@@ -2,6 +2,7 @@ using LibOrbisPkg.PFS;
 using LibOrbisPkg.PKG;
 using LibOrbisPkg.SFO;
 using LibOrbisPkg.GP4;
+using System.IO.MemoryMappedFiles;
 using System.Security.Cryptography;
 using System.Text;
 using PT.PkgExtract;
@@ -51,7 +52,22 @@ if(dump==null){
     if(Refusal(Build("other.pkg","UP9999-CUSA99998_00-0000000000000000",n=>n,pt:false),Path.Combine(root,"other"))!=Extraction.NotPtMessage)throw new Exception("Other game accepted");
     Console.WriteLine("PASS other game refused as not P.T.");
 }
-var parsed=new PkgReader(File.OpenRead(pkg)).ReadPkg();
+using var parsedStream=File.OpenRead(pkg);
+var parsed=new PkgReader(parsedStream).ReadPkg();
+string incomplete=Path.Combine(root,"incomplete.pkg");File.Copy(pkg,incomplete);
+using(var map=MemoryMappedFile.CreateFromFile(pkg,FileMode.Open,null,0,MemoryMappedFileAccess.Read))
+using(var accessor=map.CreateViewAccessor((long)parsed.Header.pfs_image_offset,(long)parsed.Header.pfs_image_size,MemoryMappedFileAccess.Read)) {
+    var outer=new PfsReader(accessor,parsed.Header.pfs_flags,parsed.GetEkpfs());
+    var image=outer.GetFile("pfs_image.dat");
+    using var f=new FileStream(incomplete,FileMode.Open,FileAccess.ReadWrite);
+    f.Position=(long)parsed.Header.pfs_image_offset+image.offset;
+    f.Write(new byte[0x1000]);
+}
+string incompleteOut=Path.Combine(root,"incomplete-out");
+if(new FileInfo(incomplete).Length!=new FileInfo(pkg).Length)throw new Exception("Incomplete fixture changed package size");
+if(Refusal(incomplete,incompleteOut)!=Extraction.UnreadableDataMessage)throw new Exception("Missing game data not refused with a clear message");
+if(Directory.Exists(incompleteOut))throw new Exception("Incomplete PKG left output");
+Console.WriteLine("PASS full-size PKG with missing game data refused, leaves no output");
 var keys=parsed.Metas.Metas.Single(m=>m.id==EntryId.ENTRY_KEYS);
 string retail=Path.Combine(root,"retail.pkg");File.Copy(pkg,retail);
 using(var f=new FileStream(retail,FileMode.Open,FileAccess.ReadWrite)){f.Position=keys.DataOffset+0x20+7*0x20+3*0x100;var garbage=new byte[0x100];new Random(1).NextBytes(garbage);f.Write(garbage);}

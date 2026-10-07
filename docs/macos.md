@@ -19,6 +19,9 @@ game data, initializes an audio device and renders the opening scene. These
 scripted checks do not establish manual visual/audio quality or microphone input.
 Local build and startup logs are under `build/macos-local-checks/`; the release's
 `voice-smoke.log` and `installer-self-test.txt` retain the packaged runtime results.
+After old builds are cleaned, retained Mac validation logs and captures are stored
+under the final release's `validation/previous-checks/`, keeping their original
+relative paths.
 
 After integrating the lighting and Arabic font fixes from PR #4, the rebuilt
 installer passes its signed-payload self-test and updates the existing app while
@@ -62,6 +65,20 @@ It reuses the same LibOrbisPkg extraction and P.T. recognition rules as Windows.
 The filename alone does not establish that a package contains usable game data.
 The installer copies game archives into a native Mac runtime; it does not convert
 the PS4 executable. No game files are included in the app or setup distribution.
+
+If a PKG's game-data image cannot be read, the installer reports an incomplete,
+damaged or unsupported package before creating extracted game files. A full-size
+download can still be incomplete: the tested SuperPSX copy had valid metadata but
+its entire inner game image was zero-filled. Finish downloading/copying the file
+or choose a complete PKG or decrypted dump. Changing the installation folder does
+not repair missing package data. The extractor regression suite covers a PKG with
+unchanged file size and a zeroed game-image header, and checks that it leaves no
+output directory.
+The rebuilt Mac setup also rejects that actual incomplete copy, cleans its
+staging directory, and installs the complete local PKG successfully. SHA-256
+hashes of all three extracted game archives match the existing working install.
+All ten extraction regressions and the signed-payload installer self-test pass;
+results are under `build/macos-local-checks/pkg-error-native/`.
 
 ## Build the installer on your Mac
 

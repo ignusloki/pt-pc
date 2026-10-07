@@ -11,6 +11,8 @@ public static class Extraction {
         "or a fake PKG (fPKG) built from that dump.";
     public const string NotPtMessage="This package does not hold P.T.'s game data (no Fox Engine archive pair with P.T.'s paths). "+
         "Select the P.T. game package or your dumped game folder.";
+    public const string UnreadableDataMessage="This PKG's game data could not be read. The file may be incomplete, damaged, or use an unsupported package format. "+
+        "Finish downloading or copying the file, then try again, or select a complete P.T. fake PKG or decrypted game folder.";
     public static readonly Dictionary<string,string> Releases=new(){{"CUSA01127","US"},{"CUSA01114","Europe"},{"CUSA01098","Japan"}};
     public static string TitleOf(string contentId)=>contentId.Length>=16?contentId.Substring(7,9):"";
     static byte[] Head(PfsReader.File file,long offset,int count) {
@@ -49,7 +51,9 @@ public static class Extraction {
         using var map=MemoryMappedFile.CreateFromFile(package,FileMode.Open,null,0,MemoryMappedFileAccess.Read);
         using var accessor=map.CreateViewAccessor((long)pkg.Header.pfs_image_offset,(long)pkg.Header.pfs_image_size,MemoryMappedFileAccess.Read);
         var outer=new PfsReader(accessor,pkg.Header.pfs_flags,key);
-        var inner=new PfsReader(new PFSCReader(outer.GetFile("pfs_image.dat").GetView()));
+        var image=outer.GetFile("pfs_image.dat");
+        if(image==null || !Head(image,0,4).AsSpan().SequenceEqual("PFSC"u8))throw new IOException(UnreadableDataMessage);
+        var inner=new PfsReader(new PFSCReader(image.GetView()));
         var root=inner.GetURoot();
         var files=AllFiles(root).ToList();
         var psarc=Choose(files,root,warnings,"chunk1.psarc",f=>f.name.EndsWith(".psarc",StringComparison.OrdinalIgnoreCase),f=>IsPsarc(Head(f,0,4)));
