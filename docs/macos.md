@@ -20,6 +20,13 @@ scripted checks do not establish manual visual/audio quality or microphone input
 Local build and startup logs are under `build/macos-local-checks/`; the release's
 `voice-smoke.log` and `installer-self-test.txt` retain the packaged runtime results.
 
+After integrating the lighting and Arabic font fixes from PR #4, the rebuilt
+installer passes its signed-payload self-test and updates the existing app while
+preserving all checked game archives, settings and save files. The multilingual
+test passes for all five added languages, including Arabic. The updated installed
+app again passes the early (15/15) and full (27/27) walkthroughs. Logs for this
+integration are saved as `graphics-fixed-*` under `build/macos-local-checks/`.
+
 Windows-host validation (7 October 2026): all 14 synthetic checks in
 `tools/macos/test_packaging.py` pass. They cover the app/payload round trip,
 executable ZIP permissions, game-asset exclusion, unsafe paths, incomplete or
@@ -134,6 +141,16 @@ enables portability enumeration when advertised and the device's portability
 subset, checks its required Vulkan features, and logs the name of a missing
 feature before stopping.
 No separate Vulkan SDK installation is needed on the player's Mac.
+
+Mac shader builds define `PT_SHADOW_GATHER`: shadow sampling gathers four depth
+values and performs the existing bilinear LESS comparison explicitly. A comparison
+sampler on the shared `images[]` array otherwise makes SPIRV-Cross declare the
+whole array as Metal depth textures, corrupting reads of normals and material
+data and causing incorrect lighting and bright ceiling patches. This workaround
+and the bundled Noto Kufi/Naskh Arabic font mapping come from
+[ahm3texe's Apple Silicon PR](https://github.com/LoreanXavier/pt-pc/pull/4)
+(commits `3615fe5` and `deaab67`). The PKG installer and signed Frameworks layout
+continue to use this branch's implementation.
 
 The first Mac target uses the existing raster renderer. DLSS, XeSS, FSR SDKs,
 frame generation, OpenXR and the external enhanced-texture generator are excluded
