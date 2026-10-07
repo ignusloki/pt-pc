@@ -7,6 +7,13 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+if(APPLE)
+  # Enable Cocoa languages before dependencies so their targets inherit the compile rules.
+  enable_language(OBJC OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 20)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # one binary for many distributions: the C++ runtime goes into the executable, only glibc is taken from the system
   string(APPEND CMAKE_EXE_LINKER_FLAGS " -static-libstdc++ -static-libgcc")
@@ -317,4 +324,3 @@ target_link_libraries(pt_platform_test PRIVATE pt_engine)
 
 add_executable(pt_mods_test tests/mods_test.cpp)
 target_link_libraries(pt_mods_test PRIVATE pt_engine)
-

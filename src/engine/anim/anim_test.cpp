@@ -3,9 +3,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -14,6 +16,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
 
 #include "engine/anim/demo_file.h"
 #include "engine/anim/gani.h"
@@ -170,11 +176,26 @@ private:
             return true;
         }
         double d = 0.0;
+#ifdef __APPLE__
+        // Floating-point from_chars requires macOS 26; animation JSON also runs on macOS 14.
+        static const locale_t numeric_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+        if (!numeric_locale || c == '+') {
+            return false;
+        }
+        char* end = nullptr;
+        errno = 0;
+        d = strtod_l(text_.c_str() + pos_, &end, numeric_locale);
+        if (end == text_.data() + pos_ || (errno == ERANGE && (d == 0.0 || !std::isfinite(d)))) {
+            return false;
+        }
+        pos_ = static_cast<size_t>(end - text_.data());
+#else
         const auto result = std::from_chars(text_.data() + pos_, text_.data() + text_.size(), d);
         if (result.ec != std::errc()) {
             return false;
         }
         pos_ = static_cast<size_t>(result.ptr - text_.data());
+#endif
         out.type = Number;
         std::memcpy(&out.data, &d, 8);
         return true;

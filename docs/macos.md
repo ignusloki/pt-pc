@@ -1,10 +1,24 @@
 # macOS (Apple Silicon)
 
 This is an experimental native arm64 port for M-series Macs running macOS 14 or newer.
-The source changes, Cocoa installer and packaging tools are provided; they have not
-yet been compiled or tested on macOS. Windows-side packaging tests do not establish
-that the game renders correctly on a Mac. A Mac build and gameplay test are required
-before treating the installer as a working release.
+The runtime, Cocoa installer and packaging tools have been built and tested
+on an M1 Pro running macOS 26.6.2, including the full scripted walkthrough.
+Manual gameplay, microphone and controller input, and other Mac/OS combinations
+still need validation before treating it as a working release.
+
+Mac validation (7 October 2026): the native preset builds with Apple Clang 21,
+CMake 4.4.4, MoltenVK 1.4.2 and Microsoft's arm64 .NET 10.0.401 SDK. All 14
+synthetic packaging checks, nine CPU/platform test targets, 29 reflection-mix GPU
+cases and nine C# extraction checks pass. The signed runtime processes the voice
+smoke WAV, and the installer self-test passes with the actual signed payload.
+A local US fake PKG installs successfully, and its opening scene renders at
+1280x720 through MoltenVK with a normal exit. The installed executable passes
+all 15 early walkthrough checkpoints and all 27 full walkthrough checkpoints,
+reaching the ending. Opening the installed app normally also finds its adjacent
+game data, initializes an audio device and renders the opening scene. These
+scripted checks do not establish manual visual/audio quality or microphone input.
+Local build and startup logs are under `build/macos-local-checks/`; the release's
+`voice-smoke.log` and `installer-self-test.txt` retain the packaged runtime results.
 
 Windows-host validation (7 October 2026): all 14 synthetic checks in
 `tools/macos/test_packaging.py` pass. They cover the app/payload round trip,
@@ -36,7 +50,10 @@ Install these development tools:
 
 - Xcode command line tools with a C++20 compiler and `std::format` support.
 - Python 3.11+, CMake 3.28+ and Ninja (for example, `brew install python cmake ninja`).
-- The **arm64 .NET 10 SDK**, used to build the self-contained PKG extractor.
+- The **arm64 .NET 10 SDK from Microsoft**, used to build the self-contained PKG
+  extractor. Homebrew's .NET runtime can link to external Homebrew libraries,
+  causing the distribution's dependency audit to reject the published helper.
+  See [Microsoft's macOS installation instructions](https://learn.microsoft.com/dotnet/core/install/macos).
 - A current **macOS Vulkan SDK** with `glslc`, Vulkan headers and a MoltenVK build
   exposing Vulkan 1.3 or newer. Older Vulkan 1.2-only MoltenVK builds are insufficient.
 
@@ -44,6 +61,22 @@ Run the SDK's `setup-env.sh` in your shell so `VULKAN_SDK` and its tools are ava
 then, from the repository root:
 
 ```sh
+python3 tools/macos/build.py
+```
+
+Homebrew can also supply the graphics and C++ build tools:
+
+```sh
+brew install cmake ninja shaderc vulkan-headers vulkan-loader molten-vk
+export VULKAN_SDK="$(brew --prefix)"
+```
+
+If Microsoft's SDK is installed locally at `.deps/dotnet`, select it before running
+the build script:
+
+```sh
+export DOTNET_ROOT="$PWD/.deps/dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
 python3 tools/macos/build.py
 ```
 
@@ -97,8 +130,9 @@ Keep custom content outside `P.T..app`.
 
 Vulkan runs over Metal through the bundled `libMoltenVK.dylib`. Both SDL's surface
 creation and volk use that same library, including headless runs. The renderer
-enables portability enumeration and the device's portability subset, checks its
-required Vulkan features, and logs the name of a missing feature before stopping.
+enables portability enumeration when advertised and the device's portability
+subset, checks its required Vulkan features, and logs the name of a missing
+feature before stopping.
 No separate Vulkan SDK installation is needed on the player's Mac.
 
 The first Mac target uses the existing raster renderer. DLSS, XeSS, FSR SDKs,
@@ -110,7 +144,11 @@ audio-input entitlement for the hardened runtime. Voice libraries are signed in
 `Contents/Frameworks`; models stay in `Contents/Resources/voice`. The voice
 recognizer uses a baseline ARM64 GGML CPU backend and utility thread priority.
 
-## Acceptance checks still required on macOS
+## macOS acceptance checks
+
+The local build, signed-payload self-test, PKG installation, normal app launch,
+and early/full headless walkthrough checks passed on the M1 Pro described above.
+Use this checklist for further manual coverage and testing on other Macs:
 
 1. Run the build script and keep its output, `voice-smoke.log` and
    `installer-self-test.txt`. Passing these is necessary but does not establish

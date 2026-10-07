@@ -107,7 +107,15 @@ bool Context::Init(SDL_Window* window, bool validation) {
         validation = false;
     }
 #ifdef __APPLE__
-    if (std::none_of(extensions.begin(), extensions.end(), [](const char* name) {
+    // The Vulkan loader advertises this extension; directly loaded MoltenVK does not.
+    uint32_t instance_extension_count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr);
+    std::vector<VkExtensionProperties> instance_extensions(instance_extension_count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, instance_extensions.data());
+    const bool enumerate_portability = std::any_of(instance_extensions.begin(), instance_extensions.end(), [](const VkExtensionProperties& e) {
+        return std::strcmp(e.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0;
+    });
+    if (enumerate_portability && std::none_of(extensions.begin(), extensions.end(), [](const char* name) {
             return std::strcmp(name, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0;
         })) extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 #endif
@@ -118,7 +126,7 @@ bool Context::Init(SDL_Window* window, bool validation) {
     app.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 #ifdef __APPLE__
-    instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    if (enumerate_portability) instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
     instance_info.pApplicationInfo = &app;
     instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
