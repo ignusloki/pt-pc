@@ -91,6 +91,11 @@ Mods
 
 ## Building from source
 
+Apple Silicon macOS: an experimental native port and Cocoa installer build path are
+available in [docs/macos.md](docs/macos.md). Run `python3 tools/macos/build.py` on a Mac
+with the prerequisites listed there. This target still needs macOS compilation and
+gameplay validation before it can be considered a working release.
+
 Windows: Visual Studio 2022 Build Tools, LLVM (clang-cl), the Vulkan SDK, CMake 3.28 and Ninja. Then
 
     tools\build_pt.bat release

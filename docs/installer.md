@@ -6,6 +6,11 @@ archives are taken from what the player selects, on the player's PC.
 
 ## Pieces
 
+Apple Silicon macOS uses `installer/Native/setup_macos.mm` (Cocoa), a self-contained
+`osx-arm64` extractor, and a game `.app` containing MoltenVK. The hashed `PTSETUP1`
+payload is a bundle resource, so executable code signing is preserved. Build and
+acceptance instructions are in [macos.md](macos.md); Mac runtime validation is pending.
+
 | Piece | Source | Language | Role |
 |---|---|---|---|
 | `pt_setup.exe` (shipped as `P.T.PC.Port.Setup.exe`) | `installer/Native/setup.cpp`, CMake target `pt_setup` | C++20, Win32 API | the Windows installer: window, checks, payload unpack, install |

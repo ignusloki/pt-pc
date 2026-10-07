@@ -1,6 +1,7 @@
 #include "engine/voice/voice_recognizer.h"
 
 #include <whisper.h>
+#include "engine/core/resource_path.h"
 
 #include <algorithm>
 #include <chrono>
@@ -17,7 +18,11 @@
 #else
 #include <dlfcn.h>
 #include <sys/resource.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#else
 #include <sys/syscall.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -94,7 +99,11 @@ std::string LoadError() { return std::format("Windows error {}", GetLastError())
 #else
 using Library = void*;
 constexpr const char* kLibraryPrefix = "lib";
+#ifdef __APPLE__
+constexpr const char* kLibraryExtension = ".dylib";
+#else
 constexpr const char* kLibraryExtension = ".so";
+#endif
 Library LoadNear(const std::filesystem::path& path) { return dlopen(std::filesystem::absolute(path).c_str(), RTLD_NOW | RTLD_GLOBAL); }
 void* Symbol(Library library, const char* name) { return dlsym(library, name); }
 void Unload(Library library) { dlclose(library); }
@@ -106,14 +115,26 @@ std::string LoadError() {
 
 std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) + name + kLibraryExtension; }
 
+std::filesystem::path RuntimeLibraryDir(const std::filesystem::path& dir) {
+    std::filesystem::path library_dir = dir;
+#ifdef __APPLE__
+    // Signed code belongs in Frameworks; models stay in Resources/voice.
+    const auto frameworks = ExecutableDir() / ".." / "Frameworks";
+    std::error_code library_error;
+    if (std::filesystem::is_regular_file(frameworks / LibraryName("whisper"), library_error)) library_dir = frameworks;
+#endif
+    return library_dir;
+}
+
 bool LoadRuntime(const std::filesystem::path& dir) {
     std::lock_guard lock(g_api_mutex);
     if (g_api.ready) return true;
-    const Library base = LoadNear(dir / LibraryName("ggml-base"));
-    const Library ggml = base ? LoadNear(dir / LibraryName("ggml")) : nullptr;
-    const Library whisper = ggml ? LoadNear(dir / LibraryName("whisper")) : nullptr;
+    const auto library_dir = RuntimeLibraryDir(dir);
+    const Library base = LoadNear(library_dir / LibraryName("ggml-base"));
+    const Library ggml = base ? LoadNear(library_dir / LibraryName("ggml")) : nullptr;
+    const Library whisper = ggml ? LoadNear(library_dir / LibraryName("whisper")) : nullptr;
     if (!whisper) {
-        LogError("voice: cannot load {} from {} ({})", LibraryName("whisper"), dir.string(), LoadError());
+        LogError("voice: cannot load {} from {} ({})", LibraryName("whisper"), library_dir.string(), LoadError());
         return false;
     }
     bool complete = true;
@@ -132,8 +153,16 @@ bool LoadRuntime(const std::filesystem::path& dir) {
     const char* forced = std::getenv("PT_VOICE_CPU");
     std::filesystem::path best;
     int best_score = 0;
+#ifdef __APPLE__
+    // The arm64 build ships one portable CPU backend, without per-CPU scoring.
+    if (!forced || std::strcmp(forced, "arm64") == 0) {
+        best = library_dir / LibraryName("ggml-cpu");
+        best_score = 1;
+        g_api.cpu = "arm64";
+    }
+#endif
     std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator(dir, error)) {
+    for (const auto& entry : std::filesystem::directory_iterator(library_dir, error)) {
         const std::string name = entry.path().filename().string();
         const std::string prefix = std::string(kLibraryPrefix) + "ggml-cpu-";
         if (!name.starts_with(prefix) || entry.path().extension() != kLibraryExtension) continue;
@@ -153,7 +182,7 @@ bool LoadRuntime(const std::filesystem::path& dir) {
     }
     const std::u8string best_path = best.u8string();
     if (best.empty() || !load_backend(reinterpret_cast<const char*>(best_path.c_str()))) {
-        LogError("voice: no ggml-cpu variant in {} supported by this CPU{}", dir.string(), forced ? std::format(" (PT_VOICE_CPU={})", forced) : "");
+        LogError("voice: no ggml-cpu variant in {} supported by this CPU{}", library_dir.string(), forced ? std::format(" (PT_VOICE_CPU={})", forced) : "");
         return false;
     }
     g_api.ready = true;
@@ -286,9 +315,9 @@ bool VoiceRecognizer::MatchesKeyword(std::string_view text, int max_words, int* 
 bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::string& keyword) {
     Shutdown();
     keyword_ = keyword;
-    for (const std::string& name : {std::string(kWhisperModel), std::string(kVadModel), LibraryName("whisper")}) {
-        if (!std::filesystem::is_regular_file(model_dir / name)) {
-            LogError("voice: {} is missing from {}", name, model_dir.string());
+    for (const auto& file : {model_dir / kWhisperModel, model_dir / kVadModel, RuntimeLibraryDir(model_dir) / LibraryName("whisper")}) {
+        if (!std::filesystem::is_regular_file(file)) {
+            LogError("voice: {} is missing from {}", file.filename().string(), file.parent_path().string());
             state_ = State::Failed;
             return false;
         }
@@ -436,6 +465,8 @@ void VoiceRecognizer::FreeModels() {
 void VoiceRecognizer::Run(std::filesystem::path model_dir) {
 #ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #else
     setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
 #endif

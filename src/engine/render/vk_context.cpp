@@ -9,6 +9,10 @@
 
 #include "engine/core/crash_report.h"
 #include "engine/core/log.h"
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include "engine/core/resource_path.h"
+#endif
 
 namespace pt {
 extern bool g_checkpoints;
@@ -71,6 +75,17 @@ bool HasLayer(const char* name) {
 }
 
 bool Context::Init(SDL_Window* window, bool validation) {
+#ifdef __APPLE__
+    // Retain the module for the lifetime of SDL/volk, including headless contexts.
+    if (!loader) {
+        static void* module = dlopen(MacVulkanLibrary().c_str(), RTLD_NOW | RTLD_LOCAL);
+        loader = module ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(module, "vkGetInstanceProcAddr")) : nullptr;
+        if (!loader) {
+            LogError("vulkan: cannot load bundled MoltenVK from {}", MacVulkanLibrary().string());
+            return false;
+        }
+    }
+#endif
     if (loader) {
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
         volkInitializeCustom(loader);
@@ -88,14 +103,23 @@ bool Context::Init(SDL_Window* window, bool validation) {
         layers.push_back("VK_LAYER_KHRONOS_validation");
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     } else {
+        if (validation) LogWarn("vulkan: validation layer unavailable; continuing without validation");
         validation = false;
     }
+#ifdef __APPLE__
+    if (std::none_of(extensions.begin(), extensions.end(), [](const char* name) {
+            return std::strcmp(name, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0;
+        })) extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "pt-port";
     app.pEngineName = "pt-port";
     app.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __APPLE__
+    instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
     instance_info.pApplicationInfo = &app;
     instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     instance_info.ppEnabledExtensionNames = extensions.data();
@@ -169,6 +193,34 @@ bool Context::Init(SDL_Window* window, bool validation) {
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
 
+    VkPhysicalDeviceVulkan13Features supported13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    VkPhysicalDeviceVulkan12Features supported12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    supported12.pNext = &supported13;
+    VkPhysicalDeviceFeatures2 supported2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    supported2.pNext = &supported12;
+    vkGetPhysicalDeviceFeatures2(physical, &supported2);
+#define PT_REQUIRE_FEATURE(source, field) \
+    if (!(source).field) { LogError("vulkan: required feature {} unavailable", #field); return false; }
+    PT_REQUIRE_FEATURE(supported13, dynamicRendering)
+    PT_REQUIRE_FEATURE(supported13, synchronization2)
+    PT_REQUIRE_FEATURE(supported13, shaderDemoteToHelperInvocation)
+    PT_REQUIRE_FEATURE(supported12, descriptorIndexing)
+    PT_REQUIRE_FEATURE(supported12, runtimeDescriptorArray)
+    PT_REQUIRE_FEATURE(supported12, shaderSampledImageArrayNonUniformIndexing)
+    PT_REQUIRE_FEATURE(supported12, descriptorBindingPartiallyBound)
+    PT_REQUIRE_FEATURE(supported12, descriptorBindingVariableDescriptorCount)
+    PT_REQUIRE_FEATURE(supported12, descriptorBindingSampledImageUpdateAfterBind)
+    PT_REQUIRE_FEATURE(supported12, timelineSemaphore)
+    PT_REQUIRE_FEATURE(supported12, descriptorBindingUpdateUnusedWhilePending)
+    PT_REQUIRE_FEATURE(supported12, descriptorBindingStorageBufferUpdateAfterBind)
+    PT_REQUIRE_FEATURE(supported12, scalarBlockLayout)
+    PT_REQUIRE_FEATURE(supported2.features, samplerAnisotropy)
+    PT_REQUIRE_FEATURE(supported2.features, textureCompressionBC)
+    PT_REQUIRE_FEATURE(supported2.features, fillModeNonSolid)
+    PT_REQUIRE_FEATURE(supported2.features, shaderInt16)
+    PT_REQUIRE_FEATURE(supported2.features, shaderClipDistance)
+#undef PT_REQUIRE_FEATURE
+
     VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
@@ -212,6 +264,9 @@ bool Context::Init(SDL_Window* window, bool validation) {
     }
     ray_query_supported = RayQuerySupport(physical, ray_query_missing);
     VkPhysicalDeviceFaultFeaturesEXT fault_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+#ifdef __APPLE__
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portability{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR};
+#endif
     {
         uint32_t count = 0;
         vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
@@ -225,6 +280,16 @@ bool Context::Init(SDL_Window* window, bool validation) {
                 device_extensions.push_back(name);
             }
         };
+#ifdef __APPLE__
+        if (has(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+            add(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+            VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            query.pNext = &portability;
+            vkGetPhysicalDeviceFeatures2(physical, &query);
+            portability.pNext = features.pNext;
+            features.pNext = &portability;
+        }
+#endif
         if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;

@@ -1,7 +1,8 @@
 #include "engine/audio/sound_engine.h"
 
-#include <pmmintrin.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <xmmintrin.h>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -3501,8 +3502,15 @@ void SoundEngine::Render(float* out, uint32_t frames) {
         motion_levels_.store(0, std::memory_order_relaxed);
         return;
     }
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     const unsigned int csr = _mm_getcsr();
     _mm_setcsr(csr | 0x8040);
+#elif defined(__aarch64__)
+    uint64_t fpcr = 0;
+    asm volatile("mrs %0, fpcr" : "=r"(fpcr));
+    const uint64_t flush = fpcr | (uint64_t(1) << 24);
+    asm volatile("msr fpcr, %0" : : "r"(flush));
+#endif
     {
         std::lock_guard lock(command_mutex_);
         command_work_.swap(commands_);
@@ -3555,7 +3563,11 @@ void SoundEngine::Render(float* out, uint32_t frames) {
         stats_.sequencers = static_cast<uint32_t>(sequencers_.size());
         stats_.music = static_cast<uint32_t>(music_.size());
     }
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     _mm_setcsr(csr);
+#elif defined(__aarch64__)
+    asm volatile("msr fpcr, %0" : : "r"(fpcr));
+#endif
 }
 
 }

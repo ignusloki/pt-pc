@@ -1,10 +1,11 @@
 """Prepare a native C++ setup payload. Extractor is a separate replaceable LGPL tool."""
 import argparse,hashlib,json,struct,zipfile,zlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 REPO=Path(__file__).resolve().parent.parent
 p=argparse.ArgumentParser();p.add_argument('--runtime',type=Path,required=True);p.add_argument('--extractor',type=Path,required=True);p.add_argument('--source',type=Path,required=True)
 # --out: another folder for the payload (the Linux installer's, tools/linux/attach_payload.py); the Windows one stays where CMake looks
 p.add_argument('--out',type=Path,default=REPO/'dump/installer-20261002/native')
+p.add_argument('--runtime-id',default='win-x64',choices=['win-x64','linux-x64','osx-arm64'],help='Target for the corresponding-source rebuild instructions')
 a=p.parse_args()
 out=a.out;out.mkdir(parents=True,exist_ok=True)
 sourcezip=out/'extractor-source.zip'
@@ -12,14 +13,16 @@ with zipfile.ZipFile(sourcezip,'w',zipfile.ZIP_DEFLATED) as z:
     for root,prefix in ((a.source,'LibOrbisPkg'),(REPO/'installer/Extractor','PT.PkgExtract')):
         for file in root.rglob('*'):
             if file.is_file() and not {'bin','obj','.git'}.intersection(file.relative_to(root).parts):z.write(file,prefix+'/'+file.relative_to(root).as_posix())
-    z.writestr('BUILD.txt','dotnet publish PT.PkgExtract/Extractor.csproj -c Release -r win-x64 --self-contained true -p:LibOrbisSource=<absolute LibOrbisPkg folder>. Library and wrapper are LGPL-3.0-or-later; the library DLL may be replaced. Changes: net10.0/modern SDK, fixed three-file root extraction, identity validation, safe output creation; PFSC decompression uses ReadExactly and chunked reads use the current chunk length. These read fixes are included in this corresponding source. No original game assets in this archive.\n')
+    z.writestr('BUILD.txt',f'dotnet publish PT.PkgExtract/Extractor.csproj -c Release -r {a.runtime_id} --self-contained true -p:LibOrbisSource=<absolute LibOrbisPkg folder>. Library and wrapper are LGPL-3.0-or-later; the library DLL may be replaced. Changes: net10.0/modern SDK, fixed three-file root extraction, identity validation, safe output creation; PFSC decompression uses ReadExactly and chunked reads use the current chunk length. These read fixes are included in this corresponding source. No original game assets in this archive.\n')
 files={}
 with zipfile.ZipFile(a.runtime) as z:
     for entry in z.infolist():
-        parts=Path(entry.filename).parts
+        parts=PurePosixPath(entry.filename).parts
         if entry.is_dir() or len(parts)<2:continue
-        name=Path(*parts[1:]).as_posix()
-        if parts[1].lower() in {'game','cusa01127','enhanced-textures'}:raise RuntimeError('Game assets in runtime ZIP')
+        if entry.filename.startswith('/') or any(part in {'.','..'} or ':' in part or '\\' in part for part in parts):raise RuntimeError('Unsafe runtime ZIP path')
+        name=PurePosixPath(*parts[1:]).as_posix()
+        if any(part.lower() in {'game','cusa01127','cusa01114','cusa01098','enhanced-textures'} for part in parts[1:]) or parts[-1].lower() in {'chunk1.psarc','texture.qar','pathid_list_ps4.bin'}:raise RuntimeError('Game assets in runtime ZIP')
+        if name in files:raise RuntimeError('Duplicate runtime ZIP path')
         files[name]=z.read(entry)
 for file in a.extractor.rglob('*'):
     if file.is_file() and file.suffix.lower()!='.pdb':files['extractor/'+file.relative_to(a.extractor).as_posix()]=file.read_bytes()

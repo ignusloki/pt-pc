@@ -223,7 +223,7 @@ constexpr OptionSpec kOptionSpecs[] = {
 };
 
 void PrintOptions(FILE* out) {
-    std::fprintf(out, "pt.exe [options]\n\nWithout options the game starts. Options:\n");
+    std::fprintf(out, "P.T. [options]\n\nWithout options the game starts. Options:\n");
     for (const OptionSpec& spec : kOptionSpecs) std::fprintf(out, "  %-22s %s\n", spec.name, spec.help);
 }
 
@@ -234,7 +234,7 @@ int OptionValues(std::string_view arg) {
 }
 
 [[noreturn]] void RefuseCommandLine(const std::string& message) {
-    std::fprintf(stderr, "pt.exe: %s\n\n", message.c_str());
+    std::fprintf(stderr, "P.T.: %s\n\n", message.c_str());
     PrintOptions(stderr);
     std::exit(2);
 }
@@ -597,7 +597,13 @@ void MountMods(App& app) {
     if (options.no_mods || (options.headless && options.mods_dir.empty())) {
         return;
     }
-    const std::filesystem::path dir = options.mods_dir.empty() ? pt::ExecutableDir() / "mods" : options.mods_dir;
+    std::filesystem::path default_mods = pt::ExecutableDir() / "mods";
+#ifdef __APPLE__
+    const auto executable = pt::ExecutablePath();
+    if (executable.parent_path().filename() == "MacOS" && executable.parent_path().parent_path().filename() == "Contents")
+        default_mods = executable.parent_path().parent_path().parent_path().parent_path() / "mods";
+#endif
+    const std::filesystem::path dir = options.mods_dir.empty() ? default_mods : options.mods_dir;
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) {
         if (!options.mods_dir.empty()) {
@@ -2343,12 +2349,7 @@ private:
             if (!std::filesystem::exists(dir / std::format("{}.png", e->id), ec)) missing = true;
         }
         if (!missing) return;
-        const auto exe = std::filesystem::path(SDL_GetBasePath()) /
-#ifdef _WIN32
-            "pt.exe";
-#else
-            "pt";
-#endif
+        const auto exe = pt::ExecutablePath();
         std::vector<std::string> args{exe.string(), "--game", app_.options.game_dir.string(), "--make-museum-previews", dir.string(),
             "--log", (dir / "capture.log").string()};
         std::vector<const char*> argv;
@@ -2484,12 +2485,7 @@ private:
         if (missing.empty()) return;
         std::ofstream(dir / "capture.txt") << LoopPreviewRoute(dir, missing);
         pt::SaveAppSettings(dir / "preview.ini", pt::AppSettings{});
-        const auto exe = std::filesystem::path(SDL_GetBasePath()) /
-#ifdef _WIN32
-            "pt.exe";
-#else
-            "pt";
-#endif
+        const auto exe = pt::ExecutablePath();
         std::vector<std::string> args{exe.string(), "--headless", "--no-save", "--audio-offline", "--game", app_.options.game_dir.string(),
             "--frames", "120000", "--demo-rate", "20", "--street-offer", "never", "--seed", std::to_string(kLoopPreviewSeed),
             "--bug-screen", std::to_string(kLoopPreviewBugScreen), "--f160-light", std::to_string(kLoopPreviewF160Roll), "--shot-warmup", "30", "--shot-settle", "--width", "640", "--height", "360", "--input-script", (dir/"capture.txt").string(),
@@ -4372,9 +4368,14 @@ int main(int argc, char** argv) {
     if (!vfs.Mount(game_dir)) {
         if (!options.headless) {
             const std::string text = "The P.T. game files were not found in\n" + std::filesystem::absolute(game_dir).string() +
+#ifdef __APPLE__
+                                     "\n\nKeep the CUSA01127 folder (containing chunk1.psarc and texture.qar) beside P.T..app "
+                                     "in the installation folder, or launch the app's executable with --game <folder>.";
+#else
                                      "\n\nStart pt.exe with --game <folder>, where the folder is your extracted CUSA01127 package "
                                      "(it contains chunk1.psarc and texture.qar), or put that folder at game\\CUSA01127 next to the "
                                      "working directory.";
+#endif
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
         return 1;
@@ -4428,6 +4429,9 @@ int main(int argc, char** argv) {
         app.options.width = static_cast<uint32_t>(app.settings.display.width);
         app.options.height = static_cast<uint32_t>(app.settings.display.height);
         app.options.vsync = app.settings.display.vsync;
+#ifdef __APPLE__
+        SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, pt::MacVulkanLibrary().c_str());
+#endif
         app.window = SDL_CreateWindow("P.T.", app.settings.display.width, app.settings.display.height,
                                       SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!app.window) {
