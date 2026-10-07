@@ -3357,7 +3357,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                  : vr         ? !vr->Host().FocusLost()
                                               : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
             const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
-            if (was_focused && !focused && pause && ui_ready && !ui.MenuOpen() && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
+            // The first controller tick installs the startup pause lock and fade ordering.
+            // A menu opened before that tick would stop startup under the opaque boot fade.
+            if (was_focused && !focused && pause && ui_ready && game.Controller().Step() >= 0 && !ui.MenuOpen() &&
+                !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
                 stop_freecam();
                 ui.OpenMenu(game, false);
                 pt::LogInfo("focus: window in the background, pause menu opened");

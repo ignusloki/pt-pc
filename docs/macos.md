@@ -27,6 +27,18 @@ test passes for all five added languages, including Arabic. The updated installe
 app again passes the early (15/15) and full (27/27) walkthroughs. Logs for this
 integration are saved as `graphics-fixed-*` under `build/macos-local-checks/`.
 
+Cold-launch validation: `tests/pad/boot_focus.txt` reproduces a background launch
+before the first controller tick. The previous runtime opens a pause menu under
+the opaque boot fade and fails two assertions; the fixed runtime freezes startup
+until focus returns, displays the first-boot options, accepts Escape and reaches
+the start room. All nine assertions pass, including the normal pause menu after
+focus loss during gameplay. Captures and logs are under
+`build/macos-local-checks/cold-boot-before/` and `cold-boot-fixed/`.
+The signed app also displays the options in a real 2560x1440 Mac window with
+isolated saves; Escape closes them and startup reaches `StartGame`. Its log is
+in `cold-boot-native/`. The rebuilt installer updates the existing app, and all
+six checked game archives, settings and save files remain byte-for-byte intact.
+
 Windows-host validation (7 October 2026): all 14 synthetic checks in
 `tools/macos/test_packaging.py` pass. They cover the app/payload round trip,
 executable ZIP permissions, game-asset exclusion, unsafe paths, incomplete or
@@ -183,6 +195,12 @@ Use this checklist for further manual coverage and testing on other Macs:
    MoltenVK's shader diagnostics and Xcode Metal capture in the meantime.
 6. Re-run setup on the same install: test repair, cancellation, game archive
    preservation and update rollback. Test a transferred ZIP on a second Mac.
+7. Test a cold launch in the foreground and background with an isolated settings
+   file and empty save folder. The options must appear after focusing the game,
+   Escape must start gameplay, and later focus loss must still open the pause
+   menu. Run `tests/pad/boot_focus.txt` headless with `--virtual-pads`,
+   `--audio-offline`, `--no-save`, `--options-menu`, `--demo-rate 20` and
+   `--frames 10000` to check the startup race without touching player saves.
 
 Primary integration references:
 [MoltenVK runtime guide](https://github.com/KhronosGroup/MoltenVK/blob/main/Docs/MoltenVK_Runtime_UserGuide.md),
