@@ -185,6 +185,9 @@ The first Mac target uses the existing raster renderer. DLSS, XeSS, FSR SDKs,
 frame generation, OpenXR and the external enhanced-texture generator are excluded
 from the default build. Ray queries remain dependent on capabilities actually
 reported by MoltenVK and the GPU; they are not part of Mac acceptance testing yet.
+The Mac branch includes upstream 1.0.1's DLSS swapchain recovery and Windows
+surface-creation fixes; these do not enable DLSS on Apple Silicon. The Mac build
+and package scripts default to version 1.0.1 to match that upstream release.
 Microphone access has a usage description in the game's Info.plist and an
 audio-input entitlement for the hardened runtime. Voice libraries are signed in
 `Contents/Frameworks`; models stay in `Contents/Resources/voice`. The voice
