@@ -142,6 +142,8 @@ public:
     bool FreeView() const { return detached_view_; }
     void SetThirdPerson(bool on);
     bool ThirdPerson() const { return third_person_; }
+    void SetFastWalk(bool on) { fast_walk_ = on; }
+    bool FastWalk() const { return fast_walk_; }
     Camera ViewCamera() const;
     float ThirdPersonWeight() const { return third_person_weight_; }
     Camera ThirdPersonTurn(const Camera& before, const Camera& after) const;
@@ -392,6 +394,7 @@ private:
     bool show_body_ = false;
     bool detached_view_ = false;
     bool third_person_ = false;
+    bool fast_walk_ = false;
     bool third_person_shown_ = false;
     float third_person_weight_ = 0.0f;
     float third_person_distance_ = 0.0f;

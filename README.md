@@ -79,6 +79,9 @@ Extras
 - Speedrun timer with a split at every loop, real time and game time, personal bests, and a LiveSplit server
   connection (Control > Start TCP Server in LiveSplit).
 - Third person view (experimental).
+- Fast walk: enable it in PC settings > Extras, then hold either Shift key or the controller's bottom face button
+  (Xbox A / PlayStation X) to walk 50% faster. Release for normal speed. Interactions and puzzle timers keep their
+  original behaviour. See [docs/fast-walk.md](docs/fast-walk.md).
 - VR through OpenXR (experimental: I have no headset, so it has only run against a simulated runtime). See
   docs/vr.md before trying it.
 

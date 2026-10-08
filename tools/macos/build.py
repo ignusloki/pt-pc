@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_status_test",
          "pt_save_reset_test", "pt_language_default_test", "pt_graphics_preset_test", "pt_voice_match_test", "pt_installer_update_test",
-         "pt_reflection_mix_test")
+         "pt_reflection_mix_test", "pt_fast_walk_test")
 
 
 def run(*args):

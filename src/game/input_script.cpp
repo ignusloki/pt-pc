@@ -993,6 +993,14 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const bool on = bit != 0 && (value & bit) != 0;
         ok = bit != 0 && on == (arg(0) != 0.0f);
         got = std::format("{} {} is {} (word {:#x})", what, word(1), on ? 1 : 0, value);
+    } else if (what == "fastwalk" || what == "fastwalkenabled") {
+        const bool on = what == "fastwalk" ? input.fast_walk : game.FastWalk();
+        ok = on == (arg(0) != 0.0f);
+        got = std::format("{} {}", what, on ? 1 : 0);
+    } else if (what == "moverate") {
+        const float rate = game.GetPlayer().MovementRate();
+        ok = std::abs(rate - arg(0)) <= arg(1, 0.01f);
+        got = std::format("movement rate {:.3f}", rate);
     } else if (what == "gimmickmotion") {
         const Gimmick* gimmick = game.Objects().FindGimmick(word(1));
         ok = gimmick && gimmick->motion == word(2);

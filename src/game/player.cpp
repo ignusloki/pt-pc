@@ -266,6 +266,10 @@ void Player::LocomotionFrame(const PlayerFrameContext& context) {
     motion_.rate = standing_ ? 1.0f : SpeedRate(delta, m, context.full_screen_blur);
     motion_.heading = stick_heading_;
     motion_.steered = m >= 0.1f && !LeftStickLocked();
+    // Apply the boost to locomotion after the original directional and red-loop rates.
+    if (context.fast_walk && motion_.steered) {
+        motion_.rate *= 1.5f;
+    }
     const PlayerBody::Kind kind = body_.ClipKind();
     if (kind == PlayerBody::Kind::Start) {
         body_.Play(PlayerBody::Kind::Node, body_.Clip());

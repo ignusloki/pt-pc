@@ -26,6 +26,8 @@ constexpr KeyBinding kKeyBindings[] = {
     {KeyAction::WalkBack, SDL_SCANCODE_S, 0},
     {KeyAction::WalkLeft, SDL_SCANCODE_A, 0},
     {KeyAction::WalkRight, SDL_SCANCODE_D, 0},
+    {KeyAction::FastWalk, SDL_SCANCODE_LSHIFT, 0},
+    {KeyAction::FastWalk, SDL_SCANCODE_RSHIFT, 0},
     {KeyAction::PadUp, SDL_SCANCODE_UP, 0},
     {KeyAction::PadDown, SDL_SCANCODE_DOWN, 0},
     {KeyAction::PadLeft, SDL_SCANCODE_LEFT, 0},
@@ -574,6 +576,7 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
         move = glm::normalize(move);
     }
     state.left_stick = move;
+    state.fast_walk = held(KeyAction::FastWalk);
     if (held(KeyAction::PadUp)) raw |= kRawUp;
     if (held(KeyAction::PadDown)) raw |= kRawDown;
     if (held(KeyAction::PadLeft)) raw |= kRawLeft;
@@ -650,6 +653,7 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     if (pad_raw) {
         state.from_gamepad = true;
     }
+    state.fast_walk = state.fast_walk || (pad_raw & kRawCross) != 0;
     raw |= pad_raw;
     state.raw_held = raw;
     state.raw_pressed = raw & ~previous_raw_;

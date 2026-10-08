@@ -52,7 +52,7 @@ uint32_t PlayerButtonsFromRaw(uint32_t raw);
 
 enum class KeyAction : uint8_t {
     WalkForward, WalkBack, WalkLeft, WalkRight, PadUp, PadDown, PadLeft, PadRight, Zoom, Act, Menu, Confirm, Cancel, PcSettings, MenuColumn,
-    MenuQuit, MenuHouse
+    MenuQuit, MenuHouse, FastWalk
 };
 
 struct KeyBinding {
@@ -90,6 +90,7 @@ struct InputState {
     bool any_button = false;
     bool from_gamepad = false;
     bool left_stick_from_pad = false;
+    bool fast_walk = false;
     bool click = false;
     bool right_click = false;
     bool gouge_pressed = false;

@@ -71,6 +71,7 @@ struct AppSettings {
         bool operator==(const Graphics&) const = default;
     } graphics;
     struct Extras {
+        bool fast_walk = false;
         int speedrun = 0;
         bool livesplit = false;
         std::string livesplit_host = "127.0.0.1";

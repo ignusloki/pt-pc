@@ -1,0 +1,106 @@
+# Run with --headless --virtual-pads --audio-offline --no-save --start-floor f010,
+# a fresh isolated --settings file and --save-dir, and --frames 4000.
+# Check the default, live Extras toggle, held/released controls and original interactions.
+10 pattach 0 xbox
+20 sstep 15
+20 swait 30
+20 sexpect fastwalkenabled 0
+20 skey W 1
+20 skey Left_Shift 1
+20 swait 6
+20 sexpect fastwalk 1
+20 sexpect moverate 1
+20 skey Left_Shift 0
+20 skey W 0
+20 stap 0 options
+20 swait 70
+20 stap 0 cross
+20 swait 40
+20 stap 0 r1
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_extras
+20 stap 0 cross
+20 swait 20
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_fast_walk
+20 sexpect pcvalue pc_fast_walk 0
+20 sexpect pcnote pc_fast_walk pc_note_fast_walk
+20 stap 0 right
+20 swait 10
+20 sexpect pcvalue pc_fast_walk 1
+20 sexpect fastwalkenabled 1
+20 stap 0 left
+20 swait 10
+20 sexpect fastwalkenabled 0
+20 stap 0 right
+20 swait 10
+20 sexpect fastwalkenabled 1
+20 sshot fast-walk-menu.png
+20 sktap Escape
+20 swait 10
+20 sktap Escape
+20 swait 40
+20 sktap Escape
+20 swait 90
+20 sexpect menu 0
+20 sexpect paused 0
+20 skey W 1
+20 skey Left_Shift 1
+20 swait 6
+20 sexpect fastwalk 1
+20 sexpect moverate 1.5
+20 sexpect held zoom 0
+20 skey Left_Shift 0
+20 swait 6
+20 sexpect fastwalk 0
+20 sexpect moverate 1
+20 skey Right_Shift 1
+20 swait 6
+20 sexpect moverate 1.5
+20 skey Right_Shift 0
+20 sbutton 0 cross 1
+20 swait 6
+20 sexpect fastwalk 1
+20 sexpect held action 1
+20 sexpect moverate 1.5
+20 sbutton 0 cross 0
+20 swait 6
+20 sexpect fastwalk 0
+20 sexpect moverate 1
+20 skey E 1
+20 swait 6
+20 sexpect held action 1
+20 sexpect fastwalk 0
+20 sexpect moverate 1
+20 skey E 0
+20 skey W 0
+20 skey Left_Shift 1
+20 swait 10
+20 sexpect moverate 1
+20 skey Left_Shift 0
+20 squit

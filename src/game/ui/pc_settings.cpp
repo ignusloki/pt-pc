@@ -92,6 +92,8 @@ constexpr Entry kTexts[] = {
     {"pc_photo_mode", {"Photo mode"}},
     {"pc_note_photo_mode", {"Pause and frame a shot with the free camera (F7). P or Square saves to Pictures/PT Photos, H or Triangle hides the panel."}},
     {"pc_third_person", {"Third person (experimental)"}},
+    {"pc_fast_walk", {"Fast walk"}},
+    {"pc_note_fast_walk", {"Hold either Shift key or the controller's bottom face button (Xbox A / PlayStation X) to walk 50% faster. Release for normal speed. Interactions and puzzle timers keep their original behavior."}},
     {"pc_note_third_person", {"Experimental, not in the original: the camera follows the player over the shoulder. The zoom and the cutscenes return to first person; events play out as in first person."}},
     {"pc_extras_start", {"Start"}},
     {"pc_vr", {"VR (experimental)"}},
