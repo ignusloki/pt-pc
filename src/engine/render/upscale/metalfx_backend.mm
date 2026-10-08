@@ -38,6 +38,16 @@ struct ScalerKey {
 constexpr uint64_t kPairRetireDistance = 16;
 constexpr double kWatchdogSeconds = 2.0;
 
+// MetalFX takes exposure as a 1x1 R16Float texture; the scene's exposure image is R32_SFLOAT and shared with the other upscalers.
+constexpr const char* kExposureShader = R"(
+#include <metal_stdlib>
+using namespace metal;
+kernel void exposure_to_half(texture2d<float, access::read> source [[texture(0)]],
+                             texture2d<half, access::write> target [[texture(1)]]) {
+    target.write(half4(half(source.read(uint2(0, 0)).r)), uint2(0, 0));
+}
+)";
+
 /* The upscale runs on its own Metal queue, ordered against the frame's command buffer by two events: the frame signals inputs_ready where
    the upscale belongs and waits on output_ready; the MetalFX command buffer waits on the first and signals the second. */
 class MetalFxBackend final : public UpscaleBackend {
@@ -71,6 +81,9 @@ public:
         device_ = device_info.mtlDevice;
         if (!device_ || ![MTLFXTemporalScalerDescriptor supportsDevice:device_]) {
             reason = "this GPU has no MetalFX temporal scaler";
+            return false;
+        }
+        if (!CreateExposureConversion(reason)) {
             return false;
         }
         queue_ = [device_ newCommandQueue];
@@ -133,17 +146,27 @@ private:
         const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_MEMORY_WRITE_BIT,
                                       VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT};
         vkCmdSetEvent(d.cmd, pair->inputs_ready, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-        vkCmdWaitEvents(d.cmd, 1, &pair->output_ready, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 1, &barrier, 0,
-                        nullptr, 0, nullptr);
+        // Metal signals output_ready outside any Vulkan command buffer, hence HOST as the source stage. The validation layer only tracks
+        // events set through vkCmdSetEvent/vkSetEvent, so it reports this wait (VUID-vkCmdWaitEvents-srcStageMask-01158).
+        vkCmdWaitEvents(d.cmd, 1, &pair->output_ready, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 1, &barrier, 0, nullptr, 0,
+                        nullptr);
 
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
         [cb encodeWaitForEvent:pair->mtl_inputs_ready value:1];
+        if (exposure) {
+            id<MTLComputeCommandEncoder> convert = [cb computeCommandEncoder];
+            [convert setComputePipelineState:exposure_pipeline_];
+            [convert setTexture:exposure atIndex:0];
+            [convert setTexture:exposure_half_ atIndex:1];
+            [convert dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [convert endEncoding];
+        }
         id<MTLTexture> target = OutputTarget(scaler, output, d.display);
         scaler.colorTexture = color;
         scaler.depthTexture = depth;
         scaler.motionTexture = motion;
         scaler.outputTexture = target;
-        scaler.exposureTexture = exposure;
+        scaler.exposureTexture = exposure ? exposure_half_ : nil;
         scaler.inputContentWidth = std::min<NSUInteger>(d.render.width, color.width);
         scaler.inputContentHeight = std::min<NSUInteger>(d.render.height, color.height);
         scaler.jitterOffsetX = d.jitter.x;
@@ -175,6 +198,22 @@ private:
         last_cb_ = cb;
         ArmWatchdog(cb, pair->mtl_inputs_ready);
         return true;
+    }
+
+    bool CreateExposureConversion(std::string& reason) {
+        NSError* error = nil;
+        id<MTLLibrary> library = [device_ newLibraryWithSource:@(kExposureShader) options:nil error:&error];
+        id<MTLFunction> function = [library newFunctionWithName:@"exposure_to_half"];
+        exposure_pipeline_ = function ? [device_ newComputePipelineStateWithFunction:function error:&error] : nil;
+        if (!exposure_pipeline_) {
+            reason = std::string("cannot build the exposure conversion: ") + (error ? error.localizedDescription.UTF8String : "no function");
+            return false;
+        }
+        MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR16Float width:1 height:1 mipmapped:NO];
+        desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        desc.storageMode = MTLStorageModePrivate;
+        exposure_half_ = [device_ newTextureWithDescriptor:desc];
+        return exposure_half_ != nil;
     }
 
     id<MTLTexture> Texture(const UpscaleImage& image) const {
@@ -307,6 +346,8 @@ private:
     PFN_vkExportMetalObjectsEXT export_objects_ = nullptr;
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
+    id<MTLComputePipelineState> exposure_pipeline_;
+    id<MTLTexture> exposure_half_;  // written and read only on queue_, which runs its command buffers in order
     id<MTLFXTemporalScaler> scaler_;
     id<MTLTexture> staging_;
     id<MTLCommandBuffer> last_cb_;
