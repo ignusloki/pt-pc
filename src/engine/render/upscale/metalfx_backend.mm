@@ -4,23 +4,28 @@
 #import <MetalFX/MetalFX.h>
 #include <vulkan/vulkan_metal.h>
 
-#include <deque>
+#include <atomic>
+#include <memory>
 #include <string>
 
 #include "engine/core/log.h"
+#include "engine/render/renderer.h"
 
 namespace pt {
 namespace {
 
-/* Events are never reused: resetting a MoltenVK event and waiting on it again from the GPU deadlocks. A pair is destroyed once both
-   command buffers are well past it. */
-struct EventPair {
-    VkEvent inputs_ready = VK_NULL_HANDLE;
-    VkEvent output_ready = VK_NULL_HANDLE;
+struct TimelineSync {
+    VkDevice device = VK_NULL_HANDLE;
+    VkSemaphore inputs_ready = VK_NULL_HANDLE;
+    VkSemaphore output_ready = VK_NULL_HANDLE;
     id<MTLSharedEvent> mtl_inputs_ready;
     id<MTLSharedEvent> mtl_output_ready;
-    id<MTLCommandBuffer> upscale_cb;
-    uint64_t dispatch = 0;
+    std::atomic<bool> failed{false};
+
+    ~TimelineSync() {
+        if (inputs_ready) vkDestroySemaphore(device, inputs_ready, nullptr);
+        if (output_ready) vkDestroySemaphore(device, output_ready, nullptr);
+    }
 };
 
 struct ScalerKey {
@@ -35,9 +40,6 @@ struct ScalerKey {
     bool operator==(const ScalerKey&) const = default;
 };
 
-constexpr uint64_t kPairRetireDistance = 16;
-constexpr double kWatchdogSeconds = 2.0;
-
 // MetalFX takes exposure as a 1x1 R16Float texture; the scene's exposure image is R32_SFLOAT and shared with the other upscalers.
 constexpr const char* kExposureShader = R"(
 #include <metal_stdlib>
@@ -48,8 +50,8 @@ kernel void exposure_to_half(texture2d<float, access::read> source [[texture(0)]
 }
 )";
 
-/* The upscale runs on its own Metal queue, ordered against the frame's command buffer by two events: the frame signals inputs_ready where
-   the upscale belongs and waits on output_ready; the MetalFX command buffer waits on the first and signals the second. */
+/* Vulkan submits the scene and signals inputs_ready; Metal waits for that value, upscales, and signals output_ready. A second Vulkan
+   submission waits for that output before resolving and presenting. Timeline values are never reset or reused. */
 class MetalFxBackend final : public UpscaleBackend {
 public:
     explicit MetalFxBackend(vk::Context& ctx) : ctx_(ctx) {}
@@ -86,6 +88,9 @@ public:
         if (!CreateExposureConversion(reason)) {
             return false;
         }
+        if (!sync_ && !CreateTimelines(reason)) {
+            return false;
+        }
         queue_ = [device_ newCommandQueue];
         queue_.label = @"MetalFX upscale";
         reason.clear();
@@ -107,21 +112,24 @@ public:
     }
 
     void Release() override {
-        [last_cb_ waitUntilCompleted];  // bounded by the watchdog
-        for (EventPair& pair : pairs_) {
-            DestroyPair(pair);
+        // A recorded frame may be abandoned; its Metal command buffer is not committed until Vulkan submits the inputs.
+        if (last_cb_.status >= MTLCommandBufferStatusCommitted) {
+            [last_cb_ waitUntilCompleted];
         }
-        pairs_.clear();
         scaler_ = nil;
         staging_ = nil;
         last_cb_ = nil;
         key_ = {};
         failed_ = false;
         dispatches_ = 0;
+        if (sync_) sync_->failed.store(false);
     }
 
 private:
     bool Encode(const UpscaleDispatch& d) {
+        if (!d.renderer || !sync_ || sync_->failed.load()) {
+            return false;
+        }
         id<MTLTexture> color = Texture(d.color);
         id<MTLTexture> depth = Texture(d.depth);
         id<MTLTexture> motion = Texture(d.motion);
@@ -137,22 +145,15 @@ private:
         if (!scaler) {
             return false;
         }
-        EventPair* pair = NewPair();
-        if (!pair) {
+        const auto sync = sync_;
+        const uint64_t value = ++next_value_;
+        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+        id<MTLTexture> target = OutputTarget(scaler, output, d.display);
+        if (!cb || !target) {
+            LogError("metalfx: cannot allocate the command buffer or output texture");
             return false;
         }
-        ++dispatches_;
-
-        const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_MEMORY_WRITE_BIT,
-                                      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT};
-        vkCmdSetEvent(d.cmd, pair->inputs_ready, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-        // Metal signals output_ready outside any Vulkan command buffer, hence HOST as the source stage. The validation layer only tracks
-        // events set through vkCmdSetEvent/vkSetEvent, so it reports this wait (VUID-vkCmdWaitEvents-srcStageMask-01158).
-        vkCmdWaitEvents(d.cmd, 1, &pair->output_ready, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 1, &barrier, 0, nullptr, 0,
-                        nullptr);
-
-        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
-        [cb encodeWaitForEvent:pair->mtl_inputs_ready value:1];
+        [cb encodeWaitForEvent:sync->mtl_inputs_ready value:value];
         if (exposure) {
             id<MTLComputeCommandEncoder> convert = [cb computeCommandEncoder];
             [convert setComputePipelineState:exposure_pipeline_];
@@ -161,7 +162,6 @@ private:
             [convert dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
             [convert endEncoding];
         }
-        id<MTLTexture> target = OutputTarget(scaler, output, d.display);
         scaler.colorTexture = color;
         scaler.depthTexture = depth;
         scaler.motionTexture = motion;
@@ -173,7 +173,7 @@ private:
         scaler.jitterOffsetY = d.jitter.y;
         scaler.motionVectorScaleX = d.motion_scale.x;
         scaler.motionVectorScaleY = d.motion_scale.y;
-        scaler.reset = d.reset || dispatches_ == 1;
+        scaler.reset = d.reset || dispatches_ == 0;
         scaler.depthReversed = YES;  // the scene uses reversed infinite depth (FSR is created with DEPTH_INVERTED)
         scaler.preExposure = d.pre_exposure;
         [scaler encodeToCommandBuffer:cb];
@@ -184,19 +184,26 @@ private:
                  destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
             [blit endEncoding];
         }
-        [cb encodeSignalEvent:pair->mtl_output_ready value:1];
+        [cb encodeSignalEvent:sync->mtl_output_ready value:value];
         // The handler keeps the scaler and target alive until the GPU is done with them, even if the backend replaces them first.
         [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
             (void)scaler;
             (void)target;
             if (done.error) {
                 LogError("metalfx: upscale failed on the GPU: {}", done.error.localizedDescription.UTF8String);
+                sync->failed.store(true);
+                // Failed GPU work must not leave Vulkan waiting forever. Future dispatches use the existing resolve fallback.
+                if (sync->mtl_output_ready.signaledValue < value) sync->mtl_output_ready.signaledValue = value;
             }
         }];
-        [cb commit];
-        pair->upscale_cb = cb;
+        if (!d.renderer->QueueHandoff(d.cmd, sync->inputs_ready, value, sync->output_ready, value, [cb, sync] {
+                (void)sync;  // keep the semaphores alive until this frame's fence retires its submissions
+                [cb commit];
+            })) {
+            return false;
+        }
         last_cb_ = cb;
-        ArmWatchdog(cb, pair->mtl_inputs_ready);
+        if (dispatches_++ == 0) LogInfo("metalfx: timeline semaphore queue handoff enabled");
         return true;
     }
 
@@ -285,61 +292,34 @@ private:
         return staging_;
     }
 
-    id<MTLSharedEvent> SharedEvent(VkEvent& event) {
+    id<MTLSharedEvent> SharedTimeline(VkSemaphore& semaphore) {
         VkExportMetalObjectCreateInfoEXT export_create{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
         export_create.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_SHARED_EVENT_BIT_EXT;
-        VkEventCreateInfo create{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO, &export_create};
-        if (vkCreateEvent(ctx_.device, &create, nullptr, &event) != VK_SUCCESS) {
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO, &export_create};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        type.initialValue = 0;
+        VkSemaphoreCreateInfo create{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &type};
+        if (vkCreateSemaphore(ctx_.device, &create, nullptr, &semaphore) != VK_SUCCESS) {
             return nil;
         }
         VkExportMetalSharedEventInfoEXT shared{VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT};
-        shared.event = event;
+        shared.semaphore = semaphore;
         VkExportMetalObjectsInfoEXT info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT, &shared};
         export_objects_(ctx_.device, &info);
         return shared.mtlSharedEvent;
     }
 
-    EventPair* NewPair() {
-        while (!pairs_.empty()) {
-            EventPair& oldest = pairs_.front();
-            const bool done = !oldest.upscale_cb || oldest.upscale_cb.status >= MTLCommandBufferStatusCompleted;
-            if (!done || dispatches_ - oldest.dispatch < kPairRetireDistance) {
-                break;
-            }
-            DestroyPair(oldest);
-            pairs_.pop_front();
+    bool CreateTimelines(std::string& reason) {
+        auto sync = std::make_shared<TimelineSync>();
+        sync->device = ctx_.device;
+        sync->mtl_inputs_ready = SharedTimeline(sync->inputs_ready);
+        sync->mtl_output_ready = SharedTimeline(sync->output_ready);
+        if (!sync->mtl_inputs_ready || !sync->mtl_output_ready) {
+            reason = "cannot create exportable timeline semaphores";
+            return false;
         }
-        EventPair pair;
-        pair.mtl_inputs_ready = SharedEvent(pair.inputs_ready);
-        pair.mtl_output_ready = SharedEvent(pair.output_ready);
-        if (!pair.mtl_inputs_ready || !pair.mtl_output_ready) {
-            LogError("metalfx: cannot create shared events");
-            DestroyPair(pair);
-            return nullptr;
-        }
-        pair.dispatch = dispatches_;
-        pairs_.push_back(pair);
-        return &pairs_.back();
-    }
-
-    void DestroyPair(EventPair& pair) {
-        if (pair.inputs_ready) {
-            vkDestroyEvent(ctx_.device, pair.inputs_ready, nullptr);
-        }
-        if (pair.output_ready) {
-            vkDestroyEvent(ctx_.device, pair.output_ready, nullptr);
-        }
-    }
-
-    // A frame command buffer that is recorded but never submitted would leave the upscale queue waiting forever.
-    static void ArmWatchdog(id<MTLCommandBuffer> cb, id<MTLSharedEvent> inputs_ready) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(kWatchdogSeconds * NSEC_PER_SEC)),
-                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                           if (cb.status < MTLCommandBufferStatusCompleted && inputs_ready.signaledValue == 0) {
-                               LogWarn("metalfx: frame never reached the upscale, releasing its queue");
-                               inputs_ready.signaledValue = 1;
-                           }
-                       });
+        sync_ = std::move(sync);
+        return true;
     }
 
     vk::Context& ctx_;
@@ -353,7 +333,8 @@ private:
     id<MTLCommandBuffer> last_cb_;
     ScalerKey key_;
     bool failed_ = false;
-    std::deque<EventPair> pairs_;
+    std::shared_ptr<TimelineSync> sync_;
+    uint64_t next_value_ = 0;
     uint64_t dispatches_ = 0;
 };
 

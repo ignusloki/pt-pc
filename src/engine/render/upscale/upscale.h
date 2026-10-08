@@ -67,8 +67,11 @@ struct UpscaleImage {
     bool Valid() const { return image != VK_NULL_HANDLE; }
 };
 
+class Renderer;
+
 struct UpscaleDispatch {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
+    Renderer* renderer = nullptr;
     UpscaleImage color;
     UpscaleImage depth;
     UpscaleImage motion;
