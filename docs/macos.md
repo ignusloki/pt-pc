@@ -189,7 +189,9 @@ continue to use this branch's implementation.
 
 The first Mac target uses the existing raster renderer. DLSS, XeSS, FSR SDKs,
 frame generation, OpenXR and the external enhanced-texture generator are excluded
-from the default build. Ray queries remain dependent on capabilities actually
+from the default build. Upscaling uses Apple MetalFX instead (PC settings >
+Upscaling, `upscaler = metalfx`; see [Upscaling](upscaling.md#apple-metalfx)).
+Ray queries remain dependent on capabilities actually
 reported by MoltenVK and the GPU; they are not part of Mac acceptance testing yet.
 The Mac branch includes upstream 1.0.1's DLSS swapchain recovery and Windows
 surface-creation fixes; these do not enable DLSS on Apple Silicon. The upstream

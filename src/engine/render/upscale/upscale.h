@@ -15,7 +15,7 @@ namespace pt {
 
 class FrameGeneration;
 
-enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, Count = 6 };
+enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
 enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Count = 3 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
@@ -184,6 +184,7 @@ std::unique_ptr<UpscaleBackend> CreateStreamlineDlssBackend(vk::Context& ctx);
 uint32_t DlssPresetHint(DlssModel model);
 bool DlssAutoExposure();
 std::unique_ptr<UpscaleBackend> CreateXessBackend(vk::Context& ctx);
+std::unique_ptr<UpscaleBackend> CreateMetalFxBackend(vk::Context& ctx);
 void XessDeviceRequirements(bool query, VkInstance instance, VkPhysicalDevice physical, DeviceFeatureSet& out);
 void DlssInstanceExtensions(bool query, std::vector<std::string>& out);
 void DlssDeviceExtensions(bool query, VkInstance instance, VkPhysicalDevice physical, std::vector<std::string>& out);

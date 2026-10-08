@@ -15,6 +15,10 @@
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale_platform.h"
 
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
+
 namespace pt {
 namespace {
 
@@ -24,7 +28,8 @@ struct KindInfo {
 };
 
 constexpr KindInfo kKinds[] = {{"Off", "off"},           {"AMD FSR 3", "fsr3"},          {"NVIDIA DLSS", "dlss"},
-                               {"Intel XeSS", "xess"},    {"Spatial (test)", "spatial"}, {"AMD FSR 4", "fsr4"}};
+                               {"Intel XeSS", "xess"},    {"Spatial (test)", "spatial"}, {"AMD FSR 4", "fsr4"},
+                               {"Apple MetalFX", "metalfx"}};
 
 constexpr const char* kDlssModels[] = {"auto", "k", "l", "m"};
 constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss"};
@@ -321,6 +326,12 @@ void UpscaleHost::DeviceSetup(VkInstance instance, VkPhysicalDevice physical, st
             LogInfo("upscale: device extension {} (DLSS) unavailable", name);
         }
     }
+#ifdef __APPLE__
+    // MetalFX reads the scene's images as Metal textures (metalfx_backend.mm).
+    if (!AddExtension(extensions, VK_EXT_METAL_OBJECTS_EXTENSION_NAME, true)) {
+        LogInfo("upscale: device extension {} (MetalFX) unavailable", VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+    }
+#endif
     DeviceFeatureSet xess;
     XessDeviceRequirements(startup_ == UpscalerKind::Xess, instance, physical, xess);
     for (const std::string& name : xess.extensions) {
@@ -707,6 +718,7 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
         case UpscalerKind::Fsr4: backends_[i] = CreateFsrBackend(*ctx_, 4); break;
         case UpscalerKind::Dlss: backends_[i] = streamline::Active() ? CreateStreamlineDlssBackend(*ctx_) : CreateDlssBackend(*ctx_); break;
         case UpscalerKind::Xess: backends_[i] = CreateXessBackend(*ctx_); break;
+        case UpscalerKind::MetalFx: backends_[i] = CreateMetalFxBackend(*ctx_); break;
         default: break;
         }
         if (!backends_[i]) {
@@ -729,5 +741,12 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
     reason = reasons_[i];
     return available_[i];
 }
+
+#ifndef __APPLE__
+// MetalFX is Apple's; metalfx_backend.mm is only built for macOS.
+std::unique_ptr<UpscaleBackend> CreateMetalFxBackend(vk::Context&) {
+    return nullptr;
+}
+#endif
 
 }
