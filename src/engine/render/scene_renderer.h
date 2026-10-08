@@ -276,7 +276,8 @@ private:
     bool EnsureTargets(VkExtent2D extent, VkExtent2D output, bool upscaling);
     void DestroyTargets();
     void WriteImageDescriptors();
-    bool CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect);
+    bool CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+                      bool metal_export = false);
     bool UploadImage(vk::Image& image, VkFormat format, VkExtent3D extent, const void* data, size_t size);
     bool UploadImageMips(vk::Image& image, VkFormat format, VkExtent3D extent, const std::vector<std::vector<uint8_t>>& mips);
     void CreateBuiltinResources();

@@ -142,12 +142,12 @@ void SceneRenderer::DestroyUpscalePipelines() {
 bool SceneRenderer::CreateUpscaleTargets(VkExtent2D render, VkExtent2D output) {
     const VkImageUsageFlags color = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
-    const bool ok = CreateTarget(motion_, kMotionFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) && CreateTarget(reactive_, kReactiveFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-                    CreateTarget(opaque_, kHdrTargetFormat, render, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+    const bool ok = CreateTarget(motion_, kMotionFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c, true) && CreateTarget(reactive_, kReactiveFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+                    CreateTarget(opaque_, kHdrTargetFormat, render, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(handy_factor_, kHandyFactorFormat, render, color, c) &&
-                    CreateTarget(exposure_image_, kExposureFormat, {1, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+                    CreateTarget(exposure_image_, kExposureFormat, {1, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(upscaled_, kUpscaleColorFormat, output,
-                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(post_hdr_, kUpscaleColorFormat, output, color, c) && CreateTarget(post_depth_, kPostDepthFormat, output, color, c) &&
                     CreateTarget(post_object_velocity_, kUpscaleColorFormat, output, color, c);
     if (!ok) {

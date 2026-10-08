@@ -64,8 +64,9 @@ public:
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
     VkImageLayout PresentLayout() const { return swapchain_owner_ ? swapchain_owner_->PresentLayout() : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; }
 
+    // metal_export declares the image's MTLTexture as exportable (VK_EXT_metal_objects), for images the MetalFX upscaler reads or writes.
     bool CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels = 1,
-                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false);
+                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false, bool metal_export = false);
     void DestroyImage(Image& image);
     bool CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible);
     void DestroyBuffer(Buffer& buffer);
@@ -94,6 +95,7 @@ public:
     bool ray_query_supported = false;
     bool ray_query = false;
     std::string ray_query_missing;
+    bool metal_objects = false;
     VkDeviceSize scratch_alignment = 256;
 
     bool memory_budget = false;

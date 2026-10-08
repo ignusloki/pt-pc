@@ -1,7 +1,7 @@
 # Upscaling and frame generation
 
 The original renders at 1920x1080 with FXAA. The port can render the scene at a lower internal resolution and
-reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS), or keep the display
+reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS, Apple MetalFX on macOS), or keep the display
 resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the
 upscaler off the frame is the same as without this feature.
 
@@ -11,10 +11,10 @@ upscaler off the frame is the same as without this feature.
 
 | key | values | meaning |
 | --- | --- | --- |
-| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess` | backend. The page lists every backend and greys the ones this machine or build cannot run, with the reason on the help line |
+| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess`, `metalfx` | backend. The page lists every backend and greys the ones this machine or build cannot run, with the reason on the help line |
 | `quality` | `native`, `quality`, `balanced`, `performance`, `ultra_performance`, `custom` | render scale 1/1.0, 1/1.5, 1/1.7, 1/2.0, 1/3.0 per axis (the FSR ratios, used for every backend), or `scale` |
 | `scale` | 0.25 to 1.0 | render scale per axis for `custom` |
-| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler. DLSS has no sharpening |
+| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler. DLSS and MetalFX have no sharpening |
 | `dlss_model` | `auto`, `k`, `l`, `m` | the DLSS Super Resolution model. `auto` is NVIDIA's default per quality (K for DLAA, quality and balanced, M for performance, L for ultra performance). L and M run in FP8, which RTX 20 and 30 cards lack, so they cost about twice as much there |
 | `frame_generation` | `off`, `fsr3`, `dlss` | one generated frame between two rendered frames. Needs a window and an upscaler (any backend and quality) |
 
@@ -66,6 +66,14 @@ XeSS SDK 3.0.2, `libxess.dll` next to `pt.exe`, loaded when XeSS is selected. GP
 run its DP4a model. The qualities use the XeSS preset with the same ratio; `custom` takes the nearest.
 
 The three SDKs are Windows binaries, so the upscalers are left out of the Linux build (docs/linux.md).
+
+### Apple MetalFX
+
+macOS only (`metalfx_backend.mm`). MoltenVK's `VK_EXT_metal_objects` gives the Metal textures behind the scene's
+images, and `MTLFXTemporalScaler` upscales them on its own Metal queue. Two Vulkan events keep it in order with the
+frame: the frame's command buffer signals one where the upscale belongs and waits on the other, which the MetalFX
+command buffer signals when it is done. The qualities use the same ratios as FSR. The frame's exposure value is passed
+as the exposure texture; MetalFX has no sharpening.
 
 ## Frame generation
 

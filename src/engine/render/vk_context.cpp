@@ -11,6 +11,7 @@
 #include "engine/core/log.h"
 #ifdef __APPLE__
 #include <dlfcn.h>
+#include <vulkan/vulkan_metal.h>
 #include "engine/core/resource_path.h"
 #endif
 
@@ -138,6 +139,13 @@ bool Context::Init(SDL_Window* window, bool validation) {
         instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         instance_info.ppEnabledExtensionNames = extensions.data();
     }
+#ifdef __APPLE__
+    // The MetalFX upscaler exports the Metal device, which the instance has to declare (VUID-VkExportMetalObjectsInfoEXT-pNext-06791).
+    VkExportMetalObjectCreateInfoEXT export_device{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_device.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_DEVICE_BIT_EXT;
+    export_device.pNext = instance_info.pNext;
+    instance_info.pNext = &export_device;
+#endif
     const VkResult instance_result = creator ? creator->CreateInstance(instance_info, instance) : vkCreateInstance(&instance_info, nullptr, &instance);
     if (!Check(instance_result, "vkCreateInstance")) {
         return false;
@@ -383,6 +391,10 @@ bool Context::Init(SDL_Window* window, bool validation) {
     }
     volkLoadDevice(device);
     vkGetDeviceQueue(device, queue_family, 0, &queue);
+#ifdef __APPLE__
+    metal_objects = std::any_of(device_extensions.begin(), device_extensions.end(),
+                                [](const char* e) { return std::strcmp(e, VK_EXT_METAL_OBJECTS_EXTENSION_NAME) == 0; });
+#endif
     g_checkpoints = checkpoints && vkCmdSetCheckpointNV;
 
     VmaVulkanFunctions functions{};
@@ -621,7 +633,7 @@ VkResult Context::QueuePresent(const VkPresentInfoKHR& info) {
 }
 
 bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels,
-                          uint32_t layers, VkImageAspectFlags aspect, bool cube) {
+                          uint32_t layers, VkImageAspectFlags aspect, bool cube, bool metal_export) {
     VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     info.imageType = extent.depth > 1 ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     info.format = format;
@@ -632,6 +644,17 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usage;
     info.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+#ifdef __APPLE__
+    // VUID-VkExportMetalObjectsInfoEXT-pNext-06795: an image whose MTLTexture is exported declares it at creation.
+    VkExportMetalObjectCreateInfoEXT export_texture{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_texture.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+    if (metal_export && metal_objects) {
+        export_texture.pNext = info.pNext;
+        info.pNext = &export_texture;
+    }
+#else
+    (void)metal_export;
+#endif
     VmaAllocationCreateInfo alloc{};
     alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (!Check(vmaCreateImage(allocator, &info, &alloc, &out.image, &out.allocation, nullptr), "vmaCreateImage")) {
