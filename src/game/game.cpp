@@ -268,6 +268,7 @@ void Game::Update(float dt, const InputState& pad_input) {
         context.invert_x = options_.invert_x;
         context.invert_y = options_.invert_y;
         context.peephole_theater = nazo_.IsPeepholeTheaterActive();
+        context.fast_walk = fast_walk_ && input.fast_walk;
         if (!demo_control) {
             player_.Update(dt, input, collision_, context);
             zoom_fell_ = zoom_fell_ || player_.ZoomFalling();

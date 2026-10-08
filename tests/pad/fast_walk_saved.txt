@@ -1,0 +1,14 @@
+# Run after fast_walk.txt using the same isolated --settings file and --start-floor f010.
+# The stored setting is applied to the game on startup.
+20 sstep 15
+20 swait 30
+20 sexpect fastwalkenabled 1
+20 skey W 1
+20 skey Left_Shift 1
+20 swait 6
+20 sexpect fastwalk 1
+20 sexpect moverate 1.5
+20 skey Left_Shift 0
+20 swait 6
+20 sexpect moverate 1
+20 squit

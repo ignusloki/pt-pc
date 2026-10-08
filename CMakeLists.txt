@@ -270,6 +270,10 @@ target_link_libraries(pt_settings_roundtrip_test PRIVATE pt_engine)
 add_executable(pt_player_publish_test tests/player_publish_test.cpp)
 target_link_libraries(pt_player_publish_test PRIVATE pt_engine)
 
+# Fast Walk input, movement rates and frame timing; optionally verify travel using a game folder.
+add_executable(pt_fast_walk_test tests/fast_walk_test.cpp)
+target_link_libraries(pt_fast_walk_test PRIVATE pt_engine)
+
 # the hair highlight's dominant light direction over time (0x8D12A0)
 add_executable(pt_dominant_light_test tests/dominant_light_test.cpp)
 target_link_libraries(pt_dominant_light_test PRIVATE pt_engine)

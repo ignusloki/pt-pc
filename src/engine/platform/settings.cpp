@@ -158,6 +158,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
         Read(v, "progress.game_finished", out.progress.game_finished);
         Read(v, "progress.archive", out.progress.archive);
     }
+    Read(v, "extras.fast_walk", out.extras.fast_walk);
     Read(v, "extras.speedrun", out.extras.speedrun);
     Read(v, "extras.livesplit", out.extras.livesplit);
     Read(v, "extras.livesplit_host", out.extras.livesplit_host);
@@ -301,6 +302,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "archive = " << s.progress.archive << "\n";
     text << "\n[extras]\n"
          << "; not in the original; 0 keeps the original game\n"
+         << "; hold either Shift or the gamepad's bottom face button to walk 1.5x faster; game time is unchanged\n"
+         << "fast_walk = " << (s.extras.fast_walk ? 1 : 0) << "\n"
          << "; speedrun timer: 0 off, 1 real time (everything counts), 2 game time (no pauses, no loads); records in this folder\n"
          << "speedrun = " << s.extras.speedrun << "\n"
          << "; LiveSplit: send the start, the splits and the game time to its TCP server (Control > Start TCP Server)\n"

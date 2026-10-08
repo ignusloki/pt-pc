@@ -30,7 +30,7 @@ bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
            a.upscaling.quality == b.upscaling.quality && Near(a.upscaling.scale, b.upscaling.scale) &&
            Near(a.upscaling.sharpness, b.upscaling.sharpness) && a.upscaling.dlss_model == b.upscaling.dlss_model &&
            a.upscaling.frame_generation == b.upscaling.frame_generation &&
-           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr;
+           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr && a.extras == b.extras;
 }
 
 pt::AppSettings RoundTrip(const std::filesystem::path& path, const pt::AppSettings& s) {
@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
         {"input.rumble", [](auto& s) { s.input.rumble = false; }},
         {"camera.roll", [](auto& s) { s.camera.roll = 0.0f; }},
         {"camera.third_person", [](auto& s) { s.camera.third_person = true; }},
+        {"extras.fast_walk", [](auto& s) { s.extras.fast_walk = true; }},
         {"audio.volume", [](auto& s) { s.audio.volume = 1.7f; }},
         {"voice.device", [](auto& s) { s.voice.device = "Microphone (USB Audio Device)"; }},
         {"voice.key", [](auto& s) { s.voice.key = "J"; }},
@@ -130,6 +131,9 @@ int main(int argc, char** argv) {
     Check("vr resolution scale clamped", odd.vr.resolution_scale == 2.0f);
     Check("vr snap nan is the default", odd.vr.snap_degrees == 30.0f);
     Check("vr off by default", !pt::AppSettings{}.vr.enabled);
+    Check("fast walk off by default", !pt::AppSettings{}.extras.fast_walk);
+    Check("older settings keep fast walk off", !LoadText(ini, "[extras]\nspeedrun = 1\n").extras.fast_walk);
+    Check("disabled fast walk round trip", !RoundTrip(ini, {}).extras.fast_walk);
     std::filesystem::remove(ini);
     std::printf("%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
