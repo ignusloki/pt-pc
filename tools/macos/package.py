@@ -227,7 +227,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--build", type=Path, default=REPO / "build/macos-arm64")
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--version", default="1.0.1")
+    p.add_argument("--version", default="1.0.2")
     p.add_argument("--identity", default="-", help="Developer ID Application identity, or '-' for local ad-hoc signing")
     p.add_argument("--exe", type=Path)
     p.add_argument("--moltenvk", type=Path)

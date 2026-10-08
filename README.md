@@ -20,6 +20,8 @@ still have it installed. It plays the whole teaser from the first wake-up to the
   decrypts it.
 - Windows 10 or 11 (x64), or Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
   and SteamOS).
+- Apple Silicon Macs (M1 or newer) running macOS 14 or later are supported by the preview build; see
+  [macOS instructions](docs/macos.md).
 - A GPU and driver with Vulkan 1.3. The optional ray-traced shadows, ambient occlusion and reflections need a GPU with
   Vulkan ray queries. DLSS needs a GeForce RTX card; FSR and XeSS run on any recent GPU. The settings page greys out
   what your machine cannot run and says why.
@@ -36,6 +38,11 @@ system files are not used.
 
 Linux: `chmod +x` the setup and run it from a terminal. The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
+
+macOS (Apple Silicon): download **PT-Mac-Setup-arm64.zip** from the
+[Mac preview release](https://github.com/ignusloki/pt-pc/releases/tag/macos-arm64-preview-3), unzip it and open
+**P.T. Mac Setup.app**. Choose your PKG or decrypted game folder and a destination. Open **P.T..app** inside
+**P.T. PC Port**, keeping **CUSA01127** beside it. The runtime and its dependencies are included.
 
 There is also a portable zip on the Releases page if you prefer to put the game files in place yourself: unpack it,
 then start `pt.exe --game <your CUSA01127 folder>` once, or put the folder next to the executable as `game/CUSA01127`.

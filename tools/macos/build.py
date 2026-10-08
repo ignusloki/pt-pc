@@ -59,7 +59,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--liborbis", type=Path, help="Existing upstream source; a pinned copy is downloaded when omitted")
     p.add_argument("--out", type=Path, help="New output directory (defaults to a timestamp under dist/macos)")
-    p.add_argument("--version", default="1.0.1")
+    p.add_argument("--version", default="1.0.2")
     p.add_argument("--identity", default="-", help="Developer ID Application identity, or '-' for local testing")
     p.add_argument("--jobs", type=int, default=6)
     args = p.parse_args()

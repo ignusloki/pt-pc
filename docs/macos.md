@@ -6,6 +6,12 @@ on an M1 Pro running macOS 26.6.2, including the full scripted walkthrough.
 Manual gameplay, microphone and controller input, and other Mac/OS combinations
 still need validation before treating it as a working release.
 
+Apple Silicon preview 3 uses version 1.0.2 and includes built-in Fast Walk.
+It is off by default; enable PC settings > Extras > Fast walk, then hold either
+Shift key or the controller's bottom face button (Xbox A / PlayStation X) for
+50% faster walking. Release for normal speed. The option is saved and takes
+effect immediately. See [Fast Walk](fast-walk.md) for behavior and checks.
+
 Mac validation (7 October 2026): the native preset builds with Apple Clang 21,
 CMake 4.4.4, MoltenVK 1.4.2 and Microsoft's arm64 .NET 10.0.401 SDK. All 14
 synthetic packaging checks, nine CPU/platform test targets, 29 reflection-mix GPU
@@ -186,8 +192,9 @@ frame generation, OpenXR and the external enhanced-texture generator are exclude
 from the default build. Ray queries remain dependent on capabilities actually
 reported by MoltenVK and the GPU; they are not part of Mac acceptance testing yet.
 The Mac branch includes upstream 1.0.1's DLSS swapchain recovery and Windows
-surface-creation fixes; these do not enable DLSS on Apple Silicon. The Mac build
-and package scripts default to version 1.0.1 to match that upstream release.
+surface-creation fixes; these do not enable DLSS on Apple Silicon. The upstream
+base remains version 1.0.1. The Mac build and package scripts default to version
+1.0.2 for Apple Silicon preview 3.
 Microphone access has a usage description in the game's Info.plist and an
 audio-input entitlement for the hardened runtime. Voice libraries are signed in
 `Contents/Frameworks`; models stay in `Contents/Resources/voice`. The voice
