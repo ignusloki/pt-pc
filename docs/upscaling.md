@@ -70,10 +70,12 @@ The three SDKs are Windows binaries, so the upscalers are left out of the Linux 
 ### Apple MetalFX
 
 macOS only (`metalfx_backend.mm`). MoltenVK's `VK_EXT_metal_objects` gives the Metal textures behind the scene's
-images, and `MTLFXTemporalScaler` upscales them on its own Metal queue. Two Vulkan events keep it in order with the
-frame: the frame's command buffer signals one where the upscale belongs and waits on the other, which the MetalFX
-command buffer signals when it is done. The qualities use the same ratios as FSR. The frame's exposure value is passed
-as the exposure texture; MetalFX has no sharpening.
+images, and `MTLFXTemporalScaler` upscales them on its own Metal queue. Two Vulkan timeline semaphores exported as
+Metal shared events keep the queues in order. The renderer submits the scene inputs before committing the MetalFX
+command buffer; the remaining Vulkan work waits for MetalFX's output signal. Synchronization resources stay alive
+until the frame fence completes, and timeline values keep increasing across settings and size changes.
+The qualities use the same ratios as FSR. The frame's exposure is converted to an R16Float texture for MetalFX;
+MetalFX has no sharpening. Upscaling remains off by default.
 
 ## Frame generation
 

@@ -40,7 +40,7 @@ Linux: `chmod +x` the setup and run it from a terminal. The game needs only glib
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
 macOS (Apple Silicon): download **PT-Mac-Setup-arm64.zip** from the
-[Mac preview release](https://github.com/ignusloki/pt-pc/releases/tag/macos-arm64-preview-3), unzip it and open
+[Mac preview release](https://github.com/ignusloki/pt-pc/releases/tag/macos-arm64-preview-4), unzip it and open
 **P.T. Mac Setup.app**. Choose your PKG or decrypted game folder and a destination. Open **P.T..app** inside
 **P.T. PC Port**, keeping **CUSA01127** beside it. The runtime and its dependencies are included.
 
@@ -66,7 +66,7 @@ there if you want them.
 
 Display and image
 - Window, borderless or fullscreen, any resolution, v-sync on or off.
-- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS, in the usual quality steps or a
+- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model), Intel XeSS and Apple MetalFX on macOS, in the usual quality steps or a
   custom scale, plus native-resolution anti-aliasing (FSR native AA, DLAA).
 - Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer.
 - Graphics presets Low, Medium, Original (PS4), High, Ultra and Custom. The individual controls cover shadow map size,

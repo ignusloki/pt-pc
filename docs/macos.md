@@ -3,10 +3,19 @@
 This is an experimental native arm64 port for M-series Macs running macOS 14 or newer.
 The runtime, Cocoa installer and packaging tools have been built and tested
 on an M1 Pro running macOS 26.6.2, including the full scripted walkthrough.
-Manual gameplay, microphone and controller input, and other Mac/OS combinations
-still need validation before treating it as a working release.
+The preview 4 test build has also passed the user's manual gameplay checks.
+Microphone and physical controller input, and other Mac/OS combinations still
+need further validation.
 
-Apple Silicon preview 3 uses version 1.0.2 and includes built-in Fast Walk.
+Apple Silicon preview 4 uses version 1.0.3 and adds Apple MetalFX temporal
+upscaling from [ginnfx's PR #1](https://github.com/ignusloki/pt-pc/pull/1), together
+with timeline semaphore synchronization and macOS fullscreen/resolution fixes.
+Upscaling is off by default. Open PC settings > Upscaling, select Apple MetalFX
+and start with Quality. Native provides anti-aliasing at the display resolution;
+Balanced and Performance lower the internal rendering resolution further.
+The timeline handoff regression is included in the Mac build script's checks.
+
+Built-in Fast Walk is retained.
 It is off by default; enable PC settings > Extras > Fast walk, then hold either
 Shift key or the controller's bottom face button (Xbox A / PlayStation X) for
 50% faster walking. Release for normal speed. The option is saved and takes
@@ -196,7 +205,7 @@ reported by MoltenVK and the GPU; they are not part of Mac acceptance testing ye
 The Mac branch includes upstream 1.0.1's DLSS swapchain recovery and Windows
 surface-creation fixes; these do not enable DLSS on Apple Silicon. The upstream
 base remains version 1.0.1. The Mac build and package scripts default to version
-1.0.2 for Apple Silicon preview 3.
+1.0.3 for Apple Silicon preview 4.
 Microphone access has a usage description in the game's Info.plist and an
 audio-input entitlement for the hardened runtime. Voice libraries are signed in
 `Contents/Frameworks`; models stay in `Contents/Resources/voice`. The voice
@@ -230,6 +239,12 @@ Use this checklist for further manual coverage and testing on other Macs:
    menu. Run `tests/pad/boot_focus.txt` headless with `--virtual-pads`,
    `--audio-offline`, `--no-save`, `--options-menu`, `--demo-rate 20` and
    `--frames 10000` to check the startup race without touching player saves.
+8. With MetalFX enabled, switch between Native, Quality, Balanced and Performance,
+   then disable and re-enable it during play. Change window mode and resolution,
+   toggle v-sync and return after focus loss. Check the first-boot options, dark
+   hallway, mirrors, particles and subtitles for flicker, stale frames or hangs.
+   `pt_queue_handoff_test` checks submission order and synchronization lifetimes;
+   Metal's validation layer can additionally check the live renderer.
 
 Primary integration references:
 [MoltenVK runtime guide](https://github.com/KhronosGroup/MoltenVK/blob/main/Docs/MoltenVK_Runtime_UserGuide.md),

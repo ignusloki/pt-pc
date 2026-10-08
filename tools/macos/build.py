@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_status_test",
          "pt_save_reset_test", "pt_language_default_test", "pt_graphics_preset_test", "pt_voice_match_test", "pt_installer_update_test",
-         "pt_reflection_mix_test", "pt_fast_walk_test")
+         "pt_reflection_mix_test", "pt_fast_walk_test", "pt_queue_handoff_test")
 
 
 def run(*args):
@@ -59,7 +59,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--liborbis", type=Path, help="Existing upstream source; a pinned copy is downloaded when omitted")
     p.add_argument("--out", type=Path, help="New output directory (defaults to a timestamp under dist/macos)")
-    p.add_argument("--version", default="1.0.2")
+    p.add_argument("--version", default="1.0.3")
     p.add_argument("--identity", default="-", help="Developer ID Application identity, or '-' for local testing")
     p.add_argument("--jobs", type=int, default=6)
     args = p.parse_args()
