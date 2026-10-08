@@ -665,6 +665,11 @@ void ApplyFullscreen(App& app) {
         SDL_SetWindowFullscreenMode(app.window, nullptr);
     }
     SDL_SetWindowFullscreen(app.window, mode != 0);
+#ifdef __APPLE__
+    // Cocoa applies fullscreen requests asynchronously. Finish the transition before rebuilding the Vulkan drawable.
+    if (!SDL_SyncWindow(app.window)) pt::LogWarn("display: fullscreen transition timed out: {}", SDL_GetError());
+    if (app.renderer.Context().device) app.renderer.Resize(0, 0);
+#endif
 }
 
 std::filesystem::path g_output_dir;
@@ -1831,6 +1836,10 @@ public:
             s.display.height = sizes[value].y;
             if (app_.window && s.display.fullscreen == 0) {
                 SDL_SetWindowSize(app_.window, s.display.width, s.display.height);
+#ifdef __APPLE__
+                if (!SDL_SyncWindow(app_.window)) pt::LogWarn("display: window resize timed out: {}", SDL_GetError());
+                app_.renderer.Resize(0, 0);
+#endif
             }
             break;
         }

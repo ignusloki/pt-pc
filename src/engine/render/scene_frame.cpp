@@ -2433,9 +2433,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         }
         Stamp(cmd, 9);
         if (up_.enabled) {
-            BeginLabel(cmd, "upscale");
             RecordUpscale(cmd, dt);
-            EndLabel(cmd);
             post_bindings_ = true;
             BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
         }

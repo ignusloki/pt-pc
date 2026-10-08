@@ -344,7 +344,7 @@ private:
     void RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer);
     void RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context);
     void RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& view);
-    void RecordUpscale(VkCommandBuffer cmd, float dt);
+    void RecordUpscale(VkCommandBuffer& cmd, float dt);
     void ReadUpscaleTimestamps(FrameSlot& slot);
 
     static constexpr uint32_t kTimestamps = 12;

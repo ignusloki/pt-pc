@@ -286,6 +286,9 @@ target_link_libraries(pt_vr_view_test PRIVATE pt_engine)
 add_executable(pt_upscaler_gpu_test tests/upscaler_gpu_test.cpp)
 target_link_libraries(pt_upscaler_gpu_test PRIVATE pt_engine)
 
+add_executable(pt_queue_handoff_test tests/queue_handoff_test.cpp)
+target_link_libraries(pt_queue_handoff_test PRIVATE pt_engine)
+
 add_executable(pt_peephole_look_test tests/peephole_look_test.cpp)
 target_link_libraries(pt_peephole_look_test PRIVATE pt_engine)
 

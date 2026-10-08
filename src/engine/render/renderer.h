@@ -51,6 +51,9 @@ public:
     const vk::Image& SceneColor() const { return scene_color_; }
     VkExtent2D RenderExtent() const { return {scene_color_.extent.width, scene_color_.extent.height}; }
     uint32_t FrameIndex() const { return frame_index_; }
+    // Finish the current segment, then resume after work on another GPU queue. Submission is deferred to EndFrame.
+    VkCommandBuffer QueueHandoff(VkCommandBuffer current, VkSemaphore inputs_ready, uint64_t inputs_value,
+                                 VkSemaphore output_ready, uint64_t output_value, std::function<void()> submit_external);
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
@@ -69,11 +72,24 @@ public:
     static constexpr VkExtent2D kHudExtent{1920, 1080};
 
 private:
+    struct FrameSegment {
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkSemaphore wait = VK_NULL_HANDLE;
+        uint64_t wait_value = 0;
+        VkSemaphore signal = VK_NULL_HANDLE;
+        uint64_t signal_value = 0;
+        std::function<void()> submit_external;
+    };
+
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
+        std::vector<VkCommandBuffer> commands;
+        std::vector<FrameSegment> segments;
+        VkSemaphore wait = VK_NULL_HANDLE;
+        uint64_t wait_value = 0;
     };
 
     bool CreateTargets(uint32_t width, uint32_t height);

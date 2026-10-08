@@ -440,7 +440,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 1);
 }
 
-void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
+void SceneRenderer::RecordUpscale(VkCommandBuffer& cmd, float dt) {
     FrameSlot& slot = slots_[renderer_->FrameIndex()];
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 2);
     UseTargets(cmd, {{&exposure_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL}});
@@ -458,6 +458,7 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
                          {&upscaled_, VK_IMAGE_LAYOUT_GENERAL}});
         UpscaleDispatch d;
         d.cmd = cmd;
+        d.renderer = renderer_;
         d.color = Wrap(handy_demod_ ? opaque_ : hdr_);
         d.depth = Wrap(depth_);
         d.motion = Wrap(motion_);
@@ -494,6 +495,12 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
             streamline::SetConstants(k);
         }
         upscaled = up_.backend->Dispatch(d);
+        if (cmd != renderer_->Cmd()) {
+            cmd = renderer_->Cmd();
+            // Command-buffer state does not carry across the external queue handoff.
+            BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+            BindSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+        }
         FrameGeneration* fg = streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
         if (upscaled && fg && fg->Generating()) {
             FrameGenPrepare prepare;
