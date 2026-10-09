@@ -22,6 +22,8 @@ struct Push {
 };
 
 constexpr uint32_t kInitialQuads = 4096;
+// Uploads no longer wait on the GPU, so a few decoded textures per frame cost only their copy into staging memory.
+constexpr uint32_t kDecodedUploadsPerFrame = 4;
 
 struct FogBlock {
     glm::vec4 fog[8]{};
@@ -197,6 +199,10 @@ uint32_t VfxPass::Texture(const std::string& path) {
     if (auto it = texture_cache_.find(path); it != texture_cache_.end()) {
         return it->second;
     }
+    // Not cached, so a later frame picks up the real texture; fully transparent leaves every blend mode's target untouched.
+    if (textures_->StillDecoding(path)) {
+        return TextureManager::kClear;
+    }
     bool ok = false;
     const auto started = std::chrono::steady_clock::now();
     const uint32_t index = textures_->LoadFox(vfs_->Textures(), path, &ok);
@@ -243,7 +249,7 @@ uint32_t VfxPass::Cube(const std::string& path) {
 
 void VfxPass::Submit(vfx::RenderList& list) {
     if (textures_ && vfs_) {
-        textures_->PumpDecoded(vfs_->Textures(), 1);
+        textures_->PumpDecoded(vfs_->Textures(), kDecodedUploadsPerFrame);
     }
     std::swap(list_, list);
     list.Clear();

@@ -52,6 +52,7 @@ public:
     static constexpr uint32_t kBlack = 2;
     static constexpr uint32_t kGrey = 4;
     static constexpr uint32_t kGreySrgb = 5;
+    static constexpr uint32_t kClear = 6;
     static constexpr uint32_t kMaxCubeTextures = 64;
     static constexpr uint32_t kNoCube = 0xFFFFFFFFu;
 
@@ -62,6 +63,7 @@ public:
     uint32_t Find(const std::string& name) const;
     uint32_t LoadFox(const QarArchive& qar, const std::string& path, bool* ok = nullptr, bool raw = false);
     void DecodeAhead(const QarArchive& qar, const std::vector<std::string>& paths);
+    bool StillDecoding(const std::string& path) const;
     uint32_t PumpDecoded(const QarArchive& qar, uint32_t count);
     bool AdoptDecoded(const std::string& path, std::shared_ptr<FtexTexture> decoded);
     void DropDecoded(const std::vector<std::string>& paths);
@@ -89,6 +91,12 @@ private:
     void UpdateTextureDescriptor(uint32_t index);
     void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr);
     uint32_t LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png, bool raw);
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
+
+    struct PendingUpload {
+        vk::Submission submission;
+        vk::Buffer staging;
+    };
 
     vk::Context* ctx_ = nullptr;
     VkSampler base_sampler_ = VK_NULL_HANDLE;
@@ -115,6 +123,8 @@ private:
     std::unordered_map<std::string, std::shared_future<std::shared_ptr<FtexTexture>>> decoding_;
     std::deque<std::string> decode_order_;
     std::vector<std::future<void>> decode_workers_;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     double read_ms_ = 0.0;
     double upload_ms_ = 0.0;
 };

@@ -52,6 +52,11 @@ struct Swapchain {
     uint32_t min_image_count = 2;
 };
 
+struct Submission {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+};
+
 class Context {
 public:
     bool Init(SDL_Window* window, bool validation);
@@ -72,6 +77,9 @@ public:
     void DestroyBuffer(Buffer& buffer);
 
     void Submit(const std::function<void(VkCommandBuffer)>& record);
+    // Submit without the CPU wait: the caller polls or waits on the fence, then hands it back to Release.
+    Submission SubmitAsync(const std::function<void(VkCommandBuffer)>& record);
+    void Release(Submission& submission);
     bool Upload(Buffer& dst, const void* data, VkDeviceSize size);
 
     VkInstance instance = VK_NULL_HANDLE;
