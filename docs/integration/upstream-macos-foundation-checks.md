@@ -51,7 +51,7 @@ The GPU checks use isolated settings/save paths and offline audio; they do not g
 
 `.github/workflows/macos.yml` uses native Apple silicon and Intel runners; `.github/workflows/desktop-validation.yml` uses Windows and Linux runners. The [runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) were checked against GitHub's runner documentation.
 
-The initial push was rejected because the existing GitHub CLI OAuth login lacked `workflow` scope. Reauthorization was requested through the official GitHub device flow. Until that permission is granted and the branch is pushed, these workflows have not run. This is an authentication gate, not a passing platform result.
+The initial push was rejected because the GitHub CLI OAuth login lacked `workflow` scope. Reauthorization subsequently succeeded through the official GitHub device flow. The local permission prompt rejected the next push, and the user explicitly chose to keep the integration branch local. These workflows have therefore not run; their definitions and syntax checks are not passing native platform results.
 
 Windows validation keeps strict FSR/DLSS/XeSS requirements and checks the executable fingerprint plus staged SDK files. The Windows installer resource/link check uses a compile-only payload fixture that is never shipped. Both desktop jobs build the game and installer, exercise shared transactions/Unicode paths, test synthetic extractor input and publish the self-contained helper. Neither CI job proves actual GPU gameplay or installs a real game PKG.
 
