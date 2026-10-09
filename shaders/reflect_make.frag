@@ -82,6 +82,9 @@ void main() {
             hit = k - 1;
         }
         behind_previous = behind;
+        if (hit >= 0 || terminated) {
+            break;
+        }
     }
     if (hit < 0) {
         out_color = vec4(0.0);
