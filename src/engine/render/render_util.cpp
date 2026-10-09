@@ -9,11 +9,24 @@ namespace pt {
 
 bool g_checkpoints = false;
 
+namespace {
+
+bool ReadOnlyLayout(VkImageLayout layout) {
+    return layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL ||
+           layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+}
+
+}
+
 void UseTargets(VkCommandBuffer cmd, std::initializer_list<TargetUse> uses) {
     VkImageMemoryBarrier2 barriers[16];
     uint32_t count = 0;
     for (const TargetUse& use : uses) {
         if (!use.target || !use.target->Valid() || count == std::size(barriers)) {
+            continue;
+        }
+        // Read to read needs no barrier: the transition into this layout already made the image's last write visible to later commands.
+        if (use.target->layout == use.layout && ReadOnlyLayout(use.layout)) {
             continue;
         }
         VkImageMemoryBarrier2& b = barriers[count++];
