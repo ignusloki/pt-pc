@@ -2,11 +2,17 @@
 
 Prepared: 8 October 2026. Updated: 9 October 2026.
 
-Phase 1 is complete on `codex/upstream-macos-integration`. See the
-[baseline report](upstream-macos-baseline.md) and
-[classified change inventory](upstream-macos-change-inventory.md).
-The first source commit fixes two existing Mac baseline issues; the next phase
-adapts the Apple-only build and packaging foundations.
+Phase 1 is complete on `codex/upstream-macos-integration`. The historical [baseline report](upstream-macos-baseline.md) and [classified change inventory](upstream-macos-change-inventory.md) remain the original comparison. Upstream was refreshed and rebased onto `0e0e147649c05be3b7782f89f55d9e125ce7671e`; its own Mac compile fix is retained. Our baseline source repair now only adds the missing `.dylib` files to Unicode voice test fixtures.
+
+The agreed current priority is:
+
+1. Reconcile Mac build and packaging, including the native installer.
+2. Request microphone access when the game starts.
+3. Use the supplied icon by default for the Mac game and builder/installer.
+4. Validate Intel Mac builds and packaging.
+5. Validate Windows and Linux builds and shared installer/extractor code.
+
+Implementation and verification for these priorities are recorded in [the foundation checks](upstream-macos-foundation-checks.md). MetalFX, remaining window behavior and Fast Walk follow these platform gates.
 
 ## Objective
 
@@ -23,7 +29,7 @@ the combined code works on Windows or Linux.
 | Item | Verified state |
 | --- | --- |
 | Upstream repository | https://github.com/LoreanXavier/pt-pc |
-| Upstream base | `main`, `31dc878a7ff33f5ae5bb49659e4f3f7ec449b7fb` |
+| Upstream base | `main`, `0e0e147649c05be3b7782f89f55d9e125ce7671e` |
 | Tested fork | `ignusloki/pt-pc`, `codex/macos-arm64-port` |
 | Tested fork commit | `877aa3b8474809904309416e27c229a41178b6c8` |
 | Fork release checkpoint | `macos-arm64-preview-4`, version 1.0.3 |
@@ -35,7 +41,7 @@ reviewed starting points rather than pinning development to an outdated main.
 
 Upstream already contains Apple Silicon and Intel Mac support, a remembered dump
 folder picker, a release workflow, and several fixes credited to this fork.
-Its documentation currently excludes native PKG installation and Fast Walk.
+The refreshed upstream base excludes native PKG installation and Fast Walk; this integration branch now adapts the native installer.
 References: [upstream macOS documentation](https://github.com/LoreanXavier/pt-pc/blob/31dc878a7ff33f5ae5bb49659e4f3f7ec449b7fb/docs/macos.md),
 [macOS release workflow](https://github.com/LoreanXavier/pt-pc/blob/31dc878a7ff33f5ae5bb49659e4f3f7ec449b7fb/.github/workflows/macos.yml).
 
@@ -52,14 +58,7 @@ superseded by an upstream implementation, or an optional feature. Preserve the
 original contributor attribution, including ginnfx's MetalFX PR and ahm3texe's
 graphics/font work, when adapting their code.
 
-Use this commit order:
-
-1. Compatible Mac build and packaging foundations.
-2. Native Apple Silicon PKG installer and update support.
-3. MetalFX and GPU queue synchronization.
-4. Remaining macOS fullscreen/resolution fixes.
-5. Optional Fast Walk and its tests.
-6. Cross-platform checks, release integration and documentation.
+Use the current priority order above for foundation work. Then keep MetalFX and GPU queue synchronization, remaining fullscreen/resolution behavior, and optional Fast Walk in focused follow-up commits. Native microphone permissions and framework linkage stay Apple-only. Source attribution and upstream gameplay/update behavior remain preserved.
 
 Fast Walk should be independently reviewable because it changes gameplay on all
 platforms. If the maintainer wants a separate feature PR, the Mac contribution
@@ -90,7 +89,7 @@ has an integration decision.
 ## Phase 2 — Reconcile build and app packaging
 
 - Keep upstream's pinned MoltenVK download and local-library override.
-- Enable Objective-C/Cocoa and MetalFX only on macOS. Keep Apple framework and
+- Enable Objective-C++/Cocoa and AVFoundation only on macOS; MetalFX follows in Phase 4. Keep Apple framework and
   Metal headers out of Windows and Linux compilation.
 - Preserve the existing Windows and Linux compiler, dependency, shader and
   release settings. Keep their enhanced-texture and upscaler defaults.
@@ -101,8 +100,9 @@ has an integration decision.
   do not assume the fork's single ARM64 voice module exists in this layout.
 - Use upstream's app name and resource conventions consistently in the runtime,
   installer, update detection and repair tests.
-- Preserve the existing Intel portable-app build. The first native installer can
-  remain Apple Silicon only, explicitly scoped and named as such.
+- Build separate Apple Silicon and Intel game/installer packages; preserve upstream's per-CPU voice modules. Distinguish cross-compilation from native runtime/GPU validation.
+- Request microphone permission asynchronously during normal game startup, respecting existing macOS decisions and keeping recording timing unchanged.
+- Include the supplied default icon in both Mac bundles before signing.
 
 **Exit condition:** the integrated game and portable app build on Apple Silicon;
 non-Apple builds acquire no Apple dependencies; the Intel build path remains
@@ -206,7 +206,4 @@ because its Mac-only counterpart passed.
 
 ## First implementation milestone
 
-Start with Phase 1 and the build/packaging foundations from Phase 2. Produce an
-upstream-based Apple Silicon app with the correct resource and voice layout,
-alongside a classified change/conflict inventory. This creates a stable base for
-the installer and MetalFX work before the larger shared-code changes begin.
+Finish the foundation checks in the agreed priority order, with native Intel, Windows and Linux validation where available. Obtain manual confirmation of the first-launch microphone dialog and live input on the packaged app. Keep the current tested fork release as the comparison until the integration preview and later renderer/gameplay phases are approved for release.

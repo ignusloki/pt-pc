@@ -2,16 +2,17 @@
 
 The game (`pt`) builds for macOS 14 or newer on Apple silicon (M1 and later, arm64) and on Intel Macs (x86_64). It ships as
 `P.T. PC Port.app`, one app per CPU: `P.T.PC.Port-macOS-arm64.zip` and `P.T.PC.Port-macOS-x64.zip` on the Releases page.
-There is no installer on macOS: the app asks for the dump folder on the first start.
+A native `P.T. PC Port Setup.app` also accepts a complete P.T. fake PKG or decrypted game folder and installs the app beside the extracted archives in a location you choose. Its release ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` or `P.T.PC.Port.Setup-macOS-x64.zip`. The portable app still remembers a selected dump folder.
 
 The macOS version is the port's own and does what the Linux one does, with these limits: FSR 3, DLSS and XeSS (Windows
 SDKs), the VR mode and the ray-traced shadows, ambient occlusion and reflections (MoltenVK has no ray queries) are off, and
-the settings page greys them out. Nothing of the macOS port could be built or run on the machine it was written on (a
-Windows PC); what has been tried on a Mac is in the credits below.
+the settings page greys them out. Validation results and hardware limits are recorded in the credits below and the [integration check report](integration/upstream-macos-foundation-checks.md).
 
 ## Running
 
-1. Unzip the zip for your Mac (`...-arm64.zip` for an M1 or later, `...-x64.zip` for an Intel Mac; Apple menu > About This
+1. For direct PKG installation, unzip the **Setup** ZIP for your Mac and open `P.T. PC Port Setup.app`. Select your complete fake PKG or decrypted folder, then choose a writable parent folder. The installer creates a `P.T. PC Port` folder containing the app and `CUSA01127` archives. Updates and repairs replace the signed app as a whole, preserving player files and usable game archives.
+
+   For the portable app, unzip the zip for your Mac (`...-arm64.zip` for an M1 or later, `...-x64.zip` for an Intel Mac; Apple menu > About This
    Mac says which) and move `P.T. PC Port.app` where you like (Applications, or a folder of its own). The game's own
    update notice names the right zip for the CPU it runs on.
 2. The app is signed ad hoc, without a paid Developer ID or notarisation. After you try opening the downloaded app once,
@@ -20,10 +21,8 @@ Windows PC); what has been tried on a Mac is in the credits below.
    that hasn't been notarised](https://support.apple.com/en-gb/102445).
 3. On the first start a folder dialog asks for your extracted CUSA01127 folder (the one with `chunk1.psarc` and
    `texture.qar`). The choice is remembered. A `CUSA01127` or `game/CUSA01127` folder next to the app is found without
-   asking, and `pt --game <folder>` (`P.T. PC Port.app/Contents/MacOS/pt`) still works. A fake PKG cannot be used on
-   macOS: the extraction helper of the installers is not built for it, so extract the PKG on Windows or Linux first.
-4. macOS asks once for the microphone, for the part of the game that listens for the word. `[voice] key = J` in `pt.ini`
-   works here too.
+   asking, and `pt --game <folder>` (`P.T. PC Port.app/Contents/MacOS/pt`) still works. Use the native Setup app to extract a fake PKG locally on macOS; the portable game accepts the extracted folder.
+4. On a normal game launch, macOS requests microphone permission at startup if it has no decision recorded for this app. Granting permission does not start recording. Recording still begins when the game needs voice input. If access is denied, gameplay continues; enable the app in System Settings > Privacy & Security > Microphone for the voice puzzle. Already granted/denied decisions are respected. `[voice] key = J` in `pt.ini` works here too. Headless runs, previews, WAV voice tests and installer verification do not request startup microphone access.
 
 Settings, the save, `pt.log` and the enhanced texture cache are in `~/Library/Application Support/pt-port/pt/`. Mods go
 in `mods/` in that folder (docs/modding.md), since the app bundle is no place for user files.
@@ -37,6 +36,7 @@ macOS takes the POSIX side of `src/engine/platform` (docs/linux.md), with these 
 | Vulkan | MoltenVK 1.4.2 (Vulkan 1.4 on Metal, Apache-2.0), loaded by the game from `Contents/Frameworks/libMoltenVK.dylib` or next to `pt` in a build folder; SDL is pointed at the same file (`SDL_HINT_VULKAN_LIBRARY`). The instance asks for portability drivers and the device enables `VK_KHR_portability_subset`. `PT_VULKAN_LIBRARY` picks another library, such as the Vulkan SDK's loader for the validation layers |
 | `http.h`: HTTPS GET (update check) | the system's `/usr/lib/libcurl.4.dylib`, loaded with `dlopen` as on Linux. The manifest entry is `macos-arm64` or `macos-x64` by the CPU the game was built for (`Platform()` in update_check.cpp) |
 | voice recognizer (whisper.cpp) | `libwhisper.dylib`, `libggml*.dylib` and ggml's CPU variants in `voice/` (CMake modules keep `.so`), rpath `@loader_path`, worker thread at QoS utility. The variants are the target CPU's: `libggml-cpu-apple_m1.so`, `-apple_m2_m3`, `-apple_m4` on Apple silicon; `-x64`, `-sse42`, `-haswell`, `-skylakex` and the other x86 ones on an Intel Mac, each loaded only on a CPU that has what it needs. CPU only, as elsewhere: ggml's Metal and Accelerate backends are off |
+| microphone permission | asynchronous AVFoundation authorization during normal game startup, with the usage description and audio-input entitlement in the signed game bundle; permission and actual recording are separate |
 | audio mixer | flush to zero through ARM64 FPCR.FZ on Apple silicon, the SSE control register (FTZ and DAZ) on Intel |
 | `LiveSplitClient` | no `MSG_NOSIGNAL` on macOS: `SO_NOSIGPIPE` is set on the socket |
 | window opened in the background | no pause menu before the controller's first tick (an app started from Finder or the Dock can lose the focus while it starts) |
@@ -78,16 +78,27 @@ makes `dist/P.T. PC Port.app` (MoltenVK in `Contents/Frameworks`, the shaders, f
 `ditto`. `--exe build/macos/pt_release` packages the release game; with `--game <folder>` the bundled game also shoots
 the loop browser's previews, as tools/package.py does.
 
+The default icon in both Mac apps is `assets/macos/pt.icns`, generated from the supplied `assets/macos/pt-icon.png`. Package resources and Info.plist are populated before signing.
+
+For a complete game and installer build, install the .NET 10 SDK as well, then run:
+
+    python3 tools/macos/build.py --arch arm64 --out dist/my-mac-build
+    # On an Intel Mac:
+    python3 tools/macos/build.py --arch x64 --out dist/my-intel-build
+
+The helper builds `pt_release`, its resources and the native installer, runs the CPU and installer regressions, publishes the self-contained extractor, and calls `make_app.py` followed by `make_setup.py`. It preserves upstream's three voice models and the target architecture's ggml CPU modules. The matching patched LibOrbisPkg and wrapper source and LGPL notices are embedded in the installer. Users do not need the .NET SDK installed. Homebrew .NET builds that link external Brotli libraries get those libraries and their MIT license bundled; any remaining non-system Mach-O dependency fails the package audit.
+
+`--liborbis <checkout>` uses an existing source checkout; otherwise the pinned revision is downloaded. `--build <folder>` changes the build/output cache. `--identity <Developer ID Application identity>` signs using that identity; the default is ad hoc. Signing with an identity does not perform notarization.
+
+Cross-compilation is available with `--arch x64 --skip-tests` on Apple silicon, or the reverse target. It verifies and signs the target binaries but skips target-runtime tests. Native hardware testing remains required, especially for GPU support and voice CPU feature selection. Release-only Mac builds stage the same shaders, fonts, voice runtime, MoltenVK and texture helper as developer builds.
+
 ## Releases
 
-`.github/workflows/macos.yml` runs when a release is published, on GitHub's Apple silicon runner (`macos-26`, arm64) and
-Intel runner (`macos-15-intel`, x86_64): each builds `pt` and `pt_release` at the release's version natively and makes the
-app with `tools/macos/make_app.py`. A last job attaches `P.T.PC.Port-macOS-arm64.zip` and `P.T.PC.Port-macOS-x64.zip` to the
-release. The game discovers these assets directly through the GitHub Releases API (docs/updates.md). Started by hand
-(Actions > macOS > Run workflow) it leaves both zips as workflow artifacts, for a test. Without game files on the runner the
-zips have no loop browser previews; the game shoots them at the browser's first use. GitHub retires its Intel runners in
-2027; after that the Intel app needs another Intel Mac or a `CMAKE_OSX_ARCHITECTURES=x86_64` cross build on the arm64 runner
-(not tried).
+`.github/workflows/macos.yml` builds on native Apple silicon (`macos-26`) and Intel (`macos-15-intel`) runners. It runs for pull requests, this integration branch, manual dispatch and published releases. Each runner builds the game and installer, tests packaged voice loading, verifies signatures and exercises native installer rollback. The published-release job attaches portable and Setup ZIPs for both CPUs. The updater keeps its existing portable ZIP asset names and GitHub Releases API endpoint.
+
+`.github/workflows/desktop-validation.yml` checks Windows and Linux separately: both game targets, the native installer, shared installer transactions, Unicode paths, source preservation, synthetic PKG extraction, self-contained extractor publishing and Python payload regressions. Windows keeps all required upscaler backends and verifies their executable fingerprint and staged runtime files. The Windows resource/link check uses a compile-only payload fixture that is never distributed as an installer. Neither workflow ships original game archives or proves GPU gameplay compatibility.
+
+The public runners have no game files, so loop browser previews are generated by the game at first use. The [integration check report](integration/upstream-macos-foundation-checks.md) distinguishes completed local tests from pending native hardware/CI checks.
 
 ## Credits and what was tried
 
@@ -95,5 +106,6 @@ zips have no loop browser previews; the game shoots them at the browser's first 
   scenarios; the bundle played the first room and the hallway. Not tried on M1 to M3 or on an older macOS.
 - ignusloki (github.com/ignusloki/pt-pc, `codex/macos-arm64-port`, preview 1 to 3): Apple silicon, M1 Pro. From that fork
   come the `SO_NOSIGPIPE` socket option, the check for missing GPU features, enabling the portability subset's features and
-  the no-pause-before-the-first-tick fix. Their native macOS installer and the Fast Walk option are not part of this port.
-  That fork has no Intel build; the Intel support here is derived from the same code and has not been run on an Intel Mac.
+  the no-pause-before-the-first-tick fix. The native macOS installer is adapted on this integration branch, with whole-app repair and rollback. Fast Walk and the fork's MetalFX backend remain later integration work. Intel hardware gameplay still requires testing.
+
+- Integration foundation: local M1 Pro, macOS 26.6.2; native installer and portable game compiled, synthetic extractor and shared installer tests passed, a real PKG installed and repaired, and packaged headless graphics/first-boot focus checks passed. Interactive microphone consent and live capture remain manual checks.
