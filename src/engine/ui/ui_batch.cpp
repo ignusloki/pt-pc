@@ -1,5 +1,7 @@
 #include "engine/ui/ui_batch.h"
 
+#include "engine/render/pipeline_cache_store.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -172,6 +174,7 @@ bool UiBatch::CreatePipelines(VkFormat format) {
         blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         blend_attachment.dstColorBlendFactor = !additive ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
         blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        // the coverage variants (VR's HUD): alpha draws add their coverage, additive draws add light without covering
         blend_attachment.srcAlphaBlendFactor = coverage && !additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
         blend_attachment.dstAlphaBlendFactor = coverage && !additive ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
         blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
@@ -191,7 +194,7 @@ bool UiBatch::CreatePipelines(VkFormat format) {
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
         info.layout = layout_;
-        ok = ok && vk::Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipelines_[i]), "ui pipeline");
+        ok = ok && vk::Check(vk::CreateGraphicsPipelinesCached(device_, 1, &info, nullptr, &pipelines_[i]), "ui pipeline");
     }
     vkDestroyShaderModule(device_, vert, nullptr);
     vkDestroyShaderModule(device_, frag, nullptr);

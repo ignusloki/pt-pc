@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "engine/audio/motion_generator.h"
+#include "engine/audio/controller_pcm_capture.h"
 #include "engine/audio/subtitles.h"
 #include "engine/audio/wwise_bank.h"
 
@@ -49,15 +50,18 @@ public:
     SoundSystem(const SoundSystem&) = delete;
     SoundSystem& operator=(const SoundSystem&) = delete;
 
-    bool Init(Vfs& vfs, bool open_device);
+    bool Init(Vfs& vfs, bool open_device, bool surround_output = false);
     void Shutdown();
 
     PlayingId PostEvent(std::string_view event_name, GameObjectId object = 0);
     PlayingId PostEventId(uint32_t event_id, GameObjectId object = 0);
+    // the event playing these media of its container in order, once (SoundEngine::PostEventMedia)
     PlayingId PostEventMedia(std::string_view event_name, std::vector<uint32_t> media_ids, GameObjectId object = 0);
     PlayingId PostDialogueEvent(std::string_view dialogue_event, std::span<const std::string_view> arguments, GameObjectId object = 0);
     PlayingId PostDialogueEventId(uint32_t dialogue_event_id, std::span<const std::string_view> arguments, GameObjectId object = 0);
+    // stop every voice of a playing id with a fade of that curve (AK::SoundEngine::ExecuteActionOnPlayingID Stop)
     void StopPlayingId(PlayingId id, float fade_seconds = 0.0f, Interp curve = Interp::Linear);
+    // move every voice of a playing id to that time of its media (AK::SoundEngine::SeekOnEvent)
     void SeekPlayingId(PlayingId id, float seconds);
     void StopAll(float fade_seconds = 0.0f);
     bool IsPlaying(PlayingId id) const;
@@ -97,6 +101,10 @@ public:
     bool DeviceOpen() const;
     uint64_t RenderedFrames() const;
     MotionLevels Motion() const;
+    void SetControllerCaptureEvent(uint32_t event_id);
+    void SetControllerCaptureEvents(std::span<const uint32_t> event_ids);
+    bool TryReadControllerPcm(ControllerPcmBlock& block);
+    uint32_t ControllerPcmDroppedBlocks() const;
     void SetFrozen(bool frozen);
 
 private:
@@ -108,6 +116,7 @@ private:
     SubtitleTable subtitles_;
     std::mutex warn_mutex_;
     std::unordered_set<uint32_t> warned_events_;
+    // PT_SOLO_EVENT: the one event posted, 0 all
     uint32_t solo_event_ = 0;
 };
 

@@ -202,14 +202,17 @@ from the default build. Upscaling uses Apple MetalFX instead (PC settings >
 Upscaling, `upscaler = metalfx`; see [Upscaling](upscaling.md#apple-metalfx)).
 Ray queries remain dependent on capabilities actually
 reported by MoltenVK and the GPU; they are not part of Mac acceptance testing yet.
-The Mac branch includes upstream 1.0.1's DLSS swapchain recovery and Windows
-surface-creation fixes; these do not enable DLSS on Apple Silicon. The upstream
-base remains version 1.0.1. The Mac build and package scripts default to version
-1.0.3 for Apple Silicon preview 4.
+The Mac branch now includes upstream's 1.0.2 source update at `fa6fabb`, while
+retaining the tested MetalFX synchronization, window-transition fixes and optional
+Fast Walk. Upstream has not yet published 1.0.2. The Mac version remains 1.0.3
+until a new release is explicitly prepared; preview 4 is the existing release.
 Microphone access has a usage description in the game's Info.plist and an
-audio-input entitlement for the hardened runtime. Voice libraries are signed in
-`Contents/Frameworks`; models stay in `Contents/Resources/voice`. The voice
-recognizer uses a baseline ARM64 GGML CPU backend and utility thread priority.
+audio-input entitlement for the hardened runtime. Voice libraries and all three
+models are signed/staged under `Contents/Resources/voice`, matching upstream's
+loader. Apple M1, M2/M3 and M4 CPU modules are included and scored at runtime;
+the recognizer uses upstream's rescue model, diagnostics and configurable thread
+priority. The installer uses Microsoft's self-contained .NET runtime and rejects
+Mach-O dependencies that require an OS newer than macOS 14.
 
 ## macOS acceptance checks
 

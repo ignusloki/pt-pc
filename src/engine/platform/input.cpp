@@ -7,8 +7,16 @@
 #include <format>
 
 #include "engine/core/log.h"
+#include "engine/platform/controller_feedback.h"
 
 namespace pt {
+
+void KeyPressLatch::ProcessEvent(const SDL_Event& event, uint32_t scancode) {
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode) {
+        pressed_ = true;
+    }
+}
+
 namespace {
 
 constexpr float kTouchSelectX = 768.0f / 1920.0f;
@@ -16,6 +24,8 @@ constexpr float kTouchStartX = 1152.0f / 1920.0f;
 constexpr uint64_t kRumbleRefreshMs = 400;
 constexpr uint32_t kRumbleDurationMs = 1000;
 constexpr int kPlayerRawBits[11] = {11, 6, 7, 3, 10, 1, 9, 12, 13, 14, 15};
+// prompts: a stick or trigger past half its travel is a pad in use, and pointer moves in a menu are the mouse in use
+// (smaller moves are desk bumps); the first two frames after the mouse changes between look and pointer ignore moves (cursor warps)
 constexpr int16_t kPromptAxis = 16384;
 constexpr float kPromptMouseTravel = 12.0f;
 /* Switching between look and pointer warps the cursor; the two frames after it would otherwise read as mouse use and flip the prompts. */
@@ -32,6 +42,8 @@ constexpr KeyBinding kKeyBindings[] = {
     {KeyAction::PadDown, SDL_SCANCODE_DOWN, 0},
     {KeyAction::PadLeft, SDL_SCANCODE_LEFT, 0},
     {KeyAction::PadRight, SDL_SCANCODE_RIGHT, 0},
+    // the zoom is the right button alone: the player holds it and presses the action with the left one (the XMark photo's gouge is the
+    // action, cross, in the original; the X key gouges too)
     {KeyAction::Zoom, 0, SDL_BUTTON_RIGHT},
     {KeyAction::Act, 0, SDL_BUTTON_LEFT},
     {KeyAction::Act, SDL_SCANCODE_RETURN, 0},
@@ -50,6 +62,11 @@ constexpr KeyBinding kKeyBindings[] = {
 
 PromptStyle StyleOf(SDL_Gamepad* pad) {
     PromptStyle style;
+    if (IsSteamGamepadId(SDL_GetGamepadVendor(pad), SDL_GetGamepadProduct(pad))) {
+        style.device = PromptDevice::Steam;
+        style.faces = {'A', 'B', 'X', 'Y'};
+        return style;
+    }
     const SDL_GamepadType type = SDL_GetGamepadType(pad);
     switch (type) {
         case SDL_GAMEPAD_TYPE_PS3:
@@ -233,6 +250,7 @@ std::string KeyBindingName(const KeyBinding& binding) {
         case SDL_SCANCODE_PAGEDOWN: return "PgDn";
         default: break;
     }
+    // letters, digits and punctuation as the current layout prints them (Z for the W key on AZERTY), the rest by SDL's key name
     const SDL_Keycode key = SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(binding.scancode), SDL_KMOD_NONE, false);
     const char* name = key != SDLK_UNKNOWN ? SDL_GetKeyName(key) : SDL_GetScancodeName(static_cast<SDL_Scancode>(binding.scancode));
     return name && *name ? std::string(name) : std::format("Key {}", binding.scancode);
@@ -243,8 +261,32 @@ const char* PromptDeviceName(PromptDevice device) {
         case PromptDevice::PlayStation: return "PlayStation";
         case PromptDevice::Xbox: return "Xbox";
         case PromptDevice::Nintendo: return "Nintendo";
+        case PromptDevice::Steam: return "Steam";
         default: return "keyboard";
     }
+}
+
+bool IsSteamGamepadId(uint16_t vendor, uint16_t product) {
+    if (vendor == 0x28DE) {
+        switch (product) {
+            case 0x1101: // legacy Steam Controller
+            case 0x1102: // wired Steam Controller
+            case 0x1105: // Bluetooth Steam Controller
+            case 0x1106: // Bluetooth Steam Controller
+            case 0x1142: // wireless Steam Controller
+            case 0x11FF: // Steam Virtual Gamepad
+            case 0x1201: // Steam Controller v2, wired
+            case 0x1202: // Steam Controller v2, Bluetooth
+            case 0x1205: // Steam Deck built-in controller
+            case 0x1302: // Steam Controller (Triton)
+            case 0x1303: // Steam Controller (Triton), Bluetooth
+            case 0x1304: // Steam Controller (Proteus dongle)
+            case 0x1305: // Steam Controller (Nereid dongle)
+                return true;
+            default: return false;
+        }
+    }
+    return vendor == 0x0F0D && (product == 0x01AB || product == 0x0196); // HORIPAD for Steam, USB or Bluetooth
 }
 
 uint32_t PlayerButtonsFromRaw(uint32_t raw) {
@@ -332,6 +374,8 @@ void InputDevice::Init() {
     }
 }
 
+// The prompts follow the device used last at once; a pad connected counts as used, and a pad removed hands them to the pad used last
+// before it, or to the keyboard
 void InputDevice::UsePrompts(const PromptStyle& style, uint32_t pad) {
     if (style.device != PromptDevice::Keyboard) {
         mouse_travel_ = 0.0f;
@@ -350,8 +394,13 @@ void InputDevice::UsePrompts(const PromptStyle& style, uint32_t pad) {
 }
 
 void InputDevice::Shutdown() {
-    if (Pad* pad = Find(rumble_pad_); pad && (rumble_sent_[0] || rumble_sent_[1])) {
-        SDL_RumbleGamepad(pad->handle, 0, 0, 0);
+    if (Pad* pad = Find(rumble_pad_); pad) {
+        if (rumble_sent_[0] || rumble_sent_[1]) {
+            SDL_RumbleGamepad(pad->handle, 0, 0, 0);
+        }
+        if (trigger_rumble_sent_[0] || trigger_rumble_sent_[1]) {
+            SDL_RumbleGamepadTriggers(pad->handle, 0, 0, 0);
+        }
     }
     for (Pad& pad : pads_) {
         SDL_CloseGamepad(pad.handle);
@@ -359,6 +408,18 @@ void InputDevice::Shutdown() {
     pads_.clear();
     rumble_pad_ = 0;
     rumble_sent_[0] = rumble_sent_[1] = 0;
+    trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+    trigger_rumble_sent_at_ = 0;
+}
+
+SDL_Gamepad* InputDevice::LastUsedGamepad() const {
+    const Pad* target = nullptr;
+    for (const Pad& pad : pads_) {
+        if (!target || pad.last_used > target->last_used) {
+            target = &pad;
+        }
+    }
+    return target ? target->handle : nullptr;
 }
 
 InputDevice::Pad* InputDevice::Find(uint32_t id) {
@@ -379,7 +440,12 @@ void InputDevice::Open(uint32_t id) {
         LogWarn("input: cannot open gamepad {}: {}", id, SDL_GetError());
         return;
     }
-    pads_.push_back({handle, id, 0, 0, StyleOf(handle)});
+    Pad pad;
+    pad.handle = handle;
+    pad.id = id;
+    pad.style = StyleOf(handle);
+    pad.trigger_rumble_supported = Describe(handle).trigger_rumble;
+    pads_.push_back(std::move(pad));
     LogInfo("input: gamepad opened: {} ({} connected)", DescribeGamepad(Describe(handle)), pads_.size());
 }
 
@@ -390,11 +456,21 @@ void InputDevice::Close(uint32_t id) {
         }
         const char* name = SDL_GetGamepadName(it->handle);
         LogInfo("input: gamepad {} removed ('{}'), {} left", id, name ? name : "", pads_.size() - 1);
+        if (it->id == rumble_pad_) {
+            if (rumble_sent_[0] || rumble_sent_[1]) {
+                SDL_RumbleGamepad(it->handle, 0, 0, 0);
+            }
+            if (trigger_rumble_sent_[0] || trigger_rumble_sent_[1]) {
+                SDL_RumbleGamepadTriggers(it->handle, 0, 0, 0);
+            }
+        }
         SDL_CloseGamepad(it->handle);
         pads_.erase(it);
         if (rumble_pad_ == id) {
             rumble_pad_ = 0;
             rumble_sent_[0] = rumble_sent_[1] = 0;
+            trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+            trigger_rumble_sent_at_ = 0;
         }
         if (prompt_pad_ == id) {
             const Pad* next = nullptr;
@@ -464,6 +540,7 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         }
         any_edge_ = true;
         last_from_gamepad_ = false;
+        key_pressed_since_poll_ = true;
         UsePrompts(PromptStyle{}, 0);
         for (const KeyBinding& binding : kKeyBindings) {
             if (binding.scancode == 0 || binding.scancode != event.key.scancode) {
@@ -547,6 +624,7 @@ void InputDevice::InjectMouseButton(uint8_t button, bool down) {
 
 InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free) {
     InputState state;
+    state.gamepad_sensitivity = settings.gamepad_sensitivity;
     uint32_t raw = 0;
     const bool video = SDL_WasInit(SDL_INIT_VIDEO) != 0;
     const bool* sdl_keys = keyboard_free && video ? SDL_GetKeyboardState(nullptr) : nullptr;
@@ -554,6 +632,8 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
         return (sdl_keys && sdl_keys[code]) || (static_cast<size_t>(code) < injected_keys_.size() && injected_keys_[code]);
     };
     const SDL_MouseButtonFlags buttons = (mouse != MouseUse::None && video ? SDL_GetMouseState(nullptr, nullptr) : 0u) | injected_mouse_;
+    // Mouse bindings count in play; on the option screen only the zoom's (the photo option, 0x1285F80 reads R3, follows the right button
+    // as in play) and a left click stays a click
     auto held = [&](KeyAction action) {
         for (const KeyBinding& binding : kKeyBindings) {
             if (binding.action != action) {
@@ -583,11 +663,13 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     if (held(KeyAction::PadRight)) raw |= kRawRight;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuColumn)) raw |= kRawR1;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuQuit)) raw |= kRawR1;
+    // zoom: the right mouse button (no key: Shift was too easy to press while walking with WASD, and the user wants the right button only)
     if (held(KeyAction::Zoom)) raw |= kRawR3;
     if (held(KeyAction::Act)) raw |= kRawCross;
     const bool gouge_key = key(SDL_SCANCODE_X);
     state.gouge_pressed = gouge_key && !previous_gouge_key_;
     previous_gouge_key_ = gouge_key;
+    // the option screen's "Return to the house" in the street walk (L1 on a pad)
     const bool house_key = mouse == MouseUse::Menu && held(KeyAction::MenuHouse);
     state.house_pressed = house_key && !previous_house_key_;
     previous_house_key_ = house_key;
@@ -600,9 +682,10 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     }
     if (mouse_settle_ > 0) {
         --mouse_settle_;
-    } else if (mouse_travel_ >= kPromptMouseTravel) {
+    } else if (mouse == MouseUse::Menu && mouse_travel_ >= kPromptMouseTravel && !key_pressed_since_poll_) {
         UsePrompts(PromptStyle{}, 0);
     }
+    key_pressed_since_poll_ = false;
     mouse_travel_ = 0.0f;
     mouse_dx_ = 0.0f;
     mouse_dy_ = 0.0f;
@@ -611,6 +694,12 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     glm::vec2 right(0.0f);
     for (Pad& pad : pads_) {
         const uint32_t held = HeldRaw(pad) | pad.event_raw;
+        const bool voice_chord = SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16383 &&
+                                 SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16383;
+        state.voice_keyword_pressed |= pads_free && voice_chord && !pad.previous_voice_chord;
+        pad.previous_voice_chord = voice_chord;
+        // the XMark gouge is X on every device: cross on a PlayStation pad, else the face button SDL labels X (west on Xbox and
+        // generic pads, north on Switch pads); square (west) when a pad labels none
         uint32_t gouge_button = kRawSquare;
         if (pad.style.device == PromptDevice::PlayStation) {
             gouge_button = kRawCross;
@@ -641,6 +730,8 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
             right = r;
         }
     }
+    // the stronger of the keys and the sticks moves: an idle pad whose stick drifts past the dead zone (a tester's charging
+    // Xbox One pad) took over every frame and WASD did nothing
     if (glm::length(left) > glm::length(move)) {
         state.left_stick = left;
         state.left_stick_from_pad = true;
@@ -679,6 +770,15 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
 void InputDevice::SetRumble(uint8_t large_motor, uint8_t small_motor) {
     rumble_want_[0] = settings.rumble ? large_motor : 0;
     rumble_want_[1] = settings.rumble ? small_motor : 0;
+    if (!settings.rumble || !settings.trigger_rumble) {
+        trigger_rumble_want_[0] = trigger_rumble_want_[1] = 0;
+    }
+    UpdateRumble();
+}
+
+void InputDevice::SetTriggerRumble(uint8_t left, uint8_t right) {
+    trigger_rumble_want_[0] = settings.rumble && settings.trigger_rumble ? left : 0;
+    trigger_rumble_want_[1] = settings.rumble && settings.trigger_rumble ? right : 0;
     UpdateRumble();
 }
 
@@ -694,8 +794,13 @@ void InputDevice::UpdateRumble() {
         if (Pad* old = Find(rumble_pad_); old && (rumble_sent_[0] || rumble_sent_[1])) {
             SDL_RumbleGamepad(old->handle, 0, 0, 0);
         }
+        if (Pad* old = Find(rumble_pad_); old && (trigger_rumble_sent_[0] || trigger_rumble_sent_[1])) {
+            SDL_RumbleGamepadTriggers(old->handle, 0, 0, 0);
+        }
         rumble_pad_ = id;
         rumble_sent_[0] = rumble_sent_[1] = 0;
+        trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+        trigger_rumble_sent_at_ = 0;
         rumble_sent_at_ = 0;
     }
     if (!target) {
@@ -704,6 +809,9 @@ void InputDevice::UpdateRumble() {
     const uint64_t now = SDL_GetTicks();
     const bool active = rumble_want_[0] || rumble_want_[1];
     const bool changed = rumble_want_[0] != rumble_sent_[0] || rumble_want_[1] != rumble_sent_[1];
+    const TriggerRumbleLevels trigger = BuildTriggerRumble(trigger_rumble_want_[0], trigger_rumble_want_[1], settings.rumble,
+                                                           settings.trigger_rumble, target->trigger_rumble_supported);
+    const bool trigger_changed = trigger.left != trigger_rumble_sent_[0] || trigger.right != trigger_rumble_sent_[1];
     if (active && rumble_logged_pad_ != id) {
         rumble_logged_pad_ = id;
         const char* name = SDL_GetGamepadName(target->handle);
@@ -715,6 +823,12 @@ void InputDevice::UpdateRumble() {
         rumble_sent_[0] = rumble_want_[0];
         rumble_sent_[1] = rumble_want_[1];
         rumble_sent_at_ = now;
+    }
+    if (trigger_changed || (trigger.Active() && now - trigger_rumble_sent_at_ >= kRumbleRefreshMs)) {
+        SDL_RumbleGamepadTriggers(target->handle, trigger.left, trigger.right, trigger.Active() ? kRumbleDurationMs : 0);
+        trigger_rumble_sent_[0] = trigger.left;
+        trigger_rumble_sent_[1] = trigger.right;
+        trigger_rumble_sent_at_ = now;
     }
 }
 

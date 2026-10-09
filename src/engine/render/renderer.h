@@ -13,25 +13,36 @@ struct SDL_Window;
 
 namespace pt {
 
+enum class FrameStartAction;
+enum class RendererOutputMode { Sdr, ScRgb, Hdr10 };
+
 struct RendererSettings {
     bool validation = false;
     bool vsync = true;
     bool headless = false;
+    bool hdr = false;
+    std::filesystem::path pipeline_cache_dir;
     uint32_t width = 1600;
     uint32_t height = 900;
 };
 
+// The VR mode's outputs of one frame (docs/vr.md): images of the OpenXR runtime's swapchains that EndFrame fills besides the
+// window or the headless target. Colour goes in as linear values (an sRGB swapchain encodes them again on write).
 struct XrTarget {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent2D extent{};
+    // the part of the frame the target shows: uv offset (xy) and size (zw)
     glm::vec4 rect{0.0f, 0.0f, 1.0f, 1.0f};
 };
 
 struct XrFrame {
+    // the composited frame (fade, brightness, film grain as the window's), cropped to the target's rect
     const XrTarget* eye = nullptr;
+    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
     const XrTarget* hud = nullptr;
+    // the overlay over the frame as without VR (the virtual screen), else only on the hud
     bool overlay_on_frame = false;
 };
 
@@ -40,11 +51,12 @@ public:
     bool Init(SDL_Window* window, const RendererSettings& settings);
     void Shutdown();
 
+    // present: whether this frame goes to the window (VR draws the second eye without presenting)
     bool BeginFrame(bool present = true);
     void EndFrame(bool draw_ui);
     void Resize(uint32_t width, uint32_t height);
     void SetVsync(bool enabled);
-    bool SaveScreenshot(const std::filesystem::path& path);
+    bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f});
 
     vk::Context& Context() { return ctx_; }
     VkCommandBuffer Cmd() const { return frames_[frame_index_].cmd; }
@@ -56,7 +68,10 @@ public:
                                  VkSemaphore output_ready, uint64_t output_value, std::function<void()> submit_external);
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat SceneColorFormat() const { return output_mode_ == RendererOutputMode::Sdr ? kSceneColorFormat : VK_FORMAT_R16G16B16A16_SFLOAT; }
+    RendererOutputMode OutputMode() const { return output_mode_; }
 
+    int photo_filter = 0;
     float exposure = 1.0f;
     float output_brightness = 1.0f;
     float fade[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -64,10 +79,16 @@ public:
     float grain_offset[2] = {0.0f, 0.0f};
     std::function<void(VkCommandBuffer, VkImageView, VkExtent2D)> overlay;
     std::function<const vk::Image*(uint32_t)> hudless;
+    // frame generation's hooks, applied before swapchain creation and image acquisition
+    std::function<FrameStartAction(bool)> frame_start;
+    std::function<bool()> swapchain_failed;
 
     void SetGrainNoise(VkImageView view);
 
+    // VR: a fixed render size independent of the window (the eye images), applied at the next BeginFrame; {0, 0} follows the
+    // window again. The window then shows the frame scaled to fit.
     void SetRenderExtent(VkExtent2D extent) { render_extent_ = extent; }
+    // VR: the swapchain images the next EndFrame also fills (only for that frame)
     void SetXrFrame(const XrFrame& frame) { xr_frame_ = frame; xr_pending_ = true; }
     static constexpr VkExtent2D kHudExtent{1920, 1080};
 
@@ -96,7 +117,8 @@ private:
     void DestroyTargets();
     bool CreateCompositePipeline(VkFormat output_format);
     bool InitImGui(SDL_Window* window);
-    void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkOffset2D offset = {0, 0});
+    void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format,
+                   VkOffset2D offset = {0, 0});
     void WriteCompositeSets();
     void RecordXr(VkCommandBuffer cmd);
     void CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget& target, bool premultiplied);
@@ -118,6 +140,8 @@ private:
     vk::Image final_;
     vk::Image output_;
     VkFormat output_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat final_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    RendererOutputMode output_mode_ = RendererOutputMode::Sdr;
     VkSampler linear_sampler_ = VK_NULL_HANDLE;
     VkSampler wrap_sampler_ = VK_NULL_HANDLE;
     VkImageView grain_noise_ = VK_NULL_HANDLE;
@@ -127,7 +151,9 @@ private:
     VkDescriptorSet final_set_ = VK_NULL_HANDLE;
     VkPipelineLayout composite_layout_ = VK_NULL_HANDLE;
     VkPipeline composite_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline final_composite_pipeline_ = VK_NULL_HANDLE;
 
+    // VR (SetRenderExtent, SetXrFrame)
     VkExtent2D render_extent_{0, 0};
     bool presenting_ = false;
     XrFrame xr_frame_;

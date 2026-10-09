@@ -3,7 +3,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
-#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -16,10 +15,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#ifdef __APPLE__
-#include <xlocale.h>
-#endif
 
 #include "engine/anim/demo_file.h"
 #include "engine/anim/gani.h"
@@ -177,18 +172,18 @@ private:
         }
         double d = 0.0;
 #ifdef __APPLE__
-        // Floating-point from_chars requires macOS 26; animation JSON also runs on macOS 14.
-        static const locale_t numeric_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
-        if (!numeric_locale || c == '+') {
+        /* floating point std::from_chars is in Apple's libc++ from macOS 26 only, and the build runs on 14 (docs/macos.md); strtod
+           reads the same numbers in the "C" locale, which the game never changes */
+        const char* begin = text_.c_str() + pos_;
+        if (*begin != '-' && (*begin < '0' || *begin > '9')) {
             return false;
         }
         char* end = nullptr;
-        errno = 0;
-        d = strtod_l(text_.c_str() + pos_, &end, numeric_locale);
-        if (end == text_.data() + pos_ || (errno == ERANGE && (d == 0.0 || !std::isfinite(d)))) {
+        d = std::strtod(begin, &end);
+        if (end == begin) {
             return false;
         }
-        pos_ = static_cast<size_t>(end - text_.data());
+        pos_ = static_cast<size_t>(end - text_.c_str());
 #else
         const auto result = std::from_chars(text_.data() + pos_, text_.data() + text_.size(), d);
         if (result.ec != std::errc()) {
@@ -689,6 +684,8 @@ RigCheck CheckRig(const GaniMotion& motion, JsonDoc& doc, Vfs& vfs) {
     return check;
 }
 
+// helpbones_<model>.json (tools/motion.py --help-poses): random model space poses and the help bones of the Python model,
+// which matches the original evaluator run natively. Every bone is compared after the C++ evaluation.
 struct HelpCheck {
     Stats rotation;
     Stats position;

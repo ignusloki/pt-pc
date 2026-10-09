@@ -6,10 +6,10 @@
 namespace pt {
 
 std::filesystem::path ExecutableDir();
-// The actual executable; SDL_GetBasePath returns Resources/ inside a Mac app.
-std::filesystem::path ExecutablePath();
 #ifdef __APPLE__
-std::filesystem::path MacVulkanLibrary();
+/* The running executable. In the macOS app bundle ExecutableDir() is Contents/Resources, where the data is, and the
+   executable is in Contents/MacOS (docs/macos.md). */
+std::filesystem::path ExecutablePath();
 #endif
 std::filesystem::path ResourceDir(std::string_view name, const std::filesystem::path& build_dir);
 

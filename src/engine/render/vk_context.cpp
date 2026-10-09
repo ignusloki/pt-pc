@@ -4,16 +4,27 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+
+#ifdef __APPLE__
+#include <dlfcn.h>
+
+#include <cstdlib>
+#include <filesystem>
+
+#include "engine/core/resource_path.h"
+#endif
 
 #include "engine/core/crash_report.h"
 #include "engine/core/log.h"
 #ifdef __APPLE__
-#include <dlfcn.h>
 #include <vulkan/vulkan_metal.h>
-#include "engine/core/resource_path.h"
 #endif
+#include "engine/render/hdr_output.h"
+#include "engine/render/pipeline_cache_store.h"
 
 namespace pt {
 extern bool g_checkpoints;
@@ -38,6 +49,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
 constexpr const char* kRayQueryExtensions[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
                                                VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 
+// Whether the device can run the ray traced shadows: the three extensions and the accelerationStructure, rayQuery and
+// bufferDeviceAddress features. Only a query; nothing is enabled here.
 bool RayQuerySupport(VkPhysicalDevice physical, std::string& missing) {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
@@ -73,21 +86,85 @@ bool HasLayer(const char* name) {
     return std::any_of(layers.begin(), layers.end(), [&](const VkLayerProperties& l) { return std::strcmp(l.layerName, name) == 0; });
 }
 
+#ifdef __APPLE__
+PFN_vkGetInstanceProcAddr LoadVulkanLibrary(SDL_Window* window) {
+    if (window) {
+        /* SDL loaded it for the window (SDL_HINT_VULKAN_LIBRARY): the same library, or the surface belongs to another instance */
+        if (auto proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr())) return proc;
+    }
+    const std::string path = VulkanLibraryPath();
+    if (path.empty()) return nullptr;
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!library) {
+        LogError("vulkan: cannot load {} ({})", path, dlerror());
+        return nullptr;
+    }
+    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr"));
+}
+#endif
+
+bool HasInstanceExtension(const char* name) {
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> available(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, available.data());
+    return std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& e) { return std::strcmp(e.extensionName, name) == 0; });
 }
 
-bool Context::Init(SDL_Window* window, bool validation) {
+#ifdef _WIN32
+// RivaTuner Statistics Server (MSI Afterburner's overlay) installs an implicit Vulkan layer, VK_LAYER_RTSS. With it 1.0.1 died
+// 0.26 s in, between vkCreateDevice and the first pipeline, in RTSSVkLayer64.dll+0x2a01 (two dumps from one RTX 4080 player,
+// 2026-10-07). The loader leaves it out when VK_LOADER_LAYERS_DISABLE names it (loader 1.3.234 and newer) or when the layer's own
+// disable_environment DISABLE_RTSS_LAYER is set; the overlay's other hooks are not affected. PT_ALLOW_RTSS=1 keeps the layer.
+void DisableCrashingImplicitLayers() {
+    if (const char* allow = std::getenv("PT_ALLOW_RTSS"); allow && *allow && *allow != '0') {
+        return;
+    }
+    // _putenv_s updates the process environment the loader reads as well as the CRT's copy
+    const char* current = std::getenv("VK_LOADER_LAYERS_DISABLE");
+    std::string list = current ? current : "";
+    if (list.find("RTSS") == std::string::npos) {
+        list += list.empty() ? "*RTSS*" : ",*RTSS*";
+        _putenv_s("VK_LOADER_LAYERS_DISABLE", list.c_str());
+    }
+    _putenv_s("DISABLE_RTSS_LAYER", "1");
+}
+#endif
+
+}
+
+std::string VulkanLibraryPath() {
 #ifdef __APPLE__
-    // Retain the module for the lifetime of SDL/volk, including headless contexts.
-    if (!loader) {
-        static void* module = dlopen(MacVulkanLibrary().c_str(), RTLD_NOW | RTLD_LOCAL);
-        loader = module ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(module, "vkGetInstanceProcAddr")) : nullptr;
-        if (!loader) {
-            LogError("vulkan: cannot load bundled MoltenVK from {}", MacVulkanLibrary().string());
-            return false;
+    /* the app bundle's Contents/Frameworks (ExecutableDir() is Contents/Resources there), or next to pt in a build folder;
+       PT_VULKAN_LIBRARY picks another one, such as the Vulkan SDK's loader for the validation layers */
+    static const std::string path = [] {
+        /* MoltenVK lists all its extensions at every start otherwise; MVK_CONFIG_LOG_LEVEL set by the user still wins */
+        setenv("MVK_CONFIG_LOG_LEVEL", "2", 0);
+        if (const char* env = std::getenv("PT_VULKAN_LIBRARY"); env && *env) return std::string(env);
+        const std::filesystem::path base = ExecutableDir();
+        std::error_code ec;
+        for (const std::filesystem::path& candidate :
+             {base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
+              std::filesystem::path("/usr/local/lib/libMoltenVK.dylib"), std::filesystem::path("/usr/local/lib/libvulkan.1.dylib")}) {
+            if (std::filesystem::is_regular_file(candidate, ec)) return std::filesystem::weakly_canonical(candidate, ec).string();
         }
+        return std::string();
+    }();
+    return path;
+#else
+    return {};
+#endif
+}
+
+bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
+#ifdef __APPLE__
+    if (!loader) {
+        loader = LoadVulkanLibrary(window);
+        if (loader) LogInfo("vulkan: {}", VulkanLibraryPath());
     }
 #endif
     if (loader) {
+        // Streamline's interposer (upscale/streamline.h): its proxies create the instance, the device and the swapchain
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
         volkInitializeCustom(loader);
     } else if (!Check(volkInitialize(), "volkInitialize")) {
@@ -98,6 +175,9 @@ bool Context::Init(SDL_Window* window, bool validation) {
         Uint32 count = 0;
         const char* const* names = SDL_Vulkan_GetInstanceExtensions(&count);
         extensions.assign(names, names + count);
+    }
+    if (window && want_hdr && HasInstanceExtension(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME)) {
+        extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     }
     std::vector<const char*> layers;
     if (validation && HasLayer("VK_LAYER_KHRONOS_validation")) {
@@ -121,6 +201,9 @@ bool Context::Init(SDL_Window* window, bool validation) {
         })) extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 #endif
 
+#ifdef _WIN32
+    DisableCrashingImplicitLayers();
+#endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "pt-port";
     app.pEngineName = "pt-port";
@@ -130,6 +213,15 @@ bool Context::Init(SDL_Window* window, bool validation) {
     if (enumerate_portability) instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
     instance_info.pApplicationInfo = &app;
+#ifdef __APPLE__
+    /* MoltenVK is a portability driver: a Vulkan loader lists it only when asked to (SDL already names the extension for a window) */
+    if (HasInstanceExtension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        if (std::none_of(extensions.begin(), extensions.end(), [](const char* e) { return std::strcmp(e, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0; })) {
+            extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        }
+        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+#endif
     instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     instance_info.ppEnabledExtensionNames = extensions.data();
     instance_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
@@ -234,34 +326,41 @@ bool Context::Init(SDL_Window* window, bool validation) {
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
 
-    VkPhysicalDeviceVulkan13Features supported13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-    VkPhysicalDeviceVulkan12Features supported12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-    supported12.pNext = &supported13;
-    VkPhysicalDeviceFeatures2 supported2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-    supported2.pNext = &supported12;
-    vkGetPhysicalDeviceFeatures2(physical, &supported2);
-#define PT_REQUIRE_FEATURE(source, field) \
-    if (!(source).field) { LogError("vulkan: required feature {} unavailable", #field); return false; }
-    PT_REQUIRE_FEATURE(supported13, dynamicRendering)
-    PT_REQUIRE_FEATURE(supported13, synchronization2)
-    PT_REQUIRE_FEATURE(supported13, shaderDemoteToHelperInvocation)
-    PT_REQUIRE_FEATURE(supported12, descriptorIndexing)
-    PT_REQUIRE_FEATURE(supported12, runtimeDescriptorArray)
-    PT_REQUIRE_FEATURE(supported12, shaderSampledImageArrayNonUniformIndexing)
-    PT_REQUIRE_FEATURE(supported12, descriptorBindingPartiallyBound)
-    PT_REQUIRE_FEATURE(supported12, descriptorBindingVariableDescriptorCount)
-    PT_REQUIRE_FEATURE(supported12, descriptorBindingSampledImageUpdateAfterBind)
-    PT_REQUIRE_FEATURE(supported12, timelineSemaphore)
-    PT_REQUIRE_FEATURE(supported12, descriptorBindingUpdateUnusedWhilePending)
-    PT_REQUIRE_FEATURE(supported12, descriptorBindingStorageBufferUpdateAfterBind)
-    PT_REQUIRE_FEATURE(supported12, scalarBlockLayout)
-    PT_REQUIRE_FEATURE(supported2.features, samplerAnisotropy)
-    PT_REQUIRE_FEATURE(supported2.features, textureCompressionBC)
-    PT_REQUIRE_FEATURE(supported2.features, fillModeNonSolid)
-    PT_REQUIRE_FEATURE(supported2.features, shaderInt16)
-    PT_REQUIRE_FEATURE(supported2.features, shaderClipDistance)
-#undef PT_REQUIRE_FEATURE
-
+#ifdef __APPLE__
+    {
+        /* MoltenVK on an older GPU (an Intel Mac's) can lack what the renderer needs, above all the bindless image array (Metal
+           argument buffers tier 2): say which feature, not just that the device could not be created (docs/macos.md) */
+        VkPhysicalDeviceVulkan13Features have13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        VkPhysicalDeviceVulkan12Features have12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        have12.pNext = &have13;
+        VkPhysicalDeviceFeatures2 have2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        have2.pNext = &have12;
+        vkGetPhysicalDeviceFeatures2(physical, &have2);
+        const struct { const char* name; VkBool32 value; } needed[] = {
+            {"dynamicRendering", have13.dynamicRendering}, {"synchronization2", have13.synchronization2},
+            {"shaderDemoteToHelperInvocation", have13.shaderDemoteToHelperInvocation},
+            {"descriptorIndexing", have12.descriptorIndexing}, {"runtimeDescriptorArray", have12.runtimeDescriptorArray},
+            {"shaderSampledImageArrayNonUniformIndexing", have12.shaderSampledImageArrayNonUniformIndexing},
+            {"descriptorBindingPartiallyBound", have12.descriptorBindingPartiallyBound},
+            {"descriptorBindingVariableDescriptorCount", have12.descriptorBindingVariableDescriptorCount},
+            {"descriptorBindingSampledImageUpdateAfterBind", have12.descriptorBindingSampledImageUpdateAfterBind},
+            {"timelineSemaphore", have12.timelineSemaphore},
+            {"descriptorBindingUpdateUnusedWhilePending", have12.descriptorBindingUpdateUnusedWhilePending},
+            {"descriptorBindingStorageBufferUpdateAfterBind", have12.descriptorBindingStorageBufferUpdateAfterBind},
+            {"scalarBlockLayout", have12.scalarBlockLayout}, {"samplerAnisotropy", have2.features.samplerAnisotropy},
+            {"textureCompressionBC", have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+            {"shaderInt16", have2.features.shaderInt16}, {"shaderClipDistance", have2.features.shaderClipDistance},
+        };
+        bool complete = true;
+        for (const auto& feature : needed) {
+            if (!feature.value) {
+                LogError("vulkan: required feature {} is not available on {}", feature.name, properties.deviceName);
+                complete = false;
+            }
+        }
+        if (!complete) return false;
+    }
+#endif
     VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
@@ -321,16 +420,18 @@ bool Context::Init(SDL_Window* window, bool validation) {
                 device_extensions.push_back(name);
             }
         };
+        /* a device that implements only part of Vulkan (MoltenVK on macOS) must be created with the extension that says so */
+        if (has("VK_KHR_portability_subset")) {
+            add("VK_KHR_portability_subset");
 #ifdef __APPLE__
-        if (has(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
-            add(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+            /* the optional parts of the subset the device has (triangle fans, mip LOD bias, ...) are switched on, as the spec asks */
             VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             query.pNext = &portability;
             vkGetPhysicalDeviceFeatures2(physical, &query);
             portability.pNext = features.pNext;
             features.pNext = &portability;
-        }
 #endif
+        }
         if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;
@@ -397,6 +498,39 @@ bool Context::Init(SDL_Window* window, bool validation) {
 #endif
     g_checkpoints = checkpoints && vkCmdSetCheckpointNV;
 
+    const PipelineCacheIdentity cache_identity = PipelineCacheIdentityFor(properties);
+    const std::filesystem::path cache_path = pipeline_cache_dir.empty() ? std::filesystem::path{} : PipelineCacheFilePath(pipeline_cache_dir, cache_identity);
+    std::vector<uint8_t> initial_cache_data;
+    std::string cache_status;
+    const auto cache_load_start = std::chrono::steady_clock::now();
+    const bool cache_loaded = !cache_path.empty() && ReadPipelineCacheFile(cache_path, cache_identity, initial_cache_data, cache_status);
+    if (!cache_path.empty()) {
+        if (cache_loaded) {
+            LogInfo("vulkan: pipeline cache loaded {} bytes", initial_cache_data.size());
+        } else {
+            LogInfo("vulkan: pipeline cache cold start ({})", cache_status);
+        }
+    }
+    VkPipelineCacheCreateInfo cache_info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    cache_info.initialDataSize = cache_loaded ? initial_cache_data.size() : 0;
+    cache_info.pInitialData = cache_loaded && !initial_cache_data.empty() ? initial_cache_data.data() : nullptr;
+    VkResult cache_result = vkCreatePipelineCache(device, &cache_info, nullptr, &pipeline_cache);
+    if (cache_result != VK_SUCCESS && cache_loaded) {
+        LogWarn("vulkan: cached pipeline data was rejected by the driver ({})", vk::ResultName(cache_result));
+        cache_info.initialDataSize = 0;
+        cache_info.pInitialData = nullptr;
+        cache_result = vkCreatePipelineCache(device, &cache_info, nullptr, &pipeline_cache);
+    }
+    if (cache_result == VK_SUCCESS) {
+        RegisterPipelineCache(device, pipeline_cache);
+    } else {
+        LogWarn("vulkan: pipeline cache unavailable ({})", vk::ResultName(cache_result));
+    }
+    if (!cache_path.empty()) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - cache_load_start).count();
+        LogInfo("vulkan: pipeline cache initialization {} ms", elapsed);
+    }
+
     VmaVulkanFunctions functions{};
     functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
     functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
@@ -427,6 +561,43 @@ bool Context::Init(SDL_Window* window, bool validation) {
 void Context::Shutdown() {
     if (device) {
         vkDeviceWaitIdle(device);
+        if (pipeline_cache) {
+            if (!pipeline_cache_dir.empty()) {
+                std::vector<uint8_t> data;
+                VkResult result;
+                {
+                    std::lock_guard lock(PipelineCacheCreationMutex());
+                    size_t size = 0;
+                    result = vkGetPipelineCacheData(device, pipeline_cache, &size, nullptr);
+                    if (result == VK_SUCCESS && size <= kMaxPipelineCacheBytes) {
+                        data.resize(size);
+                        result = vkGetPipelineCacheData(device, pipeline_cache, &size, data.data());
+                        if (result == VK_SUCCESS) data.resize(size);
+                    } else if (result == VK_SUCCESS) {
+                        result = VK_ERROR_OUT_OF_HOST_MEMORY;
+                        LogWarn("vulkan: pipeline cache is larger than 64 MiB; previous file kept");
+                    }
+                }
+                if (result == VK_SUCCESS) {
+                    std::string status;
+                    const PipelineCacheIdentity identity = PipelineCacheIdentityFor(properties);
+                    const std::filesystem::path path = PipelineCacheFilePath(pipeline_cache_dir, identity);
+                    if (WritePipelineCacheFileAtomic(path, identity, data, status)) {
+                        LogInfo("vulkan: pipeline cache saved {} bytes", data.size());
+                    } else {
+                        LogWarn("vulkan: pipeline cache not saved ({})", status);
+                    }
+                } else {
+                    LogWarn("vulkan: could not read pipeline cache ({})", vk::ResultName(result));
+                }
+            }
+            const PipelineCreationStats stats = PipelineStats(device);
+            LogInfo("vulkan: pipeline creation took {:.2f} s ({} graphics, {} compute)", stats.duration_ns / 1.0e9,
+                    stats.graphics_count, stats.compute_count);
+            UnregisterPipelineCache(device);
+            vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+            pipeline_cache = VK_NULL_HANDLE;
+        }
         DestroySwapchain();
         if (upload_pool_) {
             vkDestroyCommandPool(device, upload_pool_, nullptr);
@@ -452,26 +623,31 @@ void Context::Shutdown() {
     instance = VK_NULL_HANDLE;
 }
 
-bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync) {
+bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
     vkDeviceWaitIdle(device);
+    swapchain_refused = false;
     vsync = vsync && !force_vsync_off;
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
     uint32_t format_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(format_count);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
-    VkSurfaceFormatKHR chosen = formats[0];
-    for (const auto& f : formats) {
-        if ((f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            chosen = f;
-            break;
-        }
+    if (format_count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
+    VkSurfaceFormatKHR chosen{};
+    bool hdr_selected = false;
+    if (!ChooseSwapchainSurfaceFormat(formats, want_hdr, !swapchain_hooks && !hooks, chosen, hdr_selected)) {
+        LogError("vulkan: surface has no supported SDR or HDR color format");
+        return false;
     }
+    LogInfo("vulkan: swapchain format {} color space {}{}", static_cast<int>(chosen.format), static_cast<int>(chosen.colorSpace),
+            hdr_selected ? " (HDR)" : " (SDR)");
     uint32_t mode_count = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr);
     std::vector<VkPresentModeKHR> modes(mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data());
+    // v-sync off is IMMEDIATE (frames shown as they finish: no cap from the display, tearing possible), MAILBOX where the
+    // surface has no IMMEDIATE. MAILBOX had been preferred, and a window then held at the display's refresh rate (259 fps at
+    // 260 Hz with a 2.3 ms GPU frame), which read as v-sync still on.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (!vsync) {
         const bool immediate = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_IMMEDIATE_KHR) != modes.end();
@@ -515,17 +691,20 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync) {
         const VkResult result =
             swapchain_hooks ? swapchain_hooks->CreateSwapchain(info, handle) : vkCreateSwapchainKHR(device, &info, nullptr, &handle);
         if (!Check(result, "vkCreateSwapchainKHR")) {
+            swapchain_refused = true;
             return false;
         }
         swapchain_owner_ = swapchain_hooks;
     } else {
         if (!Check(vkCreateSwapchainKHR(device, &info, nullptr, &handle), "vkCreateSwapchainKHR")) {
+            swapchain_refused = true;
             return false;
         }
         DestroySwapchain();
     }
     swapchain.handle = handle;
     swapchain.format = chosen.format;
+    swapchain.color_space = chosen.colorSpace;
     swapchain.extent = extent;
     swapchain.min_image_count = image_count;
     uint32_t count = 0;

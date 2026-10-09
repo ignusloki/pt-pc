@@ -1,4 +1,6 @@
 #version 460
+// Remove the smooth flashlight beam before temporal reconstruction. Shadow visibility stays in
+// the input so the upscaler can accumulate soft-ray noise and shadow-map tap changes.
 #include "common.glsl"
 #include "lighting.glsl"
 
@@ -19,6 +21,11 @@ void main() {
     vec4 hdr = ImgFetch(IMG_HDR, pixel);
     float factor = 1.0;
     float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    // hdr.a >= 1: an opaque effect replaced the surface here (vfx_pass.cpp BlendState: the alpha tested liquids, the Freezer's
+    // view blood fx_sh_viwbld01_s0 refracting another part of the view). F belongs to the G-buffer surface under it, so dividing
+    // the effect's colour by F and multiplying the upscaled colour by it again left F's edges (the fridge's ropes and creases)
+    // as faint white lines over the blood; such a pixel keeps F = 1. Scene colour alone reaches 1 only at a luma of 32
+    // (compose.frag BloomAlpha), far past white, where the handy light's share is nil anyway
     if (depth > 0.0 && hdr.a < 1.0 && pass.ids.y != 0xFFFFFFFFu) {
         View v = frame.views[pass.ids.x];
         Light l = frame.lights[pass.ids.y];
@@ -26,17 +33,18 @@ void main() {
         s.P = ViewPosition(v, PixelNdc(v, gl_FragCoord.xy), depth);
         s.world = (v.inv_view * vec4(s.P, 1.0)).xyz;
         vec4 g_material = ImgFetch(IMG_MATERIAL, pixel);
-        s.N = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
         s.roughness = g_material.x;
         s.specular = g_material.y;
         s.material_u = g_material.z;
-        s.translucency = g_material.w;
-        vec3 dh;
-        vec3 sh;
-        if (EvaluateLight(l, v, s, pass.ids.z != 0u, gl_FragCoord.xy, dh, sh)) {
-            float whole = Luma709(max(ImgFetch(IMG_DIFFUSE, pixel).rgb, vec3(0.0)));
-            float handy = clamp(Luma709(max(dh, vec3(0.0))), 0.0, whole);
-            factor = (whole + pass.f0.x) / (whole - handy + pass.f0.x);
+        // Only the beam's incident radiance belongs in this factor. Surface normals and
+        // shadow samples introduce edges and frame noise that must stay inside the upscaler.
+        vec3 to_light = (v.view * vec4(l.position.xyz, 1.0)).xyz - s.P;
+        s.N = to_light / max(length(to_light), 1.0e-6);
+        s.translucency = 0.0;
+        vec3 beam;
+        vec3 specular;
+        if (EvaluateLight(l, v, s, false, gl_FragCoord.xy, beam, specular)) {
+            factor = min(65504.0, 1.0 + Luma709(max(beam, vec3(0.0))) / pass.f0.x);
         }
     }
     out_color = vec4(hdr.rgb / factor, hdr.a);

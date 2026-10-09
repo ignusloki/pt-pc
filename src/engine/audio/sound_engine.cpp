@@ -1,6 +1,11 @@
 #include "engine/audio/sound_engine.h"
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include "engine/audio/channel_layout.h"
+
+#if defined(__aarch64__)
+#include <arm_acle.h>
+#else
+#include <pmmintrin.h>
 #include <xmmintrin.h>
 #endif
 
@@ -21,6 +26,7 @@ constexpr float kSamplesPerMs = kOutputRate / 1000.0f;
 constexpr int kMaxPlayDepth = 32;
 constexpr uint16_t kRumbleDevice = 406;
 constexpr float kCenterGain = 0.70710678f;
+// the eboot's audio frame: an item that ends inside one hands over to the next item of a Disabled transition at the frame's end
 constexpr uint64_t kEbootFrame = 1024;
 
 uint64_t MsToSamples(double ms) {
@@ -245,6 +251,7 @@ float Ramp::Step(int64_t frame) const {
     if (frame >= static_cast<int64_t>(frames)) {
         return end;
     }
+    // 0x603230: position (frame - start) / frames through the curve 0x11A8990, the gains of a dB transition back to dB
     const float x = static_cast<float>(frame) / static_cast<float>(frames);
     if (decibels) {
         const float a = FastPow10(from * 0.05f);
@@ -261,6 +268,7 @@ float Ramp::Value(uint64_t t) const {
     if (t <= start) {
         return from;
     }
+    // frame k holds the value of step k and the mixer ramps from step k - 1 to it over the frame
     const uint64_t elapsed = t - start;
     const int64_t frame = static_cast<int64_t>(elapsed / kEbootFrame);
     const float f = static_cast<float>(elapsed % kEbootFrame) / static_cast<float>(kEbootFrame);
@@ -276,6 +284,8 @@ uint64_t Ramp::Samples(float ms) {
 void Ramp::Transition(float target, uint64_t now, float ms, Interp shape, bool db, bool mirror) {
     const float current = Value(now);
     decibels = db;
+    // 0x5684D0, 0x578AD0, 0x57E520: no time or no change sets the value at once; otherwise 0x603390 starts a transition from the
+    // current value, (ms + 20) / 21 frames long
     const int duration = static_cast<int>(ms);
     if (duration <= 0 || target == current) {
         Jump(target);
@@ -1473,6 +1483,8 @@ SoundEngine::Voice* SoundEngine::CreateVoice(NodeInfo* info, const PlayContext& 
     v.rs_r.assign(kBlockFrames * 4 + 8, 0.0f);
     v.rs_count = 1;
     v.rs_pos = 1.0;
+    // the limiter's side chain: a spatialized mono voice goes through its speaker gains (UpdateVoiceParams), a voice with more
+    // channels than a plain stereo pair keeps them apart, 2D each on its own speaker, spatialized through its speaker gains
     {
         const bool spatial = info->positioning && info->positioning->has_3d && info->positioning->spatialized;
         uint32_t mask = v.media ? v.media->Info().channel_mask : 0x4u;
@@ -1739,6 +1751,9 @@ void SoundEngine::SequencerItemDone(uint32_t serial, uint32_t token, uint64_t ti
     if (container.transition_mode == TransitionMode::Delay) {
         delay = container.transition_time + RandomRange(container.transition_mod_min, container.transition_mod_max);
     } else if (container.transition_mode == TransitionMode::Disabled && time > item_start) {
+        // without a transition the next item waits for the end of the eboot audio frame the item ended in, counted from the
+        // item's start: in audio_sd_f040 each cry_s01 item starts ceil(length / 1024) * 1024 samples after the previous one,
+        // while a Delay transition (cry_l01) counts its delay from the exact end
         time = item_start + (time - item_start + kEbootFrame - 1) / kEbootFrame * kEbootFrame;
     }
     const uint64_t next = std::max(time + MsToSamples(delay), now_);
@@ -2054,12 +2069,15 @@ void SoundEngine::PauseMatching(const ActionObject& action, GameObjectId object,
                 v->pause_fade.Transition(0.0f, time, fade_ms, curve, false, true);
             }
         } else if (v->paused || v->pausing) {
+            // a voice scheduled to start later (a music segment's clip, a container item) keeps its distance from the pause
             if (!v->started && v->start_time > v->paused_at && time > v->paused_at) v->start_time += time - v->paused_at;
             v->paused = false;
             v->pausing = false;
             v->pause_fade.Transition(1.0f, time, fade_ms, curve, false, true);
         }
     }
+    // The schedules of music playlists and containers stop with their voices: without this a playlist paused by Pause_All (the
+    // option screen) started its next segment unpaused when its timer came, and the f110 music came back a few seconds into the menu
     for (auto& player : music_) {
         if (player->released || !player->node || !ActionMatches(action, player->object, player->node, player->node->bus_id, object)) {
             continue;
@@ -2128,6 +2146,7 @@ void SoundEngine::SeekMatching(const ActionObject& action, GameObjectId object) 
     }
 }
 
+// the source position of every voice of a playing id, in seconds of its media
 void SoundEngine::SeekPlayingInternal(PlayingId id, float seconds) {
     for (auto& v : voices_) {
         if (v->finished || !v->reader || !v->media || v->playing_id != id) {
@@ -2239,6 +2258,7 @@ void SoundEngine::SetGameParameter(const ActionObject& action, GameObjectId obje
     } else if (action.value_meaning == ValueMeaning::Offset) {
         target = ramp->to + value;
     }
+    // 0x58A260: a game parameter moves without the dB conversion and without the reversed curve
     ramp->Transition(target, time, fade, action.fade_curve, false, false);
     static const bool trace = std::getenv("PT_TRACE_RTPC") != nullptr;
     if (trace) {
@@ -2276,6 +2296,7 @@ void SoundEngine::SetStateInternal(uint32_t group, uint32_t state, uint64_t time
         }
         for (int p = 0; p < 6; ++p) {
             const float* value = instance ? instance->Find(kStateParams[p]) : nullptr;
+            // 0x578AD0: volume properties (the bit mask 0x304FC0113) move as dB transitions
             slot.values[p].Transition(value ? *value : 0.0f, time, static_cast<float>(transition_ms), Interp::Linear, p == 0 || p >= 3, true);
         }
     }
@@ -2476,6 +2497,7 @@ void SoundEngine::UpdateBuses() {
         ActionPropOffsets(bus->id, 0, volume, pitch, lpf, bus_action);
         bus_db += bus_action + volume + bus->duck_db;
         bus->gain_prev = bus->gain;
+        // 0x59D1E0, 0x59D2C0: the bus volume in dB through the eboot's fast 10^x
         bus->gain = FastPow10(bus_db * 0.05f);
         bus->voice_volume_db = o.props.Get(prop::Volume) + StateOffset(bus->state_slots, 0) + SumRtpcs(o.rtpcs, rtpc_param::Volume, 0);
         bus->voice_pitch = o.props.Get(prop::Pitch) + pitch + StateOffset(bus->state_slots, 1) + SumRtpcs(o.rtpcs, rtpc_param::Pitch, 0);
@@ -2488,6 +2510,7 @@ void SoundEngine::UpdateBuses() {
             bus->voice_pitch += bus->parent->voice_pitch;
             bus->voice_lpf += bus->parent->voice_lpf;
         }
+        // the limiter's side chain: the gain from this bus's input to the master's, and whether a signal gets there unchanged
         bus->chain = bus->gain * (bus->parent ? bus->parent->chain : 1.0f);
         bus->chain_prev = bus->gain_prev * (bus->parent ? bus->parent->chain_prev : 1.0f);
         bus->sc_direct = bus == master_ || (bus->effects.empty() && bus->parent && bus->parent->sc_direct);
@@ -2648,6 +2671,7 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
                 v.matrix[0] = v.matrix[1] = l / kCenterGain * 0.5f;
                 v.matrix[2] = v.matrix[3] = r / kCenterGain * 0.5f;
                 v.send_scale = l + r > 1e-9f ? sum / (l + r) : 1.0f;
+                // the Matrix Reverb sums all seven speaker channels of its bus, the centre included
                 v.sum_scale = l + r > 1e-9f ? all / (l + r) : 1.0f;
                 v.front_matrix[0] = v.front_matrix[1] = gains[kFl][kFl] / kCenterGain * 0.5f;
                 v.front_matrix[2] = v.front_matrix[3] = gains[kFl][kFr] / kCenterGain * 0.5f;
@@ -2718,6 +2742,10 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
     }
 
     const float dry_db = volume + bus_voice_db + att_db + cone_db + obstruction_db + occlusion_db + output_bus_db + makeup;
+    // FUN_005a0fc0 turns the voice volume and the output bus volume into gains with the eboot's fast 10^x, and 0x59F978 the make-up
+    // gain (PBI +0xD4, RTPC 0x24), one conversion each; the attenuation and obstruction curves give linear gains (1 + y) and stay
+    // exact
+    // (0x5F2FC0 turns the cone's share of its outside volume into a gain with the fast 10^x as well, on the dry ray only)
     v.dry_gain = FastPow10((volume + bus_voice_db) * 0.05f) * FastPow10(makeup * 0.05f) * FastPow10(output_bus_db * 0.05f) *
                  FastPow10(cone_db * 0.05f) * DbToGain(att_db + obstruction_db + occlusion_db) * crossfade;
     float loudest_db = dry_db;
@@ -2725,6 +2753,10 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
     std::array<Voice::Send, Voice::kMaxSends> previous = v.sends;
     const uint32_t previous_count = v.send_count;
     v.send_count = 0;
+    // 0x581880 turns a game-defined send's volume (PBI +0x10C) and each user send's volume (+0xEC) into gains with the fast 10^x,
+    // the game-defined one times its object's level; the voice volume and make-up gain come in through the voice's own gain
+    // (0x59F800), the aux attenuation curves and the occlusion as gains (0x5F2C50); the aux bus's voice volume is not traced and
+    // stays exact
     auto add_send = [&](uint32_t bus_id, float send_db, float level, float exact_db) {
         const BusRuntime* aux = Bus(bus_id);
         if (!aux || v.send_count >= Voice::kMaxSends) {
@@ -2767,6 +2799,7 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
         }
     }
 
+    // 0x605130, 0x604E60: 16.16 step from the pitch clamped to 2400 cents; a change ramps the step over 1024 frames
     const float rate_ratio = v.media ? static_cast<float>(v.media->SampleRate()) / static_cast<float>(kOutputRate) : 1.0f;
     /* Wwise's resampler as 0x605130 does it: pitch clamped to +-2400 cents, a 16.16 step, and a change ramps over 1024 frames. */
     const float cents = std::clamp(pitch, -2400.0f, 2400.0f);
@@ -2788,6 +2821,7 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
     }
     v.pitch_ratio = std::max(static_cast<double>(v.rs_target) / 65536.0, 0.001);
     lpf = std::clamp(std::max(lpf, lpf_floor), 0.0f, 100.0f);
+    // PT_TRACE_VOICES=1: each voice's level terms at its first update (with PT_SOLO_EVENT, one event's voices alone)
     static const bool trace_voices = std::getenv("PT_TRACE_VOICES") != nullptr;
     if (trace_voices && !v.lpf_init) {
         const float distance = pos && pos->has_3d ? glm::length(EmitterPosition(v, obj) - listener_position_) : -1.0f;
@@ -3050,6 +3084,7 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
         if (v.source_done && i >= v.rs_valid_end) {
             break;
         }
+        // 0x605BC0: linear between the frames around the index, 16-bit fraction
         const float f = static_cast<float>(v.rs_pos - static_cast<double>(i));
         out_l[produced] = bl[i] + f * (bl[i + 1] - bl[i]);
         out_r[produced] = br[i] + f * (br[i + 1] - br[i]);
@@ -3059,6 +3094,7 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
         }
         uint32_t step = v.rs_step;
         if (step != v.rs_target) {
+            // 0x606400
             ++v.rs_ramp;
             const int64_t delta = static_cast<int64_t>(v.rs_target) - v.rs_step;
             step = static_cast<uint32_t>((static_cast<int64_t>(v.rs_step) * 1024 + delta * v.rs_ramp) >> 10);
@@ -3103,6 +3139,22 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
     const float inv = 1.0f / static_cast<float>(produced);
     const float block_inv = 1.0f / static_cast<float>(frames);
     BusRuntime* bus = Bus(v.bus_id);
+    if (controller_pcm_capture_.HasSelectedEvents()) {
+        const auto record = playing_.find(v.playing_id);
+        if (record != playing_.end()) {
+            for (uint32_t i = 0; i < produced; ++i) {
+                const float w = (static_cast<float>(i) + 1.0f) * inv;
+                const float fade = fade0 + (fade1 - fade0) * w;
+                const float a = (v.gain_prev[0] + (target[0] - v.gain_prev[0]) * w) * fade;
+                const float b = (v.gain_prev[1] + (target[1] - v.gain_prev[1]) * w) * fade;
+                const float c = (v.gain_prev[2] + (target[2] - v.gain_prev[2]) * w) * fade;
+                const float d = (v.gain_prev[3] + (target[3] - v.gain_prev[3]) * w) * fade;
+                controller_pcm_capture_.Accumulate(record->second.event_id, offset + i, a * out_l[i] + b * out_r[i],
+                                                   c * out_l[i] + d * out_r[i]);
+            }
+        }
+    }
+    // the limiter's side chain takes what reaches the master through buses without effects, times their gains on the way
     auto chain_at = [&](const BusRuntime* dest, uint32_t i) {
         return dest->chain_prev + (dest->chain - dest->chain_prev) * (static_cast<float>(offset + i) + 1.0f) * block_inv;
     };
@@ -3147,6 +3199,7 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
             weight[i] = (v.sc_dry_prev + (v.dry_gain - v.sc_dry_prev) * w) * (fade0 + (fade1 - fade0) * w) * chain_at(bus, i);
         }
         if (v.sc_mode == 1) {
+            // the mono signal is (left + right) / (mix_l + mix_r) of the stereo pair PullSource made of it
             const float norm = v.mix_l[0] + v.mix_r[0];
             const float scale = norm > 1e-9f ? 1.0f / norm : 0.0f;
             for (int s = 0; s < 8; ++s) {
@@ -3217,6 +3270,7 @@ uint32_t SoundEngine::RenderMotion(Voice& v, uint32_t offset, uint32_t frames) {
 }
 
 void SoundEngine::ApplyVoiceLpf(Voice& v, float* left, float* right, uint32_t frames) {
+    // the stereo pair and the channels kept apart for the limiter's side chain go through the same filter
     float* channels[10] = {left, right};
     float* history[10] = {v.lpf_hist[0], v.lpf_hist[1]};
     uint32_t count = 2;
@@ -3329,10 +3383,11 @@ void SoundEngine::ProcessDue(uint64_t block_end) {
     }
 }
 
-void SoundEngine::RenderBlock(float* out, uint32_t frames) {
+void SoundEngine::RenderBlock(float* out, uint32_t frames, uint32_t output_channels) {
     block_end_ = now_ + frames;
     created_this_block_ = 0;
     motion_mix_[0] = motion_mix_[1] = 0.0f;
+    controller_pcm_capture_.BeginBlock(frames);
     for (auto& [id, bus] : buses_) {
         std::fill(bus->left.begin(), bus->left.begin() + frames, 0.0f);
         std::fill(bus->right.begin(), bus->right.begin() + frames, 0.0f);
@@ -3398,6 +3453,7 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
             NotifyVoiceFinished(v);
         }
     }
+    controller_pcm_capture_.SubmitBlock();
     for (BusRuntime* bus : bus_order_) {
         if (bus->has_input) {
             bus->active_until = block_end_ + static_cast<uint64_t>(bus->tail_seconds * kOutputRate);
@@ -3425,6 +3481,7 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
         }
         /* 0x5AE4B0 links the master's 7.1 channels: the limiter detects on the loudest channel of each frame, not on the stereo fold the port outputs. */
         if (bus == master_) {
+            // 0x5AE4B0 links the master's 7.1 channels: the limiter detects the largest of them in each frame, not the stereo fold
             for (uint32_t i = 0; i < frames; ++i) {
                 float peak = 0.0f;
                 for (const auto& channel : sc_) {
@@ -3436,10 +3493,21 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
                 effect->SetDetector(sc_peak_.data());
             }
         }
-        for (auto& effect : bus->effects) {
-            effect->Process(bus->left.data(), bus->right.data(), frames);
+        if (bus == master_ && output_channels != 2) {
+            std::array<float*, 8> speakers{};
+            for (size_t channel = 0; channel < speakers.size(); ++channel) {
+                speakers[channel] = sc_[channel].data();
+            }
+            for (auto& effect : bus->effects) {
+                effect->ProcessSurround(bus->left.data(), bus->right.data(), speakers, frames);
+            }
+        } else {
+            for (auto& effect : bus->effects) {
+                effect->Process(bus->left.data(), bus->right.data(), frames);
+            }
         }
         if (BusRuntime* parent = bus->parent; parent && parent->sc_direct && !bus->sc_direct) {
+            // an effect bus reaches the side chain as its stereo output on FL and FR
             for (uint32_t i = 0; i < frames; ++i) {
                 const float k = parent->chain_prev + (parent->chain - parent->chain_prev) * (static_cast<float>(i) + 1.0f) * inv;
                 sc_[kFl][i] += bus->left[i] * k;
@@ -3456,6 +3524,8 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
     }
     float peak_l = 0.0f;
     float peak_r = 0.0f;
+    const std::array<const float*, 8> speaker_channels = {sc_[0].data(), sc_[1].data(), sc_[2].data(), sc_[3].data(),
+                                                           sc_[4].data(), sc_[5].data(), sc_[6].data(), sc_[7].data()};
     for (uint32_t i = 0; i < frames; ++i) {
         float l = 0.0f;
         float r = 0.0f;
@@ -3465,8 +3535,22 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
         }
         l = std::clamp(l * master_gain_, -1.0f, 1.0f);
         r = std::clamp(r * master_gain_, -1.0f, 1.0f);
-        out[i * 2] = l;
-        out[i * 2 + 1] = r;
+        if (output_channels == 2) {
+            out[i * 2] = l;
+            out[i * 2 + 1] = r;
+        } else if (output_channels == 6) {
+            WwiseToSdl51Frame(speaker_channels, i, out + static_cast<size_t>(i) * output_channels);
+            for (uint32_t channel = 0; channel < output_channels; ++channel) {
+                float& sample = out[static_cast<size_t>(i) * output_channels + channel];
+                sample = std::clamp(sample * master_gain_, -1.0f, 1.0f);
+            }
+        } else {
+            for (uint32_t channel = 0; channel < output_channels; ++channel) {
+                const uint8_t speaker = kWwiseToSdl71[channel];
+                const float sample = sc_[speaker][i] * master_gain_;
+                out[static_cast<size_t>(i) * output_channels + channel] = std::clamp(sample, -1.0f, 1.0f);
+            }
+        }
         peak_l = std::max(peak_l, std::fabs(l));
         peak_r = std::max(peak_r, std::fabs(r));
     }
@@ -3497,19 +3581,25 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
 }
 
 void SoundEngine::Render(float* out, uint32_t frames) {
+    Render(out, frames, 2);
+}
+
+void SoundEngine::Render(float* out, uint32_t frames, uint32_t output_channels) {
+    if (output_channels != 2 && output_channels != 6 && output_channels != 8) {
+        output_channels = 2;
+    }
     if (frozen_.load()) {
-        std::memset(out, 0, sizeof(float) * frames * 2);
+        std::memset(out, 0, sizeof(float) * frames * output_channels);
         motion_levels_.store(0, std::memory_order_relaxed);
         return;
     }
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__aarch64__)
+    /* Apple silicon (docs/macos.md): FPCR.FZ is the ARM64 flush to zero of both inputs and results, as FTZ and DAZ below */
+    const uint64_t fpcr = __arm_rsr64("fpcr");
+    __arm_wsr64("fpcr", fpcr | (uint64_t(1) << 24));
+#else
     const unsigned int csr = _mm_getcsr();
     _mm_setcsr(csr | 0x8040);
-#elif defined(__aarch64__)
-    uint64_t fpcr = 0;
-    asm volatile("mrs %0, fpcr" : "=r"(fpcr));
-    const uint64_t flush = fpcr | (uint64_t(1) << 24);
-    asm volatile("msr fpcr, %0" : : "r"(flush));
 #endif
     {
         std::lock_guard lock(command_mutex_);
@@ -3522,7 +3612,7 @@ void SoundEngine::Render(float* out, uint32_t frames) {
     uint32_t done = 0;
     while (done < frames) {
         const uint32_t n = std::min(kBlockFrames, frames - done);
-        RenderBlock(out + static_cast<size_t>(done) * 2, n);
+        RenderBlock(out + static_cast<size_t>(done) * output_channels, n, output_channels);
         done += n;
     }
     if (!global_pause_) {
@@ -3563,10 +3653,10 @@ void SoundEngine::Render(float* out, uint32_t frames) {
         stats_.sequencers = static_cast<uint32_t>(sequencers_.size());
         stats_.music = static_cast<uint32_t>(music_.size());
     }
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__aarch64__)
+    __arm_wsr64("fpcr", fpcr);
+#else
     _mm_setcsr(csr);
-#elif defined(__aarch64__)
-    asm volatile("msr fpcr, %0" : : "r"(fpcr));
 #endif
 }
 

@@ -4,8 +4,11 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <bcrypt.h>
 #include <zlib.h>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -25,14 +28,17 @@ namespace fs=std::filesystem;
 namespace {
 using namespace pt::setup;
 constexpr const wchar_t* kProduct=L"P.T. PC Port";constexpr const wchar_t* kSetupTitle=L"P.T. PC Port Setup";constexpr const wchar_t* kFolder=L"P.T. PC Port";
+// the worker thread never touches a window: it posts the status text, the progress (permille) and the result
 constexpr UINT kStatus=WM_APP+1,kFinished=WM_APP+2,kProgress=WM_APP+3;
 HWND window,pkg_edit,dest_edit,status_label,install_button,cancel_button,shortcut_check,progress_bar,update_label;
+// a newer release, looked for once when the window opens (docs/updates.md); a timer shows it when the thread is done
 pt::update::Checker updates;constexpr UINT_PTR kUpdateTimer=1;
 float dpi_scale=1.0f;HFONT body_font;
 std::atomic<bool> cancel{false},busy{false};std::thread worker;
 std::atomic<int> posted_permille{-1};
+// the status line: the current step and, once the install is measured, its percentage; the bar is a marquee until then
 std::wstring status_text;int percent=-1;bool marquee=false;
-ProgressTrace trace;
+ProgressTrace trace;  // the --install command line's progress record
 std::wstring Widen(const std::string& s){int n=MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),nullptr,0);std::wstring w(n,L'\0');MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),w.data(),n);return w;}
 std::wstring Text(HWND h){int n=GetWindowTextLengthW(h);std::wstring s(n+1,L'\0');GetWindowTextW(h,s.data(),n+1);s.resize(n);return s;}
 void ReportWide(const std::wstring& text){if(window)PostMessageW(window,kStatus,0,reinterpret_cast<LPARAM>(new std::wstring(text)));}
@@ -48,7 +54,9 @@ void BarMarquee(bool on){
     SendMessageW(progress_bar,PBM_SETMARQUEE,FALSE,0);SetWindowLongPtrW(progress_bar,GWL_STYLE,GetWindowLongPtrW(progress_bar,GWL_STYLE)&~LONG_PTR(PBS_MARQUEE));
     SendMessageW(progress_bar,PBM_SETRANGE32,0,1001);SendMessageW(progress_bar,PBM_SETPOS,0,0);
 }
+// the themed bar animates towards a higher position over a second and shows less than it was told; a step back is drawn at once
 void BarAt(int permille){if(marquee)BarMarquee(false);SendMessageW(progress_bar,PBM_SETPOS,permille+1,0);SendMessageW(progress_bar,PBM_SETPOS,permille,0);}
+// the target (when it exists) and every folder above it: no junctions or symbolic links
 void CheckParents(const fs::path& destination){
     for(auto p=fs::absolute(destination);!p.empty();){
         DWORD attr=GetFileAttributesW(p.c_str());if(attr!=INVALID_FILE_ATTRIBUTES && (attr&FILE_ATTRIBUTE_REPARSE_POINT))throw std::runtime_error("Choose a destination without junctions or symbolic links.");
@@ -66,6 +74,7 @@ std::string Hash(const fs::path& file){
     if(!ok)throw std::runtime_error("Could not verify file integrity.");
     const char* hex="0123456789abcdef";std::string result;for(auto b:bytes){result+=hex[b>>4];result+=hex[b&15];}return result;
 }
+// the setup's own file against a corrupt download (self_integrity.h, the stamp of tools/ci/stamp_integrity.py)
 void VerifyIntegrity(){
     CheckCancel();
     if(!pt::integrity::IntegrityOk())throw std::runtime_error("This setup file is damaged or was modified. Please download it again.");
@@ -93,10 +102,42 @@ void Extract(const fs::path& staging,const fs::path& package){
     DWORD code=1;GetExitCodeProcess(process.hProcess,&code);CloseHandle(process.hThread);CloseHandle(process.hProcess);CheckCancel();
     if(code){std::ifstream input(staging/L"install-extraction.log");std::string details((std::istreambuf_iterator<char>(input)),{});throw std::runtime_error("PKG extraction failed. "+details.substr(0,600));}
 }
+bool PngEncoder(CLSID& clsid){
+    UINT count=0,bytes=0;if(Gdiplus::GetImageEncodersSize(&count,&bytes)!=Gdiplus::Ok||!bytes)return false;
+    std::vector<unsigned char> buffer(bytes);auto codecs=reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if(Gdiplus::GetImageEncoders(count,bytes,codecs)!=Gdiplus::Ok)return false;
+    for(UINT i=0;i<count;++i)if(codecs[i].MimeType && std::wstring(codecs[i].MimeType)==L"image/png"){clsid=codecs[i].Clsid;return true;}
+    return false;
+}
+bool WriteIco(const fs::path& png,const fs::path& ico){
+    Gdiplus::GdiplusStartupInput startup;ULONG_PTR token=0;if(Gdiplus::GdiplusStartup(&token,&startup,nullptr)!=Gdiplus::Ok)return false;
+    struct Guard{ULONG_PTR token;~Guard(){Gdiplus::GdiplusShutdown(token);}} guard{token};
+    Gdiplus::Bitmap source(png.c_str());if(source.GetLastStatus()!=Gdiplus::Ok)return false;
+    CLSID png_clsid{};if(!PngEncoder(png_clsid))return false;
+    const int sizes[]={256,48,32,16};std::vector<std::string> images;images.reserve(4);
+    for(int size:sizes){
+        Gdiplus::Bitmap frame(size,size,PixelFormat32bppARGB);Gdiplus::Graphics graphics(&frame);
+        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);graphics.DrawImage(&source,0,0,size,size);
+        IStream* stream=nullptr;if(CreateStreamOnHGlobal(nullptr,TRUE,&stream)!=S_OK)return false;
+        const bool saved=frame.Save(stream,&png_clsid,nullptr)==Gdiplus::Ok;STATSTG stat{};
+        if(!saved || stream->Stat(&stat,STATFLAG_NONAME)!=S_OK || stat.cbSize.QuadPart<=0){stream->Release();return false;}
+        HGLOBAL memory=nullptr;GetHGlobalFromStream(stream,&memory);const char* bytes=static_cast<const char*>(GlobalLock(memory));
+        images.emplace_back(bytes,bytes+ULONG(stat.cbSize.QuadPart));GlobalUnlock(memory);stream->Release();
+    }
+    std::ofstream out(ico,std::ios::binary);if(!out)return false;
+    auto u16=[&](uint16_t v){out.put(char(v));out.put(char(v>>8));};auto u32=[&](uint32_t v){for(int i=0;i<4;++i)out.put(char(v>>(8*i)));};
+    u16(0);u16(1);u16(uint16_t(images.size()));uint32_t offset=6+16*uint32_t(images.size());
+    for(size_t i=0;i<images.size();++i){const int dim=sizes[i]>=256?0:sizes[i];out.put(char(dim));out.put(char(dim));out.put(0);out.put(0);u16(1);u16(32);u32(uint32_t(images[i].size()));u32(offset);offset+=uint32_t(images[i].size());}
+    for(const auto& image:images)out.write(image.data(),std::streamsize(image.size()));
+    return bool(out);
+}
 void Shortcut(const fs::path& destination){
+    std::error_code error;const fs::path png=destination/L"icon0.png",ico=destination/L"icon0.ico";
+    if(fs::is_regular_file(png,error))WriteIco(png,ico);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);IShellLinkW* link=nullptr;
     if(SUCCEEDED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_IShellLinkW,reinterpret_cast<void**>(&link)))){
         link->SetPath((destination/L"pt.exe").c_str());link->SetWorkingDirectory(destination.c_str());link->SetDescription(kProduct);
+        if(fs::is_regular_file(ico,error))link->SetIconLocation(ico.c_str(),0);
         PWSTR desktop=nullptr;IPersistFile* persist=nullptr;
         if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&desktop)) && SUCCEEDED(link->QueryInterface(IID_IPersistFile,reinterpret_cast<void**>(&persist)))){
             fs::path name=fs::path(desktop)/(std::wstring(kProduct)+L".lnk");if(fs::exists(name))name=fs::path(desktop)/(std::wstring(kProduct)+L" "+destination.filename().native()+L".lnk");
@@ -106,10 +147,12 @@ void Shortcut(const fs::path& destination){
     }
     CoUninitialize();
 }
+// A new install, or the update of the install in `destination` (the window asks first; the command line updates directly).
 InstallOutcome Install(const fs::path& input,const fs::path& destination,bool shortcut){
     InstallSteps steps;steps.version=std::string(pt::update::CurrentVersion());
     GUID guid{};CoCreateGuid(&guid);wchar_t id[40];StringFromGUID2(guid,id,40);std::wstring wide(id);steps.unique_id=std::string(wide.begin()+1,wide.end()-1);
     steps.check_parents=CheckParents;steps.verify_integrity=VerifyIntegrity;steps.unpack=Unpack;steps.extract=Extract;steps.shortcut=Shortcut;
+    steps.validate_runtime=[](const std::vector<InstalledFile>& files){RequireProgramFiles(files,{"amd_fidelityfx_vk.dll","nvngx_dlss.dll","libxess.dll"});};
     steps.payload_bytes=[]{auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(100),RT_RCDATA);if(!resource)throw std::runtime_error("Installer payload missing.");
         return PayloadBytes(static_cast<const unsigned char*>(LockResource(LoadResource(nullptr,resource))),SizeofResource(nullptr,resource));};
     return RunInstall(input,destination,shortcut,steps);
@@ -165,16 +208,18 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     bool preview=argc==3 && std::wstring(argv[1])==L"--preview";fs::path preview_file=preview?argv[2]:L"";
     if(argc>1 && !preview){
         int result=0;try{
-            if(std::wstring(argv[1])==L"--install" && argc==5){window=nullptr;auto outcome=Install(argv[2],argv[3],false);std::ofstream out(argv[4]);
+            if(std::wstring(argv[1])==L"--install" && argc==5){window=nullptr;if(!ResultPathWritable(argv[4]))throw std::runtime_error("refusing to overwrite the result file");auto outcome=Install(argv[2],argv[3],false);std::ofstream out(argv[4]);
                 out<<(outcome.updated?"PASS updated":"PASS installed");if(outcome.updated)out<<"\nfrom "<<(outcome.old_version.empty()?"older install":outcome.old_version)<<" replaced "<<outcome.swap.replaced<<" added "<<outcome.swap.added<<" removed "<<outcome.swap.removed<<" archives "<<(outcome.archives_restored?"restored":"kept");
                 for(const auto& note:outcome.notes)out<<"\nnote: "<<note;out<<"\n"<<trace.Summary();}
             else if(std::wstring(argv[1])==L"--check-update" && argc==3){
                 updates.Start();for(int i=0;i<200 && !updates.Done();++i)Sleep(50);auto newer=updates.Newer();
                 std::ofstream(argv[2])<<"url "<<pt::update::ManifestUrl()<<"\nthis "<<pt::update::CurrentVersion()<<"\ndone "<<updates.Done()<<"\nnewer "<<(newer?newer->version+" "+newer->url:std::string("none"));
             }
-            else if(std::wstring(argv[1])==L"--verify-integrity" && argc==3){VerifyIntegrity();std::ofstream(argv[2])<<"PASS integrity verified";}
+            else if(std::wstring(argv[1])==L"--verify-integrity" && argc==3){if(!ResultPathWritable(argv[2]))throw std::runtime_error("refusing to overwrite the result file");VerifyIntegrity();std::ofstream(argv[2])<<"PASS integrity verified";}
             else if(std::wstring(argv[1])==L"--self-test" && argc==3){
                 bool rejected=false;try{Contained(L"C:/test","../escape");}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Traversal accepted");
+                // input formats: a dump folder found below the picked folder, other names found by content, an encrypted copy refused,
+                // other regions installed with a note, another game refused
                 GUID guid{};CoCreateGuid(&guid);wchar_t id[40];StringFromGUID2(guid,id,40);const fs::path root=fs::temp_directory_path()/(std::wstring(L"pt-setup-selftest-")+id);
                 const fs::path game=root/L"dump"/L"CUSA01127-app";fs::create_directories(game);
                 auto write=[](const fs::path& file,const std::string& bytes){std::ofstream(file,std::ios::binary)<<bytes;};
@@ -187,11 +232,14 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 write(game/L"data_ps4.psarc",std::string(64,'\x5a'));
                 bool refused=false;try{ResolveSource(game);}catch(...){refused=true;}if(!refused)failures+=" encrypted-accepted";
                 GameFiles europe;europe.title="CUSA01114";europe.pathid=game/L"pathid_list_ps4.bin";if(!ConfirmPt(europe) || europe.notes.empty() || europe.notes[0].find("Europe")==std::string::npos)failures+=" region-refused";
+                failures+=SelfTestIcon(root/L"icon");
                 write(game/L"other_list.bin","/Assets/other/level/"+std::string(40,'x'));GameFiles other;other.title="CUSA99999";other.pathid=game/L"other_list.bin";if(ConfirmPt(other))failures+=" other-game-accepted";
                 fs::remove_all(root);
                 failures+=SelfTestUpdate(root/L"update");
+                failures+=SelfTestUnicodePaths(root);
                 fs::remove_all(root);
                 if(!failures.empty())throw std::runtime_error("Self test failed:"+failures);
+                // the update check: version order and the manifest (docs/updates.md)
                 using pt::update::CompareVersions;
                 if(!(CompareVersions("0.10.0","0.9.2")>0 && CompareVersions("v0.2.0","0.2.0")==0 && CompareVersions("0.2.0-rc1","0.2.0")<0 && CompareVersions("0.1","0.1.0")==0))throw std::runtime_error("Version order failure");
                 if(pt::update::CurrentVersion()=="0.0.0-dev" || pt::update::ManifestUrl().find("github.com/")==std::string::npos)throw std::runtime_error("Built without pt_version.h or with a placeholder manifest address");
@@ -199,7 +247,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 if(!release || release->version!="0.2.0" || release->url!="https://example.org/w.exe" || pt::update::ParseManifest("{\"notes\":1}","windows"))throw std::runtime_error("Manifest parse failure");
                 std::ofstream(argv[2])<<"PASS path containment, input formats, update manifest and in-place update";
             }else result=2;
-        }catch(const std::exception& e){result=1;std::ofstream(argv[argc-1])<<e.what();}
+        }catch(const std::exception& e){result=1;if(ResultPathWritable(argv[argc-1]))std::ofstream(argv[argc-1])<<e.what();}
         LocalFree(argv);return result;
     }LocalFree(argv);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -214,7 +262,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     pkg_edit=Control(L"EDIT",L"",ES_AUTOHSCROLL|WS_TABSTOP,24,128,376,28,14);Control(L"BUTTON",L"PKG...",WS_TABSTOP,410,128,90,28,10);Control(L"BUTTON",L"Folder...",WS_TABSTOP,506,128,90,28,17);
     PWSTR local=nullptr;SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local);std::wstring dest=local?(fs::path(local)/L"Programs"/kFolder).native():L"";CoTaskMemFree(local);
     dest_edit=Control(L"EDIT",dest.c_str(),ES_AUTOHSCROLL|WS_TABSTOP,24,166,472,28,15);Control(L"BUTTON",L"Location...",WS_TABSTOP,506,166,90,28,11);
-    shortcut_check=Control(L"BUTTON",L"Create desktop shortcut",BS_AUTOCHECKBOX|WS_TABSTOP,24,205,300,24,16);SendMessageW(shortcut_check,BM_SETCHECK,BST_CHECKED,0);
+    shortcut_check=Control(L"BUTTON",L"Create desktop shortcut with your game icon",BS_AUTOCHECKBOX|WS_TABSTOP,24,205,420,24,16);SendMessageW(shortcut_check,BM_SETCHECK,BST_CHECKED,0);
     progress_bar=Control(PROGRESS_CLASSW,L"",PBS_MARQUEE,24,242,572,15,0);status_label=Control(L"STATIC",L"Select your PKG or dumped game folder, and a new installation folder.",0,24,271,572,55,0);
     update_label=Control(L"STATIC",L"",0,24,337,364,30,0);
     install_button=Control(L"BUTTON",L"Install",BS_DEFPUSHBUTTON|WS_TABSTOP,398,337,94,30,12);cancel_button=Control(L"BUTTON",L"Close",WS_TABSTOP,502,337,94,30,13);

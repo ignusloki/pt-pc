@@ -1,6 +1,7 @@
 """Build and package the Apple Silicon installer on macOS."""
 import argparse
 import datetime
+import json
 import os
 import platform
 import shutil
@@ -55,11 +56,29 @@ def verify_packaged_voice(app, output):
         raise RuntimeError("Packaged voice smoke test did not process the WAV; see voice-smoke.log")
 
 
+def copy_runtime_notices(extractor, artifacts, rid):
+    config = json.loads((extractor / "PT.PkgExtract.runtimeconfig.json").read_text())
+    version = next(f["version"] for f in config["runtimeOptions"]["includedFrameworks"] if f["name"] == "Microsoft.NETCore.App")
+    assets = json.loads((artifacts / "obj/Extractor/project.assets.json").read_text())
+    pack = next((Path(root) / ("microsoft.netcore.app.runtime." + rid) / version
+                 for root in assets["packageFolders"]
+                 if (Path(root) / ("microsoft.netcore.app.runtime." + rid) / version).is_dir()), None)
+    if pack is None:
+        raise RuntimeError("Microsoft runtime pack not found for its distribution notices")
+    notices = extractor / "licenses"
+    notices.mkdir(exist_ok=True)
+    for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+        shutil.copy2(pack / name, notices / ("dotnet-" + name))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--liborbis", type=Path, help="Existing upstream source; a pinned copy is downloaded when omitted")
     p.add_argument("--out", type=Path, help="New output directory (defaults to a timestamp under dist/macos)")
     p.add_argument("--version", default="1.0.3")
+    p.add_argument("--build", type=Path, help="Optional isolated build directory")
+    p.add_argument("--cmake-init", type=Path, help="Initial CMake cache")
+    p.add_argument("--cmake-arg", action="append", default=[], help="Extra CMake option")
     p.add_argument("--identity", default="-", help="Developer ID Application identity, or '-' for local testing")
     p.add_argument("--jobs", type=int, default=6)
     args = p.parse_args()
@@ -76,10 +95,11 @@ def main():
     output = (args.out or REPO / "dist/macos" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     if output.exists():
         p.error("Choose a new output directory; existing releases are preserved")
-    build = REPO / "build/macos-arm64"
+    build = (args.build or REPO / "build/macos-arm64").resolve()
     os.environ["PT_VERSION"] = args.version
-    run("cmake", "--preset", "macos-arm64", f"-DPT_VERSION_OVERRIDE={args.version}")
-    run("cmake", "--build", "--preset", "macos-arm64", "--parallel", args.jobs)
+    initial = ["-C", args.cmake_init.resolve()] if args.cmake_init else []
+    run("cmake", "--preset", "macos-arm64", "-B", build, *initial, f"-DPT_VERSION_OVERRIDE={args.version}", *args.cmake_arg)
+    run("cmake", "--build", build, "--parallel", args.jobs, "--target", "pt", "pt_release", "pt_setup_macos")
     run("cmake", "--build", build, "--parallel", args.jobs, "--target", *TESTS)
     fixtures = build / f"test-fixtures-{uuid.uuid4().hex}"
     fixtures.mkdir()
@@ -102,10 +122,23 @@ def main():
             p.error("Cached LibOrbisPkg revision differs; pass --liborbis to explicitly use another checkout")
     source = prepare_source(upstream, build / f"liborbis-src-{uuid.uuid4().hex}")
     extractor = build / f"extractor-osx-arm64-{uuid.uuid4().hex}"
+    dotnet_artifacts = build / f"dotnet-artifacts-{uuid.uuid4().hex}"
+    # Use official Microsoft NuGet packs even when the SDK is from Homebrew.
+    # Its bundled runtime pack can link bottles built for this host's newer OS.
+    microsoft_packs = build / "microsoft-runtime-packs"
+    microsoft_packs.mkdir(exist_ok=True)
+    # .NET 10 reads pruning metadata before downloading targeting packs. Keep
+    # using the SDK's metadata without selecting its host-specific runtime.
+    sdk_packs = subprocess.check_output(["dotnet", "msbuild", str(REPO / "installer/Extractor/Extractor.csproj"),
+                                         "-getProperty:NetCoreTargetingPackRoot"], cwd=REPO, text=True).strip()
     run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-arm64",
-        "--self-contained", "true", f"-p:LibOrbisSource={source}", "-o", extractor)
-    run("dotnet", "run", "--project", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
-        f"-p:LibOrbisSource={source}", "--", build / f"extractor-tests-{uuid.uuid4().hex}")
+        "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
+        f"-p:PrunePackageTargetingPackRoots={sdk_packs}",
+        "--artifacts-path", dotnet_artifacts, "-o", extractor)
+    copy_runtime_notices(extractor, dotnet_artifacts, "osx-arm64")
+    run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
+        f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
+    run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
     # Packaging checks all Mach-O files for arm64 and signs the app after relocation.
     output.mkdir(parents=True)
     archive = package.runtime(build, output, args.version, args.identity)

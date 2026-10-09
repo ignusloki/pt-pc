@@ -12,7 +12,7 @@
       }
     },
     { "name": "debug", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
-    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
+    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "PT_REQUIRE_UPSCALERS": "ON" } },
     {
       "name": "macos-arm64",
       "generator": "Ninja",

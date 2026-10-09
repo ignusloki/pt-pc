@@ -13,8 +13,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 APP_NAME = "P.T..app"
 SETUP_NAME = "P.T. Mac Setup.app"
-MODELS = ("ggml-base.en-q5_1.bin", "ggml-silero-v6.2.0.bin")
-VOICE_LIBS = ("libwhisper.dylib", "libggml.dylib", "libggml-base.dylib", "libggml-cpu.dylib")
+MODELS = ("ggml-base.en-q5_1.bin", "ggml-small.en-q5_1.bin", "ggml-silero-v6.2.0.bin")
+VOICE_LIBS = ("libwhisper.dylib", "libggml.dylib", "libggml-base.dylib")
 MACH_MAGICS = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
                b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
 
@@ -78,6 +78,10 @@ def audit_dependencies(root):
     for file in binaries:
         run("lipo", "-verify_arch", "arm64", file)
         commands = subprocess.check_output(["otool", "-arch", "arm64", "-l", str(file)], text=True)
+        for modern, legacy in re.findall(r"\bminos ([\d.]+)|cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)", commands):
+            minimum = tuple((list(map(int, (modern or legacy).split('.'))) + [0, 0, 0])[:3])
+            if minimum > (14, 0, 0):
+                raise RuntimeError(f"{file.name} requires macOS {modern or legacy}, above the app minimum 14.0")
         rpaths[file] = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
         ids = subprocess.check_output(["otool", "-arch", "arm64", "-D", str(file)], text=True).splitlines()[1:]
         dependencies[file] = [line.strip().split(" (", 1)[0] for line in
@@ -129,8 +133,9 @@ def sign_tree(root, identity="-", entitlements=None):
 
 
 def relocate_voice(folder):
-    names = {file.name for file in folder.glob("*.dylib")}
-    for library in folder.glob("*.dylib"):
+    libraries = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix in {".dylib", ".so"})
+    names = {file.name for file in libraries}
+    for library in libraries:
         # GGML's dynamically loaded CPU module has no dylib install ID.
         ids = subprocess.check_output(["otool", "-arch", "arm64", "-D", str(library)], text=True).splitlines()
         if len(ids) > 1:
@@ -155,11 +160,14 @@ def runtime(build, output, version, identity="-", exe=None, moltenvk=None):
     exe = exe or build / "pt_release"
     moltenvk = moltenvk or build / "libMoltenVK.dylib"
     required = [exe, moltenvk, build / "voice/licenses", build / "fonts"]
+    cpu_modules = sorted((build / "voice").glob("libggml-cpu-*.so"))
+    if not cpu_modules:
+        raise RuntimeError("Missing build output: architecture-specific voice CPU modules")
     required += [build / "voice" / name for name in MODELS + VOICE_LIBS]
     for file in required:
         if not file.exists():
             raise RuntimeError(f"Missing build output: {file}")
-    for file in [exe, moltenvk, *(build / "voice" / name for name in VOICE_LIBS)]:
+    for file in [exe, moltenvk, *(build / "voice" / name for name in VOICE_LIBS), *cpu_modules]:
         if not is_mach(file):
             raise RuntimeError(f"Expected a Mach-O executable or library: {file}")
     shaders = sorted((build / "shaders").glob("*.spv"))
@@ -181,9 +189,11 @@ def runtime(build, output, version, identity="-", exe=None, moltenvk=None):
     for name in MODELS:
         shutil.copy2(build / "voice" / name, voice / name)
     for name in VOICE_LIBS:
-        executable(build / "voice" / name, frameworks / name)
+        executable(build / "voice" / name, voice / name)
+    for file in cpu_modules:
+        executable(file, voice / file.name)
     shutil.copytree(build / "voice/licenses", voice / "licenses")
-    relocate_voice(frameworks)
+    relocate_voice(voice)
     notices = resources / "licenses"
     if (build / "licenses").exists():
         shutil.copytree(build / "licenses", notices)

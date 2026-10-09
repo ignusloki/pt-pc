@@ -24,14 +24,18 @@ vec3 Lut16(uint lut, vec3 c) {
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec3 c;
+    vec3 hdr = vec3(0.0);
     if (pass.ids.y == 1u) {
         c = ImgFetch(pass.ids.x, pixel).rgb;
     } else {
-        vec3 hdr = ImgFetch(IMG_HDR, pixel).rgb * pass.f0.z;
+        hdr = ImgFetch(IMG_HDR, pixel).rgb * pass.f0.z;
+        // the lens flare buffer adds to the encoded scene before the Tonemap pass (CopyRenderBuffer, ONE + ONE on the UNORM view)
         vec3 x = min(SrgbEncode(clamp(hdr, 0.0, 1.0)) + max(ImgFetch(IMG_FLARE, pixel).rgb, vec3(0.0)), vec3(1.0));
+        // Tonemap samples the bloom half a bloom texel down and right of the pixel (m_renderBuffer.zw * 2 at 1080p)
         vec2 bloom_uv = in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);
         vec3 b = pass.f0.x > 0.0 ? min(vec3(0.5), Img(IMG_BLOOM_SUM, SMP_LINEAR_CLAMP, bloom_uv).rgb) : vec3(0.0);
         vec3 x2 = x * x;
+        // Tonemap ps: r rsqrt(max(1/512, r))
         vec3 r = clamp(x2 + b - x2 * b, 0.0, 1.0);
         c = clamp(r * inversesqrt(max(vec3(1.0 / 512.0), r)), 0.0, 1.0);
     }
@@ -41,6 +45,10 @@ void main() {
         if (pass.f0.y < 1.0) {
             graded = mix(Lut16(RES_COLOR_LUT_PREV, c), graded, pass.f0.y);
         }
+    }
+    if (pass.f1.x > 0.5 && pass.ids.y != 1u) {
+        vec3 extended = SrgbEncode(max(hdr, vec3(1.0)));
+        graded = mix(graded, max(graded, extended), greaterThan(hdr, vec3(1.0)));
     }
     out_color = vec4(graded, Luma601(graded));
 }

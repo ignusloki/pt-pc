@@ -1,8 +1,10 @@
 #include "engine/core/resource_path.h"
 
 #include <SDL3/SDL.h>
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+
 #include <vector>
 #endif
 
@@ -13,28 +15,15 @@ std::filesystem::path ExecutableDir() {
     return base ? std::filesystem::path(reinterpret_cast<const char8_t*>(base)) : std::filesystem::current_path();
 }
 
-std::filesystem::path ExecutablePath() {
 #ifdef __APPLE__
+std::filesystem::path ExecutablePath() {
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
-    std::vector<char> path(size);
-    if (_NSGetExecutablePath(path.data(), &size) == 0) return std::filesystem::path(path.data());
-    return {};
-#elif defined(_WIN32)
-    return ExecutableDir() / "pt.exe";
-#else
-    return ExecutableDir() / "pt";
-#endif
-}
-
-#ifdef __APPLE__
-std::filesystem::path MacVulkanLibrary() {
-    std::error_code error;
-    const auto bundled = ExecutableDir() / ".." / "Frameworks" / "libMoltenVK.dylib";
-    if (std::filesystem::is_regular_file(bundled, error)) return bundled;
-    const auto local = ExecutableDir() / "libMoltenVK.dylib";
-    if (std::filesystem::is_regular_file(local, error)) return local;
-    return PT_MOLTENVK_LIBRARY;
+    std::vector<char> buffer(size + 1, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
+    std::error_code ec;
+    const std::filesystem::path path = std::filesystem::weakly_canonical(std::filesystem::path(buffer.data()), ec);
+    return ec ? std::filesystem::path(buffer.data()) : path;
 }
 #endif
 

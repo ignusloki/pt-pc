@@ -1,4 +1,7 @@
 #pragma once
+// The installer's platform-independent part, shared by the Windows setup (setup.cpp) and the Linux one (setup_linux.cpp):
+// what the player gives it, how P.T. is recognised, the copy of a dump's archives, the payload format and the target folder
+// rules (docs/installer.md). The front ends supply progress and cancel through Hooks.
 #include <zlib.h>
 
 #include <algorithm>
@@ -18,15 +21,17 @@ namespace pt::setup {
 namespace fs = std::filesystem;
 
 struct Hooks {
-    std::function<void(const std::string&)> report;
+    std::function<void(const std::string&)> report;  // UTF-8 progress text
     std::function<bool()> cancelled;
-    std::function<void(uint64_t, uint64_t)> progress;
+    std::function<void(uint64_t, uint64_t)> progress;  // bytes written so far, and the bytes the whole install writes
 };
 inline Hooks hooks;
 inline void Report(const std::string& text) { if (hooks.report) hooks.report(text); }
 inline void CheckCancel() {
     if (hooks.cancelled && hooks.cancelled()) throw std::runtime_error("Installation cancelled.");
 }
+// The install measured in bytes: the payload's files and the game archives, counted as they are written. The total is
+// fixed before the first byte, so the percentage only rises; `At` sets the count from outside (the helper's output files).
 struct Progress {
     uint64_t done = 0, total = 0;
     void Begin(uint64_t bytes) { done = 0; total = bytes; Notify(); }
@@ -40,6 +45,7 @@ struct Progress {
     void Notify() const { if (hooks.progress) hooks.progress(done, total); }
 };
 inline Progress progress;
+// The bytes the extraction helper has written so far, polled while it runs: its files grow in `assets`
 inline uint64_t FolderBytes(const fs::path& dir) {
     uint64_t sum = 0;
     std::error_code error;
@@ -49,6 +55,7 @@ inline uint64_t FolderBytes(const fs::path& dir) {
     }
     return sum;
 }
+// For the --install command line of both setups: every progress call counted and checked to only rise (the tests read it)
 struct ProgressTrace {
     uint64_t events = 0, last_done = 0, last_total = 0;
     bool monotonic = true;
@@ -68,17 +75,26 @@ struct ProgressTrace {
     }
 };
 inline fs::path Utf8Path(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+inline std::string PathUtf8(const fs::path& path) {
+    const std::u8string text = path.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
 
+// A payload or archive path below root: no absolute path, drive, "..", "." or ':'
 inline fs::path Contained(const fs::path& root, const std::string& name) {
     const fs::path relative = Utf8Path(name);
     if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) throw std::runtime_error("Unsafe payload path.");
     for (const auto& part : relative) {
-        const std::string text = part.string();
+        const std::string text = PathUtf8(part);
         if (text == ".." || text == "." || text.find(':') != std::string::npos) throw std::runtime_error("Unsafe payload path.");
     }
     return root / relative;
 }
 
+// What the player gives setup (docs/installer.md): a fake PKG (fPKG), or a folder that already holds the decrypted game files
+// (a dump from their own console, an extracted fPKG, an emulator's install folder). Setup refuses only an encrypted PKG it
+// cannot open (the helper's message) and input that is not P.T.; every release of P.T. installs, and what differs from the
+// tested US data is written to install-notes.txt. Nothing here or in the helper decrypts Sony-encrypted content.
 inline constexpr const char* kGameArchives[] = {"chunk1.psarc", "texture.qar", "pathid_list_ps4.bin"};
 enum class SourceKind { Package, Folder };
 struct GameFiles {
@@ -111,6 +127,7 @@ inline bool IsPathList(const fs::path& file) {
     const auto size = fs::file_size(file, error);
     return !error && size >= 32 && size < 64ull * 1024 * 1024;
 }
+// TITLE_ID from a dump's sce_sys/param.sfo, empty when there is none (an extracted fPKG may lack it)
 inline std::string TitleId(const fs::path& folder) {
     std::error_code error;
     const fs::path sfo = folder / "sce_sys" / "param.sfo";
@@ -141,6 +158,8 @@ inline std::string Lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     return text;
 }
+// The archives in one folder, found by their own headers: the names the port reads first, else the largest file of that
+// kind (a release or dump tool that names them differently). Encrypted copies have no valid header and are not found.
 inline GameFiles FindArchives(const fs::path& folder) {
     GameFiles found;
     std::error_code error;
@@ -153,15 +172,16 @@ inline GameFiles FindArchives(const fs::path& folder) {
             const auto size = it->file_size(error);
             if (!error && size >= best_size) { best = it->path(); best_size = size; }
         }
-        if (!best.empty()) found.notes.push_back(std::string(name) + " is named " + best.filename().string() + " in this release; installed as " + name);
+        if (!best.empty()) found.notes.push_back(std::string(name) + " is named " + PathUtf8(best.filename()) + " in this release; installed as " + name);
         return best;
     };
-    auto ext = [](const char* e) { return [e](const fs::path& p) { return Lower(p.extension().string()) == e; }; };
+    auto ext = [](const char* e) { return [e](const fs::path& p) { return Lower(PathUtf8(p.extension())) == e; }; };
     found.psarc = pick("chunk1.psarc", ext(".psarc"), IsPsarc);
     found.qar = pick("texture.qar", ext(".qar"), IsQar);
-    found.pathid = pick("pathid_list_ps4.bin", [](const fs::path& p) { return Lower(p.filename().string()).find("pathid_list") != std::string::npos; }, IsPathList);
+    found.pathid = pick("pathid_list_ps4.bin", [](const fs::path& p) { return Lower(PathUtf8(p.filename())).find("pathid_list") != std::string::npos; }, IsPathList);
     return found;
 }
+// P.T. by content: P.T.'s level names in the path list, or a known P.T. title ID. Without either the folder is another game.
 inline bool ConfirmPt(GameFiles& files) {
     std::string list;
     if (!files.pathid.empty()) {
@@ -180,6 +200,8 @@ inline bool ConfirmPt(GameFiles& files) {
 }
 inline constexpr const char* kNotPt =
     "No P.T. game data was found here. Select the folder that holds chunk1.psarc and texture.qar (decrypted, from your own console's dump), or your P.T. fake PKG.";
+// A file or folder as the player picked it. Folders are searched two levels down for the game root (CUSA01127,
+// CUSA01127-app, a dumper's output folder); a folder without the archives but with exactly one PKG uses that PKG.
 inline Source ResolveSource(const fs::path& input) {
     std::error_code error;
     if (input.empty() || !fs::exists(input, error)) throw std::runtime_error("Select your P.T. game: a fake PKG, or the game folder from your console dump.");
@@ -215,6 +237,80 @@ inline Source ResolveSource(const fs::path& input) {
     if (packages.size() > 1) throw std::runtime_error("This folder has several PKG files. Select the P.T. package itself.");
     throw std::runtime_error(kNotPt);
 }
+// Copies the archives out of a dump folder under the names the port reads; the player's folder is only read.
+inline constexpr uint64_t kIconMaxBytes = 8ull * 1024 * 1024;
+inline bool IsPng(const std::string& bytes) { return bytes.size() >= 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0; }
+inline uint32_t Be32(const std::string& bytes, size_t at) {
+    const auto* p = reinterpret_cast<const unsigned char*>(bytes.data() + at);
+    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+}
+inline std::string ReadSlice(const fs::path& file, uint64_t offset, uint64_t count) {
+    if (count == 0 || count > kIconMaxBytes) return {};
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return {};
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    if (end < 0 || uint64_t(end) < offset || uint64_t(end) - offset < count) return {};
+    input.seekg(std::streamoff(offset));
+    std::string bytes(size_t(count), '\0');
+    input.read(bytes.data(), std::streamsize(count));
+    return input.gcount() == std::streamsize(count) ? bytes : std::string{};
+}
+inline std::optional<std::string> IconFromFolder(const fs::path& dir) {
+    std::error_code error;
+    const fs::path icon = dir / "sce_sys" / "icon0.png";
+    if (!fs::is_regular_file(icon, error)) return std::nullopt;
+    const auto size = fs::file_size(icon, error);
+    if (error || size < 8 || size > kIconMaxBytes) return std::nullopt;
+    const std::string bytes = ReadSlice(icon, 0, size);
+    if (!IsPng(bytes)) return std::nullopt;
+    return bytes;
+}
+inline std::optional<std::string> IconFromPackage(const fs::path& pkg) {
+    const std::string head = ReadSlice(pkg, 0, 0x20);
+    if (head.size() != 0x20 || head.compare(0, 4, "\x7F" "CNT") != 0) return std::nullopt;
+    const uint32_t count = Be32(head, 0x10), table = Be32(head, 0x18);
+    if (count == 0 || count > 256) return std::nullopt;
+    const std::string entries = ReadSlice(pkg, table, uint64_t(count) * 32);
+    if (entries.size() != uint64_t(count) * 32) return std::nullopt;
+    uint32_t names_offset = 0, names_size = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t at = size_t(i) * 32;
+        if (Be32(entries, at) != 0x0200) continue;
+        names_offset = Be32(entries, at + 16);
+        names_size = Be32(entries, at + 20);
+    }
+    if (names_size == 0 || names_size > 1024 * 1024) return std::nullopt;
+    const std::string names = ReadSlice(pkg, names_offset, names_size);
+    if (names.size() != names_size) return std::nullopt;
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t at = size_t(i) * 32;
+        const uint32_t id = Be32(entries, at), flags1 = Be32(entries, at + 8), offset = Be32(entries, at + 16), size = Be32(entries, at + 20);
+        if (id < 0x1000 || (flags1 & 0x80000000u) || size < 8 || size > kIconMaxBytes) continue;
+        const uint32_t name_at = Be32(entries, at + 4);
+        if (name_at >= names.size()) continue;
+        if (std::string(names.c_str() + name_at) != "icon0.png") continue;
+        const std::string bytes = ReadSlice(pkg, offset, size);
+        if (IsPng(bytes)) return bytes;
+    }
+    return std::nullopt;
+}
+inline std::optional<std::string> FindIconPng(const fs::path& input) {
+    std::error_code error;
+    if (input.empty() || !fs::exists(input, error)) return std::nullopt;
+    if (fs::is_regular_file(input, error)) {
+        if (IsPackage(input)) {
+            if (auto icon = IconFromPackage(input)) return icon;
+        }
+        if (auto icon = IconFromFolder(input.parent_path())) return icon;
+        return std::nullopt;
+    }
+    if (auto icon = IconFromFolder(input)) return icon;
+    for (fs::directory_iterator it(input, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error))
+        if (it->is_directory(error))
+            if (auto icon = IconFromFolder(it->path())) return icon;
+    return std::nullopt;
+}
 inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
     fs::create_directories(assets);
     std::vector<char> buffer(4 * 1024 * 1024);
@@ -244,6 +340,7 @@ inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
     source << "title_id=" << files.title << "\nregion=" << (region ? region : "unknown") << "\nsource=folder\n";
     for (const auto& note : files.notes) source << "warning=" << note << "\n";
 }
+// The notes of an install: the folder's, plus the helper's "warning: " lines for a PKG; written to install-notes.txt
 inline std::vector<std::string> WriteNotes(const Source& source, const fs::path& staging) {
     std::vector<std::string> notes = source.files.notes;
     if (source.kind == SourceKind::Package) {
@@ -260,6 +357,9 @@ inline std::vector<std::string> WriteNotes(const Source& source, const fs::path&
     return notes;
 }
 
+// The payload: "PTSETUP1", a u32 file count, then per file a u16 name length, the UTF-8 name, u64 size, u64 packed size,
+// 64 hex chars of SHA-256 and the zlib data (tools/prepare_native_installer.py). Every file is written, then read back and
+// hashed by `hash_file`.
 struct Reader {
     const unsigned char* p;
     size_t left;
@@ -279,10 +379,62 @@ struct Reader {
         return s;
     }
 };
+// a program file of an install: its path below the install folder ('/' separated) and SHA-256
 struct InstalledFile {
     std::string path;
     std::string sha256;
 };
+// The installed runtime may never classify or replace the player's data folder as program content.
+inline bool IsUserDataPath(std::string path) {
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const size_t slash = path.find('/');
+    std::string first = path.substr(0, slash);
+#ifdef _WIN32
+    // Win32 treats trailing dots and spaces in path components as absent, so these alias `data`.
+    while (!first.empty() && (first.back() == '.' || first.back() == ' ')) first.pop_back();
+#endif
+    return Lower(std::move(first)) == "data";
+}
+inline void ProbeWritableDirectory(const fs::path& dir, const std::string& unique_id, const std::string& description) {
+    std::error_code error;
+    if (fs::is_symlink(dir, error) || !fs::is_directory(dir, error))
+        throw std::runtime_error("The " + description + " must be a writable folder.");
+    const fs::path probe = dir / (".pt-write-probe-" + unique_id);
+    if (!fs::create_directory(probe, error) || error)
+        throw std::runtime_error("The " + description + " is not writable.");
+    try {
+        std::ofstream output(probe / "write-test", std::ios::binary | std::ios::trunc);
+        output.put('x');
+        output.flush();
+        if (!output) throw std::runtime_error("The " + description + " is not writable.");
+        output.close();
+        if (!output) throw std::runtime_error("The " + description + " is not writable.");
+        fs::remove_all(probe);
+    } catch (...) {
+        fs::remove_all(probe, error);
+        throw;
+    }
+}
+inline void EnsureDataDirectory(const fs::path& install, const std::string& unique_id,
+                                const std::function<void(const fs::path&)>& check_parents) {
+    const fs::path data = install / "data";
+    std::error_code error;
+    if (!fs::exists(data, error)) fs::create_directory(data, error);
+    if (error) throw std::runtime_error("Could not create the game's data folder.");
+    if (check_parents) check_parents(data);
+    ProbeWritableDirectory(data, unique_id, "game data folder");
+}
+inline void ValidateProgramFiles(const std::vector<InstalledFile>& files) {
+    for (const auto& file : files)
+        if (IsUserDataPath(file.path)) throw std::runtime_error("The installer payload cannot contain files under data/.");
+}
+inline void RequireProgramFiles(const std::vector<InstalledFile>& files, const std::vector<std::string>& required) {
+    ValidateProgramFiles(files);
+    for (const auto& path : required)
+        if (std::none_of(files.begin(), files.end(), [&](const InstalledFile& file) { return Lower(file.path) == Lower(path); }))
+            throw std::runtime_error("The installer payload is missing required runtime file " + path + ".");
+}
+// The bytes the payload unpacks to (its headers only), for the progress total before anything is written
 inline uint64_t PayloadBytes(const unsigned char* data, size_t size) {
     Reader reader{data, size};
     if (reader.String(8) != "PTSETUP1") throw std::runtime_error("Invalid installer payload.");
@@ -322,7 +474,9 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
         reader.p += packed;
         reader.left -= packed;
         const fs::path path = Contained(root, name);
-        const std::string folder = path.parent_path() == root ? "program files" : Utf8Path(name).begin()->string();
+        if (IsUserDataPath(name)) throw std::runtime_error("The installer payload cannot contain files under data/.");
+        // the status names the folder being written (shaders, voice, extractor); the files at the root are "program files"
+        const std::string folder = path.parent_path() == root ? "program files" : PathUtf8(*Utf8Path(name).begin());
         if (folder != group) {
             group = folder;
             Report("Extracting " + group + "...");
@@ -341,12 +495,16 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
             if (!file) throw std::runtime_error("Could not write installation files.");
         }
         if (hash_file(path) != digest) throw std::runtime_error("Installer payload integrity check failed.");
-        written.push_back({Utf8Path(name).generic_string(), digest});
+        written.push_back({PathUtf8(Utf8Path(name)), digest});
     }
     if (reader.left) throw std::runtime_error("Unexpected payload data.");
     return written;
 }
 
+// ---- Installs and in-place updates (docs/installer.md, "Updating an install") ----
+// An install folder holds pt-install-manifest.txt from now on: the version and every program file the setup wrote, with
+// its SHA-256. The game archives in CUSA01127, pt.ini, saves, mods, logs and anything else are not program files: an update
+// never writes or removes them (the archives are only put back when they are missing or fail their header check).
 inline constexpr const char* kManifestName = "pt-install-manifest.txt";
 #ifdef _WIN32
 inline constexpr const char* kGameExe = "pt.exe";
@@ -356,9 +514,9 @@ inline constexpr const char* kGameExe = "P.T..app/Contents/MacOS/pt";
 inline constexpr const char* kGameExe = "pt";
 #endif
 struct ExistingInstall {
-    bool found = false;
+    bool found = false;         // a P.T. port install (manifest, or the older layout)
     bool has_manifest = false;
-    std::string version;
+    std::string version;        // empty for an older install without a manifest
     std::vector<InstalledFile> files;
 };
 inline void WriteManifest(const fs::path& dir, const std::string& version, const std::vector<InstalledFile>& files) {
@@ -376,10 +534,25 @@ inline bool ArchivesUsable(const fs::path& assets) {
     return fs::is_regular_file(assets / "chunk1.psarc", error) && IsPsarc(assets / "chunk1.psarc") &&
            fs::is_regular_file(assets / "texture.qar", error) && IsQar(assets / "texture.qar");
 }
+// What is in a folder the player chose: nothing (a new install), a P.T. port install (with or without a manifest), or
+// something else (refused, as before).
+// An existing empty folder counts as a new installation folder: file managers and the folder pickers create the folder
+// before the setup sees it, and players then got "This folder holds something else" for the folder they had just made.
+inline bool EmptyDirectory(const fs::path& dir) {
+    std::error_code error;
+    return fs::is_directory(dir, error) && !fs::is_symlink(dir, error) && fs::directory_iterator(dir, error) == fs::directory_iterator() && !error;
+}
+// The command line test modes write their verdict to the last argument. A mistyped command (godlike64 in issue #36 passed a game
+// file) truncated whatever that argument named, so a result path is only written when it is new or a small earlier result.
+inline bool ResultPathWritable(const fs::path& file) {
+    std::error_code error;
+    if (!fs::exists(file, error)) return true;
+    return fs::is_regular_file(file, error) && fs::file_size(file, error) <= 64 * 1024 && !error;
+}
 inline ExistingInstall InspectInstall(const fs::path& dir) {
     ExistingInstall install;
     std::error_code error;
-    if (!fs::exists(dir, error)) return install;
+    if (!fs::exists(dir, error) || EmptyDirectory(dir)) return install;
     if (!fs::is_directory(dir, error) || fs::is_symlink(dir, error)) throw std::runtime_error("Choose a new installation folder. Existing folders are never overwritten.");
     std::ifstream manifest(dir / kManifestName, std::ios::binary);
     std::string line;
@@ -389,12 +562,14 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
             if (line.starts_with("version=")) install.version = line.substr(8);
             if (line.starts_with("file=") && line.size() > 5 + 65) {
                 InstalledFile file{line.substr(5 + 65), line.substr(5, 64)};
+                // a manifest path is checked like a payload path before anything acts on it
                 Contained(dir, file.path);
-                install.files.push_back(std::move(file));
+                if (!IsUserDataPath(file.path)) install.files.push_back(std::move(file));
             }
         }
         return install;
     }
+    // installs from before the manifest: the game executable and the installed archives
     const bool exe = fs::is_regular_file(dir / kGameExe, error) || fs::is_regular_file(dir / "pt.exe", error);
     const bool archives = fs::is_regular_file(dir / "CUSA01127" / "chunk1.psarc", error) && fs::is_regular_file(dir / "CUSA01127" / "texture.qar", error);
     if (exe && archives) {
@@ -403,23 +578,32 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
     }
     throw std::runtime_error("This folder holds something else. Choose a new installation folder, or a folder with a P.T. install to update it.");
 }
+// Program files of an install without a manifest that a new version may drop: only names the setup itself ships
 inline bool KnownProgramFile(const std::string& path) {
     static const char* const kNames[] = {"pt.exe", "pt", "amd_fidelityfx_vk.dll", "nvngx_dlss.dll", "libxess.dll", "README-UPDATE.txt", "manifest.json"};
     for (const char* name : kNames)
         if (path == name) return true;
+    // the PocketSphinx and Vosk voice files of the builds before whisper.cpp (formats/voice.md)
     if (path == "voice/cmudict-en-us.dict" || path.starts_with("voice/en-us/") || path.starts_with("voice/vosk/")) return true;
     return (path.starts_with("shaders/") && path.ends_with(".spv")) || path.starts_with("extractor/");
 }
 struct SwapResult {
     int replaced = 0, added = 0, removed = 0;
 };
+// Moves the new program files from `staging` (same parent folder, so every move is a rename) into `dest`. Each file the
+// update replaces or removes goes to a backup folder first; when anything fails, every step is undone in reverse and the
+// install is as it was. `extra` are further files of `staging` to put in place (restored game archives, notes), kept out of
+// the manifest. `fail_at` makes step N fail, for the tests.
 inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest, const std::vector<InstalledFile>& files,
                                    const std::vector<std::string>& extra, const ExistingInstall& old, const fs::path& backup, int fail_at = -1,
                                    const std::vector<std::string>& whole_trees = {}) {
+    ValidateProgramFiles(files);
+    for (const auto& path : extra)
+        if (IsUserDataPath(path)) throw std::runtime_error("The installer cannot replace files under data/.");
     struct Step {
         std::string path;
-        bool placed;
-        bool backed;
+        bool placed;   // a new file now at dest/path, from staging/path
+        bool backed;   // the old dest/path is in backup/path
     };
     std::vector<Step> journal;
     SwapResult result;
@@ -467,6 +651,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
             journal.back().placed = true;
             existed ? ++result.replaced : ++result.added;
         }
+        // program files the new version no longer ships: those of the old manifest, or known names of an older install
         std::vector<std::string> obsolete;
         auto shipped = [&](const std::string& path) { return !tree_for(path).empty() || std::find(all.begin(), all.end(), path) != all.end(); };
         if (old.has_manifest) {
@@ -476,7 +661,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
             std::error_code error;
             for (fs::recursive_directory_iterator it(dest, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error)) {
                 if (!it->is_regular_file(error)) continue;
-                const std::string path = fs::relative(it->path(), dest).generic_string();
+                const std::string path = PathUtf8(fs::relative(it->path(), dest));
                 if (KnownProgramFile(path) && !shipped(path)) obsolete.push_back(path);
             }
         }
@@ -491,6 +676,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
         }
         tick();
     } catch (...) {
+        // undo in reverse: new files back to staging, old ones back from the backup
         for (auto it = journal.rbegin(); it != journal.rend(); ++it) {
             std::error_code error;
             if (it->placed) fs::rename(Contained(dest, it->path), Contained(staging, it->path), error);
@@ -501,25 +687,30 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
     return result;
 }
 
+// The platform parts of an install, given by each front end
 struct InstallSteps {
-    std::string version;
-    std::string unique_id;
-    std::function<void(const fs::path&)> check_parents;
-    std::function<void()> verify_integrity;
-    std::function<uint64_t()> payload_bytes;
-    std::function<std::vector<InstalledFile>(const fs::path&)> unpack;
-    std::function<void(const fs::path&, const fs::path&)> extract;
-    std::function<void(const fs::path&)> shortcut;
+    std::string version;                                                    // this setup's version (PT_VERSION)
+    std::string unique_id;                                                  // for the staging and backup folder names
+    std::function<void(const fs::path&)> check_parents;                     // no junctions or links above the target
+    std::function<void()> verify_integrity;                                 // the setup file against a corrupt download
+    std::function<uint64_t()> payload_bytes;                                // what the payload unpacks to (PayloadBytes), for the progress total
+    std::function<std::vector<InstalledFile>(const fs::path&)> unpack;      // the payload into staging
+    std::function<void(const std::vector<InstalledFile>&)> validate_runtime; // platform-specific files required by the executable
+    std::function<void(const fs::path&, const fs::path&)> extract;          // staging, package: the helper
+    std::function<void(const fs::path&)> shortcut;                          // a fresh install's shortcut
     std::vector<std::string> whole_trees;
 };
 struct InstallOutcome {
     bool updated = false;
     bool had_manifest = false;
-    std::string old_version;
+    std::string old_version;  // empty: an older install without a manifest
     bool archives_restored = false;
     SwapResult swap;
     std::vector<std::string> notes;
 };
+// A new install, or an update in place when `destination` holds one (the front end asks the player first). An update keeps
+// the game archives unless they are missing or fail their header check (then `input` must name the game again), keeps every
+// file that is not a program file, and is undone completely when any step fails.
 inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bool shortcut, const InstallSteps& steps) {
     if (destination.empty()) throw std::runtime_error("Choose an installation folder.");
     steps.check_parents(destination);
@@ -538,18 +729,26 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
     Report("Verifying the setup file...");
     steps.verify_integrity();
     fs::create_directories(parent);
+    ProbeWritableDirectory(parent, steps.unique_id, "installation parent folder");
+    if (update) {
+        ProbeWritableDirectory(destination, steps.unique_id, "existing installation folder");
+        EnsureDataDirectory(destination, steps.unique_id, steps.check_parents);
+    }
     if (fs::space(parent).available < (need_archives ? 3ull : 1ull) * 1024 * 1024 * 1024)
         throw std::runtime_error(need_archives ? "At least 3 GB free space is required." : "At least 1 GB free space is required.");
     const fs::path staging = parent / ((update ? ".pt-update-" : ".pt-install-") + steps.unique_id);
     const fs::path backup = parent / (".pt-update-old-" + steps.unique_id);
     if (!fs::create_directory(staging)) throw std::runtime_error("Could not create staging directory.");
     auto remove_ours = [&](const fs::path& dir) {
+        // only the folders this run created, next to the target
         std::error_code error;
         if (fs::exists(dir, error) && dir.parent_path() == parent && !fs::is_symlink(dir, error) &&
-            (dir.filename().string().starts_with(".pt-install-") || dir.filename().string().starts_with(".pt-update-")))
+            (PathUtf8(dir.filename()).starts_with(".pt-install-") || PathUtf8(dir.filename()).starts_with(".pt-update-")))
             fs::remove_all(dir, error);
     };
     try {
+        // the progress total: the payload's files, then the archives (a folder's sizes; a PKG counts as its own size, the
+        // helper's output is polled against it and the phase is completed when the helper ends)
         uint64_t total = steps.payload_bytes ? steps.payload_bytes() : 0, archives = 0;
         if (source) {
             auto size = [](const fs::path& file) -> uint64_t {
@@ -563,6 +762,9 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         progress.Begin(total);
         Report("Preparing native PC runtime...");
         const std::vector<InstalledFile> files = steps.unpack(staging);
+        ValidateProgramFiles(files);
+        if (steps.validate_runtime) steps.validate_runtime(files);
+        if (!update) EnsureDataDirectory(staging, steps.unique_id, steps.check_parents);
         std::vector<std::string> extra;
         if (source) {
             if (source->kind == SourceKind::Package) {
@@ -580,9 +782,20 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                                      "install-notes.txt", "install-extraction.log"})
                 if (fs::is_regular_file(staging / name, error)) extra.push_back(name);
         }
+        if (shortcut) {
+            const fs::path look = source ? source->path : input;
+            if (!look.empty()) {
+                if (const auto icon = FindIconPng(look)) {
+                    std::ofstream icon_file(staging / "icon0.png", std::ios::binary);
+                    icon_file.write(icon->data(), std::streamsize(icon->size()));
+                    if (icon_file) extra.push_back("icon0.png");
+                }
+            }
+        }
         WriteManifest(staging, steps.version, files);
         CheckCancel();
         if (!update) {
+            if (EmptyDirectory(destination)) fs::remove(destination);
             if (fs::exists(destination)) throw std::runtime_error("Choose a new installation folder. Existing folders are never overwritten.");
             fs::rename(staging, destination);
             if (shortcut) steps.shortcut(destination);
@@ -596,14 +809,16 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         try {
             outcome.swap = SwapProgramFiles(staging, destination, files, extra, old, backup, -1, steps.whole_trees);
         } catch (const fs::filesystem_error& e) {
-            throw std::runtime_error("Could not replace " + e.path1().filename().string() +
+            throw std::runtime_error("Could not replace " + PathUtf8(e.path1().filename()) +
                                      ": it is in use (is P.T. still running?). Close it and try again. Nothing was changed.");
         }
         remove_ours(backup);
         remove_ours(staging);
+        if (shortcut) steps.shortcut(destination);
         return outcome;
     } catch (...) {
         remove_ours(staging);
+        // after a failed swap the backup is empty again (everything moved back); a leftover means a step could not be undone
         bool kept = false;
         std::error_code error;
         for (fs::recursive_directory_iterator it(backup, error), end; !error && it != end; it.increment(error))
@@ -612,6 +827,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         throw;
     }
 }
+// The question the front ends ask before an update; empty for a new install
 inline std::string UpdateQuestion(const ExistingInstall& old, const std::string& version) {
     if (!old.found) return {};
     if (old.has_manifest && old.version == version)
@@ -692,6 +908,8 @@ inline std::string SelfTestBundleUpdate(const fs::path& root) {
     return failures;
 }
 
+// The update checks of both setups' --self-test: a synthetic old install with a manifest and one without, the player's
+// files kept, obsolete program files removed, and a failure in the middle undone. Returns the failures, empty when none.
 inline std::string SelfTestUpdate(const fs::path& root) {
     std::string failures;
     auto write = [](const fs::path& file, const std::string& bytes) {
@@ -715,12 +933,21 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         write(dest / "CUSA01127" / "chunk1.psarc", "PSAR old archive");
         write(dest / "CUSA01127" / "texture.qar", qar);
         write(dest / "pt.ini", "player settings");
+        write(dest / "data" / "pt.ini", "user folder settings");
+        write(dest / "data" / "pt.log", "user folder log");
+        write(dest / "data" / "saves" / "progress.dat", "user save");
         write(dest / "mods" / "mine" / "init.lua", "player mod");
         write(dest / "reshade.dll", "player dll");
         if (manifest)
             WriteManifest(dest, "0.0.9", {{kGameExe, std::string(64, '0')}, {"shaders/a.spv", std::string(64, '0')},
                                           {"shaders/gone.spv", std::string(64, '0')}, {"nvngx_dlss.dll", std::string(64, '0')},
-                                          {"voice/cmudict-en-us.dict", std::string(64, '0')}, {"voice/en-us/mdef", std::string(64, '0')}});
+                                          {"voice/cmudict-en-us.dict", std::string(64, '0')}, {"voice/en-us/mdef", std::string(64, '0')},
+                                          {"data/pt.ini", std::string(64, '0')}
+#ifdef _WIN32
+                                          , {"data./pt.log", std::string(64, '0')}, {"data /saves/progress.dat", std::string(64, '0')},
+                                          {"DATA\\pt.ini", std::string(64, '0')}
+#endif
+            });
     };
     auto new_staging = [&](const fs::path& staging) {
         write(staging / kGameExe, "new exe");
@@ -744,21 +971,26 @@ inline std::string SelfTestUpdate(const fs::path& root) {
                 fs::exists(dest / "voice" / "cmudict-en-us.dict", error) || fs::exists(dest / "voice" / "en-us" / "mdef", error))
                 failures += " obsolete kept" + label;
             if (read(dest / "pt.ini") != "player settings" || read(dest / "mods" / "mine" / "init.lua") != "player mod" ||
-                read(dest / "reshade.dll") != "player dll" || read(dest / "CUSA01127" / "chunk1.psarc") != "PSAR old archive")
+                read(dest / "reshade.dll") != "player dll" || read(dest / "CUSA01127" / "chunk1.psarc") != "PSAR old archive" ||
+                read(dest / "data" / "pt.ini") != "user folder settings" || read(dest / "data" / "pt.log") != "user folder log" ||
+                read(dest / "data" / "saves" / "progress.dat") != "user save")
                 failures += " player files" + label;
+            if (std::any_of(old.files.begin(), old.files.end(), [](const InstalledFile& file) { return IsUserDataPath(file.path); }))
+                failures += " data-classified-as-program" + label;
             if (swap.replaced != (manifest ? 3 : 2) || swap.added != (manifest ? 1 : 2) || swap.removed != 4) failures += " counts" + label;
             if (InspectInstall(dest).version != "0.2.0") failures += " manifest" + label;
         } catch (const std::exception& e) {
             failures += std::string(" swap") + label + ": " + e.what();
         }
     }
+    // a failure after some files moved: everything back as it was
     for (int fail_at : {0, 2, 5}) {
         const fs::path dest = root / ("rollback" + std::to_string(fail_at)) / "PT", staging = dest.parent_path() / ".pt-update-t",
                        backup = dest.parent_path() / ".pt-update-old-t";
         old_install(dest, true);
         std::vector<std::pair<std::string, std::string>> before;
         for (const auto& entry : fs::recursive_directory_iterator(dest))
-            if (entry.is_regular_file()) before.push_back({fs::relative(entry.path(), dest).generic_string(), read(entry.path())});
+            if (entry.is_regular_file()) before.push_back({PathUtf8(fs::relative(entry.path(), dest)), read(entry.path())});
         const auto files = new_staging(staging);
         bool thrown = false;
         try {
@@ -768,18 +1000,204 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         }
         std::vector<std::pair<std::string, std::string>> after;
         for (const auto& entry : fs::recursive_directory_iterator(dest))
-            if (entry.is_regular_file()) after.push_back({fs::relative(entry.path(), dest).generic_string(), read(entry.path())});
+            if (entry.is_regular_file()) after.push_back({PathUtf8(fs::relative(entry.path(), dest)), read(entry.path())});
         std::sort(before.begin(), before.end());
         std::sort(after.begin(), after.end());
         if (!thrown || before != after) failures += " rollback at step " + std::to_string(fail_at);
         if (read(staging / kGameExe) != "new exe") failures += " staging restored at step " + std::to_string(fail_at);
     }
+    // a folder with something else stays refused; an empty name is a new install
     write(root / "other" / "notes.txt", "x");
     bool refused = false;
     try { InspectInstall(root / "other"); } catch (...) { refused = true; }
     if (!refused) failures += " other-folder-accepted";
     if (InspectInstall(root / "nothing").found) failures += " new-folder";
+    {
+        std::error_code error;
+        fs::create_directories(root / "empty", error);
+        try {
+            if (InspectInstall(root / "empty").found) failures += " empty-folder-as-install";
+        } catch (...) { failures += " empty-folder-refused"; }
+        write(root / "result.txt", "PASS old");
+        if (!ResultPathWritable(root / "result.txt") || !ResultPathWritable(root / "new-result.txt")) failures += " result-refused";
+        write(root / "big.bin", std::string(128 * 1024, 'x'));
+        if (ResultPathWritable(root / "big.bin") || ResultPathWritable(root / "empty")) failures += " result-overwrites-user-file";
+    }
+    {
+        const fs::path dest = root / "reserved-data" / "PT", staging = root / "reserved-data" / ".pt-update-t",
+                       backup = root / "reserved-data" / ".pt-update-old-t";
+        old_install(dest, true);
+        write(staging / "data" / "pt.log", "payload overwrite");
+        bool rejected_data = false;
+        try {
+            SwapProgramFiles(staging, dest, {{"data/pt.log", ""}}, {}, InspectInstall(dest), backup);
+        } catch (...) {
+            rejected_data = true;
+        }
+        if (!rejected_data || read(dest / "data" / "pt.log") != "user folder log") failures += " payload-data-overwrite-accepted";
+#ifdef _WIN32
+        for (const std::string& alias : {"data./pt.log", "data /pt.log", "DATA\\pt.log"}) {
+            bool rejected_alias = false;
+            try {
+                SwapProgramFiles(staging, dest, {{alias, ""}}, {}, InspectInstall(dest), backup);
+            } catch (...) {
+                rejected_alias = true;
+            }
+            if (!rejected_alias || read(dest / "data" / "pt.log") != "user folder log")
+                failures += " payload-data-alias-overwrite-accepted";
+        }
+        for (const std::string& alias : {"DATA\\pt.log", "data./pt.log", "data /pt.log"})
+            if (!IsUserDataPath(alias)) failures += " data-alias-not-reserved";
+#endif
+    }
+    {
+        const fs::path writable = root / "write-probe";
+        fs::create_directories(writable);
+        try {
+            ProbeWritableDirectory(writable, "selftest", "test folder");
+            if (fs::exists(writable / ".pt-write-probe-selftest")) failures += " write-probe-left-files";
+        } catch (const std::exception& e) {
+            failures += std::string(" write-probe-writable-folder: ") + e.what();
+        }
+        write(root / "not-a-folder", "x");
+        bool refused_probe = false;
+        try { ProbeWritableDirectory(root / "not-a-folder", "selftest", "test folder"); } catch (...) { refused_probe = true; }
+        if (!refused_probe) failures += " write-probe-accepted-file";
+        const fs::path custom_install = root / "custom install location" / "PT";
+        fs::create_directories(custom_install);
+        auto no_links = [](const fs::path&) {};
+        try {
+            EnsureDataDirectory(custom_install, "custom-selftest", no_links);
+            write(custom_install / "data" / "pt.log", "player log");
+            EnsureDataDirectory(custom_install, "custom-selftest-2", no_links);
+            if (read(custom_install / "data" / "pt.log") != "player log") failures += " custom-data-not-preserved";
+        } catch (const std::exception& e) {
+            failures += std::string(" custom-data-directory: ") + e.what();
+        }
+    }
+    {
+        const std::vector<InstalledFile> complete{{"amd_fidelityfx_vk.dll", ""}, {"nvngx_dlss.dll", ""}, {"libxess.dll", ""}};
+        const std::vector<std::string> required{"amd_fidelityfx_vk.dll", "nvngx_dlss.dll", "libxess.dll"};
+        try { RequireProgramFiles(complete, required); } catch (...) { failures += " complete-upscalers-rejected"; }
+        bool rejected_missing = false;
+        try { RequireProgramFiles({{"amd_fidelityfx_vk.dll", ""}, {"libxess.dll", ""}}, required); } catch (...) { rejected_missing = true; }
+        if (!rejected_missing) failures += " missing-upscaler-accepted";
+    }
     if (UpdateQuestion(InspectInstall(root / "with" / "PT"), "0.2.0").find("up to date") == std::string::npos) failures += " same-version-question";
+    return failures;
+}
+inline std::string SelfTestIcon(const fs::path& root) {
+    std::string failures;
+    const std::string png =
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x78\x9c\x63\xf8\xcf\xc0\x00\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    auto be = [](uint32_t value) {
+        std::string out(4, '\0');
+        out[0] = char(value >> 24);
+        out[1] = char(value >> 16);
+        out[2] = char(value >> 8);
+        out[3] = char(value);
+        return out;
+    };
+    auto package = [&](bool encrypt) {
+        const std::string names("icon0.png", 10);
+        const uint32_t table = 0x80, names_at = table + 64, png_at = names_at + uint32_t(names.size());
+        std::string bytes(table, '\0');
+        bytes[0] = '\x7f';
+        bytes[1] = 'C';
+        bytes[2] = 'N';
+        bytes[3] = 'T';
+        bytes.replace(0x13, 1, 1, '\x02');
+        bytes[0x1b] = char(table);
+        auto entry = [&](uint32_t id, uint32_t flags, uint32_t offset, uint32_t size) {
+            return be(id) + be(0) + be(flags) + be(0) + be(offset) + be(size) + std::string(8, '\0');
+        };
+        bytes += entry(0x0200, 0x40000000u, names_at, uint32_t(names.size()));
+        bytes += entry(0x1200, encrypt ? 0x80000000u : 0, png_at, uint32_t(png.size()));
+        bytes += names;
+        bytes += png;
+        return bytes;
+    };
+    const fs::path dir = root / "dump";
+    write(dir / "sce_sys" / "icon0.png", png);
+    const auto from_folder = FindIconPng(dir);
+    if (!from_folder || *from_folder != png) failures += " folder-icon";
+    write(dir / "sce_sys" / "icon0.png", "not a png file");
+    if (FindIconPng(dir)) failures += " folder-nonpng";
+    const fs::path pkg = root / "game.pkg";
+    write(pkg, package(false));
+    const auto from_pkg = FindIconPng(pkg);
+    if (!from_pkg || *from_pkg != png) failures += " pkg-icon";
+    write(pkg, package(true));
+    if (FindIconPng(pkg)) failures += " encrypted-icon";
+    if (FindIconPng(root / "missing")) failures += " missing-icon";
+    return failures;
+}
+
+inline std::string SelfTestUnicodePaths(const fs::path& root) {
+    auto utf8 = [](const char8_t* value) {
+        const auto* bytes = reinterpret_cast<const char*>(value);
+        return std::string(bytes, bytes + std::char_traits<char8_t>::length(value));
+    };
+    const fs::path base = root / Utf8Path(utf8(u8"Š İ 日本語 😀"));
+    const fs::path game = base / Utf8Path(utf8(u8"dump-日本語"));
+    const fs::path dest = base / Utf8Path(utf8(u8"install-Š-İ-日本語-😀"));
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    std::string qar(0x40, '\0');
+    qar[0x40 - 0x24 + 0x16] = 'a';
+    qar[0x40 - 0x24 + 0x17] = 'q';
+    const fs::path psarc = game / Utf8Path(utf8(u8"chunk-日本語-😀.PSARC"));
+    const fs::path qar_file = game / Utf8Path(utf8(u8"texture-Š.qar"));
+    const fs::path pathid = game / Utf8Path(utf8(u8"pathid_list-İ-日本語.bin"));
+    write(psarc, "PSAR" + std::string(60, '\0'));
+    write(qar_file, qar);
+    write(pathid, "/Assets/sh/level/pt14_hallway/" + std::string(40, 'x'));
+
+    std::string failures;
+    try {
+        const Source source = ResolveSource(game);
+        if (source.kind != SourceKind::Folder || source.path != game || source.files.psarc != psarc || source.files.qar != qar_file || source.files.pathid != pathid)
+            failures += " source";
+    } catch (const std::exception& e) {
+        failures += std::string(" source:") + e.what();
+    }
+
+    // Exercise manifest inspection, program replacement, and rollback beneath a Unicode install parent.
+    try {
+        const fs::path live = dest / "PT";
+        const fs::path stage = dest / ".pt-update-test";
+        const fs::path backup = dest / ".pt-update-old-test";
+        write(live / kGameExe, "old executable");
+        const std::string unicode_payload_path = utf8(u8"voice/日本語😀/dictionary.bin");
+        WriteManifest(live, "0.1.0", {{kGameExe, std::string(64, '0')}, {unicode_payload_path, std::string(64, '2')}});
+        const auto old = InspectInstall(live);
+        if (!old.found || old.version != "0.1.0" || old.files.size() != 2 || old.files.back().path != unicode_payload_path) failures += " inspect";
+        write(stage / kGameExe, "new executable");
+        write(stage / kManifestName, "pt-port-install 1\nversion=0.2.0\n");
+        const std::vector<InstalledFile> files{{kGameExe, std::string(64, '1')}};
+        SwapProgramFiles(stage, live, files, {kManifestName}, old, backup);
+        std::ifstream installed(live / kGameExe, std::ios::binary);
+        const std::string installed_text((std::istreambuf_iterator<char>(installed)), {});
+        if (installed_text != "new executable") failures += " install";
+
+        fs::remove_all(stage);
+        write(stage / kGameExe, "rollback executable");
+        write(stage / kManifestName, "pt-port-install 1\nversion=0.3.0\n");
+        bool failed = false;
+        try { SwapProgramFiles(stage, live, files, {kManifestName}, InspectInstall(live), backup, 1); }
+        catch (...) { failed = true; }
+        std::ifstream restored(live / kGameExe, std::ios::binary);
+        const std::string restored_text((std::istreambuf_iterator<char>(restored)), {});
+        if (!failed || restored_text != "new executable") failures += " rollback";
+    } catch (const std::exception& e) {
+        failures += std::string(" install-update:") + e.what();
+    }
     return failures;
 }
 }

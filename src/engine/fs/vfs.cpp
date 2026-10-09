@@ -14,7 +14,7 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     game_dir_ = game_dir;
     const auto psarc_path = game_dir / "chunk1.psarc";
     if (!std::filesystem::exists(psarc_path)) {
-        LogError("vfs: {} not found, game dir must be the extracted CUSA01127 folder", psarc_path.string());
+        LogError("vfs: {} not found, game dir must be the extracted CUSA01127 folder", pt::os::PathToUtf8(psarc_path));
         return false;
     }
     if (!archive_.Open(psarc_path)) {
@@ -22,13 +22,16 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     }
     const auto qar_path = game_dir / "texture.qar";
     if (!std::filesystem::exists(qar_path) || !textures_.Open(qar_path)) {
-        LogError("vfs: {} missing or unreadable", qar_path.string());
+        LogError("vfs: {} missing or unreadable", pt::os::PathToUtf8(qar_path));
         return false;
     }
     ReportDataDifferences();
     return true;
 }
 
+// The installer accepts every release of P.T. (docs/installer.md) and writes what it was made from to source.txt. Data that
+// another release may lack is named here once at start, and the game keeps running: a missing package is reported again
+// where it is loaded, and subtitles fall back to English (SubtitleTable::Load).
 void Vfs::ReportDataDifferences() const {
     std::error_code ec;
     const auto source = game_dir_ / "source.txt";
@@ -94,6 +97,7 @@ std::shared_ptr<FoxPackage> Vfs::LoadPackage(std::string_view path) {
             return it->second;
         }
     }
+    // a mod's copy of the package replaces it whole (docs/modding.md); without mods ReadOverride is a null check
     auto data = mods::ReadOverride(archive_path);
     if (data) {
         LogInfo("vfs: {} from a mod", archive_path);
