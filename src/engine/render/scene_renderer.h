@@ -236,6 +236,8 @@ private:
         glm::vec3 center{0.0f};
         float radius = 0.0f;
         uint8_t hidden_views = 0;
+        // Views whose occluders hide the draw, kept apart from hidden_views so shadows and ray tracing still see it.
+        uint8_t occluded_views = 0;
         bool character_shadow = false;
     };
 

@@ -67,6 +67,8 @@ class PackagingTests(unittest.TestCase):
             info = plistlib.loads(z.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleExecutable"], "pt")
             self.assertIn("NSMicrophoneUsageDescription", info)
+            self.assertEqual(info["LSApplicationCategoryType"], "public.app-category.games")
+            self.assertTrue(info["GCSupportsGameMode"])
             self.assertTrue((z.getinfo(prefix + "MacOS/pt").external_attr >> 16) & 0o111)
         result, output = self.payload(archive)
         self.assertEqual(result.returncode, 0, result.stderr)

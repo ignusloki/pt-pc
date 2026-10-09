@@ -23,7 +23,7 @@ def run(*args):
     subprocess.run([str(arg) for arg in args], check=True)
 
 
-def info(name, executable, identifier, version, microphone=False):
+def info(name, executable, identifier, version, microphone=False, game=False):
     data = dict(CFBundleName=name, CFBundleDisplayName=name, CFBundleExecutable=executable,
                 CFBundleIdentifier=identifier, CFBundlePackageType="APPL",
                 CFBundleShortVersionString=version.split("-")[0], CFBundleVersion=version.split("-")[0],
@@ -31,6 +31,10 @@ def info(name, executable, identifier, version, microphone=False):
                 SDL_FILESYSTEM_BASE_DIR_TYPE="resource")
     if microphone:
         data["NSMicrophoneUsageDescription"] = "P.T. listens for your voice during the final puzzle."
+    if game:
+        # Game Mode only engages in fullscreen for bundles that declare the games category.
+        data["LSApplicationCategoryType"] = "public.app-category.games"
+        data["GCSupportsGameMode"] = True
     return data
 
 
@@ -167,7 +171,7 @@ def runtime(build, output, version, identity="-", exe=None, moltenvk=None):
     if not expected.issubset({file.name for file in shaders}):
         raise RuntimeError("Shader build is incomplete; build the pt_shaders target first")
     app = root / APP_NAME
-    make_bundle(app, info("P.T.", "pt", "org.pt-port.game", version, microphone=True))
+    make_bundle(app, info("P.T.", "pt", "org.pt-port.game", version, microphone=True, game=True))
     resources = app / "Contents/Resources"
     executable(exe, app / "Contents/MacOS/pt")
     executable(moltenvk, app / "Contents/Frameworks/libMoltenVK.dylib")
