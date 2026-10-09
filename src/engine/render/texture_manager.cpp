@@ -449,7 +449,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
     upload_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - upload_started).count();
     if (index != kWhite && !raw && EnhancedTextureEligible(stem, ftex)) {
         fox_sources_[index] = stem;
-        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex);
+        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex, true);
     }
     if (ok) {
         *ok = index != kWhite;
@@ -581,7 +581,7 @@ void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std:
     enhanced_bytes_ = 0;
 }
 
-void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source) {
+void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source, bool fresh) {
     if (!enhanced_qar_ || !enhanced_model_ || enhanced_images_.contains(index)) return;
     FtexTexture loaded, cached;
     if (!source) {
@@ -604,7 +604,8 @@ void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path
     enhanced_images_[index] = replacement;
     enhanced_bytes_ += bytes;
     if (enhanced_enabled_) {
-        vkDeviceWaitIdle(ctx_->device);
+        // A freshly created element is not referenced by any submitted frame, so it can be rewritten without idling the device.
+        if (!fresh) vkDeviceWaitIdle(ctx_->device);
         UpdateTextureDescriptor(index);
     }
 }

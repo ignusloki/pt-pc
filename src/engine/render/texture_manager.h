@@ -89,7 +89,7 @@ public:
 private:
     VkSampler CreateSampler(int anisotropy) const;
     void UpdateTextureDescriptor(uint32_t index);
-    void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr);
+    void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr, bool fresh = false);
     uint32_t LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png, bool raw);
     void ReclaimUploads(VkDeviceSize max_pending_bytes);
 
