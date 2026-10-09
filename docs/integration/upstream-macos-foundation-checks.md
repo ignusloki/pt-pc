@@ -41,7 +41,8 @@ Host: Apple M1 Pro, macOS 26.6.2, Apple Clang 21, CMake/Ninja and .NET SDK 10.0.
 | Initial focus/controller route | Nine expectations, zero failures; options, pause and first room render correctly |
 | Headless microphone isolation | No startup microphone request logged during packaged headless/voice checks |
 | Intel cross-compilation | Separate x86_64 game, installer, CPU variants and self-contained extractor built and packaged successfully |
-| ARM64/Intel distribution audits | Correct executable architecture, all three voice models, matching icons, valid deep/strict signatures, no `.pkg`/`.psarc`/`.qar` in distribution ZIPs |
+| ARM64/Intel distribution audits | Correct executable architecture, all three voice models, matching icons, valid deep/strict signatures, all Mach-O minimums at or below macOS 14, no `.pkg`/`.psarc`/`.qar` in distribution ZIPs |
+| Official installer runtime | Both final packages use Microsoft's .NET 10.0.12 runtime with its redistribution notices; compression has no external Homebrew/Brotli dependency |
 | Workflow syntax/expressions | `actionlint` passed for Mac and desktop workflows |
 
 The GPU checks use isolated settings/save paths and offline audio; they do not grant microphone access or test physical controller hardware. The Intel build was cross-compiled on Apple silicon with target-runtime tests skipped. It demonstrates compilation and packaging, not Intel CPU/GPU gameplay.
@@ -63,4 +64,6 @@ Native Intel voice/backend execution and GPU support, Windows/Linux graphics and
 
 Each folder contains `P.T. PC Port.app`, `P.T. PC Port Setup.app`, and separate portable/Setup ZIPs. Versions follow upstream's 1.0.2 default; they are integration previews, not a replacement for the tested fork's 1.0.3 release.
 
-Machine-readable evidence: `package-audit.json`, `native-install-checks/results.json`, `preview-gpu-checks/gpu-results.json`, and the build/test logs under `/Users/suporte/PT-Mac/build/upstream-integration/`. Original PKGs, game archives and player-profile files are excluded from source control and distribution packages.
+The final packages were built from `8428c2ecf20c0ddca09eaa460f2b71b91d5d5695`. The Apple silicon portable ZIP is 263.8 MiB and Setup ZIP is 298.7 MiB; Intel portable/Setup ZIPs are 269.0/306.0 MiB. SHA-256 hashes are recorded in the package audit. The final runtime also passed a fresh real-PKG install and source-free repair.
+
+Machine-readable evidence: `package-audit.json`, `native-final-install-checks/results.json`, `preview-gpu-checks/gpu-results.json`, and the build/test logs under `/Users/suporte/PT-Mac/build/upstream-integration/`. Original PKGs, game archives and player-profile files are excluded from source control and distribution packages.
