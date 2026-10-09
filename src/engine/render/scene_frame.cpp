@@ -294,7 +294,7 @@ bool SceneRenderer::Visible(const Draw& draw, const glm::vec4* planes) const {
 }
 
 bool SceneRenderer::Visible(const Draw& draw, const ViewSetup& view) const {
-    return (draw.hidden_views & view.view_bit) == 0 && Visible(draw, view.planes);
+    return ((draw.hidden_views | draw.occluded_views) & view.view_bit) == 0 && Visible(draw, view.planes);
 }
 
 void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting) {
@@ -642,6 +642,28 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
                 const glm::vec3 q = lighting.occluders[i].points[0];
                 LogInfo("light cull: occluder {} at ({:.2f} {:.2f} {:.2f}) {}{}", i, q.x, q.y, q.z, describe(main_occluders_, i),
                         mirror_active_ ? " mirror view " + describe(mirror_occluders_, i) : std::string());
+            }
+        }
+        // Only the camera's set hides draws: the mirror's eye sits behind the wall the mirror hangs on, so that wall's occluders could
+        // swallow the whole reflection. Sky is left alone since its bounds need not match where it lands on screen.
+        static const bool draw_occlusion = [] {
+            const char* s = std::getenv("PT_DRAW_OCCLUSION");
+            return !s || std::string_view(s) != "0";
+        }();
+        if (draw_occlusion && !main_occluders_.volumes.empty()) {
+            uint32_t hidden = 0;
+            for (Draw& d : draws_) {
+                if ((d.hidden_views & 1u) != 0 || d.sub->kind == gpu::kKindSky) {
+                    continue;
+                }
+                const glm::vec3 half(d.radius);
+                if (lightcull::FindOccludingVolume(d.center - half, d.center + half, main_occluders_) >= 0) {
+                    d.occluded_views |= 1u;
+                    ++hidden;
+                }
+            }
+            if (trace_cull_frame) {
+                LogInfo("light cull: occluders hide {} of {} draws in the camera view", hidden, draws_.size());
             }
         }
     }
