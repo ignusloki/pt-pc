@@ -120,6 +120,7 @@ bool Renderer::InitImGui(SDL_Window* window) {
     info.QueueFamily = ctx_.queue_family;
     info.Queue = ctx_.queue;
     info.DescriptorPoolSize = 256;
+    info.PipelineCache = vk::g_pipeline_cache;
     info.MinImageCount = ctx_.swapchain.min_image_count;
     info.ImageCount = static_cast<uint32_t>(ctx_.swapchain.images.size());
     info.UseDynamicRendering = true;
@@ -281,7 +282,7 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = composite_layout_;
-    const bool ok = vk::Check(vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &info, nullptr, &composite_pipeline_), "composite pipeline");
+    const bool ok = vk::Check(vkCreateGraphicsPipelines(ctx_.device, vk::g_pipeline_cache, 1, &info, nullptr, &composite_pipeline_), "composite pipeline");
     vkDestroyShaderModule(ctx_.device, vert, nullptr);
     vkDestroyShaderModule(ctx_.device, frag, nullptr);
     return ok;
@@ -331,6 +332,7 @@ bool Renderer::BeginFrame(bool present) {
     Frame& frame = frames_[frame_index_];
     streamline::BeginFrame();
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
+    ctx_.ReclaimUploads(VK_WHOLE_SIZE);
     frame.segments.clear();
     frame.wait = VK_NULL_HANDLE;
     frame.wait_value = 0;
@@ -859,7 +861,7 @@ VkPipeline Renderer::XrPipeline(VkFormat format) {
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
         info.layout = xr_layout_;
-        if (!vk::Check(vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), "xr copy pipeline")) {
+        if (!vk::Check(vkCreateGraphicsPipelines(ctx_.device, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), "xr copy pipeline")) {
             pipeline = VK_NULL_HANDLE;
         }
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -52,6 +54,11 @@ struct Swapchain {
     uint32_t min_image_count = 2;
 };
 
+struct Submission {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+};
+
 class Context {
 public:
     bool Init(SDL_Window* window, bool validation);
@@ -72,7 +79,12 @@ public:
     void DestroyBuffer(Buffer& buffer);
 
     void Submit(const std::function<void(VkCommandBuffer)>& record);
+    // Submit without the CPU wait: the caller polls or waits on the fence, then hands it back to Release.
+    Submission SubmitAsync(const std::function<void(VkCommandBuffer)>& record);
+    void Release(Submission& submission);
     bool Upload(Buffer& dst, const void* data, VkDeviceSize size);
+    // Frees the staging buffers of finished Uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
 
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -89,6 +101,8 @@ public:
     ContextCreator* creator = nullptr;
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
+    // Loaded at Init and written back at Shutdown; empty keeps the cache in memory only.
+    std::filesystem::path pipeline_cache_path;
     bool force_vsync_off = false;
 
     bool want_ray_query = false;
@@ -104,7 +118,14 @@ public:
     void CheckDeviceLost(VkResult result, const char* where);
 
 private:
+    struct PendingUpload {
+        Submission submission;
+        Buffer staging;
+    };
+
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 

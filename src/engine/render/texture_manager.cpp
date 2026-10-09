@@ -3,10 +3,12 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <thread>
 
 #include "engine/assets/ftex.h"
 #include "engine/assets/enhanced_textures.h"
@@ -15,6 +17,10 @@
 
 namespace pt {
 namespace {
+
+// Staging memory allowed in flight before Create waits on the oldest uploads; bounds the peak of a stage load on 8 GB machines.
+constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(256) << 20;
+constexpr size_t kMaxDecodeWorkers = 4;
 
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
@@ -173,6 +179,9 @@ bool TextureManager::Init(vk::Context& ctx) {
     const TextureMip grey_mip{1, 1, grey};
     Create("builtin:grey", VK_FORMAT_R8G8B8A8_UNORM, {&grey_mip, 1});
     Create("builtin:grey_srgb", VK_FORMAT_R8G8B8A8_SRGB, {&grey_mip, 1});
+    const uint8_t clear[4] = {0, 0, 0, 0};
+    const TextureMip clear_mip{1, 1, clear};
+    Create("builtin:clear", VK_FORMAT_R8G8B8A8_UNORM, {&clear_mip, 1});
     AddMaterial(MaterialGpu{});
     FlushMaterials();
     return true;
@@ -188,6 +197,7 @@ void TextureManager::Shutdown() {
     if (!ctx_) {
         return;
     }
+    ReclaimUploads(0);
     for (vk::Image& image : images_) {
         ctx_->DestroyImage(image);
     }
@@ -313,7 +323,8 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
         }
     }
     vmaFlushAllocation(ctx_->allocator, staging.allocation, 0, total);
-    ctx_->Submit([&](VkCommandBuffer cmd) {
+    // No CPU wait: everything samples on the same queue after this submit, and the barrier below orders those reads after the copy.
+    const vk::Submission submission = ctx_->SubmitAsync([&](VkCommandBuffer cmd) {
         vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()),
@@ -322,7 +333,9 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
-    ctx_->DestroyBuffer(staging);
+    pending_upload_bytes_ += staging.size;
+    pending_uploads_.push_back({submission, staging});
+    ReclaimUploads(kMaxPendingUploadBytes);
     const uint32_t index = static_cast<uint32_t>(images_.size());
     const bool cube_slot = cube && cube_slots_.size() < kMaxCubeTextures;
     VkDescriptorImageInfo image_info{sampler_, image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -351,6 +364,22 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
     cube_.push_back(cube && index > 0 ? 1 : 0);
     by_name_[name] = index;
     return index;
+}
+
+// Frees the staging buffers of finished uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
+void TextureManager::ReclaimUploads(VkDeviceSize max_pending_bytes) {
+    while (!pending_uploads_.empty()) {
+        PendingUpload& upload = pending_uploads_.front();
+        if (pending_upload_bytes_ > max_pending_bytes) {
+            ctx_->CheckDeviceLost(vkWaitForFences(ctx_->device, 1, &upload.submission.fence, VK_TRUE, UINT64_MAX), "texture upload wait");
+        } else if (vkGetFenceStatus(ctx_->device, upload.submission.fence) == VK_NOT_READY) {
+            break;
+        }
+        pending_upload_bytes_ -= upload.staging.size;
+        ctx_->DestroyBuffer(upload.staging);
+        ctx_->Release(upload.submission);
+        pending_uploads_.pop_front();
+    }
 }
 
 uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path, bool* ok, bool raw) {
@@ -420,7 +449,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
     upload_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - upload_started).count();
     if (index != kWhite && !raw && EnhancedTextureEligible(stem, ftex)) {
         fox_sources_[index] = stem;
-        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex);
+        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex, true);
     }
     if (ok) {
         *ok = index != kWhite;
@@ -446,15 +475,27 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
     if (jobs.empty()) {
         return;
     }
-    decode_workers_.push_back(std::async(std::launch::async, [&qar, jobs = std::move(jobs)]() mutable {
-        for (auto& [stem, promise] : jobs) {
-            auto ftex = std::make_shared<FtexTexture>();
-            if (!LoadFtex(qar, stem, *ftex)) {
-                ftex.reset();
+    // QarArchive::Read serializes the raw file reads; inflating runs in parallel. Workers take jobs in FIFO order for PumpDecoded.
+    auto shared = std::make_shared<decltype(jobs)>(std::move(jobs));
+    auto next = std::make_shared<std::atomic<size_t>>(0);
+    const size_t workers = std::min<size_t>({kMaxDecodeWorkers, std::max(1u, std::thread::hardware_concurrency()), shared->size()});
+    for (size_t w = 0; w < workers; ++w) {
+        decode_workers_.push_back(std::async(std::launch::async, [&qar, shared, next] {
+            for (size_t i = next->fetch_add(1); i < shared->size(); i = next->fetch_add(1)) {
+                auto& [stem, promise] = (*shared)[i];
+                auto ftex = std::make_shared<FtexTexture>();
+                if (!LoadFtex(qar, stem, *ftex)) {
+                    ftex.reset();
+                }
+                promise.set_value(std::move(ftex));
             }
-            promise.set_value(std::move(ftex));
-        }
-    }));
+        }));
+    }
+}
+
+bool TextureManager::StillDecoding(const std::string& path) const {
+    auto it = decoding_.find(FtexStem(path));
+    return it != decoding_.end() && it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
 }
 
 bool TextureManager::AdoptDecoded(const std::string& path, std::shared_ptr<FtexTexture> decoded) {
@@ -499,6 +540,7 @@ uint32_t TextureManager::PumpDecoded(const QarArchive& qar, uint32_t count) {
         ++uploaded;
     }
     std::erase_if(decode_workers_, [](std::future<void>& worker) { return worker.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+    ReclaimUploads(kMaxPendingUploadBytes);
     return uploaded;
 }
 
@@ -539,7 +581,7 @@ void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std:
     enhanced_bytes_ = 0;
 }
 
-void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source) {
+void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source, bool fresh) {
     if (!enhanced_qar_ || !enhanced_model_ || enhanced_images_.contains(index)) return;
     FtexTexture loaded, cached;
     if (!source) {
@@ -562,7 +604,8 @@ void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path
     enhanced_images_[index] = replacement;
     enhanced_bytes_ += bytes;
     if (enhanced_enabled_) {
-        vkDeviceWaitIdle(ctx_->device);
+        // A freshly created element is not referenced by any submitted frame, so it can be rewritten without idling the device.
+        if (!fresh) vkDeviceWaitIdle(ctx_->device);
         UpdateTextureDescriptor(index);
     }
 }
@@ -607,6 +650,8 @@ void TextureManager::RedirectTexture(uint32_t texture, uint32_t shown) {
         materials_dirty_ = redirects_.erase(texture) > 0 || materials_dirty_;
         return;
     }
+    // The shared material buffer is rewritten under frames still in flight, which must not see an image whose upload is pending.
+    ReclaimUploads(0);
     redirects_[texture] = shown;
     materials_dirty_ = true;
 }

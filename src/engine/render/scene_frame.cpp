@@ -294,7 +294,7 @@ bool SceneRenderer::Visible(const Draw& draw, const glm::vec4* planes) const {
 }
 
 bool SceneRenderer::Visible(const Draw& draw, const ViewSetup& view) const {
-    return (draw.hidden_views & view.view_bit) == 0 && Visible(draw, view.planes);
+    return ((draw.hidden_views | draw.occluded_views) & view.view_bit) == 0 && Visible(draw, view.planes);
 }
 
 void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting) {
@@ -642,6 +642,28 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
                 const glm::vec3 q = lighting.occluders[i].points[0];
                 LogInfo("light cull: occluder {} at ({:.2f} {:.2f} {:.2f}) {}{}", i, q.x, q.y, q.z, describe(main_occluders_, i),
                         mirror_active_ ? " mirror view " + describe(mirror_occluders_, i) : std::string());
+            }
+        }
+        // Only the camera's set hides draws: the mirror's eye sits behind the wall the mirror hangs on, so that wall's occluders could
+        // swallow the whole reflection. Sky is left alone since its bounds need not match where it lands on screen.
+        static const bool draw_occlusion = [] {
+            const char* s = std::getenv("PT_DRAW_OCCLUSION");
+            return !s || std::string_view(s) != "0";
+        }();
+        if (draw_occlusion && toggles.draw_occlusion && !main_occluders_.volumes.empty()) {
+            uint32_t hidden = 0;
+            for (Draw& d : draws_) {
+                if ((d.hidden_views & 1u) != 0 || d.sub->kind == gpu::kKindSky) {
+                    continue;
+                }
+                const glm::vec3 half(d.radius);
+                if (lightcull::FindOccludingVolume(d.center - half, d.center + half, main_occluders_) >= 0) {
+                    d.occluded_views |= 1u;
+                    ++hidden;
+                }
+            }
+            if (trace_cull_frame) {
+                LogInfo("light cull: occluders hide {} of {} draws in the camera view", hidden, draws_.size());
             }
         }
     }
@@ -1299,7 +1321,7 @@ void SceneRenderer::RecordGBuffer(VkCommandBuffer cmd, const ViewSetup& view) {
 
 void SceneRenderer::RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view) {
     UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}, {&ao_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&ao_[0], false, {}}});
+    BeginPass(cmd, extent_, {{&ao_[0], false, {}, true}});
     gpu::PassPush push;
     push.ids = glm::uvec4(view.index, 0, 0, 0);
     push.f0 = glm::vec4(3.0f, 1.0f, 0.0f, 0.0f);
@@ -1308,7 +1330,7 @@ void SceneRenderer::RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view) 
     Fullscreen(cmd, occlusion_, push);
     vkCmdEndRendering(cmd);
     UseTargets(cmd, {{&ao_[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&ao_[1], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&ao_[1], false, {}}});
+    BeginPass(cmd, extent_, {{&ao_[1], false, {}, true}});
     push.f0 = glm::vec4(0.45f, 0.0f, 0.0f, 0.0f);
     Fullscreen(cmd, occlusion_blur_, push);
     vkCmdEndRendering(cmd);
@@ -1913,7 +1935,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     }
     if (rt_reflections_) {
         UseTargets(cmd, {{&refmap_color_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}}, {&refmap_color_, false, {}}});
+        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}, true}, {&refmap_color_, false, {}, true}});
         static const uint32_t debug = [] {
             const char* value = std::getenv("PT_RT_REFLECTION_DEBUG");
             return value ? (std::atoi(value) == 2 ? 2u : 1u) : 0u;
@@ -1936,7 +1958,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
         push.ids = glm::uvec4(view.index, 0, 0, 0);
         push.m = glm::mat4(1.0f);
     } else {
-        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}}});
+        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}, true}});
         Fullscreen(cmd, reflect_make_, push);
         vkCmdEndRendering(cmd);
     }
@@ -1965,7 +1987,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     UseTargets(cmd, {{&hdr_copy_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&material_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&hdr_, false, {}}});
+    BeginPass(cmd, extent_, {{&hdr_, false, {}, true}});
     if (rt_reflections_) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, reflect_blend_rt_);
         const VkDescriptorSet rt_set = rt_->Set(renderer_->FrameIndex());
@@ -1993,7 +2015,7 @@ void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetu
                      {&material_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reflect_layer_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&reflect_offset_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&reflect_layer_, false, {}}, {&reflect_offset_, false, {}}});
+    BeginPass(cmd, extent_, {{&reflect_layer_, false, {}, true}, {&reflect_offset_, false, {}, true}});
     push.m = previous_view_projection_;
     if (rt_reflections_) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, reflect_layer_rt_);
@@ -2011,7 +2033,7 @@ void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetu
                      {&reflect_history_[previous], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reflect_history_[current], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&hdr_, false, {}}, {&reflect_history_[current], false, {}}});
+    BeginPass(cmd, extent_, {{&hdr_, false, {}, true}, {&reflect_history_[current], false, {}, true}});
     gpu::PassPush temporal;
     temporal.ids = glm::uvec4(view.index, valid_history ? 1u : 0u, gpu::kImgReflectHistoryA + previous, 0u);
     static const bool pre_upscale = std::getenv("PT_REFLECT_PRE_UPSCALE") != nullptr;

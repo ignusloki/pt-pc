@@ -130,6 +130,8 @@ struct RenderToggles {
     bool mirrors = true;
     bool tpp_atmosphere = true;
     bool occlusion = true;
+    // Occluder volumes assume the eye stays inside the level, which the free camera need not.
+    bool draw_occlusion = true;
     bool local_reflections = true;
     bool motion_blur = true;
     bool subsurface_scatter = true;
@@ -236,6 +238,8 @@ private:
         glm::vec3 center{0.0f};
         float radius = 0.0f;
         uint8_t hidden_views = 0;
+        // Views whose occluders hide the draw, kept apart from hidden_views so shadows and ray tracing still see it.
+        uint8_t occluded_views = 0;
         bool character_shadow = false;
     };
 
@@ -313,7 +317,7 @@ private:
     bool RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
     bool MotionBlurActive() const;
     void RecordObjectVelocity(VkCommandBuffer cmd, const ViewSetup& view);
-    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push);
+    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push, bool discard = false);
     SceneFilterContext FilterContext(VkCommandBuffer cmd, uint32_t layers) const;
     void UpdateMotion(const Camera& camera, float dt);
     void RecordDebug(VkCommandBuffer cmd);

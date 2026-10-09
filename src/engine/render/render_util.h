@@ -28,6 +28,8 @@ struct ColorOutput {
     RenderTarget* target = nullptr;
     bool clear = false;
     VkClearColorValue clear_value{};
+    // Set only when the pass writes every pixel of the target, so its old contents need not be loaded.
+    bool discard = false;
 };
 
 void BeginPass(VkCommandBuffer cmd, VkExtent2D extent, std::initializer_list<ColorOutput> colors, RenderTarget* depth = nullptr,

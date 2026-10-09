@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "engine/core/crash_report.h"
@@ -22,6 +24,9 @@ extern bool g_checkpoints;
 namespace pt::vk {
 namespace {
 
+// Staging memory allowed in flight before Upload waits on the oldest copies; bounds the peak of a stage load on 8 GB machines.
+constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(128) << 20;
+
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
                                              const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
     const char* label = data->cmdBufLabelCount > 0 && data->pCmdBufLabels[data->cmdBufLabelCount - 1].pLabelName
@@ -33,6 +38,80 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
         LogWarn("vulkan: {}{}{}", data->pMessage, *label ? " [pass " : "", *label ? std::string(label) + "]" : std::string());
     }
     return VK_FALSE;
+}
+
+VkPipelineCache CreatePipelineCache(VkDevice device, const VkPhysicalDeviceProperties& properties, const std::filesystem::path& path) {
+    std::vector<char> data;
+    if (!path.empty()) {
+        std::ifstream file(path, std::ios::binary);
+        if (file) {
+            data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+            if (file.bad()) {
+                data.clear();
+            }
+        }
+    }
+    // Drop data written by another driver or GPU before the driver sees it; a short or unreadable file reads as no header.
+    VkPipelineCacheHeaderVersionOne header{};
+    if (data.size() >= sizeof(header)) {
+        std::memcpy(&header, data.data(), sizeof(header));
+    }
+    if (header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE || header.vendorID != properties.vendorID ||
+        header.deviceID != properties.deviceID || std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+        data.clear();
+    }
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    info.initialDataSize = data.size();
+    info.pInitialData = data.empty() ? nullptr : data.data();
+    VkPipelineCache cache = VK_NULL_HANDLE;
+    if (vkCreatePipelineCache(device, &info, nullptr, &cache) != VK_SUCCESS) {
+        cache = VK_NULL_HANDLE;
+        if (data.empty()) {
+            LogWarn("vulkan: no pipeline cache");
+            return VK_NULL_HANDLE;
+        }
+        data.clear();
+        info.initialDataSize = 0;
+        info.pInitialData = nullptr;
+        if (!Check(vkCreatePipelineCache(device, &info, nullptr, &cache), "vkCreatePipelineCache")) {
+            return VK_NULL_HANDLE;
+        }
+    }
+    LogInfo("vulkan: pipeline cache {} ({} bytes loaded)", path.empty() ? "in memory" : "on disk", data.size());
+    return cache;
+}
+
+void SavePipelineCache(VkDevice device, VkPipelineCache cache, const std::filesystem::path& path) {
+    if (!cache || path.empty()) {
+        return;
+    }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || size == 0) {
+        return;
+    }
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) {
+        return;
+    }
+    // Write beside the old file and swap it in, so a crash mid-write never leaves a truncated cache behind.
+    std::filesystem::path temp = path;
+    temp += ".tmp";
+    std::error_code error;
+    {
+        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+        file.write(data.data(), static_cast<std::streamsize>(size));
+        file.close();
+        if (!file) {
+            LogWarn("vulkan: could not write the pipeline cache");
+            std::filesystem::remove(temp, error);
+            return;
+        }
+    }
+    std::filesystem::rename(temp, path, error);
+    if (error) {
+        LogWarn("vulkan: could not save the pipeline cache: {}", error.message());
+        std::filesystem::remove(temp, error);
+    }
 }
 
 constexpr const char* kRayQueryExtensions[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
@@ -418,6 +497,7 @@ bool Context::Init(SDL_Window* window, bool validation) {
     if (!Check(vkCreateCommandPool(device, &pool_info, nullptr, &upload_pool_), "vkCreateCommandPool")) {
         return false;
     }
+    g_pipeline_cache = CreatePipelineCache(device, properties, pipeline_cache_path);
     if (hooks) {
         hooks->DeviceCreated(*this);
     }
@@ -428,6 +508,12 @@ void Context::Shutdown() {
     if (device) {
         vkDeviceWaitIdle(device);
         DestroySwapchain();
+        if (g_pipeline_cache) {
+            SavePipelineCache(device, g_pipeline_cache, pipeline_cache_path);
+            vkDestroyPipelineCache(device, g_pipeline_cache, nullptr);
+            g_pipeline_cache = VK_NULL_HANDLE;
+        }
+        ReclaimUploads(0);
         if (upload_pool_) {
             vkDestroyCommandPool(device, upload_pool_, nullptr);
         }
@@ -710,6 +796,12 @@ void Context::DestroyBuffer(Buffer& buffer) {
 }
 
 void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
+    Submission submission = SubmitAsync(record);
+    CheckDeviceLost(vkWaitForFences(device, 1, &submission.fence, VK_TRUE, UINT64_MAX), "one-time submit wait");
+    Release(submission);
+}
+
+Submission Context::SubmitAsync(const std::function<void(VkCommandBuffer)>& record) {
     VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     alloc.commandPool = upload_pool_;
     alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -730,9 +822,13 @@ void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
     VkFence fence;
     vkCreateFence(device, &fence_info, nullptr, &fence);
     CheckDeviceLost(vkQueueSubmit2(queue, 1, &submit, fence), "one-time submit");
-    CheckDeviceLost(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "one-time submit wait");
-    vkDestroyFence(device, fence, nullptr);
-    vkFreeCommandBuffers(device, upload_pool_, 1, &cmd);
+    return {cmd, fence};
+}
+
+void Context::Release(Submission& submission) {
+    vkDestroyFence(device, submission.fence, nullptr);
+    vkFreeCommandBuffers(device, upload_pool_, 1, &submission.cmd);
+    submission = Submission{};
 }
 
 bool Context::Upload(Buffer& dst, const void* data, VkDeviceSize size) {
@@ -742,12 +838,43 @@ bool Context::Upload(Buffer& dst, const void* data, VkDeviceSize size) {
     }
     std::memcpy(staging.mapped, data, static_cast<size_t>(size));
     vmaFlushAllocation(allocator, staging.allocation, 0, size);
-    Submit([&](VkCommandBuffer cmd) {
+    // No CPU wait: the barrier orders every later use on this queue after the copy, and the staging buffer is freed once the fence signals.
+    const Submission submission = SubmitAsync([&](VkCommandBuffer cmd) {
         VkBufferCopy region{0, 0, size};
         vkCmdCopyBuffer(cmd, staging.buffer, dst.buffer, 1, &region);
+        VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = dst.buffer;
+        barrier.size = size;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dependency);
     });
-    DestroyBuffer(staging);
+    pending_upload_bytes_ += staging.size;
+    pending_uploads_.push_back({submission, staging});
+    ReclaimUploads(kMaxPendingUploadBytes);
     return true;
+}
+
+void Context::ReclaimUploads(VkDeviceSize max_pending_bytes) {
+    while (!pending_uploads_.empty()) {
+        PendingUpload& upload = pending_uploads_.front();
+        if (pending_upload_bytes_ > max_pending_bytes) {
+            CheckDeviceLost(vkWaitForFences(device, 1, &upload.submission.fence, VK_TRUE, UINT64_MAX), "buffer upload wait");
+        } else if (vkGetFenceStatus(device, upload.submission.fence) == VK_NOT_READY) {
+            break;
+        }
+        pending_upload_bytes_ -= upload.staging.size;
+        DestroyBuffer(upload.staging);
+        Release(upload.submission);
+        pending_uploads_.pop_front();
+    }
 }
 
 }

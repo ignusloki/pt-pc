@@ -191,7 +191,7 @@ bool UiBatch::CreatePipelines(VkFormat format) {
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
         info.layout = layout_;
-        ok = ok && vk::Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipelines_[i]), "ui pipeline");
+        ok = ok && vk::Check(vkCreateGraphicsPipelines(device_, vk::g_pipeline_cache, 1, &info, nullptr, &pipelines_[i]), "ui pipeline");
     }
     vkDestroyShaderModule(device_, vert, nullptr);
     vkDestroyShaderModule(device_, frag, nullptr);
