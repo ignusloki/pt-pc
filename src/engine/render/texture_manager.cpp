@@ -3,10 +3,12 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <thread>
 
 #include "engine/assets/ftex.h"
 #include "engine/assets/enhanced_textures.h"
@@ -18,6 +20,7 @@ namespace {
 
 // Staging memory allowed in flight before Create waits on the oldest uploads; bounds the peak of a stage load on 8 GB machines.
 constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(256) << 20;
+constexpr size_t kMaxDecodeWorkers = 4;
 
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
@@ -472,15 +475,22 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
     if (jobs.empty()) {
         return;
     }
-    decode_workers_.push_back(std::async(std::launch::async, [&qar, jobs = std::move(jobs)]() mutable {
-        for (auto& [stem, promise] : jobs) {
-            auto ftex = std::make_shared<FtexTexture>();
-            if (!LoadFtex(qar, stem, *ftex)) {
-                ftex.reset();
+    // QarArchive::Read serializes the raw file reads; inflating runs in parallel. Workers take jobs in FIFO order for PumpDecoded.
+    auto shared = std::make_shared<decltype(jobs)>(std::move(jobs));
+    auto next = std::make_shared<std::atomic<size_t>>(0);
+    const size_t workers = std::min<size_t>({kMaxDecodeWorkers, std::max(1u, std::thread::hardware_concurrency()), shared->size()});
+    for (size_t w = 0; w < workers; ++w) {
+        decode_workers_.push_back(std::async(std::launch::async, [&qar, shared, next] {
+            for (size_t i = next->fetch_add(1); i < shared->size(); i = next->fetch_add(1)) {
+                auto& [stem, promise] = (*shared)[i];
+                auto ftex = std::make_shared<FtexTexture>();
+                if (!LoadFtex(qar, stem, *ftex)) {
+                    ftex.reset();
+                }
+                promise.set_value(std::move(ftex));
             }
-            promise.set_value(std::move(ftex));
-        }
-    }));
+        }));
+    }
 }
 
 bool TextureManager::StillDecoding(const std::string& path) const {
