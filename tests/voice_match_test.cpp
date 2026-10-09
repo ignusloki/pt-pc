@@ -53,7 +53,7 @@ int main() {
         const std::string name = entry.path().filename().string();
         const bool model = name == "ggml-base.en-q5_1.bin" || name == "ggml-small.en-q5_1.bin" || name == "ggml-silero-v6.2.0.bin";
         const bool runtime = (name.starts_with("whisper") || name.starts_with("ggml") || name.starts_with("libwhisper") || name.starts_with("libggml")) &&
-                             (entry.path().extension() == ".dll" || entry.path().extension() == ".so");
+                             (entry.path().extension() == ".dll" || entry.path().extension() == ".so" || entry.path().extension() == ".dylib");
         if (model || runtime) {
             std::filesystem::create_hard_link(entry.path(), unicode_dir / entry.path().filename(), ec);
             if (ec) std::filesystem::copy_file(entry.path(), unicode_dir / entry.path().filename(), ec);
