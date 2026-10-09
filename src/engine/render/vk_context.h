@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -82,6 +83,8 @@ public:
     Submission SubmitAsync(const std::function<void(VkCommandBuffer)>& record);
     void Release(Submission& submission);
     bool Upload(Buffer& dst, const void* data, VkDeviceSize size);
+    // Frees the staging buffers of finished Uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
 
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -115,7 +118,14 @@ public:
     void CheckDeviceLost(VkResult result, const char* where);
 
 private:
+    struct PendingUpload {
+        Submission submission;
+        Buffer staging;
+    };
+
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 

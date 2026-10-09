@@ -24,6 +24,9 @@ extern bool g_checkpoints;
 namespace pt::vk {
 namespace {
 
+// Staging memory allowed in flight before Upload waits on the oldest copies; bounds the peak of a stage load on 8 GB machines.
+constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(128) << 20;
+
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
                                              const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
     const char* label = data->cmdBufLabelCount > 0 && data->pCmdBufLabels[data->cmdBufLabelCount - 1].pLabelName
@@ -510,6 +513,7 @@ void Context::Shutdown() {
             vkDestroyPipelineCache(device, g_pipeline_cache, nullptr);
             g_pipeline_cache = VK_NULL_HANDLE;
         }
+        ReclaimUploads(0);
         if (upload_pool_) {
             vkDestroyCommandPool(device, upload_pool_, nullptr);
         }
@@ -834,12 +838,43 @@ bool Context::Upload(Buffer& dst, const void* data, VkDeviceSize size) {
     }
     std::memcpy(staging.mapped, data, static_cast<size_t>(size));
     vmaFlushAllocation(allocator, staging.allocation, 0, size);
-    Submit([&](VkCommandBuffer cmd) {
+    // No CPU wait: the barrier orders every later use on this queue after the copy, and the staging buffer is freed once the fence signals.
+    const Submission submission = SubmitAsync([&](VkCommandBuffer cmd) {
         VkBufferCopy region{0, 0, size};
         vkCmdCopyBuffer(cmd, staging.buffer, dst.buffer, 1, &region);
+        VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = dst.buffer;
+        barrier.size = size;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dependency);
     });
-    DestroyBuffer(staging);
+    pending_upload_bytes_ += staging.size;
+    pending_uploads_.push_back({submission, staging});
+    ReclaimUploads(kMaxPendingUploadBytes);
     return true;
+}
+
+void Context::ReclaimUploads(VkDeviceSize max_pending_bytes) {
+    while (!pending_uploads_.empty()) {
+        PendingUpload& upload = pending_uploads_.front();
+        if (pending_upload_bytes_ > max_pending_bytes) {
+            CheckDeviceLost(vkWaitForFences(device, 1, &upload.submission.fence, VK_TRUE, UINT64_MAX), "buffer upload wait");
+        } else if (vkGetFenceStatus(device, upload.submission.fence) == VK_NOT_READY) {
+            break;
+        }
+        pending_upload_bytes_ -= upload.staging.size;
+        DestroyBuffer(upload.staging);
+        Release(upload.submission);
+        pending_uploads_.pop_front();
+    }
 }
 
 }
