@@ -76,8 +76,8 @@ class PackagingTests(unittest.TestCase):
         with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r osx-arm64',z.read('BUILD.txt').decode())
         self.assertEqual(set(files),set(json.loads((out/'payload-manifest.json').read_text())))
     def test_other_platform_layout_and_windows_validation_preserved(self):
-        # Windows policy verification is exercised by tools/test_upscaler_policy.py;
-        # this fixture checks the call and that only the archive wrapper is removed.
+        # Strict Windows builds are checked by validate_desktop.py. This fixture
+        # checks the policy call and that only the archive wrapper is removed.
         for rid,name in [('win-x64','pt.exe'),('linux-x64','pt')]:
             archive=self.root/(rid+'.zip')
             with zipfile.ZipFile(archive,'w') as z:z.writestr('runtime/'+name,b'fixture')

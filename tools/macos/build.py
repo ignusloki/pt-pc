@@ -1,6 +1,7 @@
 """Build the upstream Mac game and its PKG/folder installer for one CPU architecture."""
 import argparse
 import datetime
+import json
 import os
 import platform
 import shutil
@@ -54,6 +55,21 @@ def verify_packaged_voice(app, output):
     run(app / "Contents/MacOS/pt", "--voice-test", fixture, "--log", log)
     if "voice test: file voice-smoke.wav" not in log.read_text(encoding="utf-8"):
         raise RuntimeError("Packaged voice smoke test did not process the WAV; see voice-smoke.log")
+
+
+def copy_runtime_notices(extractor, artifacts, rid):
+    config = json.loads((extractor / "PT.PkgExtract.runtimeconfig.json").read_text())
+    version = next(f["version"] for f in config["runtimeOptions"]["includedFrameworks"] if f["name"] == "Microsoft.NETCore.App")
+    assets = json.loads((artifacts / "obj/Extractor/project.assets.json").read_text())
+    pack = next((Path(root) / ("microsoft.netcore.app.runtime." + rid) / version
+                 for root in assets["packageFolders"]
+                 if (Path(root) / ("microsoft.netcore.app.runtime." + rid) / version).is_dir()), None)
+    if pack is None:
+        raise RuntimeError("Microsoft runtime pack not found for its distribution notices")
+    notices = extractor / "licenses"
+    notices.mkdir(exist_ok=True)
+    for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+        shutil.copy2(pack / name, notices / ("dotnet-" + name))
 
 
 def main():
@@ -123,6 +139,7 @@ def main():
     run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
         "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
         "--artifacts-path", dotnet_artifacts, "-o", extractor)
+    copy_runtime_notices(extractor, dotnet_artifacts, "osx-" + args.arch)
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
         f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
