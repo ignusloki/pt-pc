@@ -476,6 +476,8 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
 inline constexpr const char* kManifestName = "pt-install-manifest.txt";
 #ifdef _WIN32
 inline constexpr const char* kGameExe = "pt.exe";
+#elif defined(__APPLE__)
+inline constexpr const char* kGameExe = "P.T. PC Port.app/Contents/MacOS/pt";
 #else
 inline constexpr const char* kGameExe = "pt";
 #endif
@@ -519,7 +521,11 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
         }
         return install;
     }
-    const bool exe = fs::is_regular_file(dir / kGameExe, error) || fs::is_regular_file(dir / "pt.exe", error);
+    const bool exe = fs::is_regular_file(dir / kGameExe, error) || fs::is_regular_file(dir / "pt.exe", error)
+#ifdef __APPLE__
+        || fs::is_regular_file(dir / "P.T..app/Contents/MacOS/pt", error)
+#endif
+        ;
     const bool archives = fs::is_regular_file(dir / "CUSA01127" / "chunk1.psarc", error) && fs::is_regular_file(dir / "CUSA01127" / "texture.qar", error);
     if (exe && archives) {
         install.found = true;
@@ -528,6 +534,9 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
     throw std::runtime_error("This folder holds something else. Choose a new installation folder, or a folder with a P.T. install to update it.");
 }
 inline bool KnownProgramFile(const std::string& path) {
+#ifdef __APPLE__
+    if (path.starts_with("P.T..app/")) return true;
+#endif
     static const char* const kNames[] = {"pt.exe", "pt", "amd_fidelityfx_vk.dll", "nvngx_dlss.dll", "libxess.dll", "README-UPDATE.txt", "manifest.json"};
     for (const char* name : kNames)
         if (path == name) return true;
@@ -538,10 +547,16 @@ struct SwapResult {
     int replaced = 0, added = 0, removed = 0;
 };
 inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest, const std::vector<InstalledFile>& files,
-                                   const std::vector<std::string>& extra, const ExistingInstall& old, const fs::path& backup, int fail_at = -1) {
+                                   const std::vector<std::string>& extra, const ExistingInstall& old, const fs::path& backup, int fail_at = -1,
+                                   const std::vector<std::string>& whole_trees = {}) {
     ValidateProgramFiles(files);
     for (const auto& path : extra)
         if (IsUserDataPath(path)) throw std::runtime_error("The installer cannot replace files under data/.");
+    for (const auto& tree : whole_trees) {
+        Contained(staging, tree);
+        if (IsUserDataPath(tree) || tree.find('/') != std::string::npos)
+            throw std::runtime_error("A program bundle must be a top-level folder outside data/.");
+    }
     struct Step {
         std::string path;
         bool placed;
@@ -560,14 +575,30 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
         std::vector<std::string> all;
         for (const auto& file : files) all.push_back(file.path);
         all.insert(all.end(), extra.begin(), extra.end());
+        // Replace signed bundles as one tree, including their resource seal.
+        auto tree_for = [&](const std::string& path) -> std::string {
+            for (const auto& tree : whole_trees)
+                if (path == tree || path.starts_with(tree + "/")) return tree;
+            return {};
+        };
+        std::vector<std::string> moves;
         for (const auto& path : all) {
+            const auto tree = tree_for(path);
+            const auto& move = tree.empty() ? path : tree;
+            if (std::find(moves.begin(), moves.end(), move) == moves.end()) moves.push_back(move);
+        }
+        for (const auto& path : moves) {
             CheckCancel();
             tick();
             const fs::path target = Contained(dest, path);
+            const bool tree = !tree_for(path).empty();
+            if (tree && (!fs::is_directory(Contained(staging, path)) || fs::is_symlink(Contained(staging, path))))
+                throw std::runtime_error("Missing staged program bundle: " + path);
             std::error_code error;
             const bool existed = fs::exists(target, error);
             if (existed) {
-                if (fs::is_directory(target, error)) throw std::runtime_error("A folder is in the way of " + path + ".");
+                if (fs::is_directory(target, error) != tree || (tree && fs::is_symlink(target, error)))
+                    throw std::runtime_error("A file or folder is in the way of " + path + ".");
                 backup_old(path);
             }
             journal.push_back({path, false, existed});
@@ -577,22 +608,36 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
             existed ? ++result.replaced : ++result.added;
         }
         std::vector<std::string> obsolete;
-        auto shipped = [&](const std::string& path) { return std::find(all.begin(), all.end(), path) != all.end(); };
+        auto shipped = [&](const std::string& path) {
+            const auto tree = tree_for(path);
+            return std::find(moves.begin(), moves.end(), tree.empty() ? path : tree) != moves.end();
+        };
+        auto obsolete_path = [&](const std::string& path) {
+            const auto tree = tree_for(path);
+            const auto& move = tree.empty() ? path : tree;
+            if (std::find(obsolete.begin(), obsolete.end(), move) == obsolete.end()) obsolete.push_back(move);
+        };
         if (old.has_manifest) {
             for (const auto& file : old.files)
-                if (!shipped(file.path)) obsolete.push_back(file.path);
+                if (!shipped(file.path)) obsolete_path(file.path);
         } else if (old.found) {
             std::error_code error;
             for (fs::recursive_directory_iterator it(dest, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error)) {
                 if (!it->is_regular_file(error)) continue;
                 const std::string path = PathUtf8(fs::relative(it->path(), dest));
-                if (KnownProgramFile(path) && !shipped(path)) obsolete.push_back(path);
+                if (KnownProgramFile(path) && !shipped(path)) obsolete_path(path);
             }
         }
         for (const auto& path : obsolete) {
+            CheckCancel();
             tick();
             std::error_code error;
-            if (!fs::is_regular_file(Contained(dest, path), error)) continue;
+            const auto target = Contained(dest, path);
+            if (!tree_for(path).empty()) {
+                if (!fs::exists(target, error)) continue;
+                if (fs::is_symlink(target, error) || !fs::is_directory(target, error))
+                    throw std::runtime_error("Invalid old program bundle: " + path);
+            } else if (!fs::is_regular_file(target, error)) continue;
             backup_old(path);
             journal.push_back({path, false, true});
             ++result.removed;
@@ -619,6 +664,7 @@ struct InstallSteps {
     std::function<void(const std::vector<InstalledFile>&)> validate_runtime;
     std::function<void(const fs::path&, const fs::path&)> extract;
     std::function<void(const fs::path&)> shortcut;
+    std::vector<std::string> whole_trees;
 };
 struct InstallOutcome {
     bool updated = false;
@@ -720,7 +766,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         outcome.had_manifest = old.has_manifest;
         outcome.old_version = old.version;
         try {
-            outcome.swap = SwapProgramFiles(staging, destination, files, extra, old, backup);
+            outcome.swap = SwapProgramFiles(staging, destination, files, extra, old, backup, -1, steps.whole_trees);
         } catch (const fs::filesystem_error& e) {
             throw std::runtime_error("Could not replace " + PathUtf8(e.path1().filename()) +
                                      ": it is in use (is P.T. still running?). Close it and try again. Nothing was changed.");
@@ -745,6 +791,83 @@ inline std::string UpdateQuestion(const ExistingInstall& old, const std::string&
         return "P.T. version " + version + " is already installed here and up to date. Repair it (check the game files and rewrite the program files)?";
     return "P.T. is already installed here (" + (old.version.empty() ? std::string("an older version") : "version " + old.version) + "). Update it to version " +
            version + "? The game files, settings, saves and anything else you added stay.";
+}
+
+inline std::string SelfTestBundleUpdate(const fs::path& root) {
+    std::string failures;
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    auto snapshot = [](const fs::path& dir) {
+        std::vector<std::pair<std::string, std::string>> files;
+        for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+            if (!entry.is_regular_file()) continue;
+            std::ifstream input(entry.path(), std::ios::binary);
+            files.emplace_back(fs::relative(entry.path(), dir).generic_string(),
+                               std::string((std::istreambuf_iterator<char>(input)), {}));
+        }
+        std::sort(files.begin(), files.end());
+        return files;
+    };
+    constexpr const char* exe = "P.T. PC Port.app/Contents/MacOS/pt";
+    for (int kind : {0, 1, 2}) {
+        const bool bundle_exists = kind == 0, legacy = kind == 2;
+        const std::string old_app = legacy ? "P.T..app" : "P.T. PC Port.app";
+        const std::string old_exe = old_app + "/Contents/MacOS/pt";
+        for (int fail_at : {-1, 0, 1, 2, 3, 4}) {
+            const auto run = root / Utf8Path("instalação com espaços") /
+                ((legacy ? "legacy-" : bundle_exists ? "repair-" : "restore-") + std::to_string(fail_at));
+            const auto dest = run / "install", staging = run / "staging", backup = run / "backup";
+            if (bundle_exists || legacy) {
+                write(dest / old_exe, "old executable");
+                write(dest / (old_app + "/Contents/Resources/stale.txt"), "old sealed resource");
+                write(dest / (old_app + "/Contents/Resources/untracked.txt"), "extra breaks the seal");
+            }
+            write(dest / "extractor/PT.PkgExtract", "old helper");
+            write(dest / kManifestName, "old manifest");
+            write(dest / "CUSA01127/chunk1.psarc", "player archive");
+            write(dest / "mods/local/init.lua", "player mod");
+            write(dest / "pt.ini", "player settings");
+            write(dest / "data/pt-save.dat", "player save");
+            write(staging / exe, "new executable");
+            write(staging / "P.T. PC Port.app/Contents/_CodeSignature/CodeResources", "new seal");
+            write(staging / "extractor/PT.PkgExtract", "new helper");
+            write(staging / kManifestName, "new manifest");
+            const auto before = snapshot(dest), staged = snapshot(staging);
+            ExistingInstall old;
+            old.found = old.has_manifest = true;
+            old.files = {{old_exe, ""}, {old_app + "/Contents/Resources/stale.txt", ""}, {"extractor/PT.PkgExtract", ""}};
+            const std::vector<InstalledFile> files = {{exe, ""}, {"P.T. PC Port.app/Contents/_CodeSignature/CodeResources", ""},
+                                                       {"extractor/PT.PkgExtract", ""}};
+            bool thrown = false;
+            const auto previous_cancel = hooks.cancelled;
+            int cancel_checks = 0;
+            if (fail_at == 4) hooks.cancelled = [&] { return ++cancel_checks > 1; };
+            try {
+                SwapProgramFiles(staging, dest, files, {kManifestName}, old, backup, fail_at, {"P.T. PC Port.app", "P.T..app"});
+            } catch (...) { thrown = true; }
+            hooks.cancelled = previous_cancel;
+            if (fail_at >= 0) {
+                if (!thrown || snapshot(dest) != before || snapshot(staging) != staged)
+                    failures += " bundle rollback " + run.filename().string();
+            } else {
+                if (thrown) { failures += " bundle swap " + run.filename().string(); continue; }
+                if (fs::exists(dest / (old_app + "/Contents/Resources/stale.txt")) ||
+                    fs::exists(dest / (old_app + "/Contents/Resources/untracked.txt"))) failures += " stale bundle resources";
+                const std::vector<std::pair<std::string, std::string>> expected = {{"Contents/MacOS/pt", "new executable"},
+                    {"Contents/_CodeSignature/CodeResources", "new seal"}};
+                if (snapshot(dest / "P.T. PC Port.app") != expected) failures += " bundle contents";
+                if (legacy && fs::exists(dest / "P.T..app")) failures += " legacy bundle survived migration";
+                for (const auto& file : before) {
+                    if (file.first.starts_with(old_app + "/") || file.first.starts_with("extractor/") || file.first == kManifestName) continue;
+                    const auto after = snapshot(dest);
+                    if (std::find(after.begin(), after.end(), file) == after.end()) failures += " player files changed";
+                }
+            }
+        }
+    }
+    return failures;
 }
 
 inline std::string SelfTestUpdate(const fs::path& root) {

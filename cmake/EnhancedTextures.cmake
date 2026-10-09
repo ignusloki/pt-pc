@@ -54,3 +54,14 @@ if(WIN32)
   add_custom_command(TARGET pt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/vcomp140.dll" "$<TARGET_FILE_DIR:pt>/texture-tools/" VERBATIM)
 endif()
+
+if(APPLE)
+add_custom_command(TARGET pt_release POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt_release>/texture-tools/models" "$<TARGET_FILE_DIR:pt_release>/licenses"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/${pt_texture_exe}" "$<TARGET_FILE_DIR:pt_release>/texture-tools/"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/third_party/texture_models" "$<TARGET_FILE_DIR:pt_release>/texture-tools/models"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/third_party/texture_notices" "$<TARGET_FILE_DIR:pt_release>/licenses/enhanced-textures"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/Real-ESRGAN-ncnn-vulkan.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/texture_models/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/Real-ESRGAN-model.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${bc7enc_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/bc7enc.txt" VERBATIM)
+endif()

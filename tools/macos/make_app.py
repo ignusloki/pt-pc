@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from bundle import ICON_FILE, copy_icon, sign_tree
 
 REPO = Path(__file__).resolve().parent.parent.parent
 APP_NAME = "P.T. PC Port"
@@ -70,13 +71,25 @@ def copy_voice(source, target):
     shutil.copytree(source / "licenses", target / "licenses")
 
 
-def sign(app):
-    # inside out: every Mach-O file on its own, then the bundle, which seals the rest
-    for path in sorted(app.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-        if path.is_file() and not path.is_symlink() and is_macho(path) and path != app / "Contents" / "MacOS" / "pt":
-            subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(path)], check=True, capture_output=True)
-    subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(app)], check=True)
-    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+def validate_build(build, exe):
+    required = [exe, build / "libMoltenVK.dylib", build / "fonts", build / "voice/licenses", REPO / "assets/macos" / ICON_FILE]
+    required += [build / "voice" / name for name in VOICE_MODELS + VOICE_LIBRARIES]
+    for path in required:
+        if not path.exists():
+            raise RuntimeError(f"Missing build output: {path}")
+    if not list((build / "voice").glob("libggml-cpu-*.so")):
+        raise RuntimeError("Missing build output: voice/libggml-cpu-*.so")
+    for path in (exe, build / "libMoltenVK.dylib"):
+        if not is_macho(path):
+            raise RuntimeError(f"Expected a Mach-O executable or library: {path}")
+    expected = {p.name + ".spv" for p in (REPO / "shaders").iterdir() if p.suffix in {".vert", ".frag", ".comp"}}
+    if not expected.issubset({p.name for p in (build / "shaders").glob("*.spv")}):
+        raise RuntimeError("Shader build is incomplete; build pt_release or pt_shaders first")
+
+
+def sign(app, identity="-"):
+    sign_tree(app, identity, REPO / "tools/macos/game-entitlements.plist",
+              architecture(app / "Contents/MacOS/pt"))
 
 
 def main():
@@ -86,6 +99,7 @@ def main():
     parser.add_argument("--exe", help="Explicit executable: pt_release for the release 1.0 game (PT_RELEASE_LOCKS); shipped as pt")
     parser.add_argument("--game", default=str(REPO / "game" / "CUSA01127"),
                         help="the game files, for the loop browser previews (shot by the bundled game, --make-loop-previews)")
+    parser.add_argument("--identity", default="-", help="Developer ID Application identity, or ad-hoc signing with -")
     parser.add_argument("--no-zip", action="store_true", help="leave the bundle unzipped")
     args = parser.parse_args()
     build = Path(args.build)
@@ -102,6 +116,7 @@ def main():
     archive = out / f"pt-port-{ver}-macos-{arch}.zip"
     if app.exists() or archive.exists():
         sys.exit(f"Package output already exists; choose another --out folder: {app}")
+    validate_build(build, exe)
     contents = app / "Contents"
     resources = contents / "Resources"
     (contents / "MacOS").mkdir(parents=True)
@@ -117,12 +132,16 @@ def main():
         shutil.copytree(build / "texture-tools", resources / "texture-tools")
     if (build / "licenses").is_dir():
         shutil.copytree(build / "licenses", resources / "licenses")
+    (resources / "licenses").mkdir(exist_ok=True)
+    shutil.copy2(REPO / "LICENSE", resources / "licenses/PT-MIT.txt")
     shutil.copy2(REPO / "README.md", resources / "README.md")
     shutil.copy2(REPO / "docs" / "macos.md", resources / "macOS.md")
+    copy_icon(resources)
     with open(contents / "Info.plist", "wb") as f:
         plistlib.dump({
             "CFBundleDevelopmentRegion": "en",
             "CFBundleExecutable": "pt",
+            "CFBundleIconFile": ICON_FILE,
             "CFBundleIdentifier": BUNDLE_ID,
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleName": APP_NAME,
@@ -152,7 +171,7 @@ def main():
             (previews / extra).unlink(missing_ok=True)
     else:
         print(f"loop browser previews skipped: no game files at {args.game}")
-    sign(app)
+    sign(app, args.identity)
     if args.no_zip:
         print(app)
         return

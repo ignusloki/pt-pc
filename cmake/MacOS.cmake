@@ -34,7 +34,20 @@ endif()
 if(PT_MOLTENVK_LIBRARY)
   set(pt_moltenvk_dylib "${PT_MOLTENVK_LIBRARY}")
 endif()
-add_custom_command(TARGET pt POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:pt>/libMoltenVK.dylib"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/licenses"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_license}" "$<TARGET_FILE_DIR:pt>/licenses/MoltenVK_LICENSE.txt" VERBATIM)
+foreach(game pt pt_release)
+add_custom_command(TARGET ${game} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:${game}>/libMoltenVK.dylib"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${game}>/licenses"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_license}" "$<TARGET_FILE_DIR:${game}>/licenses/MoltenVK_LICENSE.txt" VERBATIM)
+
+endforeach()
+
+add_executable(pt_setup_macos EXCLUDE_FROM_ALL installer/Native/setup_macos.mm src/engine/platform/os.cpp)
+target_include_directories(pt_setup_macos PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
+add_dependencies(pt_setup_macos pt_version)
+target_compile_options(pt_setup_macos PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
+target_link_libraries(pt_setup_macos PRIVATE zlibstatic Threads::Threads "-framework Cocoa")
+
+target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
+target_compile_options(pt_engine PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
+target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")

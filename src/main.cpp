@@ -1,6 +1,9 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "engine/platform/update_check.h"
+#ifdef __APPLE__
+#include "engine/platform/macos_permissions.h"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -4933,6 +4936,9 @@ int main(int argc, char** argv) {
             app.xr.reset();
         }
         const bool viewer = !options.stage.empty() || !options.texture_test.empty();
+#ifdef __APPLE__
+        if (app.window && !viewer) pt::RequestMacMicrophoneAccessAtStartup();
+#endif
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
         app.texture_job.Cancel();
         vkDeviceWaitIdle(app.renderer.Context().device);

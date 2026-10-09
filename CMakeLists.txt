@@ -5,6 +5,12 @@ if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Oldest macOS the build runs on" FORCE)
 endif()
 project(pt_port LANGUAGES C CXX)
+if(APPLE)
+  # Enable this before SDL's subdirectory as well as our native Mac sources.
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 20)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -147,7 +153,7 @@ if(WIN32 AND EXISTS "${PT_SETUP_PAYLOAD}")
     target_link_options(pt_setup PRIVATE /OPT:REF /OPT:ICF)
   endif()
 endif()
-if(NOT WIN32)
+if(UNIX AND NOT APPLE)
   # the Linux installer (installer/Native/setup_linux.cpp); tools/linux/attach_payload.py appends the payload after the build
   add_executable(pt_setup_linux EXCLUDE_FROM_ALL installer/Native/setup_linux.cpp src/engine/platform/http.cpp
     src/engine/platform/update_check.cpp src/engine/platform/os.cpp)
@@ -198,6 +204,7 @@ foreach(shader ${PT_SHADERS})
 endforeach()
 add_custom_target(pt_shaders ALL DEPENDS ${PT_SPIRV_OUTPUTS})
 add_dependencies(pt pt_shaders)
+add_dependencies(pt_release pt_shaders)
 target_compile_definitions(pt_engine PUBLIC PT_SHADER_DIR="${PT_SPIRV_DIR}" PT_VOICE_MODEL_DIR="${CMAKE_BINARY_DIR}/voice")
 target_include_directories(pt_engine PRIVATE ${PT_WHISPER_INCLUDE_DIRS} "${whisper_SOURCE_DIR}/ggml/src")
 # whisper.cpp, ggml and its CPU variants in voice/ for every game target (tools/package.py ships them with any of these)
@@ -344,6 +351,18 @@ foreach(license ${PT_FONT_LICENSES})
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt>/licenses/${license_name}" VERBATIM)
 endforeach()
 
+if(APPLE)
+add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:pt_release>/fonts")
+# the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
+file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
+foreach(license ${PT_FONT_LICENSES})
+  get_filename_component(license_name "${license}" NAME)
+  add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt_release>/licenses"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt_release>/licenses/${license_name}" VERBATIM)
+endforeach()
+
+endif()
+
 add_executable(pt_mouse_render_test tests/mouse_render_test.cpp)
 target_link_libraries(pt_mouse_render_test PRIVATE pt_engine)
 
@@ -367,3 +386,11 @@ target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
 
 add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
 target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)
+
+# Shared installer transaction regressions; no game assets required.
+add_executable(pt_installer_update_test EXCLUDE_FROM_ALL tests/installer_update_test.cpp)
+target_include_directories(pt_installer_update_test PRIVATE installer/Native)
+target_link_libraries(pt_installer_update_test PRIVATE zlibstatic)
+if(MSVC)
+  target_compile_options(pt_installer_update_test PRIVATE /utf-8 /EHsc)
+endif()
