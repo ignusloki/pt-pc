@@ -12,7 +12,7 @@ The current order is Mac build/packaging, startup microphone consent, default ic
 
 - One portable app packer: upstream's `tools/macos/make_app.py`. The native Setup packer consumes its ZIP instead of maintaining a second runtime layout. Both use `P.T. PC Port.app`, upstream's bundle identifier and per-architecture archive names.
 - Separate ARM64 and Intel presets and installer builds. Release-only Mac targets stage shaders, fonts, voice, MoltenVK, texture tools and licenses. Windows/Linux compiler presets and release upscaler defaults are preserved.
-- Native Cocoa installer accepts a complete local fake PKG or decrypted game folder, then a writable destination. The self-contained .NET 10 helper includes matching patched LGPL source and notices. A Homebrew-specific Brotli dependency is relocated with its MIT license; the audit rejects other external non-system dependencies.
+- Native Cocoa installer accepts a complete local fake PKG or decrypted game folder, then a writable destination. The self-contained .NET 10 helper includes matching patched LGPL source and notices. Microsoft runtime packs are selected explicitly rather than inheriting host-specific Homebrew runtime dependencies. Custom extractor inputs can relocate Brotli with its MIT license; all Mach-O files are checked against the macOS 14 minimum and unbundled dependencies are rejected.
 - Signed apps are replaced as whole folders. Repairs remove stale/untracked sealed resources, and rollback restores the old bundle. Migration recognizes the older fork's `P.T..app` name. Upstream's writable-data protection, Unicode paths and runtime-validation hooks remain in place.
 - AVFoundation requests microphone authorization asynchronously during normal game startup. It respects existing allow/deny decisions; permission does not start recording. Headless execution, WAV voice tests, asset tools and installer verification do not enter that startup path. A bare executable without usage-description metadata skips the request with a log message.
 - Both Mac bundles contain `assets/macos/pt.icns` and name it in Info.plist before signing. The original supplied PNG is retained unchanged as `assets/macos/pt-icon.png`.
@@ -29,7 +29,7 @@ Host: Apple M1 Pro, macOS 26.6.2, Apple Clang 21, CMake/Ninja and .NET SDK 10.0.
 | Native ARM64 release game and Cocoa installer | Build passed |
 | Eleven selected CPU/installer regressions | Passed: core, platform, settings, saves, language defaults, graphics presets, voice matching, installer transactions, Unicode paths and user-data migration |
 | Voice regression fixture | 68/68 matches; models load from Unicode paths; missing model path reports an error |
-| Python archive/signing/source regressions | 14 passed |
+| Python archive/signing/source regressions | 15 passed |
 | Synthetic extraction fixtures | Passed, including alternate P.T. regions, incomplete inner data and retail/other-game refusal |
 | Packaged voice smoke test | All three models and ARM CPU backend load; three seconds of silence yield zero detections |
 | Installer self-test | Payload hash, unpacking, signed runtime startup, rollback, Unicode paths and icon helpers passed |

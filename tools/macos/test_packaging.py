@@ -165,6 +165,18 @@ class PackagingTests(unittest.TestCase):
                 mac.sign_tree(app)
         output.assert_not_called()
 
+    def test_newer_macos_dependency_refused(self):
+        app = self.macho_bundle()
+        original = self.otool({})
+        def output(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[-2] == "-l":
+                result += "cmd LC_BUILD_VERSION\ncmdsize 32\nplatform 1\nminos 26.0\nsdk 26.0\n"
+            return result
+        with patch.object(mac, "run"), patch.object(mac.subprocess, "check_output", side_effect=output):
+            with self.assertRaisesRegex(RuntimeError, "above the app minimum"):
+                mac.audit_dependencies(app)
+
     def test_packaged_voice_smoke_checks_that_audio_was_processed(self):
         app = self.macho_bundle()
         def launch(*args):

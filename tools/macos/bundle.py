@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ICON_FILE = "pt.icns"
+MINIMUM_MACOS = "14.0"
 
 
 def copy_icon(resources):
@@ -79,6 +80,13 @@ def audit_dependencies(root, arch="arm64"):
     for file in binaries:
         run("lipo", "-verify_arch", cpu, file)
         commands = subprocess.check_output(["otool", "-arch", cpu, "-l", str(file)], text=True)
+        minimums = re.findall(r"\bminos ([\d.]+)|cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)", commands)
+        def numeric(value):
+            return tuple((list(map(int, value.split("."))) + [0, 0, 0])[:3])
+        for build_version, legacy_version in minimums:
+            minimum = build_version or legacy_version
+            if numeric(minimum) > numeric(MINIMUM_MACOS):
+                raise RuntimeError(f"{file.name} requires macOS {minimum}, above the app minimum {MINIMUM_MACOS}")
         rpaths[file] = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
         ids = subprocess.check_output(["otool", "-arch", cpu, "-D", str(file)], text=True).splitlines()[1:]
         dependencies[file] = [line.strip().split(" (", 1)[0] for line in

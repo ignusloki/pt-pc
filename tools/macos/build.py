@@ -116,8 +116,13 @@ def main():
     source = prepare_source(upstream, build / f"liborbis-src-{uuid.uuid4().hex}")
     extractor = build / f"extractor-osx-{args.arch}-{uuid.uuid4().hex}"
     dotnet_artifacts = build / f"dotnet-artifacts-{uuid.uuid4().hex}"
+    # Use official Microsoft NuGet packs even when the SDK is from Homebrew.
+    # Its bundled runtime pack can link bottles built for this host's newer OS.
+    microsoft_packs = build / "microsoft-runtime-packs"
+    microsoft_packs.mkdir(exist_ok=True)
     run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
-        "--self-contained", "true", f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts, "-o", extractor)
+        "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
+        "--artifacts-path", dotnet_artifacts, "-o", extractor)
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
         f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")

@@ -16,12 +16,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from bundle import ICON_FILE, copy_icon, sign_tree
+from bundle import ICON_FILE, MINIMUM_MACOS, copy_icon, sign_tree
 
 REPO = Path(__file__).resolve().parent.parent.parent
 APP_NAME = "P.T. PC Port"
 BUNDLE_ID = "io.github.loreanxavier.pt-pc"
-MINIMUM_MACOS = "14.0"
 # voice/ as the recognizer loads it on macOS (src/engine/voice/voice_recognizer.cpp): the shared libraries are .dylib, ggml's
 # CPU variants are CMake modules (.so)
 VOICE_MODELS = ("ggml-base.en-q5_1.bin", "ggml-small.en-q5_1.bin", "ggml-silero-v6.2.0.bin")
