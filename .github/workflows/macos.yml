@@ -1,6 +1,6 @@
 # The macOS apps (docs/macos.md): one per CPU architecture, built natively on GitHub's runners, Apple silicon on macos-26 and
 # Intel on macos-15-intel. A published release gets P.T.PC.Port-macOS-arm64.zip and P.T.PC.Port-macOS-x64.zip;
-# the updater discovers these assets directly through the GitHub Releases API (docs/updates.md),
+# each architecture also has a PKG/folder installer. The updater keeps its existing portable-app asset URLs,
 # so nothing in tools/ci/release.py needs a Mac; run by hand (Actions > macOS > Run workflow) the zips are workflow artifacts.
 name: macOS
 
@@ -8,9 +8,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  push:
+    branches: [codex/upstream-macos-integration]
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   app:
@@ -29,6 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Tools
         run: brew install ninja shaderc vulkan-headers vulkan-loader
 
@@ -42,30 +52,32 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # pt brings the shaders, fonts, MoltenVK and the texture tools into the build folder; pt_release is the shipped game
-      - name: Build
-        env:
-          PT_VERSION: ${{ steps.version.outputs.version }}
+      - name: Packaging regressions
+        run: python3 tools/macos/test_packaging.py
+
+      - name: Build, package and test
         run: |
           test "$(uname -m)" = "${{ matrix.cmake_arch }}"
-          cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }}
-          cmake --build build/macos --target pt pt_release
-
-      - name: App
-        run: |
-          python3 tools/macos/make_app.py --build build/macos --exe build/macos/pt_release
-          mv dist/pt-port-*-macos-${{ matrix.arch }}.zip dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
+          python3 tools/macos/build.py --arch "${{ matrix.arch }}" --build build/macos --out dist --version "${{ steps.version.outputs.version }}" --jobs 4
+          mv "dist/pt-port-${{ steps.version.outputs.version }}-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
+          mv "dist/pt-port-${{ steps.version.outputs.version }}-setup-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
           lipo -archs "dist/P.T. PC Port.app/Contents/MacOS/pt"
 
       - uses: actions/upload-artifact@v7
         with:
           name: P.T.PC.Port-macOS-${{ matrix.arch }}-${{ steps.version.outputs.version }}
-          path: dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
+          path: |
+            dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
+            dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
+            dist/installer-self-test.txt
+            dist/voice-smoke.log
 
   release:
     if: github.event_name == 'release'
     needs: app
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -76,4 +88,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-macOS-arm64.zip zips/P.T.PC.Port-macOS-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-macOS-arm64.zip zips/P.T.PC.Port-macOS-x64.zip zips/P.T.PC.Port.Setup-macOS-arm64.zip zips/P.T.PC.Port.Setup-macOS-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
