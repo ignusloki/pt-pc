@@ -710,6 +710,12 @@ void Context::DestroyBuffer(Buffer& buffer) {
 }
 
 void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
+    Submission submission = SubmitAsync(record);
+    CheckDeviceLost(vkWaitForFences(device, 1, &submission.fence, VK_TRUE, UINT64_MAX), "one-time submit wait");
+    Release(submission);
+}
+
+Submission Context::SubmitAsync(const std::function<void(VkCommandBuffer)>& record) {
     VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     alloc.commandPool = upload_pool_;
     alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -730,9 +736,13 @@ void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
     VkFence fence;
     vkCreateFence(device, &fence_info, nullptr, &fence);
     CheckDeviceLost(vkQueueSubmit2(queue, 1, &submit, fence), "one-time submit");
-    CheckDeviceLost(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "one-time submit wait");
-    vkDestroyFence(device, fence, nullptr);
-    vkFreeCommandBuffers(device, upload_pool_, 1, &cmd);
+    return {cmd, fence};
+}
+
+void Context::Release(Submission& submission) {
+    vkDestroyFence(device, submission.fence, nullptr);
+    vkFreeCommandBuffers(device, upload_pool_, 1, &submission.cmd);
+    submission = Submission{};
 }
 
 bool Context::Upload(Buffer& dst, const void* data, VkDeviceSize size) {

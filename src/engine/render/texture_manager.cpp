@@ -16,6 +16,9 @@
 namespace pt {
 namespace {
 
+// Staging memory allowed in flight before Create waits on the oldest uploads; bounds the peak of a stage load on 8 GB machines.
+constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(256) << 20;
+
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
     int w = 0, h = 0, channels = 0;
@@ -188,6 +191,7 @@ void TextureManager::Shutdown() {
     if (!ctx_) {
         return;
     }
+    ReclaimUploads(0);
     for (vk::Image& image : images_) {
         ctx_->DestroyImage(image);
     }
@@ -313,7 +317,8 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
         }
     }
     vmaFlushAllocation(ctx_->allocator, staging.allocation, 0, total);
-    ctx_->Submit([&](VkCommandBuffer cmd) {
+    // No CPU wait: everything samples on the same queue after this submit, and the barrier below orders those reads after the copy.
+    const vk::Submission submission = ctx_->SubmitAsync([&](VkCommandBuffer cmd) {
         vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()),
@@ -322,7 +327,9 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
-    ctx_->DestroyBuffer(staging);
+    pending_upload_bytes_ += staging.size;
+    pending_uploads_.push_back({submission, staging});
+    ReclaimUploads(kMaxPendingUploadBytes);
     const uint32_t index = static_cast<uint32_t>(images_.size());
     const bool cube_slot = cube && cube_slots_.size() < kMaxCubeTextures;
     VkDescriptorImageInfo image_info{sampler_, image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -351,6 +358,22 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
     cube_.push_back(cube && index > 0 ? 1 : 0);
     by_name_[name] = index;
     return index;
+}
+
+// Frees the staging buffers of finished uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
+void TextureManager::ReclaimUploads(VkDeviceSize max_pending_bytes) {
+    while (!pending_uploads_.empty()) {
+        PendingUpload& upload = pending_uploads_.front();
+        if (pending_upload_bytes_ > max_pending_bytes) {
+            ctx_->CheckDeviceLost(vkWaitForFences(ctx_->device, 1, &upload.submission.fence, VK_TRUE, UINT64_MAX), "texture upload wait");
+        } else if (vkGetFenceStatus(ctx_->device, upload.submission.fence) == VK_NOT_READY) {
+            break;
+        }
+        pending_upload_bytes_ -= upload.staging.size;
+        ctx_->DestroyBuffer(upload.staging);
+        ctx_->Release(upload.submission);
+        pending_uploads_.pop_front();
+    }
 }
 
 uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path, bool* ok, bool raw) {
@@ -499,6 +522,7 @@ uint32_t TextureManager::PumpDecoded(const QarArchive& qar, uint32_t count) {
         ++uploaded;
     }
     std::erase_if(decode_workers_, [](std::future<void>& worker) { return worker.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+    ReclaimUploads(kMaxPendingUploadBytes);
     return uploaded;
 }
 
@@ -607,6 +631,8 @@ void TextureManager::RedirectTexture(uint32_t texture, uint32_t shown) {
         materials_dirty_ = redirects_.erase(texture) > 0 || materials_dirty_;
         return;
     }
+    // The shared material buffer is rewritten under frames still in flight, which must not see an image whose upload is pending.
+    ReclaimUploads(0);
     redirects_[texture] = shown;
     materials_dirty_ = true;
 }

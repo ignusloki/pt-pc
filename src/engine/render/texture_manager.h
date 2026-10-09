@@ -89,6 +89,12 @@ private:
     void UpdateTextureDescriptor(uint32_t index);
     void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr);
     uint32_t LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png, bool raw);
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
+
+    struct PendingUpload {
+        vk::Submission submission;
+        vk::Buffer staging;
+    };
 
     vk::Context* ctx_ = nullptr;
     VkSampler base_sampler_ = VK_NULL_HANDLE;
@@ -115,6 +121,8 @@ private:
     std::unordered_map<std::string, std::shared_future<std::shared_ptr<FtexTexture>>> decoding_;
     std::deque<std::string> decode_order_;
     std::vector<std::future<void>> decode_workers_;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     double read_ms_ = 0.0;
     double upload_ms_ = 0.0;
 };
