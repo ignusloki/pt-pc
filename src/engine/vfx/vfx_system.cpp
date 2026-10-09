@@ -1025,6 +1025,10 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         return;
     }
     const uint32_t texture = textures ? textures(m.texture) : 0;
+    // Opaque and HNM liquid output ignores texture alpha, so a pending texture would show as a black or flat-shaded shape.
+    if (texture == kPendingTexture && (m.blend == BlendMode::Opaque || m.liquid_hnm)) {
+        return;
+    }
     const bool reflects = m.kind == MaterialKind::Liquid && m.reflection > 0.0f && cubes;
     const uint32_t cube = reflects ? cubes(m.reflection_texture) : kNoTexture;
     Draw draw;

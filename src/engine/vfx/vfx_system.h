@@ -47,6 +47,8 @@ enum QuadFlag : uint32_t {
 };
 
 constexpr uint32_t kNoTexture = 0xFFFFFFFFu;
+// What a resolver returns while a texture still decodes (TextureManager::kClear): fully transparent.
+constexpr uint32_t kPendingTexture = 6;
 
 struct Quad {
     glm::vec4 corner[4];

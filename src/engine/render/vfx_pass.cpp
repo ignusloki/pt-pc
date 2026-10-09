@@ -199,7 +199,8 @@ uint32_t VfxPass::Texture(const std::string& path) {
     if (auto it = texture_cache_.find(path); it != texture_cache_.end()) {
         return it->second;
     }
-    // Not cached, so a later frame picks up the real texture; fully transparent leaves every blend mode's target untouched.
+    // Not cached, so a later frame picks up the real texture; fully transparent leaves blended targets untouched and vfx::System skips the rest.
+    static_assert(vfx::kPendingTexture == TextureManager::kClear);
     if (textures_->StillDecoding(path)) {
         return TextureManager::kClear;
     }
