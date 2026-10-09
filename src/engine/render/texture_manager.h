@@ -52,6 +52,7 @@ public:
     static constexpr uint32_t kBlack = 2;
     static constexpr uint32_t kGrey = 4;
     static constexpr uint32_t kGreySrgb = 5;
+    static constexpr uint32_t kClear = 6;
     static constexpr uint32_t kMaxCubeTextures = 64;
     static constexpr uint32_t kNoCube = 0xFFFFFFFFu;
 
@@ -62,6 +63,7 @@ public:
     uint32_t Find(const std::string& name) const;
     uint32_t LoadFox(const QarArchive& qar, const std::string& path, bool* ok = nullptr, bool raw = false);
     void DecodeAhead(const QarArchive& qar, const std::vector<std::string>& paths);
+    bool StillDecoding(const std::string& path) const;
     uint32_t PumpDecoded(const QarArchive& qar, uint32_t count);
     bool AdoptDecoded(const std::string& path, std::shared_ptr<FtexTexture> decoded);
     void DropDecoded(const std::vector<std::string>& paths);

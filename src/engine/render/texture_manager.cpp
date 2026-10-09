@@ -176,6 +176,9 @@ bool TextureManager::Init(vk::Context& ctx) {
     const TextureMip grey_mip{1, 1, grey};
     Create("builtin:grey", VK_FORMAT_R8G8B8A8_UNORM, {&grey_mip, 1});
     Create("builtin:grey_srgb", VK_FORMAT_R8G8B8A8_SRGB, {&grey_mip, 1});
+    const uint8_t clear[4] = {0, 0, 0, 0};
+    const TextureMip clear_mip{1, 1, clear};
+    Create("builtin:clear", VK_FORMAT_R8G8B8A8_UNORM, {&clear_mip, 1});
     AddMaterial(MaterialGpu{});
     FlushMaterials();
     return true;
@@ -478,6 +481,11 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
             promise.set_value(std::move(ftex));
         }
     }));
+}
+
+bool TextureManager::StillDecoding(const std::string& path) const {
+    auto it = decoding_.find(FtexStem(path));
+    return it != decoding_.end() && it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
 }
 
 bool TextureManager::AdoptDecoded(const std::string& path, std::shared_ptr<FtexTexture> decoded) {
