@@ -387,6 +387,7 @@ target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
 add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
 target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)
 
+
 # Shared installer transaction regressions; no game assets required.
 add_executable(pt_installer_update_test EXCLUDE_FROM_ALL tests/installer_update_test.cpp)
 target_include_directories(pt_installer_update_test PRIVATE installer/Native)

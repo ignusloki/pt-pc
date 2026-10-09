@@ -4,7 +4,7 @@ Updated: 9 October 2026. Branch: `codex/upstream-macos-integration`.
 
 ## Scope and priorities
 
-The integration was refreshed onto upstream `0e0e147649c05be3b7782f89f55d9e125ce7671e`. Commit `475dd12` adds reconciled Mac packaging and installation, startup microphone permission, and the supplied default Mac icon. Commit `a4aa77c` adds native platform validation workflows. The original baseline and conflict inventory remain historical evidence; the prior baseline checkpoint is preserved as `codex/upstream-baseline-20261009`.
+The foundation was validated on upstream `0e0e147649c05be3b7782f89f55d9e125ce7671e`. The local integration branch has now also merged `fa6fabbf24102e43e1de054f472e690b335a1e25`; see [the source refresh report](upstream-refresh-20261009.md) for the checks repeated on that snapshot. The detailed package and native/cross-build results below describe the earlier foundation snapshot. Commit `475dd12` adds reconciled Mac packaging and installation, startup microphone permission, and the supplied default Mac icon. Commit `a4aa77c` adds native platform validation workflows. The original baseline and conflict inventory remain historical evidence; the prior baseline checkpoint is preserved as `codex/upstream-baseline-20261009`.
 
 The current order is Mac build/packaging, startup microphone consent, default icons, Intel Mac, then Windows/Linux. MetalFX, remaining window behavior and optional Fast Walk remain follow-up integration work. Upstream's version, updater endpoint, controller behavior, enhanced-texture support and newer voice runtime are retained. The existing tested fork release remains the comparison build.
 
