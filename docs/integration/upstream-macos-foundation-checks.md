@@ -29,7 +29,7 @@ Host: Apple M1 Pro, macOS 26.6.2, Apple Clang 21, CMake/Ninja and .NET SDK 10.0.
 | Native ARM64 release game and Cocoa installer | Build passed |
 | Eleven selected CPU/installer regressions | Passed: core, platform, settings, saves, language defaults, graphics presets, voice matching, installer transactions, Unicode paths and user-data migration |
 | Voice regression fixture | 68/68 matches; models load from Unicode paths; missing model path reports an error |
-| Python archive/signing/source regressions | 15 passed |
+| Python archive/signing/source regressions | 16 passed, including deployment target and Microsoft runtime redistribution notices |
 | Synthetic extraction fixtures | Passed, including alternate P.T. regions, incomplete inner data and retail/other-game refusal |
 | Packaged voice smoke test | All three models and ARM CPU backend load; three seconds of silence yield zero detections |
 | Installer self-test | Payload hash, unpacking, signed runtime startup, rollback, Unicode paths and icon helpers passed |

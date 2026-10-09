@@ -93,8 +93,10 @@ def prepare(runtime, extractor, source, out, rid=None):
             for file in root.rglob("*"):
                 if file.is_file() and not {"bin", "obj", ".git"}.intersection(file.relative_to(root).parts):
                     z.write(file, prefix + "/" + file.relative_to(root).as_posix())
-        microsoft_packs = " -p:NetCoreTargetingPackRoot=<empty folder>" if rid.startswith("osx-") else ""
+        microsoft_packs = " -p:NetCoreTargetingPackRoot=<empty folder> -p:PrunePackageTargetingPackRoots=<SDK packs folder>" if rid.startswith("osx-") else ""
         z.writestr("BUILD.txt", f"dotnet publish PT.PkgExtract/Extractor.csproj -c Release -r {rid} --self-contained true -p:LibOrbisSource=<absolute LibOrbisPkg folder>{microsoft_packs}. Library and wrapper are LGPL-3.0-or-later; the library DLL may be replaced. Changes: net10.0/modern SDK, fixed three-file root extraction, identity validation, safe output creation and unreadable PKG diagnostics; PFSC decompression uses ReadExactly and chunked reads use the current chunk length. These read fixes are included in this corresponding source. No original game assets in this archive.\n")
+        if rid.startswith("osx-"):
+            z.writestr("RUNTIME.txt", "Use an empty folder for NetCoreTargetingPackRoot to download Microsoft's runtime packs rather than a Homebrew host runtime. Obtain the SDK packs folder before overriding it: dotnet msbuild PT.PkgExtract/Extractor.csproj -getProperty:NetCoreTargetingPackRoot. Pass that value only to PrunePackageTargetingPackRoots for .NET 10 restore metadata.\n")
     add("extractor/LibOrbisPkg-corresponding-source.zip", sourcezip.read_bytes())
     add("extractor/LICENSE-LibOrbisPkg.txt", (source / "LICENSE.txt").read_bytes())
     with (out / "payload.bin").open("wb") as f:

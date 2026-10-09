@@ -136,8 +136,13 @@ def main():
     # Its bundled runtime pack can link bottles built for this host's newer OS.
     microsoft_packs = build / "microsoft-runtime-packs"
     microsoft_packs.mkdir(exist_ok=True)
+    # .NET 10 reads pruning metadata before downloading targeting packs. Keep
+    # using the SDK's metadata without selecting its host-specific runtime.
+    sdk_packs = subprocess.check_output(["dotnet", "msbuild", str(REPO / "installer/Extractor/Extractor.csproj"),
+                                         "-getProperty:NetCoreTargetingPackRoot"], cwd=REPO, text=True).strip()
     run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
         "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
+        f"-p:PrunePackageTargetingPackRoots={sdk_packs}",
         "--artifacts-path", dotnet_artifacts, "-o", extractor)
     copy_runtime_notices(extractor, dotnet_artifacts, "osx-" + args.arch)
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",

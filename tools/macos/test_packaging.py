@@ -191,6 +191,22 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "did not process the WAV"):
                 mac_build.verify_packaged_voice(app, self.root)
 
+    def test_runtime_notices_match_the_published_runtime(self):
+        artifacts = self.root / "dotnet-artifacts"
+        (artifacts / "obj/Extractor").mkdir(parents=True)
+        packages = self.root / "packages"
+        pack = packages / "microsoft.netcore.app.runtime.osx-arm64/10.0.1"
+        pack.mkdir(parents=True)
+        for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+            (pack / name).write_text("Microsoft fixture " + name)
+        (artifacts / "obj/Extractor/project.assets.json").write_text(json.dumps({"packageFolders": {str(packages): {}}}))
+        (self.extractor / "PT.PkgExtract.runtimeconfig.json").write_text(json.dumps({"runtimeOptions": {"includedFrameworks": [{"name": "Microsoft.NETCore.App", "version": "10.0.1"}]}}))
+        mac_build.copy_runtime_notices(self.extractor, artifacts, "osx-arm64")
+        for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+            self.assertEqual((self.extractor / "licenses" / ("dotnet-" + name)).read_bytes(), (pack / name).read_bytes())
+        with self.assertRaisesRegex(RuntimeError, "runtime pack not found"):
+            mac_build.copy_runtime_notices(self.extractor, artifacts, "osx-x64")
+
     def test_entitlements_kept_when_signing_the_app(self):
         app = self.macho_bundle()
         entitlements = HERE / "game-entitlements.plist"
