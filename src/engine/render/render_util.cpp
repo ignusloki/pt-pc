@@ -225,7 +225,7 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     info.pDynamicState = &dynamic;
     info.layout = desc.layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), desc.fragment ? desc.fragment : desc.vertex)) {
+    if (!vk::Check(vkCreateGraphicsPipelines(device, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), desc.fragment ? desc.fragment : desc.vertex)) {
         pipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(device, vert, nullptr);
@@ -247,7 +247,7 @@ VkPipeline CreateComputePipeline(VkDevice device, VkPipelineLayout layout, const
     info.stage.pName = "main";
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), shader)) {
+    if (!vk::Check(vkCreateComputePipelines(device, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), shader)) {
         pipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(device, module, nullptr);

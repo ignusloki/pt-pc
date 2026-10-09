@@ -12,6 +12,9 @@ namespace pt::vk {
 const char* ResultName(VkResult result);
 bool Check(VkResult result, const char* what);
 
+// Process-wide pipeline cache, owned by Context; VK_NULL_HANDLE until the device exists.
+extern VkPipelineCache g_pipeline_cache;
+
 struct Image {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;

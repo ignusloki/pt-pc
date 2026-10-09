@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -89,6 +90,8 @@ public:
     ContextCreator* creator = nullptr;
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
+    // Loaded at Init and written back at Shutdown; empty keeps the cache in memory only.
+    std::filesystem::path pipeline_cache_path;
     bool force_vsync_off = false;
 
     bool want_ray_query = false;

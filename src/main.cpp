@@ -4499,6 +4499,9 @@ int main(int argc, char** argv) {
     ApplyGraphicsSettings(app);
     const pt::RayTracingSettings& rt = app.scene.raytracing;
     app.renderer.Context().want_ray_query = true;
+    if (!g_output_dir.empty()) {
+        app.renderer.Context().pipeline_cache_path = g_output_dir / "pipeline_cache.bin";
+    }
     pt::UpscaleHost::Get().SetStartupUpscaler(app.scene.upscale.kind);
     app.streamline_marker = StartStreamline(app);
     int result = 1;

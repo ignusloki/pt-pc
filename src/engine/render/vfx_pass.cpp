@@ -316,7 +316,7 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     info.pDynamicState = &dynamic;
     info.layout = layout_;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), "vfx pipeline")) {
+    if (!vk::Check(vkCreateGraphicsPipelines(device_, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), "vfx pipeline")) {
         pipeline = VK_NULL_HANDLE;
     }
     pipelines_.emplace_back(key, pipeline);
