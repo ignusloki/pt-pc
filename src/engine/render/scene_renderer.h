@@ -313,7 +313,7 @@ private:
     bool RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
     bool MotionBlurActive() const;
     void RecordObjectVelocity(VkCommandBuffer cmd, const ViewSetup& view);
-    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push);
+    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push, bool discard = false);
     SceneFilterContext FilterContext(VkCommandBuffer cmd, uint32_t layers) const;
     void UpdateMotion(const Camera& camera, float dt);
     void RecordDebug(VkCommandBuffer cmd);

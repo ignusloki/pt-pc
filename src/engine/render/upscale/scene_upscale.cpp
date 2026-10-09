@@ -345,7 +345,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     FrameSlot& slot = slots_[renderer_->FrameIndex()];
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 0);
     UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}, {&motion_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&motion_, false, {}}}, &depth_, true, false);
+    BeginPass(cmd, extent_, {{&motion_, false, {}, true}}, &depth_, true, false);
     gpu::PassPush push;
     push.ids = glm::uvec4(0, 0, 0, view.index);
     push.m = previous_view_projection_;
@@ -375,7 +375,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
                      {&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&opaque_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reactive_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&reactive_, false, {}}});
+    BeginPass(cmd, extent_, {{&reactive_, false, {}, true}});
     push = gpu::PassPush{};
     push.ids = glm::uvec4(0, 0, 0, view.index);
     static const glm::vec2 flashlight_reactive = [] {
@@ -429,7 +429,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
                          {&diffuse_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                          {&opaque_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                          {&handy_factor_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, extent_, {{&opaque_, false, {}}, {&handy_factor_, false, {}}});
+        BeginPass(cmd, extent_, {{&opaque_, false, {}, true}, {&handy_factor_, false, {}, true}});
         gpu::PassPush demod;
         demod.ids = glm::uvec4(view.index, handy, handy_shadow ? 1u : 0u, 0u);
         demod.f0 = glm::vec4(demod_floor, 0.0f, 0.0f, 0.0f);
@@ -532,7 +532,7 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer& cmd, float dt) {
                      {&post_hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&post_depth_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&post_object_velocity_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, output_extent_, {{&post_hdr_, false, {}}, {&post_depth_, false, {}}, {&post_object_velocity_, false, {}}});
+    BeginPass(cmd, output_extent_, {{&post_hdr_, false, {}, true}, {&post_depth_, false, {}, true}, {&post_object_velocity_, false, {}, true}});
     gpu::PassPush push;
     const bool warp = up_.warp_test && up_.warp_history && !up_.reset;
     push.ids = glm::uvec4(upscaled ? 1u : (warp ? 2u : 0u), gpu::kImgObjectVelocity,

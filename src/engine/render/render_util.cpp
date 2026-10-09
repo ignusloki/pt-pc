@@ -84,7 +84,7 @@ void BeginPass(VkCommandBuffer cmd, VkRect2D area, std::span<const ColorOutput> 
         a = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         a.imageView = c.target->image.view;
         a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        a.loadOp = c.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        a.loadOp = c.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : c.discard ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
         a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         a.clearValue.color = c.clear_value;
     }
