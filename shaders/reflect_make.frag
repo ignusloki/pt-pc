@@ -20,6 +20,13 @@ float SceneZ(vec2 uv) {
     return ViewZ(v, ReflectionFloorDepth(v, uv));
 }
 
+// The coarse march only brackets the crossing, so a point fetch is enough there; the refinement keeps the
+// jitter-stable planar reconstruction.
+float CoarseSceneZ(vec2 uv) {
+    if (g_reflection_depth_legacy) return SceneZ(uv);
+    return ViewZ(v, ImgLod(IMG_DEPTH, SMP_POINT_CLAMP, uv, 0.0).x);
+}
+
 bool Outside(vec2 uv) {
     return uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
 }
@@ -68,7 +75,7 @@ void main() {
     for (int k = 0; k < 16; ++k) {
         float s = k == 0 && pass.f1.w < 0.5 ? 1.0 : 1.0 + 25.0 * (float(k) + offset);
         vec2 suv = 0.5 * (start + s * stride) + 0.5;
-        float sz = SceneZ(suv);
+        float sz = CoarseSceneZ(suv);
         terminated = terminated || behind_previous || far_limit < sz || Outside(suv);
         bool behind = 1.0 / (inv_z_step * s + inv_z) > sz;
         if (k > 0 && behind && !terminated && hit < 0) {
