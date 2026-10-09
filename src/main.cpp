@@ -3963,6 +3963,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         ++frame;
         pt::LogSetTick(frame);
         app.scene.AdvanceTime(dt);
+        app.scene.toggles.draw_occlusion = !freecam;
         bool warmed = false;
         if (vr) {
             const bool screen = vr->ScreenMode(game);

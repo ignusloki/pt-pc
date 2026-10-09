@@ -650,7 +650,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             const char* s = std::getenv("PT_DRAW_OCCLUSION");
             return !s || std::string_view(s) != "0";
         }();
-        if (draw_occlusion && !main_occluders_.volumes.empty()) {
+        if (draw_occlusion && toggles.draw_occlusion && !main_occluders_.volumes.empty()) {
             uint32_t hidden = 0;
             for (Draw& d : draws_) {
                 if ((d.hidden_views & 1u) != 0 || d.sub->kind == gpu::kKindSky) {

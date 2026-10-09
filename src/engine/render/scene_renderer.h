@@ -130,6 +130,8 @@ struct RenderToggles {
     bool mirrors = true;
     bool tpp_atmosphere = true;
     bool occlusion = true;
+    // Occluder volumes assume the eye stays inside the level, which the free camera need not.
+    bool draw_occlusion = true;
     bool local_reflections = true;
     bool motion_blur = true;
     bool subsurface_scatter = true;
