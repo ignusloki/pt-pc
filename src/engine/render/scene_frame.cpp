@@ -1299,7 +1299,7 @@ void SceneRenderer::RecordGBuffer(VkCommandBuffer cmd, const ViewSetup& view) {
 
 void SceneRenderer::RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view) {
     UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}, {&ao_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&ao_[0], false, {}}});
+    BeginPass(cmd, extent_, {{&ao_[0], false, {}, true}});
     gpu::PassPush push;
     push.ids = glm::uvec4(view.index, 0, 0, 0);
     push.f0 = glm::vec4(3.0f, 1.0f, 0.0f, 0.0f);
@@ -1308,7 +1308,7 @@ void SceneRenderer::RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view) 
     Fullscreen(cmd, occlusion_, push);
     vkCmdEndRendering(cmd);
     UseTargets(cmd, {{&ao_[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&ao_[1], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&ao_[1], false, {}}});
+    BeginPass(cmd, extent_, {{&ao_[1], false, {}, true}});
     push.f0 = glm::vec4(0.45f, 0.0f, 0.0f, 0.0f);
     Fullscreen(cmd, occlusion_blur_, push);
     vkCmdEndRendering(cmd);
@@ -1913,7 +1913,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     }
     if (rt_reflections_) {
         UseTargets(cmd, {{&refmap_color_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}}, {&refmap_color_, false, {}}});
+        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}, true}, {&refmap_color_, false, {}, true}});
         static const uint32_t debug = [] {
             const char* value = std::getenv("PT_RT_REFLECTION_DEBUG");
             return value ? (std::atoi(value) == 2 ? 2u : 1u) : 0u;
@@ -1936,7 +1936,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
         push.ids = glm::uvec4(view.index, 0, 0, 0);
         push.m = glm::mat4(1.0f);
     } else {
-        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}}});
+        BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}, true}});
         Fullscreen(cmd, reflect_make_, push);
         vkCmdEndRendering(cmd);
     }
@@ -1965,7 +1965,7 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     UseTargets(cmd, {{&hdr_copy_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&material_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&hdr_, false, {}}});
+    BeginPass(cmd, extent_, {{&hdr_, false, {}, true}});
     if (rt_reflections_) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, reflect_blend_rt_);
         const VkDescriptorSet rt_set = rt_->Set(renderer_->FrameIndex());
@@ -1993,7 +1993,7 @@ void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetu
                      {&material_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reflect_layer_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&reflect_offset_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&reflect_layer_, false, {}}, {&reflect_offset_, false, {}}});
+    BeginPass(cmd, extent_, {{&reflect_layer_, false, {}, true}, {&reflect_offset_, false, {}, true}});
     push.m = previous_view_projection_;
     if (rt_reflections_) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, reflect_layer_rt_);
@@ -2011,7 +2011,7 @@ void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetu
                      {&reflect_history_[previous], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reflect_history_[current], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&hdr_, false, {}}, {&reflect_history_[current], false, {}}});
+    BeginPass(cmd, extent_, {{&hdr_, false, {}, true}, {&reflect_history_[current], false, {}, true}});
     gpu::PassPush temporal;
     temporal.ids = glm::uvec4(view.index, valid_history ? 1u : 0u, gpu::kImgReflectHistoryA + previous, 0u);
     static const bool pre_upscale = std::getenv("PT_REFLECT_PRE_UPSCALE") != nullptr;

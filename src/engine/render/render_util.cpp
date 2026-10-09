@@ -9,11 +9,24 @@ namespace pt {
 
 bool g_checkpoints = false;
 
+namespace {
+
+bool ReadOnlyLayout(VkImageLayout layout) {
+    return layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL ||
+           layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+}
+
+}
+
 void UseTargets(VkCommandBuffer cmd, std::initializer_list<TargetUse> uses) {
     VkImageMemoryBarrier2 barriers[16];
     uint32_t count = 0;
     for (const TargetUse& use : uses) {
         if (!use.target || !use.target->Valid() || count == std::size(barriers)) {
+            continue;
+        }
+        // Read to read needs no barrier: the transition into this layout already made the image's last write visible to later commands.
+        if (use.target->layout == use.layout && ReadOnlyLayout(use.layout)) {
             continue;
         }
         VkImageMemoryBarrier2& b = barriers[count++];
@@ -71,7 +84,7 @@ void BeginPass(VkCommandBuffer cmd, VkRect2D area, std::span<const ColorOutput> 
         a = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         a.imageView = c.target->image.view;
         a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        a.loadOp = c.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        a.loadOp = c.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : c.discard ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
         a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         a.clearValue.color = c.clear_value;
     }
@@ -225,7 +238,7 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     info.pDynamicState = &dynamic;
     info.layout = desc.layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), desc.fragment ? desc.fragment : desc.vertex)) {
+    if (!vk::Check(vkCreateGraphicsPipelines(device, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), desc.fragment ? desc.fragment : desc.vertex)) {
         pipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(device, vert, nullptr);
@@ -247,7 +260,7 @@ VkPipeline CreateComputePipeline(VkDevice device, VkPipelineLayout layout, const
     info.stage.pName = "main";
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), shader)) {
+    if (!vk::Check(vkCreateComputePipelines(device, vk::g_pipeline_cache, 1, &info, nullptr, &pipeline), shader)) {
         pipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(device, module, nullptr);

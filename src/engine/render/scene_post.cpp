@@ -90,7 +90,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     const bool bloom = toggles.bloom && lighting.valid && std::abs(exposure.bloom_size) >= 1.0e-5f;
     if (bloom) {
         UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&bloom_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}}});
+        BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}, true}});
         push.f0 = BloomPolynomial(exposure.bloom_extraction);
         push.f1 = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         Fullscreen(cmd, bright_, push);
@@ -98,7 +98,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
         static const uint32_t kSlots[3] = {gpu::kImgBloomA, gpu::kImgBloomB, gpu::kImgBloomSum};
         auto blur = [&](int src, int dst, VkPipeline pipeline, const glm::vec4& f0, bool clear) {
             UseTargets(cmd, {{&bloom_[src], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&bloom_[dst], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-            BeginPass(cmd, bloom_[dst].Extent(), {{&bloom_[dst], clear, {}}});
+            BeginPass(cmd, bloom_[dst].Extent(), {{&bloom_[dst], clear, {}, pipeline != bloom_add_}});
             push.ids.x = kSlots[src];
             push.f0 = f0;
             Fullscreen(cmd, pipeline, push);
@@ -124,7 +124,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
                 UseTargets(cmd, {{&bloom_[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                  {&bloom_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                                  {&bloom_[2], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-                BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}}, {&bloom_[2], i == 0, {}}});
+                BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}, true}, {&bloom_[2], i == 0, {}}});
                 push.ids.x = kSlots[1];
                 push.f0 = kawase;
                 push.f1 = glm::vec4(weight / static_cast<float>(passes), 0.0f, 0.0f, 0.0f);
@@ -148,7 +148,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
 
     int current = 0;
     UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&ldr_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, output_extent_, {{&ldr_[0], false, {}}});
+    BeginPass(cmd, output_extent_, {{&ldr_[0], false, {}, true}});
     push.ids.x = 0;
     const float lut_blend = std::clamp(screen.lut_blend, 0.0f, 1.0f);
     push.f0 = glm::vec4(bloom ? 1.0f : 0.0f, lut_blend, lighting.valid ? 1.0f : renderer_->exposure, 0.0f);
@@ -166,7 +166,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     auto run = [&](VkPipeline pipeline, const gpu::PassPush& p) {
         RenderTarget& dst = ldr_[1 - current];
         UseTargets(cmd, {{&ldr_[current], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, output_extent_, {{&dst, false, {}}});
+        BeginPass(cmd, output_extent_, {{&dst, false, {}, true}});
         Fullscreen(cmd, pipeline, p);
         vkCmdEndRendering(cmd);
         UseTargets(cmd, {{&dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
@@ -221,7 +221,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     output.image = renderer_->SceneColor();
     output.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     UseTargets(cmd, {{&output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-    BeginPass(cmd, output_extent_, {{&output, false, {}}});
+    BeginPass(cmd, output_extent_, {{&output, false, {}, true}});
     push.ids = glm::uvec4(ldr_index(current), 0, 0, post_view_);
     const bool grain = toggles.film_grain && screen.film_grain && lighting.valid;
     const bool distortion = toggles.distortion && screen.screen_distortion && lighting.valid;
@@ -256,9 +256,9 @@ SceneFilterContext SceneRenderer::FilterContext(VkCommandBuffer cmd, uint32_t la
     return context;
 }
 
-void SceneRenderer::PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push) {
+void SceneRenderer::PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push, bool discard) {
     UseTargets(cmd, {{&target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, target.Extent(), {{&target, false, {}}});
+    BeginPass(cmd, target.Extent(), {{&target, false, {}, discard}});
     Fullscreen(cmd, pipeline, push);
     vkCmdEndRendering(cmd);
     UseTargets(cmd, {{&target, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
@@ -288,13 +288,13 @@ bool SceneRenderer::RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings
     push = gpu::PassPush{};
     push.ids = glm::uvec4(scene, 0, 0, post_view_);
     push.f2 = rt(dof_half_);
-    PostPass(cmd, dof_half_, dof_down_, push);
+    PostPass(cmd, dof_half_, dof_down_, push, true);
     push.ids = glm::uvec4(gpu::kImgDofHalf, 0, 1, post_view_);
     push.f2 = rt(dof_quarter_[0]);
-    PostPass(cmd, dof_quarter_[0], dof_down_, push);
+    PostPass(cmd, dof_quarter_[0], dof_down_, push, true);
     push.ids = glm::uvec4(gpu::kImgDofQuarterA, 0, 1, post_view_);
     push.f2 = rt(dof_eighth_[0]);
-    PostPass(cmd, dof_eighth_[0], dof_down_, push);
+    PostPass(cmd, dof_eighth_[0], dof_down_, push, true);
 
     const float far_size = std::max(4.0f, std::min(s, 10.0f));
     const float far_span = std::max(0.0001f, far_size - 4.0f);
@@ -302,9 +302,9 @@ bool SceneRenderer::RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings
     push.f1 = glm::vec4(far_size * 0.125f, 4.0f / far_size, std::max(1.0f, far_size / far_span), 0.0f);
     push.f2 = rt(dof_quarter_[0]);
     push.ids = glm::uvec4(gpu::kImgDofQuarterA, scene, 0, post_view_);
-    PostPass(cmd, dof_quarter_[1], dof_blur_, push);
+    PostPass(cmd, dof_quarter_[1], dof_blur_, push, true);
     push.ids = glm::uvec4(gpu::kImgDofQuarterB, scene, 0, post_view_);
-    PostPass(cmd, dof_quarter_[0], dof_blur_, push);
+    PostPass(cmd, dof_quarter_[0], dof_blur_, push, true);
 
     if ((screen.dof_flags & 1u) == 0) {
         const float near_span = std::max(0.0001f, near_limit - 8.0f);
@@ -312,13 +312,13 @@ bool SceneRenderer::RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings
         push.f1 = glm::vec4(1.0f, 8.0f / near_limit, std::max(1.0f, near_limit / near_span), 0.0f);
         push.f2 = rt(dof_eighth_[0]);
         push.ids = glm::uvec4(gpu::kImgDofEighthA, scene, 1, post_view_);
-        PostPass(cmd, dof_eighth_[1], dof_blur_, push);
+        PostPass(cmd, dof_eighth_[1], dof_blur_, push, true);
         push.ids = glm::uvec4(gpu::kImgDofEighthB, scene, 1, post_view_);
-        PostPass(cmd, dof_eighth_[0], dof_blur_, push);
+        PostPass(cmd, dof_eighth_[0], dof_blur_, push, true);
         push = gpu::PassPush{};
         push.ids = glm::uvec4(gpu::kImgDofEighthA, 0, 2, post_view_);
         push.f2 = rt(dof_quarter_[1]);
-        PostPass(cmd, dof_quarter_[1], dof_down_, push);
+        PostPass(cmd, dof_quarter_[1], dof_down_, push, true);
     }
 
     const float blend_size = std::min(s, 10.0f);
@@ -328,7 +328,7 @@ bool SceneRenderer::RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings
     push.f0 = glm::vec4(blend_size > 4.0f ? blend_size * 0.25f : 1.0f, (screen.dof_flags & 1u) ? 0.0f : near_limit * 0.125f, s < 4.0f ? s * 0.25f : 1.0f,
                         near_limit >= 8.0f ? 1.0f : near_amount);
     push.f2 = rt(ldr_[1 - current]);
-    PostPass(cmd, ldr_[1 - current], dof_blend_, push);
+    PostPass(cmd, ldr_[1 - current], dof_blend_, push, true);
     current = 1 - current;
     return true;
 }
@@ -386,24 +386,24 @@ bool SceneRenderer::RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& 
     push.f0 = glm::vec4(1920.0f / 128.0f, 1080.0f / 128.0f, 0.0f, 0.0f);
     push.m = previous_view_projection_;
     UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-    PostPass(cmd, velocity_, mb_velocity_, push);
+    PostPass(cmd, velocity_, mb_velocity_, push, true);
     push = gpu::PassPush{};
     for (uint32_t i = 0; i < 5; ++i) {
         const VkExtent2D e = mb_tile_[i].Extent();
         push.ids = glm::uvec4(i == 0 ? static_cast<uint32_t>(gpu::kImgVelocity) : gpu::kImgMbTile + i - 1, 0, 0, post_view_);
         push.f0 = glm::vec4(1.0f / e.width, 1.0f / e.height, 0.0f, 0.0f);
-        PostPass(cmd, mb_tile_[i], mb_tile_pipeline_, push);
+        PostPass(cmd, mb_tile_[i], mb_tile_pipeline_, push, true);
     }
     push.ids = glm::uvec4(gpu::kImgMbTile + 4, 0, 1, post_view_);
-    PostPass(cmd, mb_neighbour_, mb_tile_pipeline_, push);
+    PostPass(cmd, mb_neighbour_, mb_tile_pipeline_, push, true);
     push.ids = glm::uvec4(gpu::kImgVelocity, gpu::kImgMbNeighbour, 0, post_view_);
     push.f0 = glm::vec4(0.5f, 0.5f, 1.0f, scale);
-    PostPass(cmd, mb_bake_, mb_bake_pipeline_, push);
+    PostPass(cmd, mb_bake_, mb_bake_pipeline_, push, true);
     push.ids = glm::uvec4(current == 0 ? gpu::kImgLdrA : gpu::kImgLdrB, gpu::kImgMbBake, 0, post_view_);
-    PostPass(cmd, mb_blur_[0], mb_mcguire_, push);
+    PostPass(cmd, mb_blur_[0], mb_mcguire_, push, true);
     push.ids = glm::uvec4(gpu::kImgMbBlurA, gpu::kImgMbBake, 0, post_view_);
     push.f0 = glm::vec4(0.5f, 0.5f, 0.16666667f, scale);
-    PostPass(cmd, mb_blur_[1], mb_mcguire_, push);
+    PostPass(cmd, mb_blur_[1], mb_mcguire_, push, true);
     push.ids = glm::uvec4(gpu::kImgMbBlurB, 0, 0, post_view_);
     push.f0 = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
     PostPass(cmd, ldr_[current], mb_composite_, push);

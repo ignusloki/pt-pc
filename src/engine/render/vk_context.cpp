@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "engine/core/crash_report.h"
@@ -33,6 +35,80 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
         LogWarn("vulkan: {}{}{}", data->pMessage, *label ? " [pass " : "", *label ? std::string(label) + "]" : std::string());
     }
     return VK_FALSE;
+}
+
+VkPipelineCache CreatePipelineCache(VkDevice device, const VkPhysicalDeviceProperties& properties, const std::filesystem::path& path) {
+    std::vector<char> data;
+    if (!path.empty()) {
+        std::ifstream file(path, std::ios::binary);
+        if (file) {
+            data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+            if (file.bad()) {
+                data.clear();
+            }
+        }
+    }
+    // Drop data written by another driver or GPU before the driver sees it; a short or unreadable file reads as no header.
+    VkPipelineCacheHeaderVersionOne header{};
+    if (data.size() >= sizeof(header)) {
+        std::memcpy(&header, data.data(), sizeof(header));
+    }
+    if (header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE || header.vendorID != properties.vendorID ||
+        header.deviceID != properties.deviceID || std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+        data.clear();
+    }
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    info.initialDataSize = data.size();
+    info.pInitialData = data.empty() ? nullptr : data.data();
+    VkPipelineCache cache = VK_NULL_HANDLE;
+    if (vkCreatePipelineCache(device, &info, nullptr, &cache) != VK_SUCCESS) {
+        cache = VK_NULL_HANDLE;
+        if (data.empty()) {
+            LogWarn("vulkan: no pipeline cache");
+            return VK_NULL_HANDLE;
+        }
+        data.clear();
+        info.initialDataSize = 0;
+        info.pInitialData = nullptr;
+        if (!Check(vkCreatePipelineCache(device, &info, nullptr, &cache), "vkCreatePipelineCache")) {
+            return VK_NULL_HANDLE;
+        }
+    }
+    LogInfo("vulkan: pipeline cache {} ({} bytes loaded)", path.empty() ? "in memory" : "on disk", data.size());
+    return cache;
+}
+
+void SavePipelineCache(VkDevice device, VkPipelineCache cache, const std::filesystem::path& path) {
+    if (!cache || path.empty()) {
+        return;
+    }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || size == 0) {
+        return;
+    }
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) {
+        return;
+    }
+    // Write beside the old file and swap it in, so a crash mid-write never leaves a truncated cache behind.
+    std::filesystem::path temp = path;
+    temp += ".tmp";
+    std::error_code error;
+    {
+        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+        file.write(data.data(), static_cast<std::streamsize>(size));
+        file.close();
+        if (!file) {
+            LogWarn("vulkan: could not write the pipeline cache");
+            std::filesystem::remove(temp, error);
+            return;
+        }
+    }
+    std::filesystem::rename(temp, path, error);
+    if (error) {
+        LogWarn("vulkan: could not save the pipeline cache: {}", error.message());
+        std::filesystem::remove(temp, error);
+    }
 }
 
 constexpr const char* kRayQueryExtensions[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
@@ -418,6 +494,7 @@ bool Context::Init(SDL_Window* window, bool validation) {
     if (!Check(vkCreateCommandPool(device, &pool_info, nullptr, &upload_pool_), "vkCreateCommandPool")) {
         return false;
     }
+    g_pipeline_cache = CreatePipelineCache(device, properties, pipeline_cache_path);
     if (hooks) {
         hooks->DeviceCreated(*this);
     }
@@ -428,6 +505,11 @@ void Context::Shutdown() {
     if (device) {
         vkDeviceWaitIdle(device);
         DestroySwapchain();
+        if (g_pipeline_cache) {
+            SavePipelineCache(device, g_pipeline_cache, pipeline_cache_path);
+            vkDestroyPipelineCache(device, g_pipeline_cache, nullptr);
+            g_pipeline_cache = VK_NULL_HANDLE;
+        }
         if (upload_pool_) {
             vkDestroyCommandPool(device, upload_pool_, nullptr);
         }
