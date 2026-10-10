@@ -63,6 +63,12 @@ jobs:
           mv "dist/pt-port-${{ steps.version.outputs.version }}-setup-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
           lipo -archs "dist/P.T. PC Port.app/Contents/MacOS/pt"
 
+      # the installer: a disk image with the app and a link to Applications to drag it onto (the zip is the portable app)
+      - name: Disk image
+        run: |
+          mkdir -p dmg && cp -R "dist/P.T. PC Port.app" dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "P.T. PC Port" -srcfolder dmg -fs HFS+ -format UDZO "dist/P.T.PC.Port-macOS-${{ matrix.arch }}.dmg"
+
       - uses: actions/upload-artifact@v7
         with:
           name: P.T.PC.Port-macOS-${{ matrix.arch }}-${{ steps.version.outputs.version }}
@@ -71,6 +77,7 @@ jobs:
             dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
             dist/installer-self-test.txt
             dist/voice-smoke.log
+            dist/P.T.PC.Port-macOS-${{ matrix.arch }}.dmg
 
   release:
     if: github.event_name == 'release'
@@ -88,4 +95,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-macOS-arm64.zip zips/P.T.PC.Port-macOS-x64.zip zips/P.T.PC.Port.Setup-macOS-arm64.zip zips/P.T.PC.Port.Setup-macOS-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-macOS-arm64.zip zips/P.T.PC.Port-macOS-x64.zip zips/P.T.PC.Port.Setup-macOS-arm64.zip zips/P.T.PC.Port.Setup-macOS-x64.zip zips/P.T.PC.Port-macOS-arm64.dmg zips/P.T.PC.Port-macOS-x64.dmg --clobber --repo "$GITHUB_REPOSITORY"

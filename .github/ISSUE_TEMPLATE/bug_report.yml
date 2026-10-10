@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the port does not work or differs from the PS4 original. A pt.log is required.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues without a `pt.log` are closed. Suggestions and questions belong on Discord.
+
+        **Where is pt.log?** In the game's installation folder: `data\pt.log` (Windows), `data/pt.log` next to the game (Linux portable),
+        or `~/Library/Application Support/pt-port/pt/pt.log` (macOS). It is rewritten at every start, so attach the one from the run
+        where the problem happened (quit the game first). A crash also leaves a `.dmp` file in the same folder; attach it too.
+  - type: input
+    id: version
+    attributes:
+      label: Port version
+      description: Shown at the bottom of the PC settings page and in the first lines of pt.log.
+      placeholder: "1.0.2"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: For a visual difference from the PS4, a screenshot or video of both helps the most.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The loop, where you stand, what you do. "Every time" or "once" matters.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: pt.log
+      description: Drag the pt.log file into this box (GitHub uploads it and puts its link here), or paste its contents. Required.
+      placeholder: Drop pt.log here
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: GPU and OS
+      placeholder: "RTX 3060, Windows 11"
+    validations:
+      required: true
