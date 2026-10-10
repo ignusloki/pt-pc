@@ -29,7 +29,7 @@ bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
            a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && Near(a.audio.volume, b.audio.volume) &&
-           a.voice.device == b.voice.device && a.voice.key == b.voice.key && a.upscaling.upscaler == b.upscaling.upscaler &&
+           a.voice.microphone_enabled == b.voice.microphone_enabled && a.voice.device == b.voice.device && a.voice.key == b.voice.key && a.upscaling.upscaler == b.upscaling.upscaler &&
            a.upscaling.quality == b.upscaling.quality && Near(a.upscaling.scale, b.upscaling.scale) &&
            Near(a.upscaling.sharpness, b.upscaling.sharpness) && a.upscaling.dlss_model == b.upscaling.dlss_model &&
            a.upscaling.frame_generation == b.upscaling.frame_generation &&
@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
         {"camera.third_person", [](auto& s) { s.camera.third_person = true; }},
         {"extras.fast_walk", [](auto& s) { s.extras.fast_walk = true; }},
         {"audio.volume", [](auto& s) { s.audio.volume = 1.7f; }},
+        {"voice.microphone_enabled", [](auto& s) { s.voice.microphone_enabled = false; }},
         {"voice.device", [](auto& s) { s.voice.device = "Microphone (USB Audio Device)"; }},
         {"voice.key", [](auto& s) { s.voice.key = "J"; }},
         {"upscaling.upscaler", [](auto& s) { s.upscaling.upscaler = "dlss"; }},
@@ -150,6 +151,12 @@ int main(int argc, char** argv) {
     Check("fast walk off by default", !pt::AppSettings{}.extras.fast_walk);
     Check("older settings keep fast walk off", !LoadText(ini, "[extras]\nspeedrun = 1\n").extras.fast_walk);
     Check("disabled fast walk round trip", !RoundTrip(ini, {}).extras.fast_walk);
+    Check("microphone on by default", pt::AppSettings{}.voice.microphone_enabled);
+    Check("older settings keep microphone on", LoadText(ini, "[voice]\ndevice = \"USB mic\"\nenabled = 0\n").voice.microphone_enabled);
+    const auto mic_off = LoadText(ini, "[voice]\nmicrophone_enabled = 0\nkey = \"J\"\n");
+    Check("microphone off retains optional trigger", !mic_off.voice.microphone_enabled && mic_off.voice.key == "J");
+    Check("microphone off persists", !RoundTrip(ini, mic_off).voice.microphone_enabled);
+    Check("microphone on persists", RoundTrip(ini, {}).voice.microphone_enabled);
     std::filesystem::remove(ini);
     std::printf("%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

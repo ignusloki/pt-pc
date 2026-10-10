@@ -21,6 +21,7 @@
 #include "engine/core/crash_report.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/pipeline_cache_store.h"
+#include "engine/render/render_viewport.h"
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale.h"
@@ -628,11 +629,8 @@ void Renderer::EndFrame(bool draw_ui) {
         }
         vkCmdBeginRendering(cmd, &rendering);
         if (fitted) {
-            const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
-                                         static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
-            const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
-            Composite(cmd, final_set_, 1.0f, shown, ctx_.swapchain.format,
-                      {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
+            const VkRect2D viewport = FitRenderViewport(extent, window_extent);
+            Composite(cmd, final_set_, 1.0f, viewport.extent, ctx_.swapchain.format, viewport.offset);
         } else {
             Composite(cmd, final_set_, 1.0f, extent, window_ ? ctx_.swapchain.format : output_.format);
         }

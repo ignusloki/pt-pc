@@ -46,8 +46,9 @@ struct AppSettings {
     struct Network {
         bool check_updates = true;
     } network;
-    // voice recognition is always on (an older pt.ini's voice.enabled is ignored)
     struct Voice {
+        // Controls microphone input; the optional keyboard/controller trigger remains independent.
+        bool microphone_enabled = true;
         std::string device;
         std::string key;
     } voice;

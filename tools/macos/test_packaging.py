@@ -67,6 +67,8 @@ class PackagingTests(unittest.TestCase):
             info = plistlib.loads(z.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleExecutable"], "pt")
             self.assertIn("NSMicrophoneUsageDescription", info)
+            self.assertEqual(info["CFBundleIconFile"], mac.ICON_FILE)
+            self.assertEqual(z.read(prefix + "Resources/" + mac.ICON_FILE), mac.ICON_SOURCE.read_bytes())
             self.assertTrue((z.getinfo(prefix + "MacOS/pt").external_attr >> 16) & 0o111)
         result, output = self.payload(archive)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -91,6 +93,7 @@ class PackagingTests(unittest.TestCase):
             files[name] = raw
         self.assertEqual(offset, len(data))
         self.assertEqual(files["P.T..app/Contents/MacOS/pt"], self.magic + b"synthetic executable")
+        self.assertEqual(files["P.T..app/Contents/Resources/" + mac.ICON_FILE], mac.ICON_SOURCE.read_bytes())
         self.assertIn("extractor/PT.PkgExtract", files)
         sourcezip = output / "extractor-source.zip"
         with zipfile.ZipFile(sourcezip) as z:

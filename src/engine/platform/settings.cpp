@@ -113,6 +113,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "audio.surround", out.audio.surround);
     Read(v, "audio.controller_speaker", out.audio.controller_speaker);
     Read(v, "audio.controller_speaker_volume", out.audio.controller_speaker_volume);
+    Read(v, "voice.microphone_enabled", out.voice.microphone_enabled);
     Read(v, "voice.device", out.voice.device);
     Read(v, "voice.key", out.voice.key);
     Read(v, "upscaling.upscaler", out.upscaling.upscaler);
@@ -260,6 +261,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "check_updates = " << (s.network.check_updates ? 1 : 0) << "\n\n"
          << "[voice]\n"
          << "; the microphone listens only where the original game does (f160)\n"
+         << "; 0 disables microphone input and its test; the optional key/controller trigger still works\n"
+         << "microphone_enabled = " << (s.voice.microphone_enabled ? 1 : 0) << "\n"
          << "; part of the recording device name, empty for the system default\n"
          << "device = \"" << s.voice.device << "\"\n"
          << "; optional key name (SDL scancode name, e.g. J) that stands in for saying the word, empty to disable\n"

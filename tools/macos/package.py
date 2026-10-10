@@ -13,6 +13,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 APP_NAME = "P.T..app"
 SETUP_NAME = "P.T. Mac Setup.app"
+ICON_FILE = "pt.icns"
+ICON_SOURCE = REPO / "assets/macos" / ICON_FILE
 MODELS = ("ggml-base.en-q5_1.bin", "ggml-small.en-q5_1.bin", "ggml-silero-v6.2.0.bin")
 VOICE_LIBS = ("libwhisper.dylib", "libggml.dylib", "libggml-base.dylib")
 MACH_MAGICS = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
@@ -28,15 +30,18 @@ def info(name, executable, identifier, version, microphone=False):
                 CFBundleIdentifier=identifier, CFBundlePackageType="APPL",
                 CFBundleShortVersionString=version.split("-")[0], CFBundleVersion=version.split("-")[0],
                 LSMinimumSystemVersion="14.0", NSHighResolutionCapable=True,
-                SDL_FILESYSTEM_BASE_DIR_TYPE="resource")
+                SDL_FILESYSTEM_BASE_DIR_TYPE="resource", CFBundleIconFile=ICON_FILE)
     if microphone:
-        data["NSMicrophoneUsageDescription"] = "P.T. listens for your voice during the final puzzle."
+        data["NSMicrophoneUsageDescription"] = "P.T. uses your microphone for its voice puzzle and microphone test. You can turn microphone input off in PC Settings."
     return data
 
 
 def make_bundle(app, metadata):
+    if not ICON_SOURCE.is_file():
+        raise RuntimeError(f"Missing Mac app icon: {ICON_SOURCE}")
     for folder in ("MacOS", "Resources", "Frameworks"):
         (app / "Contents" / folder).mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ICON_SOURCE, app / "Contents/Resources" / ICON_FILE)
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(metadata))
     (app / "Contents/PkgInfo").write_bytes(b"APPL????")
 

@@ -136,7 +136,7 @@ def main():
             "NSHighResolutionCapable": True,
             "NSSupportsAutomaticGraphicsSwitching": True,
             # the one part of the game that listens for a spoken word (README, What you need)
-            "NSMicrophoneUsageDescription": "P.T. listens for one spoken word in one part of the game, as on the PS4.",
+            "NSMicrophoneUsageDescription": "P.T. uses your microphone for its voice puzzle and microphone test. You can turn microphone input off in PC Settings.",
         }, f)
     (contents / "PkgInfo").write_text("APPL????")
     # the loop browser's previews are shot by the bundled game itself (tools/package.py does the same for Windows)

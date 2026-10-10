@@ -41,9 +41,13 @@ endif()
 find_library(PT_COCOA_FRAMEWORK Cocoa REQUIRED)
 find_library(PT_METAL_FRAMEWORK Metal REQUIRED)
 find_library(PT_METALFX_FRAMEWORK MetalFX REQUIRED)
-target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm)
-set_source_files_properties(src/engine/render/upscale/metalfx_backend.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
-target_link_libraries(pt_engine PRIVATE ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK})
+find_library(PT_AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
+find_library(PT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm src/engine/platform/macos_permissions.mm)
+set_source_files_properties(src/engine/render/upscale/metalfx_backend.mm src/engine/platform/macos_permissions.mm
+  PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+target_link_libraries(pt_engine PRIVATE ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK}
+  ${PT_AVFOUNDATION_FRAMEWORK} ${PT_FOUNDATION_FRAMEWORK})
 foreach(game pt pt_release)
   set_target_properties(${game} PROPERTIES BUILD_RPATH "@executable_path;@executable_path/../Frameworks")
   add_custom_command(TARGET ${game} POST_BUILD

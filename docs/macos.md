@@ -81,6 +81,12 @@ The filename alone does not establish that a package contains usable game data.
 The installer copies game archives into a native Mac runtime; it does not convert
 the PS4 executable. No game files are included in the app or setup distribution.
 
+Both the game and native Setup use the supplied P.T. artwork as their default
+Mac icon. The original image and its icon container are in `assets/macos/`;
+packaging copies `pt.icns` into each bundle and sets `CFBundleIconFile` before
+signing. Earlier preview packages without that resource show the generic app
+icon and need a rebuilt package to display the artwork.
+
 If a PKG's game-data image cannot be read, the installer reports an incomplete,
 damaged or unsupported package before creating extracted game files. A full-size
 download can still be incomplete: the tested SuperPSX copy had valid metadata but
@@ -207,7 +213,23 @@ retaining the tested MetalFX synchronization, window-transition fixes and option
 Fast Walk. Upstream has not yet published 1.0.2. The Mac version remains 1.0.3
 until a new release is explicitly prepared; preview 4 is the existing release.
 Microphone access has a usage description in the game's Info.plist and an
-audio-input entitlement for the hardened runtime. Voice libraries and all three
+audio-input entitlement for the hardened runtime. The packaged game requests
+permission at startup when microphone input is On, without opening a recording
+stream. The request is asynchronous, so denying access does not block gameplay.
+macOS remembers the decision; denied access can be changed in System Settings >
+Privacy & Security > Microphone. Headless checks, viewers and file-based voice
+tests do not request permission.
+
+PC Settings > Sound > Microphone input switches capture On or Off immediately
+and saves the choice as `[voice] microphone_enabled = 1` or `0`. On is the default
+for new and existing settings files. Off also disables device selection and the
+microphone test, and skips the permission request at the next launch. The optional
+keyboard/controller microphone trigger remains independent of this choice.
+Turning input On requests permission if macOS has not already recorded a decision.
+The actual microphone still opens only during the voice puzzle or its test.
+See [Apple's microphone authorization documentation](https://developer.apple.com/documentation/bundleresources/requesting-authorization-for-media-capture-on-macos).
+
+Voice libraries and all three
 models are signed/staged under `Contents/Resources/voice`, matching upstream's
 loader. Apple M1, M2/M3 and M4 CPU modules are included and scored at runtime;
 the recognizer uses upstream's rescue model, diagnostics and configurable thread
