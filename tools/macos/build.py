@@ -75,7 +75,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--liborbis", type=Path, help="Existing upstream source; a pinned copy is downloaded when omitted")
     p.add_argument("--out", type=Path, help="New output directory (defaults to a timestamp under dist/macos)")
-    p.add_argument("--version", default="1.0.3")
+    p.add_argument("--version", default="1.0.4")
     p.add_argument("--build", type=Path, help="Optional isolated build directory")
     p.add_argument("--cmake-init", type=Path, help="Initial CMake cache")
     p.add_argument("--cmake-arg", action="append", default=[], help="Extra CMake option")

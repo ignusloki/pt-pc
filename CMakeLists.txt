@@ -39,7 +39,7 @@ file(GLOB_RECURSE PT_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp src/game/*.h 
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.3")
+set(PT_VERSION "1.0.4")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()

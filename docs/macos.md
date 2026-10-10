@@ -4,8 +4,16 @@ This is an experimental native arm64 port for M-series Macs running macOS 14 or 
 The runtime, Cocoa installer and packaging tools have been built and tested
 on an M1 Pro running macOS 26.6.2, including the full scripted walkthrough.
 The preview 4 test build has also passed the user's manual gameplay checks.
-Microphone and physical controller input, and other Mac/OS combinations still
-need further validation.
+The preview 5 fixes passed manual fullscreen mouse alignment checks and a live
+microphone test on this Mac. Physical controller input and other Mac/OS
+combinations still need further validation. The native installer and its runtime
+are arm64-only; an Intel installer has not been built or validated.
+
+Apple Silicon preview 5 uses version 1.0.4. It incorporates upstream's 1.0.2
+updates, fixes fullscreen menu mouse alignment, installs the supplied icon in
+both game and Setup, requests microphone permission before gameplay, and adds a
+saved PC settings > Sound > Microphone input switch. See the
+[preview 5 release notes](releases/macos-arm64-preview-5.md).
 
 Apple Silicon preview 4 uses version 1.0.3 and adds Apple MetalFX temporal
 upscaling from [ginnfx's PR #1](https://github.com/ignusloki/pt-pc/pull/1), together
@@ -210,8 +218,8 @@ Ray queries remain dependent on capabilities actually
 reported by MoltenVK and the GPU; they are not part of Mac acceptance testing yet.
 The Mac branch now includes upstream's 1.0.2 source update at `fa6fabb`, while
 retaining the tested MetalFX synchronization, window-transition fixes and optional
-Fast Walk. Upstream has not yet published 1.0.2. The Mac version remains 1.0.3
-until a new release is explicitly prepared; preview 4 is the existing release.
+Fast Walk. Version 1.0.4 prepares preview 5 with the updates and fixes described
+above. Preview 4 remains the published release until preview 5 is published.
 Microphone access has a usage description in the game's Info.plist and an
 audio-input entitlement for the hardened runtime. The packaged game requests
 permission at startup when microphone input is On, without opening a recording
