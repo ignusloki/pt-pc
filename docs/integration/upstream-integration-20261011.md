@@ -61,14 +61,9 @@ Final binaries are built from `ac93ac92f317cc2ab7415f065409b89c770b2158`. Later 
 | Apple silicon | `pt-port-1.0.2-setup-macos-arm64.zip` | 313,249,118 bytes | `5377145f220a93d203757d78259570c7276d8ffd5ab3c879fc53eb646c814654` |
 | Intel | `pt-port-1.0.2-setup-macos-x64.zip` | 320,899,886 bytes | `6e6443c2be2c7e9c1ee558be57c11cb85a2a1dc39814e6d11dccd04d1dde6c06` |
 
-Folders on the build Mac:
+The original build/distribution folders were cleared at the user's request before the fresh Apple silicon regression. Both verified Setup ZIPs in this table are now frozen at `/Users/suporte/PT-Mac/.local-backups/intel-integration-20261011/`, together with the complete-history source bundle and notes. Original game archives are excluded. The runtime is Microsoft's .NET 10.0.12 with its redistribution notices; no external Homebrew dependency is required by the extractor.
 
-- `/Users/suporte/PT-Mac/dist/macos/upstream-integration-20261010-arm64/`
-- `/Users/suporte/PT-Mac/dist/macos/upstream-integration-20261010-x64/`
-
-Each contains `P.T. PC Port.app`, `P.T. PC Port Setup.app` and separate portable/Setup ZIPs. Original game archives are excluded. The runtime is Microsoft's .NET 10.0.12 with its redistribution notices; no external Homebrew dependency is required by the extractor.
-
-Evidence lives under `/Users/suporte/PT-Mac/build/upstream-integration-20261010/`: build logs/results, `package-audit.json`, `validation-intel.json`, `controller-results.json`, `walkthrough-results.json`, screenshots and profile-preservation reports. Earlier failed checks are retained for comparison; the migration fix and final passing runs are recorded separately.
+Selected historical logs/results, audit records, screenshots and validation scripts were retained under `/Users/suporte/PT-Mac/.local-backups/intel-integration-20261011/validation-evidence/` before the original build directory was cleared. They include earlier failed checks and the later corrected runs.
 
 ## Remaining gates
 
@@ -77,3 +72,9 @@ The user will test a 2019 MacBook Pro using the [Intel checklist](intel-mac-test
 Windows/Linux release scripts, strict Windows upscaler policy, native installer entry points, updater discovery and voice recognizer implementation remain upstream's. Apple framework dependencies are guarded, shared package layouts pass their fixtures, and native validation workflows are prepared. Those workflows have not run because the user chose to keep the integration branch local. Windows/Linux builds and GPU behavior must be verified before claiming complete cross-platform validation or publishing an upstream PR.
 
 Use the [local PR draft](upstream-pr-draft.md) after the hardware and CI gates pass. The [foundation report](upstream-macos-foundation-checks.md) describes earlier snapshots and remains historical evidence.
+
+## Native Intel work resumed
+
+The user accepted the clean stable Apple silicon installer in a targeted regression on 11 October 2026; see [the baseline record](../apple-silicon-regression-20261011.md). The complete game and shader trees on this integration branch match the accepted `b687754` build. Resuming this checkpoint changes documentation and handoff instructions only. Its earlier integration runtime and packaging validation remains applicable; native Intel gameplay is still pending.
+
+The [native Intel build guide](intel-native-build.md) uses a transferred local source bundle, an x64 .NET SDK and `--arch x64 --version 1.0.4`, with runtime tests enabled. It also documents profile backup and transferring the two completed save slots for targeted Loop Browser checks. No integration push, tag, release or upstream PR is part of this handoff.

@@ -2,9 +2,9 @@
 
 Target: the user's **2019 MacBook Pro**. This is the first native Intel gameplay test for the refreshed integration preview. It requires **macOS 14 or newer** and a GPU that supplies the renderer's required features.
 
-Copy `pt-port-1.0.2-setup-macos-x64.zip` from `/Users/suporte/PT-Mac/dist/macos/upstream-integration-20261010-x64/` to the Intel Mac. It contains the installer; the original game assets must be selected separately on that Mac. Use the x64 package for Intel.
+Build the x64 installer directly on the Intel Mac using the [native build guide](intel-native-build.md) and transferred source bundle. The expected validation package is `pt-port-1.0.4-setup-macos-x64.zip`. Original game assets are selected separately. A frozen, earlier cross-built Intel Setup ZIP remains in `/Users/suporte/PT-Mac/.local-backups/intel-integration-20261011/` on the build Mac.
 
-For a clean boot without touching existing progress, use a separate macOS user account. Two app folders under the same account share the profile at `~/Library/Application Support/pt-port/pt/`.
+Two app folders under the same account share the profile at `~/Library/Application Support/pt-port/pt/`. For a fresh game boot, quit and rename that profile folder to `pt-backup`; restore it after moving the new test profile aside. A separate macOS account also provides a fresh profile and its own microphone decision. For targeted scene checks after first boot, the guide explains how to copy both completed save slots from the accepted Apple silicon test while retaining conservative Intel graphics settings.
 
 ## Record the machine
 

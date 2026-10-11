@@ -96,6 +96,8 @@ For a complete game and installer build, install the .NET 10 SDK as well, then r
     # On an Intel Mac:
     python3 tools/macos/build.py --arch x64 --out dist/my-intel-build
 
+For the current local 2019 MacBook Pro test, use the [native Intel build guide](integration/intel-native-build.md). It includes source transfer, development prerequisites, an explicit 1.0.4 validation version and conservative starting settings.
+
 The helper builds `pt_release`, its resources and the native installer, runs the CPU and installer regressions, publishes the self-contained extractor, and calls `make_app.py` followed by `make_setup.py`. It preserves upstream's three voice models and the target architecture's ggml CPU modules. The matching patched LibOrbisPkg and wrapper source and LGPL notices are embedded in the installer. Users do not need the .NET SDK installed. The build helper uses Microsoft's official runtime packs, including with a Homebrew SDK. The package audit checks that every Mach-O dependency is contained and targets macOS 14 or earlier. Custom extractors that reference external Brotli libraries can bundle those libraries and their MIT license, but host-only bottles requiring a newer macOS are rejected.
 
 `--liborbis <checkout>` uses an existing source checkout; otherwise the pinned revision is downloaded. `--build <folder>` changes the build/output cache. `--identity <Developer ID Application identity>` signs using that identity; the default is ad hoc. Signing with an identity does not perform notarization.
