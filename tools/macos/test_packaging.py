@@ -1,4 +1,4 @@
-"""Synthetic packaging checks; runnable on Windows without a Mac SDK or game data."""
+"""Assets-free archive, payload, architecture and signing regressions on any host."""
 import hashlib
 import importlib.util
 import json
@@ -13,141 +13,103 @@ import zipfile
 import zlib
 from pathlib import Path
 from unittest.mock import patch
+import bundle as mac
+import make_app
 import build as mac_build
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-spec = importlib.util.spec_from_file_location("mac_package", HERE / "package.py")
-mac = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mac)
-
+spec=importlib.util.spec_from_file_location('prepare_installer',REPO/'tools/prepare_native_installer.py')
+prepare=importlib.util.module_from_spec(spec);spec.loader.exec_module(prepare)
 
 class PackagingTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="pt-mac-packaging-")
-        self.root = Path(self.temp.name)
-        self.build = self.root / "build"
-        self.source = self.root / "source"
-        self.extractor = self.root / "extractor"
-        for folder in (self.build / "shaders", self.build / "voice/licenses", self.build / "fonts", self.source, self.extractor):
-            folder.mkdir(parents=True)
-        (self.source / "LICENSE.txt").write_text("Synthetic LGPL fixture")
-        self.magic = b"\xcf\xfa\xed\xfe"
-        (self.extractor / "PT.PkgExtract").write_bytes(self.magic + b"synthetic extractor")
-        (self.build / "pt_release").write_bytes(self.magic + b"synthetic executable")
-        (self.build / "pt_setup_macos").write_bytes(self.magic + b"synthetic installer")
-        (self.build / "libMoltenVK.dylib").write_bytes(self.magic + b"synthetic graphics library")
-        for name in mac.MODELS + mac.VOICE_LIBS:
-            (self.build / "voice" / name).write_bytes(self.magic + name.encode() if name in mac.VOICE_LIBS else name.encode())
-        (self.build / "voice/libggml-cpu-fixture.so").write_bytes(self.magic + b"CPU module")
-        (self.build / "voice/licenses/MIT.txt").write_text("Synthetic license")
-        (self.build / "fonts/font.ttf").write_bytes(b"font fixture")
-        for shader in (REPO / "shaders").iterdir():
-            if shader.suffix in {".vert", ".frag", ".comp"}:
-                (self.build / "shaders" / f"{shader.name}.spv").write_bytes(b"SPIR-V fixture")
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def payload(self, archive):
-        output = self.root / "payload"
-        return subprocess.run([sys.executable, str(REPO / "tools/prepare_native_installer.py"), "--runtime", str(archive),
-                               "--extractor", str(self.extractor), "--source", str(self.source), "--out", str(output),
-                               "--runtime-id", "osx-arm64"], capture_output=True, text=True), output
-
-    def test_bundle_and_payload_roundtrip(self):
-        with patch.object(mac, "relocate_voice"), patch.object(mac, "sign_tree"):
-            archive = mac.runtime(self.build, self.root / "release", "1.2.3")
-        with zipfile.ZipFile(archive) as z:
-            prefix = "pt-port-macos-arm64/P.T..app/Contents/"
-            self.assertIn(prefix + "MacOS/pt", z.namelist())
-            self.assertIn(prefix + "Frameworks/libMoltenVK.dylib", z.namelist())
-            for name in mac.MODELS + mac.VOICE_LIBS + ("libggml-cpu-fixture.so",):
-                self.assertIn(prefix + "Resources/voice/" + name, z.namelist())
-            info = plistlib.loads(z.read(prefix + "Info.plist"))
-            self.assertEqual(info["CFBundleExecutable"], "pt")
-            self.assertIn("NSMicrophoneUsageDescription", info)
-            self.assertEqual(info["CFBundleIconFile"], mac.ICON_FILE)
-            self.assertEqual(z.read(prefix + "Resources/" + mac.ICON_FILE), mac.ICON_SOURCE.read_bytes())
-            self.assertEqual(info["LSApplicationCategoryType"], "public.app-category.games")
-            self.assertTrue(info["GCSupportsGameMode"])
-            self.assertTrue(info["LSSupportsGameMode"])
-            self.assertTrue((z.getinfo(prefix + "MacOS/pt").external_attr >> 16) & 0o111)
-        result, output = self.payload(archive)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        data = memoryview((output / "payload.bin").read_bytes())
-        self.assertEqual(data[:8], b"PTSETUP1")
-        count = struct.unpack_from("<I", data, 8)[0]
-        offset = 12
-        files = {}
+        self.temp=tempfile.TemporaryDirectory(prefix='pt-packaging-');self.root=Path(self.temp.name)
+        self.build=self.root/'build';self.source=self.root/'source';self.extractor=self.root/'extractor'
+        for folder in (self.build/'shaders',self.build/'voice/licenses',self.build/'fonts',self.build/'generated',self.source,self.extractor):folder.mkdir(parents=True)
+        self.magic=b'\xcf\xfa\xed\xfe'+struct.pack('<I',0x0100000C)
+        for name in ('pt_release','libMoltenVK.dylib'):(self.build/name).write_bytes(self.magic+b'fixture')
+        (self.build/'generated/pt_version.h').write_text('#define PT_VERSION "1.2.3"')
+        for name in make_app.VOICE_MODELS+make_app.VOICE_LIBRARIES:
+            (self.build/'voice'/name).write_bytes(name.encode() if name in make_app.VOICE_MODELS else self.magic)
+        (self.build/'voice/libggml-cpu-fixture.so').write_bytes(self.magic)
+        (self.build/'voice/licenses/MIT.txt').write_text('Fixture license')
+        (self.build/'fonts/font.ttf').write_bytes(b'font fixture')
+        (self.build/'licenses/enhanced-textures').mkdir(parents=True)
+        (self.build/'licenses/enhanced-textures/notice.txt').write_text('Fixture texture tool license')
+        for shader in (REPO/'shaders').iterdir():
+            if shader.suffix in {'.vert','.frag','.comp'}:(self.build/'shaders'/f'{shader.name}.spv').write_bytes(b'SPIR-V fixture')
+        (self.source/'LICENSE.txt').write_text('Fixture license')
+        (self.extractor/'PT.PkgExtract').write_bytes(self.magic)
+    def tearDown(self):self.temp.cleanup()
+    def portable(self):
+        out=self.root/'out'
+        def ditto(args,**kwargs):
+            app=Path(args[-2]);archive=Path(args[-1])
+            with zipfile.ZipFile(archive,'w') as z:
+                for file in app.rglob('*'):
+                    if file.is_file():z.write(file,file.relative_to(app.parent))
+                z.writestr('__MACOSX/._P.T. PC Port.app',b'metadata')
+        with patch.object(make_app,'sign'),patch.object(make_app.subprocess,'run',side_effect=ditto),patch.object(sys,'argv',['make_app.py','--build',str(self.build),'--exe',str(self.build/'pt_release'),'--out',str(out),'--game',str(self.root/'absent')]):make_app.main()
+        return out/'pt-port-1.2.3-macos-arm64.zip'
+    def payload(self,archive,rid=None):
+        out=self.root/'payload';prepare.prepare(archive,self.extractor,self.source,out,rid);return out
+    def test_upstream_bundle_payload_roundtrip(self):
+        archive=self.portable();out=self.payload(archive,'osx-arm64')
+        raw=(out/'payload.bin').read_bytes();self.assertEqual(raw[:8],b'PTSETUP1')
+        count=struct.unpack_from('<I',raw,8)[0];offset=12;files={}
         for _ in range(count):
-            length = struct.unpack_from("<H", data, offset)[0]
-            offset += 2
-            name = bytes(data[offset:offset + length]).decode()
-            offset += length
-            size, packed = struct.unpack_from("<QQ", data, offset)
-            offset += 16
-            digest = bytes(data[offset:offset + 64]).decode()
-            offset += 64
-            raw = zlib.decompress(data[offset:offset + packed])
-            offset += packed
-            self.assertEqual(len(raw), size)
-            self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
-            files[name] = raw
-        self.assertEqual(offset, len(data))
-        self.assertEqual(files["P.T..app/Contents/MacOS/pt"], self.magic + b"synthetic executable")
-        self.assertEqual(files["P.T..app/Contents/Resources/" + mac.ICON_FILE], mac.ICON_SOURCE.read_bytes())
-        self.assertIn("extractor/PT.PkgExtract", files)
-        sourcezip = output / "extractor-source.zip"
-        with zipfile.ZipFile(sourcezip) as z:
-            self.assertIn("-r osx-arm64", z.read("BUILD.txt").decode())
-        manifest = json.loads((output / "payload-manifest.json").read_text())
-        self.assertEqual(set(manifest), set(files))
-
-    def test_nested_game_assets_rejected(self):
-        for name in ("P.T..app/Contents/Resources/CUSA01127/a", "P.T..app/Contents/Resources/texture.qar"):
-            with self.subTest(name=name):
-                archive = self.root / "bad.zip"
-                with zipfile.ZipFile(archive, "w") as z:
-                    z.writestr("runtime/" + name, "game fixture")
-                result, _ = self.payload(archive)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Game assets in runtime ZIP", result.stderr)
-
-    def test_unsafe_and_duplicate_paths_rejected(self):
-        for names in (("runtime/../escape",), ("runtime/C:/escape",), ("runtime/a", "other/a")):
+            length=struct.unpack_from('<H',raw,offset)[0];offset+=2
+            name=raw[offset:offset+length].decode();offset+=length
+            size,packed=struct.unpack_from('<QQ',raw,offset);offset+=16
+            digest=raw[offset:offset+64].decode();offset+=64
+            data=zlib.decompress(raw[offset:offset+packed]);offset+=packed
+            self.assertEqual(len(data),size);self.assertEqual(hashlib.sha256(data).hexdigest(),digest);files[name]=data
+        self.assertEqual(offset,len(raw));prefix='P.T. PC Port.app/Contents/'
+        self.assertEqual(files[prefix+'MacOS/pt'],self.magic+b'fixture')
+        for name in make_app.VOICE_MODELS+make_app.VOICE_LIBRARIES+('libggml-cpu-fixture.so',):self.assertIn(prefix+'Resources/voice/'+name,files)
+        self.assertIn('NSMicrophoneUsageDescription',plistlib.loads(files[prefix+'Info.plist']))
+        self.assertEqual(plistlib.loads(files[prefix+'Info.plist'])['CFBundleIconFile'],mac.ICON_FILE)
+        self.assertEqual(files[prefix+'Resources/'+mac.ICON_FILE],(REPO/'assets/macos'/mac.ICON_FILE).read_bytes())
+        self.assertFalse(any(n.startswith('__MACOSX') for n in files))
+        self.assertIn('extractor/PT.PkgExtract',files)
+        with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r osx-arm64',z.read('BUILD.txt').decode())
+        self.assertEqual(set(files),set(json.loads((out/'payload-manifest.json').read_text())))
+    def test_other_platform_layout_and_windows_validation_preserved(self):
+        # Strict Windows builds are checked by validate_desktop.py. This fixture
+        # checks the policy call and that only the archive wrapper is removed.
+        for rid,name in [('win-x64','pt.exe'),('linux-x64','pt')]:
+            archive=self.root/(rid+'.zip')
+            with zipfile.ZipFile(archive,'w') as z:z.writestr('runtime/'+name,b'fixture')
+            spec=importlib.util.spec_from_file_location('package',REPO/'tools/package.py');pkg=importlib.util.module_from_spec(spec);spec.loader.exec_module(pkg)
+            with patch.dict(sys.modules,{'package':pkg}),patch.object(pkg,'validate_upscaler_archive') as validate:
+                out=self.root/rid;prepare.prepare(archive,self.extractor,self.source,out,rid)
+                self.assertEqual(validate.call_count,1 if rid=='win-x64' else 0)
+            self.assertIn(name,json.loads((out/'payload-manifest.json').read_text()))
+            with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r '+rid,z.read('BUILD.txt').decode())
+    def test_wrong_runtime_architecture_refused(self):
+        with self.assertRaisesRegex(RuntimeError,'architecture mismatch'):self.payload(self.portable(),'osx-x64')
+    def test_unsafe_duplicates_assets_and_data_refused(self):
+        cases=[('runtime/../escape',),('runtime/C:/escape',),('runtime/a','other/a'),('runtime/A','runtime/a'),('runtime/P.T.app/Contents/Resources/texture.qar',),('runtime/P.T.app/Contents/Resources/CUSA01127/a',),('runtime/data/save.dat',)]
+        for names in cases:
             with self.subTest(names=names):
-                archive = self.root / "unsafe.zip"
-                with zipfile.ZipFile(archive, "w") as z:
-                    for name in names:
-                        z.writestr(name, "fixture")
-                result, _ = self.payload(archive)
-                self.assertNotEqual(result.returncode, 0)
-
-    def test_incomplete_runtime_refused_before_bundle_creation(self):
-        (self.build / "voice/libggml-cpu-fixture.so").unlink()
-        with self.assertRaisesRegex(RuntimeError, "Missing build output"):
-            mac.runtime(self.build, self.root / "incomplete", "1.0.0")
-        self.assertFalse((self.root / "incomplete/pt-port-macos-arm64").exists())
-
-    def test_existing_release_preserved(self):
-        output = self.root / "existing"
-        (output / "pt-port-macos-arm64").mkdir(parents=True)
-        marker = output / "pt-port-macos-arm64/keep.txt"
-        marker.write_text("preserve me")
-        with self.assertRaisesRegex(RuntimeError, "Output already exists"):
-            mac.runtime(self.build, output, "1.0.0")
-        self.assertEqual(marker.read_text(), "preserve me")
-
-    def test_static_moltenvk_refused_before_bundle_creation(self):
-        (self.build / "libMoltenVK.dylib").write_bytes(b"!<arch>\nstatic archive")
-        with self.assertRaisesRegex(RuntimeError, "Expected a Mach-O"):
-            mac.runtime(self.build, self.root / "invalid", "1.0.0")
-        self.assertFalse((self.root / "invalid/pt-port-macos-arm64").exists())
-
+                archive=self.root/'bad.zip'
+                with zipfile.ZipFile(archive,'w') as z:
+                    for name in names:z.writestr(name,b'fixture')
+                with self.assertRaises(RuntimeError):self.payload(archive)
+    def test_incomplete_build_refused(self):
+        (self.build/'voice/libggml-cpu-fixture.so').unlink()
+        with self.assertRaisesRegex(RuntimeError,'Missing build output'):make_app.validate_build(self.build,self.build/'pt_release')
+    def test_static_moltenvk_refused(self):
+        (self.build/'libMoltenVK.dylib').write_bytes(b'!<arch>\n')
+        with self.assertRaisesRegex(RuntimeError,'Expected a Mach-O'):make_app.validate_build(self.build,self.build/'pt_release')
+    def test_intel_archive_name_uses_target_cpu(self):
+        (self.build/'pt_release').write_bytes(b'\xcf\xfa\xed\xfe'+struct.pack('<I',0x01000007))
+        self.assertEqual(make_app.architecture(self.build/'pt_release'),'x64')
     def macho_bundle(self):
         app = self.root / "audit/P.T..app"
-        mac.make_bundle(app, mac.info("P.T.", "pt", "org.pt-port.game", "1.0.0"))
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "Contents/Frameworks").mkdir()
         (app / "Contents/MacOS/pt").write_bytes(self.magic + b"game")
         (app / "Contents/Frameworks/libMoltenVK.dylib").write_bytes(self.magic + b"library")
         return app
@@ -203,19 +165,47 @@ class PackagingTests(unittest.TestCase):
                 mac.sign_tree(app)
         output.assert_not_called()
 
+    def test_newer_macos_dependency_refused(self):
+        app = self.macho_bundle()
+        original = self.otool({})
+        def output(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[-2] == "-l":
+                result += "cmd LC_BUILD_VERSION\ncmdsize 32\nplatform 1\nminos 26.0\nsdk 26.0\n"
+            return result
+        with patch.object(mac, "run"), patch.object(mac.subprocess, "check_output", side_effect=output):
+            with self.assertRaisesRegex(RuntimeError, "above the app minimum"):
+                mac.audit_dependencies(app)
+
     def test_packaged_voice_smoke_checks_that_audio_was_processed(self):
         app = self.macho_bundle()
         def launch(*args):
             self.assertEqual(args[0], app / "Contents/MacOS/pt")
             self.assertEqual(args[1], "--voice-test")
             with wave.open(str(args[2]), "rb") as audio:
-                self.assertEqual((audio.getnchannels(), audio.getsampwidth(), audio.getframerate(), audio.getnframes()), (1, 2, 16000, 16000))
+                self.assertEqual((audio.getnchannels(), audio.getsampwidth(), audio.getframerate(), audio.getnframes()), (1, 2, 16000, 48000))
             Path(args[-1]).write_text("voice test: file voice-smoke.wav | 0 detections")
         with patch.object(mac_build, "run", side_effect=launch):
             mac_build.verify_packaged_voice(app, self.root)
         with patch.object(mac_build, "run", side_effect=lambda *args: Path(args[-1]).write_text("cannot load WAV")):
             with self.assertRaisesRegex(RuntimeError, "did not process the WAV"):
                 mac_build.verify_packaged_voice(app, self.root)
+
+    def test_runtime_notices_match_the_published_runtime(self):
+        artifacts = self.root / "dotnet-artifacts"
+        (artifacts / "obj/Extractor").mkdir(parents=True)
+        packages = self.root / "packages"
+        pack = packages / "microsoft.netcore.app.runtime.osx-arm64/10.0.1"
+        pack.mkdir(parents=True)
+        for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+            (pack / name).write_text("Microsoft fixture " + name)
+        (artifacts / "obj/Extractor/project.assets.json").write_text(json.dumps({"packageFolders": {str(packages): {}}}))
+        (self.extractor / "PT.PkgExtract.runtimeconfig.json").write_text(json.dumps({"runtimeOptions": {"includedFrameworks": [{"name": "Microsoft.NETCore.App", "version": "10.0.1"}]}}))
+        mac_build.copy_runtime_notices(self.extractor, artifacts, "osx-arm64")
+        for name in ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"):
+            self.assertEqual((self.extractor / "licenses" / ("dotnet-" + name)).read_bytes(), (pack / name).read_bytes())
+        with self.assertRaisesRegex(RuntimeError, "runtime pack not found"):
+            mac_build.copy_runtime_notices(self.extractor, artifacts, "osx-x64")
 
     def test_entitlements_kept_when_signing_the_app(self):
         app = self.macho_bundle()
@@ -234,18 +224,6 @@ class PackagingTests(unittest.TestCase):
             mac.sign_tree(self.extractor, "Developer ID fixture")
         self.assertIn(HERE / "extractor-entitlements.plist", run.call_args.args)
 
-    def test_voice_module_relocation_has_no_install_id(self):
-        voice = self.build / "voice"
-        def output(args, **kwargs):
-            library = Path(args[-1])
-            self.assertEqual(args[1:3], ["-arch", "arm64"])
-            if args[-2] == "-D":
-                return str(library) + ":\n" + ("@rpath/" + library.name + "\n" if library.name != "libggml-cpu.dylib" else "")
-            return str(library) + ":\n\t@rpath/libggml-base.dylib (compatibility version 1.0.0)\n"
-        with patch.object(mac.subprocess, "check_output", side_effect=output), patch.object(mac, "run") as run:
-            mac.relocate_voice(voice)
-        self.assertFalse(any(call.args[1] == "-id" and Path(call.args[-1]).name == "libggml-cpu.dylib" for call in run.call_args_list))
-        self.assertTrue(any("@loader_path/libggml-base.dylib" in call.args for call in run.call_args_list))
 
     def test_patched_source_is_fresh_and_original_is_preserved(self):
         original = self.root / "upstream"

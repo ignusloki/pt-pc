@@ -1,4 +1,4 @@
-"""Build and package the Apple Silicon installer on macOS."""
+"""Build the upstream Mac game and its PKG/folder installer for one CPU architecture."""
 import argparse
 import datetime
 import json
@@ -11,13 +11,16 @@ import uuid
 import wave
 from pathlib import Path
 
-import package
+import make_app
+import make_setup
 
 REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_status_test",
-         "pt_save_reset_test", "pt_language_default_test", "pt_graphics_preset_test", "pt_voice_match_test", "pt_installer_update_test",
-         "pt_reflection_mix_test", "pt_fast_walk_test", "pt_queue_handoff_test")
+         "pt_save_reset_test", "pt_language_default_test", "pt_graphics_preset_test",
+         "pt_voice_match_test", "pt_installer_update_test", "pt_unicode_paths_test", "pt_user_data_test",
+         "pt_fast_walk_test", "pt_display_modes_test", "pt_pipeline_cache_store_test", "pt_blur_sway_test",
+         "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_texture_cache_test", "pt_upscaler_gpu_test")
 
 
 def run(*args):
@@ -50,7 +53,7 @@ def verify_packaged_voice(app, output):
         audio.setnchannels(1)
         audio.setsampwidth(2)
         audio.setframerate(16000)
-        audio.writeframes(b"\0\0" * 16000)
+        audio.writeframes(b"\0\0" * 16000 * 3)
     run(app / "Contents/MacOS/pt", "--voice-test", fixture, "--log", log)
     if "voice test: file voice-smoke.wav" not in log.read_text(encoding="utf-8"):
         raise RuntimeError("Packaged voice smoke test did not process the WAV; see voice-smoke.log")
@@ -75,15 +78,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--liborbis", type=Path, help="Existing upstream source; a pinned copy is downloaded when omitted")
     p.add_argument("--out", type=Path, help="New output directory (defaults to a timestamp under dist/macos)")
-    p.add_argument("--version", default="1.0.4")
-    p.add_argument("--build", type=Path, help="Optional isolated build directory")
-    p.add_argument("--cmake-init", type=Path, help="Initial CMake cache")
-    p.add_argument("--cmake-arg", action="append", default=[], help="Extra CMake option")
+    native_arch = "arm64" if platform.machine() == "arm64" else "x64"
+    p.add_argument("--arch", choices=("arm64", "x64"), default=native_arch)
+    p.add_argument("--build", type=Path, help="Override the CMake/output directory")
+    p.add_argument("--cmake-init", type=Path, help="Optional CMake initial cache for offline dependencies")
+    p.add_argument("--cmake-arg", action="append", default=[], help="Extra CMake option, e.g. --cmake-arg=-DNAME=VALUE")
+    p.add_argument("--version", help="Override upstream's version for this build")
+    p.add_argument("--game", type=Path, help="Optional game files for loop browser previews")
+    p.add_argument("--skip-tests", action="store_true", help="Cross-compile without running binaries for the other CPU")
     p.add_argument("--identity", default="-", help="Developer ID Application identity, or '-' for local testing")
     p.add_argument("--jobs", type=int, default=6)
     args = p.parse_args()
-    if sys.platform != "darwin" or platform.machine() != "arm64":
-        p.error("Run this build on an Apple Silicon Mac using native arm64 Python")
+    if sys.platform != "darwin":
+        p.error("Run this build on macOS")
+    if args.arch != native_arch and not args.skip_tests:
+        p.error("Use a native Mac of the target architecture for runtime tests, or --skip-tests for cross-compilation")
     if sys.version_info < (3, 11):
         p.error("Python 3.11 or newer is required")
     for tool in ("cmake", "ninja", "clang", "clang++", "git", "dotnet", "glslc", "codesign", "lipo", "otool", "install_name_tool", "ditto"):
@@ -91,16 +100,15 @@ def main():
             p.error(f"Missing {tool}; see docs/macos.md for prerequisites and Vulkan SDK setup")
     sdk = subprocess.check_output(["dotnet", "--version"], text=True).strip()
     if int(sdk.split(".")[0]) < 10:
-        p.error("Install the .NET 10 arm64 SDK to build the package extractor")
+        p.error("Install the .NET 10 SDK to build the package extractor")
     output = (args.out or REPO / "dist/macos" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     if output.exists():
         p.error("Choose a new output directory; existing releases are preserved")
-    build = (args.build or REPO / "build/macos-arm64").resolve()
-    os.environ["PT_VERSION"] = args.version
+    build = (args.build or REPO / "build" / ("macos-" + args.arch)).resolve()
     initial = ["-C", args.cmake_init.resolve()] if args.cmake_init else []
-    run("cmake", "--preset", "macos-arm64", "-B", build, *initial, f"-DPT_VERSION_OVERRIDE={args.version}", *args.cmake_arg)
-    run("cmake", "--build", build, "--parallel", args.jobs, "--target", "pt", "pt_release", "pt_setup_macos")
-    run("cmake", "--build", build, "--parallel", args.jobs, "--target", *TESTS)
+    run("cmake", "--preset", "macos-" + args.arch, "-B", build, *initial,
+        f"-DPT_VERSION_OVERRIDE={args.version or ''}", *args.cmake_arg)
+    run("cmake", "--build", build, "--parallel", args.jobs, "--target", "pt_release", "pt_setup_macos", *TESTS)
     fixtures = build / f"test-fixtures-{uuid.uuid4().hex}"
     fixtures.mkdir()
     test_args = {
@@ -109,9 +117,12 @@ def main():
         "pt_save_reset_test": [fixtures / "save-reset"],
         "pt_graphics_preset_test": [fixtures / "graphics.ini"],
         "pt_installer_update_test": [fixtures / "installer"],
+        "pt_unicode_paths_test": [fixtures / "unicode"],
+        "pt_user_data_test": [fixtures / "user-data"],
     }
-    for test in TESTS:
-        run(build / test, *test_args.get(test, []))
+    if not args.skip_tests:
+        for test in TESTS:
+            run(build / test, *test_args.get(test, []))
     upstream = args.liborbis.resolve() if args.liborbis else build / "liborbis-upstream"
     if not args.liborbis:
         if not upstream.exists():
@@ -121,7 +132,7 @@ def main():
         if revision != LIBORBIS_REVISION:
             p.error("Cached LibOrbisPkg revision differs; pass --liborbis to explicitly use another checkout")
     source = prepare_source(upstream, build / f"liborbis-src-{uuid.uuid4().hex}")
-    extractor = build / f"extractor-osx-arm64-{uuid.uuid4().hex}"
+    extractor = build / f"extractor-osx-{args.arch}-{uuid.uuid4().hex}"
     dotnet_artifacts = build / f"dotnet-artifacts-{uuid.uuid4().hex}"
     # Use official Microsoft NuGet packs even when the SDK is from Homebrew.
     # Its bundled runtime pack can link bottles built for this host's newer OS.
@@ -131,21 +142,24 @@ def main():
     # using the SDK's metadata without selecting its host-specific runtime.
     sdk_packs = subprocess.check_output(["dotnet", "msbuild", str(REPO / "installer/Extractor/Extractor.csproj"),
                                          "-getProperty:NetCoreTargetingPackRoot"], cwd=REPO, text=True).strip()
-    run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-arm64",
+    run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
         "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
         f"-p:PrunePackageTargetingPackRoots={sdk_packs}",
         "--artifacts-path", dotnet_artifacts, "-o", extractor)
-    copy_runtime_notices(extractor, dotnet_artifacts, "osx-arm64")
+    copy_runtime_notices(extractor, dotnet_artifacts, "osx-" + args.arch)
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
         f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
-    # Packaging checks all Mach-O files for arm64 and signs the app after relocation.
-    output.mkdir(parents=True)
-    archive = package.runtime(build, output, args.version, args.identity)
-    verify_packaged_voice(output / "pt-port-macos-arm64" / package.APP_NAME, output)
-    installer = package.setup(build, archive, extractor, source, output, args.version, args.identity)
-    run(installer / "Contents/MacOS/pt_setup_macos", "--self-test", output / "installer-self-test.txt")
-    print(f"\nInstaller: {installer}\nDistribution ZIP: {output / 'PT-Mac-Setup-arm64.zip'}")
+    game_args = ["--game", args.game.resolve()] if args.game else []
+    run(sys.executable, REPO / "tools/macos/make_app.py", "--build", build, "--exe", build / "pt_release",
+        "--out", output, "--identity", args.identity, *game_args)
+    archive = output / f"pt-port-{make_app.version(build)}-macos-{args.arch}.zip"
+    if not args.skip_tests:
+        verify_packaged_voice(output / (make_app.APP_NAME + ".app"), output)
+    installer = make_setup.setup(build, archive, extractor, source, output, args.identity)
+    if not args.skip_tests:
+        run(installer / "Contents/MacOS/pt_setup_macos", "--self-test", output / "installer-self-test.txt")
+    print(f"\nInstaller: {installer}\nDistribution ZIP: {output / f'pt-port-{make_app.version(build)}-setup-macos-{args.arch}.zip'}")
 
 
 if __name__ == "__main__":

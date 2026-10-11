@@ -20,13 +20,14 @@ the street, with the voice part included.
   their data myself. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing here
   decrypts it.
 - Windows 10 or 11 (x64), Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
-  and SteamOS), or macOS 14 or newer on an Apple silicon Mac. The separate upstream Intel app still needs hardware testing.
+  and SteamOS), or macOS 14 or newer on an Apple silicon or Intel Mac.
 - A GPU and driver with Vulkan 1.3; on macOS the port brings MoltenVK, which runs Vulkan on Metal. The optional
   ray-traced shadows, ambient occlusion and reflections need a GPU with Vulkan ray queries (not on macOS). DLSS needs a
   GeForce RTX card; FSR and XeSS run on any recent GPU (Windows only). The settings page greys out what your machine
   cannot run and says why.
-- A microphone for one part of the game, as on the PS4. If you have none, `key = J` under `[voice]` in `pt.ini` lets a
-  key stand in for the spoken word.
+- A microphone for one part of the game, as on the PS4. PC Settings → Sound can enable/disable microphone input and
+  test it. Mac startup requests permission before gameplay when input is enabled. If you have none, `key = J` under
+  `[voice]` in `pt.ini` lets a key stand in for the spoken word.
 
 ## Installing
 
@@ -41,11 +42,12 @@ package or that image: the installer reads it from the PKG or dump you select. T
 Linux: `chmod +x` the setup and run it, from a terminal or from the file manager (it uses zenity or kdialog for its windows). The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
-macOS (Apple Silicon): download **PT-Mac-Setup-arm64.zip** from the
-[Mac preview release](https://github.com/ignusloki/pt-pc/releases/tag/macos-arm64-preview-4), unzip it and open
-**P.T. Mac Setup.app**. Choose your PKG or decrypted game folder and a destination. Open **P.T..app** inside
-**P.T. PC Port**, keeping **CUSA01127** beside it. The runtime and its dependencies are included.
-
+macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later) or
+`P.T.PC.Port.Setup-macOS-x64.zip` (Intel). Unzip `P.T. PC Port Setup.app`, select your own complete fake PKG or decrypted
+folder, and choose an installation location. The portable `P.T.PC.Port-macOS-arm64.zip` / `...-x64.zip` apps still accept
+an extracted folder directly. Both apps use the selected forest/P.T. icon. Downloads are signed ad hoc; the opening
+steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). Intel compilation, packaging and Rosetta
+checks pass; native Intel graphics and live microphone testing are pending. See the [integration report](docs/integration/upstream-integration-20261011.md).
 
 Portable downloads: `P.T.PC.Port-portable-windows.zip` and `P.T.PC.Port-portable-linux.zip` hold the same files the
 setups install. Unpack one anywhere you can write to, then either put your extracted `CUSA01127` folder next to `pt.exe`
@@ -74,10 +76,11 @@ Everything below is off or set to the original's behaviour by default. The PS4 l
 there if you want them.
 
 Display and image
+
 - Windowed, borderless or exclusive fullscreen, with a selectable render resolution and v-sync on or off. Exclusive
   fullscreen lists supported display modes; borderless keeps the desktop window and can render at another selected size.
-- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) Intel XeSS and Apple MetalFX on macOS, in the usual quality steps or a
-  custom scale, plus native-resolution anti-aliasing (FSR native AA, DLAA).
+- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS on Windows, plus Apple MetalFX on
+  supported Mac hardware, in the usual quality steps or a custom scale. Native-resolution anti-aliasing is also available.
 - Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer.
 - Graphics presets Low, Medium, Original (PS4), High, Ultra and Custom. The individual controls cover shadow map size,
   ray-traced shadows (sharp like the original or soft), contact shadows, ray-traced ambient occlusion, ray-traced floor
@@ -86,6 +89,9 @@ Display and image
   fringing. Each one can go back to the PS4 setting on its own.
 
 Extras
+
+- Optional Fast Walk: enable it in PC Settings → Extras, then hold Shift or the controller's bottom face button for
+  a 1.5× walking boost. It is off by default and preserves interactions and game timing. See [docs/fast-walk.md](docs/fast-walk.md).
 - Photo mode (F7): pause, fly the camera, adjust focal length, focus, aperture, exposure and roll, choose an aspect
   crop and color filter, then save at native resolution or 4K (3840 pixels on the long edge) to Pictures/PT Photos.
 - Free camera (F6).
@@ -101,9 +107,6 @@ Extras
 - Speedrun timer with a split at every loop, real time and game time, personal bests, and a LiveSplit server
   connection (Control > Start TCP Server in LiveSplit).
 - Third person view (experimental).
-- Fast walk: enable it in PC settings > Extras, then hold either Shift key or the controller's bottom face button
-  (Xbox A / PlayStation X) to walk 50% faster. Release for normal speed. Interactions and puzzle timers keep their
-  original behaviour. See [docs/fast-walk.md](docs/fast-walk.md).
 - VR through OpenXR (experimental: I have no headset, so it has only run against a simulated runtime). See
   docs/vr.md before trying it.
 
@@ -117,11 +120,6 @@ Mods
   to game events. See docs/modding.md and docs/lua_api.md.
 
 ## Building from source
-
-Apple Silicon macOS: an experimental native port and Cocoa installer build path are
-available in [docs/macos.md](docs/macos.md). Run `python3 tools/macos/build.py` on a Mac
-with the prerequisites listed there. This target still needs macOS compilation and
-gameplay validation before it can be considered a working release.
 
 Windows: Visual Studio 2022 Build Tools, LLVM (clang-cl), the Vulkan SDK, CMake 3.28 and Ninja. Then
 

@@ -5,19 +5,18 @@ if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Oldest macOS the build runs on" FORCE)
 endif()
 project(pt_port LANGUAGES C CXX)
+if(APPLE)
+  # Enable this before SDL's subdirectory as well as our native Mac sources.
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 20)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
-if(APPLE)
-  # Enable Cocoa languages before dependencies so their targets inherit the compile rules.
-  enable_language(OBJC OBJCXX)
-  set(CMAKE_OBJCXX_STANDARD 20)
-  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # one binary for many distributions: the C++ runtime goes into the executable, only glibc is taken from the system
@@ -39,7 +38,7 @@ file(GLOB_RECURSE PT_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp src/game/*.h 
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.4")
+set(PT_VERSION "1.0.5")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()
@@ -156,19 +155,13 @@ if(WIN32 AND EXISTS "${PT_SETUP_PAYLOAD}")
     target_link_options(pt_setup PRIVATE /OPT:REF /OPT:ICF)
   endif()
 endif()
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(UNIX AND NOT APPLE)
   # the Linux installer (installer/Native/setup_linux.cpp); tools/linux/attach_payload.py appends the payload after the build
   add_executable(pt_setup_linux EXCLUDE_FROM_ALL installer/Native/setup_linux.cpp src/engine/platform/http.cpp
     src/engine/platform/update_check.cpp src/engine/platform/os.cpp)
   target_include_directories(pt_setup_linux PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
   add_dependencies(pt_setup_linux pt_version)
   target_link_libraries(pt_setup_linux PRIVATE zlibstatic ${CMAKE_DL_LIBS} Threads::Threads)
-endif()
-add_executable(pt_installer_update_test tests/installer_update_test.cpp)
-target_include_directories(pt_installer_update_test PRIVATE installer/Native)
-target_link_libraries(pt_installer_update_test PRIVATE zlibstatic)
-if(MSVC)
-  target_compile_options(pt_installer_update_test PRIVATE /utf-8 /EHsc)
 endif()
 if(MSVC)
   target_compile_options(pt PRIVATE /utf-8 /EHsc)
@@ -314,10 +307,6 @@ target_link_libraries(pt_settings_roundtrip_test PRIVATE pt_engine)
 add_executable(pt_player_publish_test tests/player_publish_test.cpp)
 target_link_libraries(pt_player_publish_test PRIVATE pt_engine)
 
-# Fast Walk input, movement rates and frame timing; optionally verify travel using a game folder.
-add_executable(pt_fast_walk_test tests/fast_walk_test.cpp)
-target_link_libraries(pt_fast_walk_test PRIVATE pt_engine)
-
 # the hair highlight's dominant light direction over time (0x8D12A0)
 add_executable(pt_dominant_light_test tests/dominant_light_test.cpp)
 target_link_libraries(pt_dominant_light_test PRIVATE pt_engine)
@@ -329,9 +318,6 @@ target_link_libraries(pt_vr_view_test PRIVATE pt_engine)
 # the hardware check of FSR 3 frame generation (src/engine/render/upscale/upscale.h, docs/upscaling.md)
 add_executable(pt_upscaler_gpu_test tests/upscaler_gpu_test.cpp)
 target_link_libraries(pt_upscaler_gpu_test PRIVATE pt_engine)
-
-add_executable(pt_queue_handoff_test tests/queue_handoff_test.cpp)
-target_link_libraries(pt_queue_handoff_test PRIVATE pt_engine)
 
 add_executable(pt_peephole_look_test tests/peephole_look_test.cpp)
 target_link_libraries(pt_peephole_look_test PRIVATE pt_engine)
@@ -367,6 +353,18 @@ foreach(license ${PT_FONT_LICENSES})
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt>/licenses/${license_name}" VERBATIM)
 endforeach()
 
+if(APPLE)
+add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:pt_release>/fonts")
+# the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
+file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
+foreach(license ${PT_FONT_LICENSES})
+  get_filename_component(license_name "${license}" NAME)
+  add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt_release>/licenses"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt_release>/licenses/${license_name}" VERBATIM)
+endforeach()
+
+endif()
+
 add_executable(pt_mouse_render_test tests/mouse_render_test.cpp)
 target_link_libraries(pt_mouse_render_test PRIVATE pt_engine)
 
@@ -391,7 +389,22 @@ target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
 add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
 target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)
 
-# Keep assertions active in regression tests built with RelWithDebInfo.
+
+# Shared installer transaction regressions; no game assets required.
+add_executable(pt_installer_update_test EXCLUDE_FROM_ALL tests/installer_update_test.cpp)
+target_include_directories(pt_installer_update_test PRIVATE installer/Native)
+target_link_libraries(pt_installer_update_test PRIVATE zlibstatic)
+if(MSVC)
+  target_compile_options(pt_installer_update_test PRIVATE /utf-8 /EHsc)
+endif()
+
+# Optional movement and Vulkan/Metal submission regressions.
+add_executable(pt_fast_walk_test tests/fast_walk_test.cpp)
+target_link_libraries(pt_fast_walk_test PRIVATE pt_engine)
+add_executable(pt_queue_handoff_test tests/queue_handoff_test.cpp)
+target_link_libraries(pt_queue_handoff_test PRIVATE pt_engine)
+
+# The validation workflows build RelWithDebInfo; assertions in test translation units must stay active.
 get_property(pt_directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(test IN LISTS pt_directory_targets)
   if(test STREQUAL "pt_tests" OR test MATCHES "^pt_.*_test$")

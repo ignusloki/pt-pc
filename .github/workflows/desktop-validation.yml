@@ -1,0 +1,67 @@
+name: Desktop validation
+
+on:
+  push:
+    branches: [codex/upstream-macos-integration]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libwayland-dev libxkbcommon-dev libasound2-dev libpulse-dev libudev-dev libdrm-dev libegl-dev
+      - name: Build and test
+        run: python3 tools/ci/validate_desktop.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: desktop-validation-linux
+          path: build/desktop-validation/validation-logs
+          retention-days: 14
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Vulkan tools
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install vulkan-headers:x64-windows-static vulkan-loader:x64-windows-static shaderc:x64-windows-static
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and test
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x64
+          python tools/ci/validate_desktop.py --cmake-arg=-DVulkan_INCLUDE_DIR=%VCPKG_INSTALLATION_ROOT%/installed/x64-windows-static/include --cmake-arg=-DVulkan_LIBRARY=%VCPKG_INSTALLATION_ROOT%/installed/x64-windows-static/lib/vulkan-1.lib --cmake-arg=-DVulkan_GLSLC_EXECUTABLE=%VCPKG_INSTALLATION_ROOT%/installed/x64-windows-static/tools/shaderc/glslc.exe
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: desktop-validation-windows
+          path: build/desktop-validation/validation-logs
+          retention-days: 14

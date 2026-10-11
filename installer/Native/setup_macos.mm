@@ -94,7 +94,7 @@ void VerifyRuntime(const fs::path& root) {
             throw std::runtime_error("Could not verify the unpacked Mac runtime. " + details.substr(0, 1200));
         }
     };
-    verify("/usr/bin/codesign", {"--verify", "--deep", "--strict", (root / "P.T..app").string()}, 0);
+    verify("/usr/bin/codesign", {"--verify", "--deep", "--strict", (root / "P.T. PC Port.app").string()}, 0);
     verify("/usr/bin/codesign", {"--verify", "--strict", (root / "extractor/PT.PkgExtract").string()}, 0);
     verify(root / kGameExe, {"--help"}, 0);
     verify(root / "extractor/PT.PkgExtract", {}, 1);
@@ -108,7 +108,7 @@ void Extract(const fs::path& staging, const fs::path& package) {
         {fs::absolute(package).string(), (staging / "CUSA01127").string()}, staging,
         staging / "install-extraction.log", cancelled, std::chrono::hours(2));
     CheckCancel();
-    if (!result.started) throw std::runtime_error("Could not start the Apple Silicon PKG extraction helper.");
+    if (!result.started) throw std::runtime_error("Could not start the Mac PKG extraction helper.");
     if (result.exit_code != 0) {
         std::ifstream log(staging / "install-extraction.log");
         const std::string details((std::istreambuf_iterator<char>(log)), {});
@@ -121,7 +121,10 @@ InstallOutcome Install(const fs::path& input, const fs::path& destination) {
     steps.unique_id = NSUUID.UUID.UUIDString.UTF8String;
     steps.check_parents = CheckParents;
     steps.verify_integrity = VerifyPayload;
-    steps.whole_trees = {"P.T..app"};
+    steps.whole_trees = {"P.T. PC Port.app", "P.T..app"};
+    steps.validate_runtime = [](const std::vector<InstalledFile>& files) {
+        RequireProgramFiles(files, {kGameExe, "extractor/PT.PkgExtract", "P.T. PC Port.app/Contents/Info.plist"});
+    };
     auto payload = std::make_shared<std::vector<unsigned char>>();
     steps.payload_bytes = [payload] {
         if (payload->empty()) *payload = ReadPayload();
@@ -169,7 +172,8 @@ int CommandLine(int argc, char** argv) {
             UnpackPayload(payload.data(), payload.size(), runtime, HashFile);
             MarkExecutables(runtime);
             VerifyRuntime(runtime);
-            const auto failures = SelfTestUpdate(root / "files") + SelfTestBundleUpdate(root / "bundles");
+            const auto failures = SelfTestUpdate(root / "files") + SelfTestBundleUpdate(root / "bundles") +
+                SelfTestIcon(root / "icons") + SelfTestUnicodePaths(root / "unicode");
             fs::remove_all(root);
             std::ofstream(argv[2]) << (failures.empty() ? "PASS" : "FAIL " + failures) << '\n';
             return failures.empty() ? 0 : 1;
@@ -266,10 +270,10 @@ int main(int argc, char** argv) {
         worker.join();
         [window orderOut:nil];
         if (!error.empty()) { Alert(@"Installation stopped", Text(error), @"OK", false); return 1; }
-        NSString* message = Text("Open P.T..app in " + destination.string() + ".");
+        NSString* message = Text("Open P.T. PC Port.app in " + destination.string() + ".");
         if (!outcome.notes.empty()) message = [message stringByAppendingString:@" See install-notes.txt for notes about this copy's game data."];
         if (Alert(@"P.T. is installed", message, @"Show in Finder"))
-            [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:Text((destination / "P.T..app").string())]]];
+            [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:Text((destination / "P.T. PC Port.app").string())]]];
         return 0;
     }
 }

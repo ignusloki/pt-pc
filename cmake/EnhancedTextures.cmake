@@ -1,15 +1,3 @@
-if(APPLE)
-  set(pt_texture_default OFF)
-else()
-  set(pt_texture_default ON)
-endif()
-option(PT_ENHANCED_TEXTURES "Bundle the external enhanced texture generator" ${pt_texture_default})
-if(NOT PT_ENHANCED_TEXTURES)
-  return()
-endif()
-if(APPLE)
-  message(FATAL_ERROR "The bundled Real-ESRGAN runtime does not support this macOS arm64 build; use PT_ENHANCED_TEXTURES=OFF")
-endif()
 set(PT_TEXTURE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/_deps/texture-runtime" CACHE PATH "Real-ESRGAN runtime cache")
 # the upscaler's own release build for the target platform (the Windows one needs vcomp140.dll beside it)
 if(WIN32)
@@ -65,4 +53,15 @@ add_custom_command(TARGET pt POST_BUILD
 if(WIN32)
   add_custom_command(TARGET pt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/vcomp140.dll" "$<TARGET_FILE_DIR:pt>/texture-tools/" VERBATIM)
+endif()
+
+if(APPLE)
+add_custom_command(TARGET pt_release POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt_release>/texture-tools/models" "$<TARGET_FILE_DIR:pt_release>/licenses"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/${pt_texture_exe}" "$<TARGET_FILE_DIR:pt_release>/texture-tools/"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/third_party/texture_models" "$<TARGET_FILE_DIR:pt_release>/texture-tools/models"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/third_party/texture_notices" "$<TARGET_FILE_DIR:pt_release>/licenses/enhanced-textures"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/Real-ESRGAN-ncnn-vulkan.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/texture_models/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/Real-ESRGAN-model.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${bc7enc_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:pt_release>/licenses/bc7enc.txt" VERBATIM)
 endif()

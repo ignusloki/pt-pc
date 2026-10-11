@@ -34,29 +34,32 @@ endif()
 if(PT_MOLTENVK_LIBRARY)
   set(pt_moltenvk_dylib "${PT_MOLTENVK_LIBRARY}")
 endif()
-
-if(NOT pt_moltenvk_dylib MATCHES "[.]dylib$" OR NOT EXISTS "${pt_moltenvk_dylib}")
-  message(FATAL_ERROR "PT_MOLTENVK_LIBRARY must name an existing libMoltenVK.dylib")
-endif()
-find_library(PT_COCOA_FRAMEWORK Cocoa REQUIRED)
-find_library(PT_METAL_FRAMEWORK Metal REQUIRED)
-find_library(PT_METALFX_FRAMEWORK MetalFX REQUIRED)
-find_library(PT_AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
-find_library(PT_FOUNDATION_FRAMEWORK Foundation REQUIRED)
-target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm src/engine/platform/macos_permissions.mm)
-set_source_files_properties(src/engine/render/upscale/metalfx_backend.mm src/engine/platform/macos_permissions.mm
-  PROPERTIES COMPILE_OPTIONS -fobjc-arc)
-target_link_libraries(pt_engine PRIVATE ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK}
-  ${PT_AVFOUNDATION_FRAMEWORK} ${PT_FOUNDATION_FRAMEWORK})
 foreach(game pt pt_release)
-  set_target_properties(${game} PROPERTIES BUILD_RPATH "@executable_path;@executable_path/../Frameworks")
-  add_custom_command(TARGET ${game} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:${game}>/libMoltenVK.dylib"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${game}>/licenses"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_license}" "$<TARGET_FILE_DIR:${game}>/licenses/MoltenVK_LICENSE.txt" VERBATIM)
+add_custom_command(TARGET ${game} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:${game}>/libMoltenVK.dylib"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${game}>/licenses"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_license}" "$<TARGET_FILE_DIR:${game}>/licenses/MoltenVK_LICENSE.txt" VERBATIM)
+
 endforeach()
+
 add_executable(pt_setup_macos EXCLUDE_FROM_ALL installer/Native/setup_macos.mm src/engine/platform/os.cpp)
 target_include_directories(pt_setup_macos PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
 add_dependencies(pt_setup_macos pt_version)
-target_compile_options(pt_setup_macos PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-target_link_libraries(pt_setup_macos PRIVATE zlibstatic ${PT_COCOA_FRAMEWORK} Threads::Threads)
+target_compile_options(pt_setup_macos PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
+target_link_libraries(pt_setup_macos PRIVATE zlibstatic Threads::Threads "-framework Cocoa")
+
+target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
+target_compile_options(pt_engine PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
+target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")
+
+# MetalFX scaling is optional at runtime. Its framework and Objective-C++ source remain Apple-only.
+if(NOT pt_moltenvk_dylib MATCHES "[.]dylib$" OR NOT EXISTS "${pt_moltenvk_dylib}")
+  message(FATAL_ERROR "PT_MOLTENVK_LIBRARY must name an existing libMoltenVK.dylib")
+endif()
+find_library(PT_METAL_FRAMEWORK Metal REQUIRED)
+find_library(PT_METALFX_FRAMEWORK MetalFX REQUIRED)
+target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm)
+target_link_libraries(pt_engine PRIVATE ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK})
+foreach(game pt pt_release)
+  set_target_properties(${game} PROPERTIES BUILD_RPATH "@executable_path;@executable_path/../Frameworks")
+endforeach()
