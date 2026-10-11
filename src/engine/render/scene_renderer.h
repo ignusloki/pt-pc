@@ -147,6 +147,8 @@ struct RenderToggles {
     bool mirrors = true;
     bool tpp_atmosphere = true;
     bool occlusion = true;
+    // Occluder volumes assume the eye stays inside the level, which the free camera need not.
+    bool draw_occlusion = true;
     bool local_reflections = true;
     bool motion_blur = true;
     // PT_SUBSURFACE=0 turns the ending's subsurface scattering off (comparisons)
@@ -277,6 +279,8 @@ private:
         glm::vec3 center{0.0f};
         float radius = 0.0f;
         uint8_t hidden_views = 0;
+        // Views whose occluders hide the draw, kept apart from hidden_views so shadows and ray tracing still see it.
+        uint8_t occluded_views = 0;
         bool character_shadow = false;
     };
 
@@ -318,7 +322,8 @@ private:
     bool EnsureTargets(VkExtent2D extent, VkExtent2D output, bool upscaling);
     void DestroyTargets();
     void WriteImageDescriptors();
-    bool CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect);
+    bool CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+                      bool metal_export = false);
     bool UploadImage(vk::Image& image, VkFormat format, VkExtent3D extent, const void* data, size_t size);
     bool UploadImageMips(vk::Image& image, VkFormat format, VkExtent3D extent, const std::vector<std::vector<uint8_t>>& mips);
     void CreateBuiltinResources();
@@ -355,7 +360,7 @@ private:
     bool RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
     bool MotionBlurActive() const;
     void RecordObjectVelocity(VkCommandBuffer cmd, const ViewSetup& view);
-    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push);
+    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push, bool discard = false);
     SceneFilterContext FilterContext(VkCommandBuffer cmd, uint32_t layers) const;
     void UpdateMotion(const Camera& camera, float dt);
     void RecordDebug(VkCommandBuffer cmd);
@@ -386,7 +391,7 @@ private:
     void RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer);
     void RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context);
     void RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& view);
-    void RecordUpscale(VkCommandBuffer cmd, float dt);
+    void RecordUpscale(VkCommandBuffer& cmd, float dt);
     void ReadUpscaleTimestamps(FrameSlot& slot);
 
     // 0 start, 1 shadows, 2 mirror, 3 G-buffer, 4 lighting, 5 compose, forward and effects, 6 end; within them 7 the forward draws,

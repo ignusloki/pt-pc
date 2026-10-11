@@ -58,8 +58,7 @@ uint32_t PlayerButtonsFromRaw(uint32_t raw);
 // PC settings page (the pad's View/Share/Create).
 enum class KeyAction : uint8_t {
     WalkForward, WalkBack, WalkLeft, WalkRight, PadUp, PadDown, PadLeft, PadRight, Zoom, Act, Menu, Confirm, Cancel, PcSettings, MenuColumn,
-    // the option screen's quit line (R1) and the street walk's "Return to the house" line (L1)
-    MenuQuit, MenuHouse
+    MenuQuit, MenuHouse, FastWalk
 };
 
 struct KeyBinding {
@@ -106,6 +105,7 @@ struct InputState {
     bool any_button = false;
     bool from_gamepad = false;
     bool left_stick_from_pad = false;
+    bool fast_walk = false;
     bool click = false;
     bool right_click = false;
     bool gouge_pressed = false;

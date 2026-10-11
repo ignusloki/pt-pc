@@ -1,7 +1,8 @@
 #pragma once
 
-#include <functional>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,11 @@ struct Swapchain {
     uint32_t min_image_count = 2;
 };
 
+struct Submission {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+};
+
 class Context {
 public:
     bool Init(SDL_Window* window, bool validation, bool want_hdr = false);
@@ -70,14 +76,20 @@ public:
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
     VkImageLayout PresentLayout() const { return swapchain_owner_ ? swapchain_owner_->PresentLayout() : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; }
 
+    // metal_export declares the image's MTLTexture as exportable (VK_EXT_metal_objects), for images the MetalFX upscaler reads or writes.
     bool CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels = 1,
-                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false);
+                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false, bool metal_export = false);
     void DestroyImage(Image& image);
     bool CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible);
     void DestroyBuffer(Buffer& buffer);
 
     void Submit(const std::function<void(VkCommandBuffer)>& record);
+    // Submit without the CPU wait: the caller polls or waits on the fence, then hands it back to Release.
+    Submission SubmitAsync(const std::function<void(VkCommandBuffer)>& record);
+    void Release(Submission& submission);
     bool Upload(Buffer& dst, const void* data, VkDeviceSize size);
+    // Frees the staging buffers of finished Uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
 
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -111,6 +123,7 @@ public:
     bool ray_query_supported = false;
     bool ray_query = false;
     std::string ray_query_missing;
+    bool metal_objects = false;
     VkDeviceSize scratch_alignment = 256;
 
     // Diagnostics, enabled when the device has them: VK_EXT_memory_budget (VMA's heap budgets are the driver's, for the status
@@ -125,7 +138,14 @@ public:
     void CheckDeviceLost(VkResult result, const char* where);
 
 private:
+    struct PendingUpload {
+        Submission submission;
+        Buffer staging;
+    };
+
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 

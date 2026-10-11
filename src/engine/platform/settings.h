@@ -46,8 +46,9 @@ struct AppSettings {
     struct Network {
         bool check_updates = true;
     } network;
-    // voice recognition is always on (an older pt.ini's voice.enabled is ignored)
     struct Voice {
+        // Controls microphone input; the optional keyboard/controller trigger remains independent.
+        bool microphone_enabled = true;
         std::string device;
         std::string key;
     } voice;
@@ -98,6 +99,7 @@ struct AppSettings {
     } graphics;
     // [extras]: PC extras that change what the game shows or does; every default keeps the original
     struct Extras {
+        bool fast_walk = false;
         // the speedrun timer: 0 off, 1 real time, 2 game time (docs/gameplay.md, speedrun mode)
         int speedrun = 0;
         // send the speedrun's start, splits and game time to LiveSplit's TCP server (an IPv4 address and its port)

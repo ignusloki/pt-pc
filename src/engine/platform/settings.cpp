@@ -113,6 +113,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "audio.surround", out.audio.surround);
     Read(v, "audio.controller_speaker", out.audio.controller_speaker);
     Read(v, "audio.controller_speaker_volume", out.audio.controller_speaker_volume);
+    Read(v, "voice.microphone_enabled", out.voice.microphone_enabled);
     Read(v, "voice.device", out.voice.device);
     Read(v, "voice.key", out.voice.key);
     Read(v, "upscaling.upscaler", out.upscaling.upscaler);
@@ -169,6 +170,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
         Read(v, "progress.game_finished", out.progress.game_finished);
         Read(v, "progress.archive", out.progress.archive);
     }
+    Read(v, "extras.fast_walk", out.extras.fast_walk);
     Read(v, "extras.speedrun", out.extras.speedrun);
     Read(v, "extras.livesplit", out.extras.livesplit);
     Read(v, "extras.livesplit_host", out.extras.livesplit_host);
@@ -259,13 +261,16 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "check_updates = " << (s.network.check_updates ? 1 : 0) << "\n\n"
          << "[voice]\n"
          << "; the microphone listens only where the original game does (f160)\n"
+         << "; 0 disables microphone input and its test; the optional key/controller trigger still works\n"
+         << "microphone_enabled = " << (s.voice.microphone_enabled ? 1 : 0) << "\n"
          << "; part of the recording device name, empty for the system default\n"
          << "device = \"" << s.voice.device << "\"\n"
          << "; optional key name (SDL scancode name, e.g. J) that stands in for saying the word, empty to disable\n"
          << "key = \"" << s.voice.key << "\"\n\n"
          << "[upscaling]\n"
          << "; off, fsr3 (AMD FSR 3; fsr reads as fsr3), fsr4 (AMD FSR 4, needs a FidelityFX Vulkan build with FSR 4), dlss (NVIDIA DLSS,\n"
-         << "; RTX GPUs), xess (Intel XeSS); off renders at the display resolution like the original\n"
+         << "; RTX GPUs), xess (Intel XeSS), metalfx (Apple MetalFX, macOS only); off renders at the display resolution like the\n"
+         << "; original\n"
          << "upscaler = " << s.upscaling.upscaler << "\n"
          << "; native (anti-aliasing only: FSR native AA, DLAA, XeSS AA), quality, balanced, performance, ultra_performance, custom\n"
          << "quality = " << s.upscaling.quality << "\n"
@@ -330,6 +335,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "archive = " << s.progress.archive << "\n";
     text << "\n[extras]\n"
          << "; not in the original; 0 keeps the original game\n"
+         << "; hold either Shift or the gamepad's bottom face button to walk 1.5x faster; game time is unchanged\n"
+         << "fast_walk = " << (s.extras.fast_walk ? 1 : 0) << "\n"
          << "; speedrun timer: 0 off, 1 real time (everything counts), 2 game time (no pauses, no loads); records in this folder\n"
          << "speedrun = " << s.extras.speedrun << "\n"
          << "; LiveSplit: send the start, the splits and the game time to its TCP server (Control > Start TCP Server)\n"

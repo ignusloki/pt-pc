@@ -397,3 +397,21 @@ target_link_libraries(pt_installer_update_test PRIVATE zlibstatic)
 if(MSVC)
   target_compile_options(pt_installer_update_test PRIVATE /utf-8 /EHsc)
 endif()
+
+# Optional movement and Vulkan/Metal submission regressions.
+add_executable(pt_fast_walk_test tests/fast_walk_test.cpp)
+target_link_libraries(pt_fast_walk_test PRIVATE pt_engine)
+add_executable(pt_queue_handoff_test tests/queue_handoff_test.cpp)
+target_link_libraries(pt_queue_handoff_test PRIVATE pt_engine)
+
+# The validation workflows build RelWithDebInfo; assertions in test translation units must stay active.
+get_property(pt_directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(test IN LISTS pt_directory_targets)
+  if(test STREQUAL "pt_tests" OR test MATCHES "^pt_.*_test$")
+    if(MSVC)
+      target_compile_options(${test} PRIVATE /UNDEBUG)
+    else()
+      target_compile_options(${test} PRIVATE -UNDEBUG)
+    endif()
+  endif()
+endforeach()

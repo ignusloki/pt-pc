@@ -1,6 +1,6 @@
 # Upscaling and frame generation (PC option)
 
-The original renders at 1920x1080 with FXAA. The port can render the 3D scene at a lower internal resolution and reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS; AMD FSR 4 is listed but has no Vulkan release, see below), or keep the display resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the upscaler off the frame is the one described in `rendering.md` section 12, bit for bit.
+The original renders at 1920x1080 with FXAA. The port can render the 3D scene at a lower internal resolution and reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS, Apple MetalFX on macOS; AMD FSR 4 is listed but has no Vulkan release, see below), or keep the display resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the upscaler off the frame is the one described in `rendering.md` section 12, bit for bit.
 
 ## Settings
 
@@ -8,10 +8,10 @@ The original renders at 1920x1080 with FXAA. The port can render the 3D scene at
 
 | key | values | meaning |
 | --- | --- | --- |
-| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess` | backend (`fsr`, written by the builds before FSR 4 was listed, reads as `fsr3`); the page lists every backend and shows the ones this machine or this build cannot run greyed, with the reason on its help line |
+| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess`, `metalfx` | backend (`fsr`, written by the builds before FSR 4 was listed, reads as `fsr3`); the page lists every backend and shows the ones this machine or this build cannot run greyed, with the reason on its help line |
 | `quality` | `native`, `quality`, `balanced`, `performance`, `ultra_performance`, `custom` | render scale 1/1.0, 1/1.5, 1/1.7, 1/2.0, 1/3.0 per axis (the FSR ratios, used for every backend), or `scale` |
 | `scale` | 0.25 to 1.0 | render scale per axis for `custom` |
-| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler (DLSS has no sharpening) |
+| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler (DLSS and MetalFX have no sharpening) |
 | `dlss_model` | `auto`, `k`, `l`, `m` | the DLSS Super Resolution model (NGX render preset) for every quality; `auto` is NVIDIA's default per quality; on the PC settings page the row takes the Sharpness row's place while DLSS is the upscaler |
 | `frame_generation` | `off`, `fsr3`, `dlss` | one generated frame between two rendered frames: AMD FSR 3 frame generation or NVIDIA DLSS Frame Generation (see below); needs a window and an upscaler (any backend and quality). `0` and `1` from older builds read as `off` and `fsr3` |
 
@@ -59,6 +59,16 @@ The upscaler list checks the vendor, `nvngx_dlss.dll` and the Vulkan extensions 
 XeSS Super Resolution from the XeSS SDK 3.0.2 (github.com/intel/xess, Intel Simplified Software License): the headers at build time, `libxess.dll` next to `pt.exe` at run time (loaded when XeSS is selected; it reports XeSS SR 2.0.2). GPUs other than Intel Arc run its DP4a model. The qualities keep the render sizes of the quality table and use the XeSS preset with the same ratio: native AA uses AA, quality (1.5) Ultra Quality, balanced (1.7) Quality, performance (2.0) Balanced, ultra performance (3.0) Ultra Performance; `custom` takes the preset with the nearest ratio. Init flags: inverted depth and the responsive pixel mask (the reactive mask). Execute: jitter `+jitter` (checked against the 4x supersampled render: 37.0 dB on the f020 corridor at performance, the other signs 32.3 to 34.9 dB), velocity scale = render size (the vectors are UV units from the current to the previous frame), exposure scale 1 (the colour is pre-exposed). XeSS's own mip bias formula is `log2(render / output)`, the bias used for every backend here.
 
 XeSS needs `VK_EXT_mutable_descriptor_type` with `mutableDescriptorType`, and `shaderStorageImageWriteWithoutFormat`, `shaderInt8`, `scalarBlockLayout` and `shaderIntegerDotProduct` (its query on driver 617.14). When `libxess.dll` is present the device enables them at start where supported: from the XeSS query when `pt.ini` selects XeSS, from that list otherwise. Selecting XeSS runs the query again and asks for a restart if something is missing.
+
+### Apple MetalFX
+
+macOS only (`metalfx_backend.mm`). MoltenVK's `VK_EXT_metal_objects` gives the Metal textures behind the scene's
+images, and `MTLFXTemporalScaler` upscales them on its own Metal queue. Two Vulkan timeline semaphores exported as
+Metal shared events keep the queues in order. The renderer submits the scene inputs before committing the MetalFX
+command buffer; the remaining Vulkan work waits for MetalFX's output signal. Synchronization resources stay alive
+until the frame fence completes, and timeline values keep increasing across settings and size changes.
+The qualities use the same ratios as FSR. The frame's exposure is converted to an R16Float texture for MetalFX;
+MetalFX has no sharpening. Upscaling remains off by default.
 
 ## Frame generation
 

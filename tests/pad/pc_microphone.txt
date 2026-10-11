@@ -1,0 +1,99 @@
+# PC Settings > Sound: disable microphone input, retain the optional trigger, re-enable, disable again,
+# verify the microphone test cannot open while Off, and verify Off survives leaving/re-entering Sound.
+# Use an isolated --settings path; the script saves preferences but --no-save keeps gameplay saves untouched.
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 stap 0 options
+20 swait 70
+20 sexpect menu 1
+20 sexpect page 0
+20 stap 0 cross
+20 swait 40
+20 sexpect pcrow pc_display_mode
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_section_sound
+20 stap 0 cross
+20 swait 20
+20 sexpect pcrow pc_volume
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_microphone_enabled
+20 sexpect pcvalue pc_microphone_enabled 1
+20 stap 0 left
+20 swait 20
+20 sexpect pcvalue pc_microphone_enabled 0
+20 sexpect pcenabled pc_microphone 0
+20 sexpect pcenabled pc_microphone_test 0
+20 sshot microphone_off.png
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 cross
+20 swait 20
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 4
+20 sexpect pcrow pc_microphone_enabled
+20 stap 0 right
+20 swait 20
+20 sexpect pcvalue pc_microphone_enabled 1
+20 sexpect pcenabled pc_microphone 1
+20 sexpect pcenabled pc_microphone_test 1
+20 sshot microphone_on.png
+20 stap 0 left
+20 swait 20
+20 sexpect pcvalue pc_microphone_enabled 0
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_microphone_test
+20 stap 0 cross
+20 swait 20
+20 sexpect pcrow pc_microphone_test
+20 stap 0 circle
+20 swait 20
+20 sexpect pcrow pc_section_sound
+20 stap 0 cross
+20 swait 20
+20 sexpect pcvalue pc_microphone_enabled 0
+20 sexpect pcenabled pc_microphone 0
+20 sexpect pcenabled pc_microphone_test 0
+20 slog
+20 squit

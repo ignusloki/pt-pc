@@ -184,7 +184,7 @@ if(WIN32)
   target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_WIN32_KHR)
 elseif(APPLE)
   # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
-  target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS)
+  target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS VK_USE_PLATFORM_METAL_EXT)
 endif()
 target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3-static zlibstatic pt_bc7enc)
 if(NOT WIN32)

@@ -1,9 +1,6 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "engine/platform/update_check.h"
-#ifdef __APPLE__
-#include "engine/platform/macos_permissions.h"
-#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -66,12 +63,16 @@
 #include "engine/core/resource_path.h"
 #include "engine/platform/settings.h"
 #include "engine/platform/display_modes.h"
+#include "engine/render/render_viewport.h"
 #include "engine/platform/os.h"
 #include "engine/platform/sdl_diag.h"
 #include "engine/platform/user_data.h"
 #include "engine/platform/graphics_presets.h"
 #include "engine/platform/virtual_pad.h"
 #include "engine/voice/microphone.h"
+#ifdef __APPLE__
+#include "engine/platform/macos_permissions.h"
+#endif
 #include "engine/voice/voice_recognizer.h"
 #include "game/archive.h"
 #include "game/archive_theater.h"
@@ -258,7 +259,7 @@ constexpr OptionSpec kOptionSpecs[] = {
 };
 
 void PrintOptions(FILE* out) {
-    std::fprintf(out, "pt.exe [options]\n\nWithout options the game starts. Options:\n");
+    std::fprintf(out, "P.T. [options]\n\nWithout options the game starts. Options:\n");
     for (const OptionSpec& spec : kOptionSpecs) std::fprintf(out, "  %-22s %s\n", spec.name, spec.help);
 }
 
@@ -270,7 +271,7 @@ int OptionValues(std::string_view arg) {
 }
 
 [[noreturn]] void RefuseCommandLine(const std::string& message) {
-    std::fprintf(stderr, "pt.exe: %s\n\n", message.c_str());
+    std::fprintf(stderr, "P.T.: %s\n\n", message.c_str());
     PrintOptions(stderr);
     std::exit(2);
 }
@@ -777,6 +778,11 @@ void ApplyFullscreen(App& app) {
         SDL_SetWindowFullscreen(app.window, false);
         SDL_SetWindowSize(app.window, app.settings.display.width, app.settings.display.height);
     }
+#ifdef __APPLE__
+    // Cocoa applies fullscreen requests asynchronously. Finish the transition before rebuilding the Vulkan drawable.
+    if (!SDL_SyncWindow(app.window)) pt::LogWarn("display: fullscreen transition timed out: {}", SDL_GetError());
+    if (app.renderer.Context().device) app.renderer.Resize(0, 0);
+#endif
 }
 
 std::filesystem::path g_output_dir;
@@ -1291,7 +1297,11 @@ bool DrawUpscaleSettings(App& app) {
     bool changed = false;
     ImGui::SeparatorText("Upscaling");
     const pt::UpscalerKind kinds[] = {pt::UpscalerKind::Off, pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss,
-                                      pt::UpscalerKind::Xess};
+                                      pt::UpscalerKind::Xess,
+#ifdef __APPLE__
+                                      pt::UpscalerKind::MetalFx,
+#endif
+    };
     if (ImGui::BeginCombo("Upscaler", pt::UpscalerName(u.kind))) {
         for (pt::UpscalerKind kind : kinds) {
             std::string reason;
@@ -1431,6 +1441,8 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
         }
         changed = true;
     }
+    if (ImGui::Checkbox("Microphone input", &s.voice.microphone_enabled)) changed = true;
+    ImGui::BeginDisabled(!s.voice.microphone_enabled);
     if (ImGui::BeginCombo("Microphone", s.voice.device.empty() ? "System default" : s.voice.device.c_str())) {
         if (ImGui::Selectable("System default", s.voice.device.empty())) {
             s.voice.device.clear();
@@ -1449,6 +1461,7 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
         SDL_free(devices);
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     ImGui::TextDisabled("Brightness, subtitles and camera inversion are in the game's own options.");
     if (DrawUpscaleSettings(app)) {
         UpscaleToApp(app.scene.upscale, s);
@@ -1840,6 +1853,7 @@ public:
             extras.rows.push_back(std::move(photo));
             // not in the original (pt.ini [camera] third_person, Game::SetThirdPerson)
             extras.rows.push_back(Row(kThirdPerson, "pc_third_person", OffOn(), game_.ThirdPerson() ? 1 : 0, "pc_note_third_person"));
+            extras.rows.push_back(Row(kFastWalk, "pc_fast_walk", OffOn(), app_.settings.extras.fast_walk ? 1 : 0, "pc_note_fast_walk"));
             extras.rows.push_back(Row(kSpeedrun, "pc_speedrun", {"pc_off", "pc_speedrun_real_time", "pc_speedrun_game_time"},
                                       std::clamp(app_.settings.extras.speedrun, 0, 2), "pc_note_speedrun"));
             extras.rows.push_back(Row(kLiveSplit, "pc_livesplit", OffOn(), app_.settings.extras.livesplit ? 1 : 0,
@@ -2012,9 +2026,15 @@ public:
         for (int i = 0; i <= 20; ++i) controller_speaker_volume.values.push_back(std::format("{}%", i * 5));
         controller_speaker_volume.wrap = false;
         sound.rows.push_back(std::move(controller_speaker_volume));
-        // voice recognition is always on, as the original's (gameplay.md 7: the true end has no path without the word); it
-        // listens only on f160
+        const char* microphone_note = "pc_note_microphone_enabled";
+#ifdef __APPLE__
+        if (s.voice.microphone_enabled && pt::GetMacMicrophoneAccess() == pt::MacMicrophoneAccess::Denied)
+            microphone_note = "pc_mic_permission_denied";
+#endif
+        sound.rows.push_back(Row(kMicrophoneEnabled, "pc_microphone_enabled", OffOn(), s.voice.microphone_enabled ? 1 : 0, microphone_note));
+        // The microphone listens on f160 or in its test; the optional trigger is independent of microphone input.
         pt::game::PcSettingRow microphone = Row(kMicrophone, "pc_microphone", {"pc_system_default"}, 0, "pc_note_voice");
+        microphone.enabled = s.voice.microphone_enabled;
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
             microphone.values.push_back(devices[i].size() > 24 ? devices[i].substr(0, 22) + "..." : devices[i]);
@@ -2034,6 +2054,7 @@ public:
         sound.rows.push_back(std::move(trigger));
         auto microphone_test = Row(kMicrophoneTest, "pc_microphone_test", {"pc_graphics_value"}, 0, "pc_note_microphone_test");
         microphone_test.link = true;
+        microphone_test.enabled = s.voice.microphone_enabled;
         sound.rows.push_back(std::move(microphone_test));
         if (page_ == kSoundPage) {
             pt::game::PcSettingSection voice{"pc_microphone", 1, {}};
@@ -2117,6 +2138,7 @@ public:
         page_ = previous;
         archive_section_ = previous_section;
         for (const char* note : {"pc_note_archive_playing", "pc_note_archive_locked", "pc_note_archive_lock"}) notes.push_back(note);
+        for (const char* note : {"pc_mic_disabled", "pc_mic_permission_pending", "pc_mic_permission_denied"}) notes.push_back(note);
         // the upscaling notes that depend on the upscaler, the GPU or the frame generation state
         for (const char* note : {"pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_frame_generation_dlss", "pc_note_dlssg_gpu",
                                  "pc_note_dlssg_driver", "pc_note_dlssg_hags", "pc_note_dlssg_missing", "pc_note_dlssg_failed",
@@ -2139,7 +2161,13 @@ public:
         }
         switch (id) {
         case kMicMonitor:
-            app_.microphone_monitor = value == 1;
+            app_.microphone_monitor = s.voice.microphone_enabled && value == 1;
+            return;
+        case kFastWalk:
+            s.extras.fast_walk = value == 1;
+            game_.SetFastWalk(s.extras.fast_walk);
+            pt::LogInfo("fast walk: {} (PC settings)", s.extras.fast_walk ? "on" : "off");
+            Save();
             return;
         case kSpeedrun:
             s.extras.speedrun = std::clamp(value, 0, 2);
@@ -2166,6 +2194,10 @@ public:
             s.display.height = sizes[value].y;
             if (app_.window && s.display.fullscreen == 0) {
                 SDL_SetWindowSize(app_.window, s.display.width, s.display.height);
+#ifdef __APPLE__
+                if (!SDL_SyncWindow(app_.window)) pt::LogWarn("display: window resize timed out: {}", SDL_GetError());
+                app_.renderer.Resize(0, 0);
+#endif
             } else if (s.display.fullscreen == 2) {
                 ApplyFullscreen(app_);
             }
@@ -2248,6 +2280,10 @@ public:
             break;
         case kVolume:
             s.audio.volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.1f;
+            break;
+        case kMicrophoneEnabled:
+            s.voice.microphone_enabled = value == 1;
+            if (!s.voice.microphone_enabled) app_.microphone_test = app_.microphone_monitor = false;
             break;
         case kMicrophoneTrigger:
             if(value==0) s.voice.key.clear();
@@ -2642,6 +2678,7 @@ private:
         kDlssModel,
         kFrameGeneration,
         kVolume,
+        kMicrophoneEnabled,
         kMicrophone,
         kMicrophoneTest, kMicrophoneTrigger, kSoundSettings,
         kMicLevel,
@@ -2667,6 +2704,7 @@ private:
         kLoopBrowser, kExtras, kFreecam, kPhotoMode, kStreetWalk, kStreetRestart, kStreetLeave, kLoopLock, kThirdPerson, kSpeedrun, kLiveSplit, kRunMenu, kRunReal, kRunGame, kRunBest,
         kArchive, kArchiveLock,
         kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
+        kFastWalk,
         kLoopFirst = 1000,
         kRunSplitFirst = 3000,
         kModFirst = 2000,
@@ -3163,6 +3201,7 @@ private:
         case pt::UpscalerKind::Fsr4: return "FSR 4";
         case pt::UpscalerKind::Dlss: return "DLSS";
         case pt::UpscalerKind::Xess: return "XeSS";
+        case pt::UpscalerKind::MetalFx: return "MetalFX";
         default: return pt::UpscalerName(kind);
         }
     }
@@ -3172,7 +3211,13 @@ private:
     std::vector<pt::UpscalerKind> Upscalers(std::vector<std::string>* notes) const {
         std::vector<pt::UpscalerKind> kinds{pt::UpscalerKind::Off};
         if (notes) notes->assign(1, std::string());
-        for (const pt::UpscalerKind kind : {pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess}) {
+#ifdef __APPLE__
+        constexpr pt::UpscalerKind kListed[] = {pt::UpscalerKind::MetalFx, pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss,
+                                                pt::UpscalerKind::Xess};
+#else
+        constexpr pt::UpscalerKind kListed[] = {pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess};
+#endif
+        for (const pt::UpscalerKind kind : kListed) {
             std::string reason;
             const bool available = app_.scene.UpscalerAvailable(kind, reason);
             kinds.push_back(kind);
@@ -3454,6 +3499,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     // the speedrun timer (Extras; off by default): its records go next to pt.ini, none without a settings file
     game.Speedrun().SetMode(app.settings.extras.speedrun);
+    game.SetFastWalk(app.settings.extras.fast_walk);
     if (!app.settings_path.empty()) game.Speedrun().SetRecordDirectory(std::filesystem::absolute(app.settings_path).parent_path());
     app.livesplit.Configure(app.settings.extras.livesplit, app.settings.extras.livesplit_host, app.settings.extras.livesplit_port);
     game.Speedrun().SetLiveSplit(&app.livesplit);
@@ -3571,6 +3617,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     std::unique_ptr<pt::VoiceRecognizer> recognizer;
     pt::Microphone microphone;
     std::string active_microphone_device;
+    bool previous_microphone_enabled = app.settings.voice.microphone_enabled;
     bool previous_microphone_test = false;
     bool microphone_failed = false;
     float mic_quiet_seconds = 0.0f;
@@ -4116,6 +4163,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         pending_input.left_stick = polled.left_stick;
         pending_input.right_stick = polled.right_stick;
+        pending_input.fast_walk = polled.fast_walk;
         pending_input.held = polled.held;
         pending_input.raw_held = polled.raw_held;
         pending_input.mouse_look += polled.mouse_look;
@@ -4138,8 +4186,22 @@ int RunGame(App& app, pt::Vfs& vfs) {
             float x = 0.0f;
             float y = 0.0f;
             SDL_GetMouseState(&x, &y);
-            pending_input.pointer = glm::vec2(x, y) * SDL_GetWindowPixelDensity(app.window);
-            pending_input.pointer_valid = true;
+            if (vr) {
+                pending_input.pointer = glm::vec2(x, y) * SDL_GetWindowPixelDensity(app.window);
+                pending_input.pointer_valid = true;
+            } else {
+                int width = 0, height = 0, pixel_width = 0, pixel_height = 0;
+                SDL_GetWindowSize(app.window, &width, &height);
+                SDL_GetWindowSizeInPixels(app.window, &pixel_width, &pixel_height);
+                if (pixel_width > 0 && pixel_height > 0) {
+                    // Match the canvas of the last rendered frame, including while a fullscreen change is pending.
+                    if (const auto pointer = pt::WindowToRenderPointer({x, y}, {width, height},
+                            {static_cast<uint32_t>(pixel_width), static_cast<uint32_t>(pixel_height)}, app.renderer.RenderExtent())) {
+                        pending_input.pointer = *pointer;
+                        pending_input.pointer_valid = true;
+                    }
+                }
+            }
         }
         // Extras hotkeys: F6 the free camera, F7 the photo mode; in the photo mode P (Square) takes a photo and H (Triangle) hides
         // the panel; the menu button (Esc, Start) ends the photo mode, then the free camera, and opens no menu
@@ -4491,6 +4553,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         if (!ui.MenuOpen() || ui.Menu().CurrentPage() != pt::game::OptionsMenu::Page::Pc)
             app.microphone_test = app.microphone_monitor = false;
+        const bool voice_file = !voice_input.empty();
+        if (previous_microphone_enabled != app.settings.voice.microphone_enabled) {
+            microphone.Close();
+            if (recognizer) recognizer->Reset();
+            microphone_failed = false;
+            app.microphone_monitor = false;
+            app.microphone_db = -80.0f;
+            app.microphone_hypothesis.clear();
+            previous_microphone_enabled = app.settings.voice.microphone_enabled;
+            pt::LogInfo("voice: microphone input {}", previous_microphone_enabled ? "on" : "off");
+#ifdef __APPLE__
+            if (app.window && previous_microphone_enabled && !voice_file) pt::RequestMacMicrophoneAccess();
+#endif
+        }
         if (active_microphone_device != app.settings.voice.device || previous_microphone_test != app.microphone_test) {
             microphone.Close();
             microphone_failed = false;
@@ -4500,9 +4576,27 @@ int RunGame(App& app, pt::Vfs& vfs) {
         // The models load once on the recognizer's thread and stay while the game listens (f160 to the ending) or the
         // microphone test is open; the microphone itself is open only while it is heard (not paused)
         // PT_VOICE_INPUT=<16 kHz wav> stands in for the microphone, looped at game time, also headless (tools/walkthrough.py voice)
-        const bool voice_file = !voice_input.empty();
-        const bool hearing = (app.window || voice_file) && ((game.VoiceListening() && !game.Paused()) || app.microphone_test);
-        if ((app.window || voice_file) && (game.VoiceListening() || app.microphone_test)) {
+        bool microphone_allowed = app.settings.voice.microphone_enabled;
+        if (!microphone_allowed) {
+            app.microphone_status = "pc_mic_disabled";
+            app.microphone_reason = "pc_off";
+            app.microphone_db = -80.0f;
+            app.microphone_hypothesis.clear();
+        }
+#ifdef __APPLE__
+        if (microphone_allowed && app.window && !voice_file) {
+            const auto access = pt::GetMacMicrophoneAccess();
+            if (access == pt::MacMicrophoneAccess::Denied || access == pt::MacMicrophoneAccess::Pending ||
+                access == pt::MacMicrophoneAccess::NotDetermined) {
+                microphone_allowed = false;
+                app.microphone_status = access == pt::MacMicrophoneAccess::Denied ? "pc_mic_permission_denied" : "pc_mic_permission_pending";
+                app.microphone_reason = "pc_mic_st_permission";
+            }
+        }
+#endif
+        const bool voice_source = microphone_allowed && (app.window || voice_file);
+        const bool hearing = voice_source && ((game.VoiceListening() && !game.Paused()) || app.microphone_test);
+        if (voice_source && (game.VoiceListening() || app.microphone_test)) {
             if (!recognizer) {
                 recognizer = std::make_unique<pt::VoiceRecognizer>();
                 recognizer->Init(pt::ResourceDir("voice", PT_VOICE_MODEL_DIR), "jack");
@@ -4728,6 +4822,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         ++frame;
         pt::LogSetTick(frame);
         app.scene.AdvanceTime(dt);
+        app.scene.toggles.draw_occlusion = !freecam;
         bool warmed = false;
         if (vr) {
             // VR (docs/vr.md): every waited frame is drawn (or ended without layers): the stereo view, two eyes from one game
@@ -5294,7 +5389,7 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to P.T. PC Port.app, or start pt with --game <folder>.";
+                                     "texture.qar), put that folder next to P.T..app, or start pt with --game <folder>.";
 #elif defined(_WIN32)
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
@@ -5468,7 +5563,8 @@ int main(int argc, char** argv) {
         }
         const bool viewer = !options.stage.empty() || !options.texture_test.empty();
 #ifdef __APPLE__
-        if (app.window && !viewer) pt::RequestMacMicrophoneAccessAtStartup();
+        if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
+            pt::RequestMacMicrophoneAccess();
 #endif
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
         app.texture_job.Cancel();

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include "engine/core/crash_report.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/pipeline_cache_store.h"
+#include "engine/render/render_viewport.h"
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale.h"
@@ -110,6 +112,7 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc.commandBufferCount = 1;
         vkAllocateCommandBuffers(ctx_.device, &alloc, &frame.cmd);
+        frame.commands.push_back(frame.cmd);
         VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.image_available);
         VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -359,6 +362,8 @@ void Renderer::Shutdown() {
     vkDestroySampler(ctx_.device, wrap_sampler_, nullptr);
     DestroyTargets();
     for (Frame& frame : frames_) {
+        // The final frame fence also covers its earlier segments and external queue work.
+        frame.segments.clear();
         vkDestroyFence(ctx_.device, frame.in_flight, nullptr);
         vkDestroySemaphore(ctx_.device, frame.image_available, nullptr);
         vkDestroyCommandPool(ctx_.device, frame.pool, nullptr);
@@ -380,6 +385,11 @@ void Renderer::Resize(uint32_t, uint32_t) {
 bool Renderer::BeginFrame(bool present) {
     Frame& frame = frames_[frame_index_];
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
+    ctx_.ReclaimUploads(VK_WHOLE_SIZE);
+    frame.segments.clear();
+    frame.wait = VK_NULL_HANDLE;
+    frame.wait_value = 0;
+    frame.cmd = frame.commands.front();
     // a frame generation switch (DLSS-G's swapchain and plugin) happens here, between frames: the previous frame is presented,
     // and no command buffer or swapchain image of this one exists yet
     bool keep_current_swapchain = false;
@@ -472,6 +482,40 @@ bool Renderer::BeginFrame(bool present) {
     streamline::SetMarker(streamline::Marker::SimulationEnd);
     streamline::SetMarker(streamline::Marker::RenderSubmitStart);
     return true;
+}
+
+VkCommandBuffer Renderer::QueueHandoff(VkCommandBuffer current, VkSemaphore inputs_ready, uint64_t inputs_value,
+                                      VkSemaphore output_ready, uint64_t output_value, std::function<void()> submit_external) {
+    Frame& frame = frames_[frame_index_];
+    if (current != frame.cmd || !inputs_ready || !output_ready || !submit_external) {
+        return VK_NULL_HANDLE;
+    }
+    const size_t next_index = frame.segments.size() + 1;
+    if (next_index == frame.commands.size()) {
+        VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc.commandPool = frame.pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        VkCommandBuffer next = VK_NULL_HANDLE;
+        if (!vk::Check(vkAllocateCommandBuffers(ctx_.device, &alloc, &next), "external queue continuation")) {
+            return VK_NULL_HANDLE;
+        }
+        frame.commands.push_back(next);
+    }
+    const VkCommandBuffer next = frame.commands[next_index];
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (!vk::Check(vkBeginCommandBuffer(next, &begin), "external queue continuation begin")) {
+        return VK_NULL_HANDLE;
+    }
+    if (!vk::Check(vkEndCommandBuffer(current), "external queue segment end")) {
+        throw std::runtime_error("cannot finish the frame before external queue work");
+    }
+    frame.segments.push_back({current, frame.wait, frame.wait_value, inputs_ready, inputs_value, std::move(submit_external)});
+    frame.cmd = next;
+    frame.wait = output_ready;
+    frame.wait_value = output_value;
+    return next;
 }
 
 void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format, VkOffset2D offset) {
@@ -586,11 +630,8 @@ void Renderer::EndFrame(bool draw_ui) {
         }
         vkCmdBeginRendering(cmd, &rendering);
         if (fitted) {
-            const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
-                                         static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
-            const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
-            Composite(cmd, final_set_, 1.0f, shown, ctx_.swapchain.format,
-                      {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
+            const VkRect2D viewport = FitRenderViewport(extent, window_extent);
+            Composite(cmd, final_set_, 1.0f, viewport.extent, ctx_.swapchain.format, viewport.offset);
         } else {
             Composite(cmd, final_set_, 1.0f, extent, window_ ? ctx_.swapchain.format : output_.format);
         }
@@ -646,20 +687,59 @@ void Renderer::EndFrame(bool draw_ui) {
     }
     vkEndCommandBuffer(cmd);
 
+    // Each prefix releases its inputs to the external queue. Only then is that queue's command buffer committed.
+    for (const FrameSegment& segment : frame.segments) {
+        VkCommandBufferSubmitInfo segment_cmd{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        segment_cmd.commandBuffer = segment.cmd;
+        VkSemaphoreSubmitInfo segment_wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        segment_wait.semaphore = segment.wait;
+        segment_wait.value = segment.wait_value;
+        segment_wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSemaphoreSubmitInfo segment_signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        segment_signal.semaphore = segment.signal;
+        segment_signal.value = segment.signal_value;
+        segment_signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 prefix{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        prefix.commandBufferInfoCount = 1;
+        prefix.pCommandBufferInfos = &segment_cmd;
+        prefix.waitSemaphoreInfoCount = segment.wait ? 1 : 0;
+        prefix.pWaitSemaphoreInfos = &segment_wait;
+        prefix.signalSemaphoreInfoCount = 1;
+        prefix.pSignalSemaphoreInfos = &segment_signal;
+        const VkResult result = vkQueueSubmit2(ctx_.queue, 1, &prefix, VK_NULL_HANDLE);
+        ctx_.CheckDeviceLost(result, "external queue inputs submit");
+        if (!vk::Check(result, "external queue inputs submit")) {
+            throw std::runtime_error("cannot submit inputs to the external queue");
+        }
+        segment.submit_external();
+    }
+
     VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     cmd_info.commandBuffer = cmd;
-    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    wait.semaphore = frame.image_available;
-    wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphoreSubmitInfo waits[2]{};
+    uint32_t wait_count = 0;
+    if (frame.wait) {
+        auto& wait = waits[wait_count++];
+        wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait.semaphore = frame.wait;
+        wait.value = frame.wait_value;
+        wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+    if (presenting_) {
+        auto& wait = waits[wait_count++];
+        wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait.semaphore = frame.image_available;
+        wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    }
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cmd_info;
+    submit.waitSemaphoreInfoCount = wait_count;
+    submit.pWaitSemaphoreInfos = waits;
     if (presenting_) {
         signal.semaphore = ctx_.swapchain.render_finished[image_index_];
-        submit.waitSemaphoreInfoCount = 1;
-        submit.pWaitSemaphoreInfos = &wait;
         submit.signalSemaphoreInfoCount = 1;
         submit.pSignalSemaphoreInfos = &signal;
     }

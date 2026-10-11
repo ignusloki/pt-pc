@@ -58,6 +58,7 @@ public:
     // gives the albedo the composite's decode of it, 0.216 (rendering.md 3)
     static constexpr uint32_t kGrey = 4;
     static constexpr uint32_t kGreySrgb = 5;
+    static constexpr uint32_t kClear = 6;
     static constexpr uint32_t kMaxCubeTextures = 64;
     static constexpr uint32_t kNoCube = 0xFFFFFFFFu;
 
@@ -73,6 +74,7 @@ public:
     // clock's maze package brings eleven effect pictures (fx_viweye01..11) whose unpacking took 311 ms of one frame. Paths loaded or
     // already queued are skipped; nothing is queued while a mod is active (LoadFox reads the overrides).
     void DecodeAhead(const QarArchive& qar, const std::vector<std::string>& paths);
+    bool StillDecoding(const std::string& path) const;
     // Uploads up to `count` finished ahead decodes in the order they were queued (one or two a frame instead of all of them in
     // the frame that first draws them); returns how many were uploaded
     uint32_t PumpDecoded(const QarArchive& qar, uint32_t count);
@@ -112,9 +114,15 @@ public:
 private:
     VkSampler CreateSampler(int anisotropy) const;
     void UpdateTextureDescriptor(uint32_t index);
-    void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr);
+    void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr, bool fresh = false);
     // a mod's <stem>.png in place of the game's texture (docs/modding.md); kWhite when it cannot be used
     uint32_t LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png, bool raw);
+    void ReclaimUploads(VkDeviceSize max_pending_bytes);
+
+    struct PendingUpload {
+        vk::Submission submission;
+        vk::Buffer staging;
+    };
 
     vk::Context* ctx_ = nullptr;
     // the trilinear sampler of the original, kept for the cube maps; sampler_ is the 2D textures' (base_sampler_ unless
@@ -161,6 +169,8 @@ private:
     std::unordered_map<std::string, std::shared_future<std::shared_ptr<FtexTexture>>> decoding_;
     std::deque<std::string> decode_order_;
     std::vector<std::future<void>> decode_workers_;
+    std::deque<PendingUpload> pending_uploads_;
+    VkDeviceSize pending_upload_bytes_ = 0;
     double read_ms_ = 0.0;
     double upload_ms_ = 0.0;
 };

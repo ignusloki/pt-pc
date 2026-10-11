@@ -51,3 +51,15 @@ target_link_libraries(pt_setup_macos PRIVATE zlibstatic Threads::Threads "-frame
 target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
 target_compile_options(pt_engine PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")
+
+# MetalFX scaling is optional at runtime. Its framework and Objective-C++ source remain Apple-only.
+if(NOT pt_moltenvk_dylib MATCHES "[.]dylib$" OR NOT EXISTS "${pt_moltenvk_dylib}")
+  message(FATAL_ERROR "PT_MOLTENVK_LIBRARY must name an existing libMoltenVK.dylib")
+endif()
+find_library(PT_METAL_FRAMEWORK Metal REQUIRED)
+find_library(PT_METALFX_FRAMEWORK MetalFX REQUIRED)
+target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm)
+target_link_libraries(pt_engine PRIVATE ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK})
+foreach(game pt pt_release)
+  set_target_properties(${game} PROPERTIES BUILD_RPATH "@executable_path;@executable_path/../Frameworks")
+endforeach()

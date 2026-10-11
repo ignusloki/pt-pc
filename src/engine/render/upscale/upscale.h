@@ -17,7 +17,7 @@ class FrameGeneration;
 
 // Fsr is AMD FSR 3.1 (pt.ini fsr3, or fsr from older builds); Fsr4 is listed for the FidelityFX Vulkan DLL that would carry an
 // FSR 4 upscaler (none does yet: upscaling.md, AMD FSR 4)
-enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, Count = 6 };
+enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 // the DLSS Super Resolution model (NGX render preset): Auto takes NVIDIA's default for each quality mode
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
 // frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp) or NVIDIA DLSS Frame Generation (Streamline)
@@ -83,8 +83,11 @@ struct UpscaleImage {
     bool Valid() const { return image != VK_NULL_HANDLE; }
 };
 
+class Renderer;
+
 struct UpscaleDispatch {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
+    Renderer* renderer = nullptr;
     UpscaleImage color;
     UpscaleImage depth;
     UpscaleImage motion;
@@ -210,6 +213,7 @@ std::unique_ptr<UpscaleBackend> CreateStreamlineDlssBackend(vk::Context& ctx);
 uint32_t DlssPresetHint(DlssModel model);
 bool DlssAutoExposure();
 std::unique_ptr<UpscaleBackend> CreateXessBackend(vk::Context& ctx);
+std::unique_ptr<UpscaleBackend> CreateMetalFxBackend(vk::Context& ctx);
 void XessDeviceRequirements(bool query, VkInstance instance, VkPhysicalDevice physical, DeviceFeatureSet& out);
 void DlssInstanceExtensions(bool query, std::vector<std::string>& out);
 void DlssDeviceExtensions(bool query, VkInstance instance, VkPhysicalDevice physical, std::vector<std::string>& out);

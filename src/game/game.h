@@ -179,6 +179,8 @@ public:
     // so every trap, in-view test, trigger and demo runs as in first person. Off by default; off, ViewCamera is GetCamera
     void SetThirdPerson(bool on);
     bool ThirdPerson() const { return third_person_; }
+    void SetFastWalk(bool on) { fast_walk_ = on; }
+    bool FastWalk() const { return fast_walk_; }
     bool ThirdPersonCameraActive() const { return third_person_ && third_person_primed_ && !detached_view_; }
     // the camera the frame is drawn with: GetCamera, or while the third person view is on, the camera behind the shoulder
     // (blended with GetCamera while it leaves or returns for the zoom, the peephole, a demo or a tight spot)
@@ -528,6 +530,7 @@ private:
     bool show_body_ = false;
     bool detached_view_ = false;
     bool third_person_ = false;
+    bool fast_walk_ = false;
     // the body is drawn and the light leaves the flashlight in the hand (the camera is far enough from the head)
     bool third_person_shown_ = false;
     float third_person_weight_ = 0.0f;

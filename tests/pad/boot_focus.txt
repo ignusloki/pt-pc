@@ -1,0 +1,33 @@
+# A cold launch in the background must freeze startup without opening a hidden pause menu.
+# Focus returns before the first controller tick; the first-boot settings then appear and Esc starts the game.
+# After startup, focus loss must still open the normal pause menu.
+# Run in an isolated working folder so the screenshots do not overwrite other captures:
+# pt --headless --virtual-pads --audio-offline --no-save --options-menu --frames 10000
+#   --settings <isolated pt.ini> --input-script tests/pad/boot_focus.txt
+0 focus 0
+180 focus 1
+181 expect menu 0
+181 expect paused 0
+700 smenu 1
+700 swait 90
+700 sexpect menu 1
+700 sexpect paused 1
+700 sshot boot_focus_options.png
+700 sktap Escape
+700 smenu 0
+700 sexpect paused 0
+700 sstep 15
+700 swait 30
+700 sshot boot_focus_start_room.png
+700 sfocus 0 120
+700 swait 5
+700 sexpect menu 1
+700 sexpect paused 1
+700 swait 200
+700 sexpect menu 1
+700 sshot boot_focus_pause.png
+700 sktap Escape
+700 smenu 0
+700 sexpect paused 0
+700 slog
+700 squit

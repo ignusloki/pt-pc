@@ -583,10 +583,12 @@ void SceneRenderer::Shutdown() {
     renderer_ = nullptr;
 }
 
-bool SceneRenderer::CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+bool SceneRenderer::CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+                                 bool metal_export) {
     target = RenderTarget{};
     target.aspect = aspect;
-    return renderer_->Context().CreateImage(target.image, format, {std::max(extent.width, 1u), std::max(extent.height, 1u), 1}, usage, 1, 1, aspect);
+    return renderer_->Context().CreateImage(target.image, format, {std::max(extent.width, 1u), std::max(extent.height, 1u), 1}, usage, 1, 1, aspect,
+                                            false, metal_export);
 }
 
 void SceneRenderer::DestroyTargets() {
@@ -641,10 +643,10 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
               CreateTarget(material_, kMaterialFormat, extent, dumped, c) &&
               CreateTarget(depth_, kDepthFormat, extent,
                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                           VK_IMAGE_ASPECT_DEPTH_BIT) &&
+                           VK_IMAGE_ASPECT_DEPTH_BIT, true) &&
               CreateTarget(diffuse_, kLightFormat, extent, dumped, c) && CreateTarget(specular_, kLightFormat, extent, dumped, c) &&
               CreateTarget(probe_acc_, kLightFormat, extent, dumped, c) &&
-              CreateTarget(hdr_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+              CreateTarget(hdr_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c, true) &&
               CreateTarget(hdr_copy_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
               CreateTarget(particles_, kHdrFormat, extent, dumped, c) &&
               CreateTarget(particles_near_, kHdrFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&

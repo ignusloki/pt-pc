@@ -158,12 +158,12 @@ void SceneRenderer::DestroyUpscalePipelines() {
 bool SceneRenderer::CreateUpscaleTargets(VkExtent2D render, VkExtent2D output) {
     const VkImageUsageFlags color = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
-    const bool ok = CreateTarget(motion_, kMotionFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) && CreateTarget(reactive_, kReactiveFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-                    CreateTarget(opaque_, kHdrTargetFormat, render, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+    const bool ok = CreateTarget(motion_, kMotionFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c, true) && CreateTarget(reactive_, kReactiveFormat, render, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+                    CreateTarget(opaque_, kHdrTargetFormat, render, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(handy_factor_, kHandyFactorFormat, render, color, c) &&
-                    CreateTarget(exposure_image_, kExposureFormat, {1, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+                    CreateTarget(exposure_image_, kExposureFormat, {1, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(upscaled_, kUpscaleColorFormat, output,
-                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(post_hdr_, kUpscaleColorFormat, output, color, c) && CreateTarget(post_depth_, kPostDepthFormat, output, color, c) &&
                     CreateTarget(post_object_velocity_, kUpscaleColorFormat, output, color, c);
     if (!ok) {
@@ -362,7 +362,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     FrameSlot& slot = slots_[renderer_->FrameIndex()];
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 0);
     UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}, {&motion_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&motion_, false, {}}}, &depth_, true, false);
+    BeginPass(cmd, extent_, {{&motion_, false, {}, true}}, &depth_, true, false);
     gpu::PassPush push;
     push.ids = glm::uvec4(0, 0, 0, view.index);
     push.m = previous_view_projection_;
@@ -392,7 +392,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
                      {&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&opaque_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                      {&reactive_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&reactive_, false, {}}});
+    BeginPass(cmd, extent_, {{&reactive_, false, {}, true}});
     push = gpu::PassPush{};
     push.ids = glm::uvec4(0, 0, 0, view.index);
     static const glm::vec2 flashlight_reactive = [] {
@@ -454,7 +454,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
                          {&diffuse_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                          {&opaque_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                          {&handy_factor_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, extent_, {{&opaque_, false, {}}, {&handy_factor_, false, {}}});
+        BeginPass(cmd, extent_, {{&opaque_, false, {}, true}, {&handy_factor_, false, {}, true}});
         gpu::PassPush demod;
         demod.ids = glm::uvec4(view.index, handy, handy_shadow ? 1u : 0u, 0u);
         demod.f0 = glm::vec4(demod_floor, 0.0f, 0.0f, 0.0f);
@@ -465,7 +465,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 1);
 }
 
-void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
+void SceneRenderer::RecordUpscale(VkCommandBuffer& cmd, float dt) {
     FrameSlot& slot = slots_[renderer_->FrameIndex()];
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 2);
     UseTargets(cmd, {{&exposure_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL}});
@@ -483,6 +483,7 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
                          {&upscaled_, VK_IMAGE_LAYOUT_GENERAL}});
         UpscaleDispatch d;
         d.cmd = cmd;
+        d.renderer = renderer_;
         d.color = Wrap(handy_demod_ ? opaque_ : hdr_);
         d.depth = Wrap(depth_);
         d.motion = Wrap(motion_);
@@ -520,6 +521,12 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
             streamline::SetConstants(k);
         }
         upscaled = up_.backend->Dispatch(d);
+        if (cmd != renderer_->Cmd()) {
+            cmd = renderer_->Cmd();
+            // Command-buffer state does not carry across the external queue handoff.
+            BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+            BindSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+        }
         FrameGeneration* fg = streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
         if (upscaled && fg && fg->Generating()) {
             FrameGenPrepare prepare;
@@ -551,7 +558,7 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
                      {&post_hdr_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&post_depth_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                      {&post_object_velocity_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-    BeginPass(cmd, output_extent_, {{&post_hdr_, false, {}}, {&post_depth_, false, {}}, {&post_object_velocity_, false, {}}});
+    BeginPass(cmd, output_extent_, {{&post_hdr_, false, {}, true}, {&post_depth_, false, {}, true}, {&post_object_velocity_, false, {}, true}});
     gpu::PassPush push;
     const bool warp = up_.warp_test && up_.warp_history && !up_.reset;
     push.ids = glm::uvec4(upscaled ? 1u : (warp ? 2u : 0u), gpu::kImgObjectVelocity,
