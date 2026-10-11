@@ -37,12 +37,12 @@ Host: Apple M1 Pro, macOS 26.6.2. A separate build directory was used; the pause
 
 Earlier harness failures are retained in the logs: the sandbox could not expose Metal; a direct unpackaged Setup invocation had no payload; the microphone-menu preset initially started Off although its script expects On. The corrected GPU environment, packaged Setup, and corrected menu preset pass.
 
-Local evidence: `/Users/suporte/PT-Mac/build/upstream-sync-20261011/`. Validation installer: `/Users/suporte/PT-Mac/dist/macos/upstream-sync-20261011-arm64/PT-Mac-Setup-arm64.zip`. This is a local validation package, not a published release.
+The original evidence directory was `/Users/suporte/PT-Mac/build/upstream-sync-20261011/`, and its validation installer was under `/Users/suporte/PT-Mac/dist/macos/upstream-sync-20261011-arm64/`. Those build/distribution folders were removed during the requested cleanup. The fresh installer, passing checks and user-confirmed targeted regression are recorded in [the accepted Apple silicon baseline](apple-silicon-regression-20261011.md). These are local validation packages, not published releases.
 
 ## Preserved Intel work
 
 `codex/upstream-macos-integration` stays local at `a32dbc6665668eaf60ea39b99045228674c055b6` in `/Users/suporte/.codex/worktrees/upstream-macos-integration/PT-Mac`. Its executables were built from `ac93ac92f317cc2ab7415f065409b89c770b2158`; the last commit only updates documentation.
 
-Backup: `/Users/suporte/PT-Mac/build/backups/intel-integration-20261011/`. It contains a verified, complete-history Git bundle, copies of both Setup ZIPs with checked SHA-256 hashes, integration documentation, working notes, package audit and recovery instructions. The original test packages and worktree remain available.
+Backup: `/Users/suporte/PT-Mac/.local-backups/intel-integration-20261011/`. It contains a verified, complete-history Git bundle, copies of both Setup ZIPs with checked SHA-256 hashes, integration documentation, working notes, selected validation evidence and recovery instructions. The original build/distribution folders were cleared for the fresh Apple silicon baseline; the frozen ZIPs and source checkpoint remain available.
 
 The Intel preview can resume from its existing checklist for the 2019 MacBook Pro. Exact macOS/GPU details and native Intel graphics, live microphone, physical controls and sustained performance remain pending. A new stable Mac release should follow a visual regression check; no tag or release was changed by this refresh.
