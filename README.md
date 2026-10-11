@@ -25,8 +25,9 @@ the street, with the voice part included.
   ray-traced shadows, ambient occlusion and reflections need a GPU with Vulkan ray queries (not on macOS). DLSS needs a
   GeForce RTX card; FSR and XeSS run on any recent GPU (Windows only). The settings page greys out what your machine
   cannot run and says why.
-- A microphone for one part of the game, as on the PS4. If you have none, `key = J` under `[voice]` in `pt.ini` lets a
-  key stand in for the spoken word.
+- A microphone for one part of the game, as on the PS4. PC Settings → Sound can enable/disable microphone input and
+  test it. Mac startup requests permission before gameplay when input is enabled. If you have none, `key = J` under
+  `[voice]` in `pt.ini` lets a key stand in for the spoken word.
 
 ## Installing
 
@@ -41,11 +42,12 @@ package or that image: the installer reads it from the PKG or dump you select. T
 Linux: `chmod +x` the setup and run it, from a terminal or from the file manager (it uses zenity or kdialog for its windows). The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
-macOS: download `P.T.PC.Port-macOS-arm64.zip` (M1 and later) or `P.T.PC.Port-macOS-x64.zip` (Intel), unzip `P.T. PC Port.app`,
-open it once and allow it under System Settings > Privacy & Security (it is not signed with a Developer ID), then pick your
-dump folder when it asks. A fake PKG has to be extracted on Windows or Linux first. Intel Macs need a GPU that MoltenVK can
-run the renderer on; the port was written without a Mac at hand and the Intel app has not been run on one yet. More in
-docs/macos.md.
+macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later) or
+`P.T.PC.Port.Setup-macOS-x64.zip` (Intel). Unzip `P.T. PC Port Setup.app`, select your own complete fake PKG or decrypted
+folder, and choose an installation location. The portable `P.T.PC.Port-macOS-arm64.zip` / `...-x64.zip` apps still accept
+an extracted folder directly. Both apps use the selected forest/P.T. icon. Downloads are signed ad hoc; the opening
+steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). Intel compilation, packaging and Rosetta
+checks pass; native Intel graphics and live microphone testing are pending. See the [integration report](docs/integration/upstream-integration-20261011.md).
 
 Portable downloads: `P.T.PC.Port-portable-windows.zip` and `P.T.PC.Port-portable-linux.zip` hold the same files the
 setups install. Unpack one anywhere you can write to, then either put your extracted `CUSA01127` folder next to `pt.exe`
@@ -74,10 +76,11 @@ Everything below is off or set to the original's behaviour by default. The PS4 l
 there if you want them.
 
 Display and image
+
 - Windowed, borderless or exclusive fullscreen, with a selectable render resolution and v-sync on or off. Exclusive
   fullscreen lists supported display modes; borderless keeps the desktop window and can render at another selected size.
-- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS, in the usual quality steps or a
-  custom scale, plus native-resolution anti-aliasing (FSR native AA, DLAA).
+- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS on Windows, plus Apple MetalFX on
+  supported Mac hardware, in the usual quality steps or a custom scale. Native-resolution anti-aliasing is also available.
 - Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer.
 - Graphics presets Low, Medium, Original (PS4), High, Ultra and Custom. The individual controls cover shadow map size,
   ray-traced shadows (sharp like the original or soft), contact shadows, ray-traced ambient occlusion, ray-traced floor
@@ -86,6 +89,9 @@ Display and image
   fringing. Each one can go back to the PS4 setting on its own.
 
 Extras
+
+- Optional Fast Walk: enable it in PC Settings → Extras, then hold Shift or the controller's bottom face button for
+  a 1.5× walking boost. It is off by default and preserves interactions and game timing. See [docs/fast-walk.md](docs/fast-walk.md).
 - Photo mode (F7): pause, fly the camera, adjust focal length, focus, aperture, exposure and roll, choose an aspect
   crop and color filter, then save at native resolution or 4K (3840 pixels on the long edge) to Pictures/PT Photos.
 - Free camera (F6).

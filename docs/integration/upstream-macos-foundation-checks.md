@@ -1,5 +1,7 @@
 # Mac integration foundation checks
 
+Historical snapshot. For the refreshed feature set and Intel packages, see [the 11 October report](upstream-integration-20261011.md) and [Intel test checklist](intel-mac-test-checklist.md).
+
 Updated: 9 October 2026. Branch: `codex/upstream-macos-integration`.
 
 ## Scope and priorities

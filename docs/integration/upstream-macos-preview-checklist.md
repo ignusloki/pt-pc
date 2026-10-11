@@ -1,5 +1,7 @@
 # Mac integration preview checklist
 
+Historical snapshot. For the refreshed feature set and Intel packages, see [the 11 October report](upstream-integration-20261011.md) and [Intel test checklist](intel-mac-test-checklist.md).
+
 Use the Apple silicon installer in `/Users/suporte/PT-Mac/dist/macos/upstream-integration-preview/P.T. PC Port Setup.app`. The separate Intel package is under `upstream-integration-intel-preview`; its compilation/signing are checked, but Intel gameplay needs an Intel Mac with a compatible GPU.
 
 This preview follows upstream's game and newer voice runtime. MetalFX and optional Fast Walk are later integration work; compare those features using the existing tested fork release.

@@ -6,7 +6,7 @@ A native `P.T. PC Port Setup.app` also accepts a complete P.T. fake PKG or decry
 
 The macOS version is the port's own and does what the Linux one does, with these limits: FSR 3, DLSS and XeSS (Windows
 SDKs), the VR mode and the ray-traced shadows, ambient occlusion and reflections (MoltenVK has no ray queries) are off, and
-the settings page greys them out. Validation results and hardware limits are recorded in the credits below and the [integration check report](integration/upstream-macos-foundation-checks.md).
+the settings page greys them out. Validation results and hardware limits are recorded in the credits below and the [current integration report](integration/upstream-integration-20261011.md).
 
 ## Running
 
@@ -22,10 +22,20 @@ the settings page greys them out. Validation results and hardware limits are rec
 3. On the first start a folder dialog asks for your extracted CUSA01127 folder (the one with `chunk1.psarc` and
    `texture.qar`). The choice is remembered. A `CUSA01127` or `game/CUSA01127` folder next to the app is found without
    asking, and `pt --game <folder>` (`P.T. PC Port.app/Contents/MacOS/pt`) still works. Use the native Setup app to extract a fake PKG locally on macOS; the portable game accepts the extracted folder.
-4. On a normal game launch, macOS requests microphone permission at startup if it has no decision recorded for this app. Granting permission does not start recording. Recording still begins when the game needs voice input. If access is denied, gameplay continues; enable the app in System Settings > Privacy & Security > Microphone for the voice puzzle. Already granted/denied decisions are respected. `[voice] key = J` in `pt.ini` works here too. Headless runs, previews, WAV voice tests and installer verification do not request startup microphone access.
+4. On a normal game launch with microphone input enabled, macOS requests microphone permission at startup if it has no decision recorded for this app. Granting permission does not start recording. Recording still begins when the game needs voice input or the microphone test. PC Settings → Sound → Microphone input turns capture on/off and saves the choice; Off also disables its test. Turning it back On requests access if no decision exists. If access is denied, gameplay continues; enable the app in System Settings > Privacy & Security > Microphone for the voice puzzle. Already granted/denied decisions are respected. `[voice] key = J` in `pt.ini` works here too. Headless runs, previews, WAV voice tests and installer verification do not request startup microphone access.
 
 Settings, the save, `pt.log` and the enhanced texture cache are in `~/Library/Application Support/pt-port/pt/`. Mods go
 in `mods/` in that folder (docs/modding.md), since the app bundle is no place for user files.
+
+## Optional features
+
+MetalFX temporal upscaling is available when the Mac GPU supports it. It uses the existing render inputs and ordered
+Vulkan/Metal timeline handoff, and remains Off by default. The menu explains unavailable choices; choosing an
+unsupported scaler does not remove the native rendering path. See [upscaling](upscaling.md). MetalFX frame generation
+is not included in this integration preview.
+
+Fast Walk is also Off by default. PC Settings → Extras enables a 1.5× walking boost while Shift or the controller's
+bottom face button is held; normal interactions and game timing are retained. See [Fast Walk](fast-walk.md).
 
 ## Platform layer
 
@@ -52,7 +62,7 @@ which MoltenVK ignores.
 
 Intel Macs: the renderer indexes a bindless array of images, which MoltenVK builds on Metal argument buffers tier 2.
 Intel's own integrated GPUs and older AMD ones may not offer that; the game then stops at start with a log line naming the
-missing Vulkan feature (`pt.log`, "required feature ... is not available"). Which Intel Macs run it has not been tried.
+missing Vulkan feature (`pt.log`, "required feature ... is not available"). The separate Intel game/installer builds and Rosetta runtime checks pass, but native Intel GPU and microphone testing is still pending. Use the [Intel test checklist](integration/intel-mac-test-checklist.md); the model year alone does not establish GPU compatibility.
 
 ## Building
 
@@ -98,7 +108,7 @@ Cross-compilation is available with `--arch x64 --skip-tests` on Apple silicon, 
 
 `.github/workflows/desktop-validation.yml` checks Windows and Linux separately: both game targets, the native installer, shared installer transactions, Unicode paths, source preservation, synthetic PKG extraction, self-contained extractor publishing and Python payload regressions. Windows keeps all required upscaler backends and verifies their executable fingerprint and staged runtime files. The Windows resource/link check uses a compile-only payload fixture that is never distributed as an installer. Neither workflow ships original game archives or proves GPU gameplay compatibility.
 
-The public runners have no game files, so loop browser previews are generated by the game at first use. The [integration check report](integration/upstream-macos-foundation-checks.md) distinguishes completed local tests from pending native hardware/CI checks.
+The public runners have no game files, so loop browser previews are generated by the game at first use. The [current integration report](integration/upstream-integration-20261011.md) distinguishes completed local tests from pending native hardware/CI checks.
 
 ## Credits and what was tried
 
@@ -106,6 +116,12 @@ The public runners have no game files, so loop browser previews are generated by
   scenarios; the bundle played the first room and the hallway. Not tried on M1 to M3 or on an older macOS.
 - ignusloki (github.com/ignusloki/pt-pc, `codex/macos-arm64-port`, preview 1 to 3): Apple silicon, M1 Pro. From that fork
   come the `SO_NOSIGPIPE` socket option, the check for missing GPU features, enabling the portability subset's features and
-  the no-pause-before-the-first-tick fix. The native macOS installer is adapted on this integration branch, with whole-app repair and rollback. Fast Walk and the fork's MetalFX backend remain later integration work. Intel hardware gameplay still requires testing.
+  the no-pause-before-the-first-tick fix. The native macOS installer is adapted on this integration branch, with whole-app repair and rollback. Default-off Fast Walk, the tested MetalFX scaler and fullscreen pointer mapping are now adapted to current upstream. Startup microphone authorization, its input toggle and the selected Mac icon are included. Intel hardware gameplay still requires testing.
 
 - Integration foundation: local M1 Pro, macOS 26.6.2; native installer and portable game compiled, synthetic extractor and shared installer tests passed, a real PKG installed and repaired, and packaged headless graphics/first-boot focus checks passed. Interactive microphone consent and live capture remain manual checks.
+
+- Refreshed integration (11 October 2026): M1 Pro, macOS 26.6.2. ARM64/x86_64 packages, 19 suites per CPU (Intel through
+  Rosetta), extractor and native installer checks passed. A full MetalFX route reached the ending (27/27 milestones);
+  bathroom, photo mode, microphone controls, Fast Walk persistence and first-boot focus passed. Native Intel gameplay
+  and Windows/Linux CI remain pending; see the current report above. ginnfx/brajan zalta's MetalFX contributions and
+  subsequent tested synchronization work are retained; PR #3 frame generation remains separate.

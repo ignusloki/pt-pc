@@ -1,5 +1,7 @@
 # Upstream macOS change inventory
 
+Historical snapshot. For the refreshed feature set and Intel packages, see [the 11 October report](upstream-integration-20261011.md) and [Intel test checklist](intel-mac-test-checklist.md).
+
 Prepared: 9 October 2026. Phase 1 inventory; feature ports are still pending.
 
 Upstream base: `31dc878a7ff33f5ae5bb49659e4f3f7ec449b7fb` (`LoreanXavier/pt-pc:main`).

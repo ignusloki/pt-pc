@@ -25,7 +25,7 @@ fixes the folder under `--dest` (default: a date and time stamp).
 The setup's window title and product name are "P.T. PC Port", the default folder `%LocalAppData%\Programs\P.T. PC Port`,
 with a plain desktop shortcut. It checks its own integrity stamp (see Integrity below).
 
-Every installation uses `data/` next to the game executable for settings, saves, logs, crash dumps and generated caches; there is no separate portable mode. Fresh installs create and test this writable directory. Updates test the existing directory before swapping program files and preserve its contents, even if an older manifest incorrectly lists `data/*`. Payloads cannot ship files under `data/`. The game's first normal launch imports missing legacy profile data without deleting the source, and records completion so reset progress is not imported again.
+Windows/Linux installations use `data/` next to the game executable for settings, saves, logs, crash dumps and generated caches; there is no separate portable mode. Fresh installs create and test this writable directory. Updates test the existing directory before swapping program files and preserve its contents, even if an older manifest incorrectly lists `data/*`. Payloads cannot ship files under `data/`. The first normal Windows/Linux launch offers a one-time move of legacy profile data: Yes imports missing files without overwriting the destination, then removes the old folder; No leaves it and records the decision. Failed directory scans remain pending for retry. Signed Mac apps keep their writable profile outside the bundle at `~/Library/Application Support/pt-port/pt/`.
 
 Windows Release/RelWithDebInfo compilation requires FSR, DLSS and XeSS. SDK download/hash failures stop configuration instead of silently compiling a reduced executable. Required DLLs are build dependencies, so rebuilding restores missing copies without needing to relink. Executable manifests include the compiled backends and executable SHA-256; packaging checks them and also requires every Streamline runtime file when Frame Generation was compiled. The native Windows installer checks the three upscaler DLL entries before publishing the installation. Linux keeps its current SDK limitations.
 
@@ -251,6 +251,29 @@ By hand, the same three tools:
     python tools/linux/attach_payload.py --setup build/linux-cross/pt_setup_linux --payload <dir>/payload/payload.bin --out <dir>/P.T.PC.Port.Setup-linux
 
 Checks on Linux or WSL: docs/linux.md (`run_tests.sh`), and the release 1.0.0 notes below.
+
+## macOS
+
+`installer/Native/setup_macos.mm` provides native PKG/folder and destination pickers. The CMake target is
+`pt_setup_macos`, included only on Apple hosts. `tools/macos/build.py --arch arm64` or `--arch x64` builds the game,
+selected regression tests and native installer, publishes the matching self-contained .NET 10 extractor, and packages
+`P.T. PC Port Setup.app`. Use a native Mac of the target CPU for execution tests, or `--skip-tests` for cross-building.
+
+The canonical runtime comes from `tools/macos/make_app.py`; `make_setup.py` consumes its ZIP, so portable and installer
+resources stay consistent. Both apps use `assets/macos/pt.icns`. The payload includes the extractor's matching patched
+LibOrbisPkg/wrapper source and notices, and Microsoft's runtime redistribution notices. Every Mach-O architecture,
+dependency and minimum macOS version is audited before signing. A full-size PKG with missing inner game data is
+refused with a diagnostic that distinguishes it from a complete fake PKG.
+
+Updates/repairs preserve game archives and player files outside the app. The signed app is swapped as one folder,
+including its resource seal; stale app resources are removed during repair and rollback restores the prior bundle.
+The earlier `P.T..app` name is recognized during migration. The signed bundle is program content, not a save/mod folder.
+Windows/Linux keep their existing file-based swap path; the whole-bundle behavior is an optional shared-core argument
+used by Mac Setup.
+
+Mac releases retain portable ZIP/DMG downloads and add `P.T.PC.Port.Setup-macOS-arm64.zip` and
+`P.T.PC.Port.Setup-macOS-x64.zip`. No original game archives are included. See [macOS instructions](macos.md) and the
+[current integration validation](integration/upstream-integration-20261011.md).
 
 ## Update check
 
