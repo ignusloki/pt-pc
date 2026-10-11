@@ -23,6 +23,8 @@ public:
     virtual void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family,
                               std::vector<VkDeviceQueueCreateInfo>& queues) = 0;
     virtual void DeviceCreated(Context& ctx) = 0;
+    // False while something the hooks loaded replaces the swapchain itself (Streamline's DLSS Frame Generation); the swapchain stays SDR then.
+    virtual bool AllowsHdr() const { return true; }
 };
 
 // Who creates the Vulkan instance and device when it is not the context itself: the VR mode's OpenXR runtime

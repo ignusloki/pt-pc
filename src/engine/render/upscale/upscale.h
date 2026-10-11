@@ -157,6 +157,7 @@ public:
                      VkPhysicalDeviceFeatures2& features) override;
     void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family, std::vector<VkDeviceQueueCreateInfo>& queues) override;
     void DeviceCreated(vk::Context& ctx) override;
+    bool AllowsHdr() const override;
     FrameGeneration* FrameGen();
     // NVIDIA DLSS Frame Generation (streamline.cpp), only while Streamline is loaded
     FrameGeneration* DlssFrameGenImpl();

@@ -499,6 +499,11 @@ void UpscaleHost::DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, 
     }
 }
 
+// The host is always installed for its device setup, which leaves the swapchain alone; only Streamline swaps it out.
+bool UpscaleHost::AllowsHdr() const {
+    return !streamline::Active();
+}
+
 void UpscaleHost::DeviceCreated(vk::Context& ctx) {
     ctx_ = &ctx;
     for (int i = 0; i < 3; ++i) {

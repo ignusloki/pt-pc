@@ -646,7 +646,7 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     if (format_count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
     VkSurfaceFormatKHR chosen{};
     bool hdr_selected = false;
-    if (!ChooseSwapchainSurfaceFormat(formats, want_hdr, !swapchain_hooks && !hooks, chosen, hdr_selected)) {
+    if (!ChooseSwapchainSurfaceFormat(formats, want_hdr, !swapchain_hooks && (!hooks || hooks->AllowsHdr()), chosen, hdr_selected)) {
         LogError("vulkan: surface has no supported SDR or HDR color format");
         return false;
     }
