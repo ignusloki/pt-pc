@@ -58,6 +58,7 @@ public:
     ~MetalFxBackend() override { Release(); }
 
     UpscalerKind Kind() const override { return UpscalerKind::MetalFx; }
+    bool UsesReactive() const override { return false; }
 
     bool Supported(std::string& reason) override {
         if (!UpscaleHost::Get().Enabled(VK_EXT_METAL_OBJECTS_EXTENSION_NAME, true)) {

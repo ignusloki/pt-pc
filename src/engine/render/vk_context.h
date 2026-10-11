@@ -124,6 +124,8 @@ public:
     bool ray_query = false;
     std::string ray_query_missing;
     bool metal_objects = false;
+    // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat, enabled when the device has both.
+    bool storage_without_format = false;
     VkDeviceSize scratch_alignment = 256;
 
     // Diagnostics, enabled when the device has them: VK_EXT_memory_budget (VMA's heap budgets are the driver's, for the status

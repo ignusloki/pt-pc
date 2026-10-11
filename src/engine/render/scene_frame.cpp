@@ -2441,7 +2441,8 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
         Stamp(cmd, 7);
     }
     BeginPass(cmd, ViewArea(view), {{&output, false, {}}}, &depth_, true, false);
-    if (main_view && up_.enabled) {
+    // The snapshot only feeds the reactive mask.
+    if (main_view && up_.enabled && up_.backend && up_.backend->UsesReactive()) {
         RecordOpaqueSnapshot(cmd, output);
     }
     if (vfx_forward) {
@@ -2533,6 +2534,10 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
 
 void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt) {
     const auto cpu_start = std::chrono::steady_clock::now();
+    // Before the guard, or its restore would undo the overrides after the first frame.
+    if (frame_counter_ == 0) {
+        ApplyEnvironmentOverrides();
+    }
     // VR: the screen effects stay out of the eyes for this frame (SetVrEye), the toggles come back as they were
     struct ToggleGuard {
         RenderToggles& toggles;
@@ -2545,9 +2550,6 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         toggles.film_grain = false;
         toggles.distortion = false;
         toggles.full_screen_blur = false;
-    }
-    if (frame_counter_ == 0) {
-        ApplyEnvironmentOverrides();
     }
     if(!EnsureShadowTarget()) return;
     const VkExtent2D output = renderer_->RenderExtent();
@@ -2621,11 +2623,16 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         SettleExposure(lighting_->exposure);
     }
     VkCommandBuffer cmd = renderer_->Cmd();
-    vkCmdResetQueryPool(cmd, slot.queries, 0, kTimestamps);
-    if (up_.enabled) {
-        vkCmdResetQueryPool(cmd, slot.upscale_queries, 0, 4);
+    // MoltenVK closes the open encoder for every timestamp and samples it in a blit encoder of its own, so the GPU timers run one frame in
+    // kTimingInterval, or every frame while PT_TIMING_LAST records a capture.
+    const bool timed = !timing_ring_.empty() || frame_counter_ % kTimingInterval == 0;
+    if (timed) {
+        vkCmdResetQueryPool(cmd, slot.queries, 0, kTimestamps);
+        if (up_.enabled) {
+            vkCmdResetQueryPool(cmd, slot.upscale_queries, 0, 4);
+        }
     }
-    queries_ = slot.queries;
+    queries_ = timed ? slot.queries : VK_NULL_HANDLE;
     Stamp(cmd, 0);
     BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
     BeginLabel(cmd, "shadows");
@@ -2757,9 +2764,11 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         EndLabel(cmd);
     }
     Stamp(cmd, 6);
+    if (timed) {
+        last_timed_slot_ = renderer_->FrameIndex();
+    }
     queries_ = VK_NULL_HANDLE;
-    last_timed_slot_ = renderer_->FrameIndex();
-    slot.timed = true;
+    slot.timed = timed;
     slot.measured = true;
     slot.exposure_used = exposure_;
     stats_.ev = ev_;

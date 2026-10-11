@@ -490,22 +490,8 @@ VkCommandBuffer Renderer::QueueHandoff(VkCommandBuffer current, VkSemaphore inpu
     if (current != frame.cmd || !inputs_ready || !output_ready || !submit_external) {
         return VK_NULL_HANDLE;
     }
-    const size_t next_index = frame.segments.size() + 1;
-    if (next_index == frame.commands.size()) {
-        VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        alloc.commandPool = frame.pool;
-        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc.commandBufferCount = 1;
-        VkCommandBuffer next = VK_NULL_HANDLE;
-        if (!vk::Check(vkAllocateCommandBuffers(ctx_.device, &alloc, &next), "external queue continuation")) {
-            return VK_NULL_HANDLE;
-        }
-        frame.commands.push_back(next);
-    }
-    const VkCommandBuffer next = frame.commands[next_index];
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (!vk::Check(vkBeginCommandBuffer(next, &begin), "external queue continuation begin")) {
+    const VkCommandBuffer next = BeginContinuation(frame);
+    if (!next) {
         return VK_NULL_HANDLE;
     }
     if (!vk::Check(vkEndCommandBuffer(current), "external queue segment end")) {
@@ -515,6 +501,29 @@ VkCommandBuffer Renderer::QueueHandoff(VkCommandBuffer current, VkSemaphore inpu
     frame.cmd = next;
     frame.wait = output_ready;
     frame.wait_value = output_value;
+    return next;
+}
+
+// Begins the command buffer after the frame's current one, allocating it the first time a frame needs that many.
+VkCommandBuffer Renderer::BeginContinuation(Frame& frame) {
+    const size_t next_index = static_cast<size_t>(std::find(frame.commands.begin(), frame.commands.end(), frame.cmd) - frame.commands.begin()) + 1;
+    if (next_index == frame.commands.size()) {
+        VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc.commandPool = frame.pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        VkCommandBuffer next = VK_NULL_HANDLE;
+        if (!vk::Check(vkAllocateCommandBuffers(ctx_.device, &alloc, &next), "frame continuation")) {
+            return VK_NULL_HANDLE;
+        }
+        frame.commands.push_back(next);
+    }
+    const VkCommandBuffer next = frame.commands[next_index];
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (!vk::Check(vkBeginCommandBuffer(next, &begin), "frame continuation begin")) {
+        return VK_NULL_HANDLE;
+    }
     return next;
 }
 
@@ -563,7 +572,12 @@ void Renderer::EndFrame(bool draw_ui) {
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
-    const vk::Image* hud = presenting_ && hudless && !xr ? hudless(image_index_) : nullptr;
+    // ImGui goes only onto the swapchain image (below), so a generator that lays its own UI layer over the frames it makes would
+    // show the debug windows every other refresh; such frames are presented without generation.
+    const ImDrawData* imgui = output_mode_ == RendererOutputMode::Sdr && draw_ui && imgui_ready_ ? ImGui::GetDrawData() : nullptr;
+    const bool imgui_on_target = imgui && imgui->TotalVtxCount > 0;
+    const bool generator_ui = ui_layer && ui_layer(image_index_);
+    const vk::Image* hud = presenting_ && hudless && !xr && !(imgui_on_target && generator_ui) ? hudless(image_index_) : nullptr;
     vkCmdBeginRendering(cmd, &rendering);
     Composite(cmd, composite_set_, 0.0f, extent, final_format_);
     if (overlay && !hud && (!xr || xr_frame_.overlay_on_frame)) {
@@ -611,10 +625,46 @@ void Renderer::EndFrame(bool draw_ui) {
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
+        // The same UI again on a transparent layer, which the generator lays over the frames it makes; cleared even without UI.
+        if (const vk::Image* layer = ui_layer ? ui_layer(image_index_) : nullptr) {
+            vk::ImageBarrier(cmd, layer->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            color.imageView = layer->view;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            vkCmdBeginRendering(cmd, &rendering);
+            if (overlay) {
+                overlay_layer = true;
+                overlay(cmd, layer->view, extent);
+                overlay_layer = false;
+            }
+            vkCmdEndRendering(cmd);
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            vk::ImageBarrier(cmd, layer->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                             VK_ACCESS_2_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
     }
     if (xr) {
         RecordXr(cmd);
     }
+    VkCommandBuffer offscreen = VK_NULL_HANDLE;
+#ifdef __APPLE__
+    /* MoltenVK takes the drawable from the compositor while it encodes the first command buffer that writes the swapchain image, and in a
+       window that waits until the compositor frees one. Submitted together with that wait, the whole post chain sat behind it and the GPU
+       idled; submitting the offscreen frame first keeps the GPU busy through the wait and leaves only the final composite after it. */
+    if (presenting_ && target_image) {
+        if (const VkCommandBuffer next = BeginContinuation(frame)) {
+            offscreen = cmd;
+            if (!vk::Check(vkEndCommandBuffer(offscreen), "offscreen frame end")) {
+                throw std::runtime_error("cannot finish the offscreen part of the frame");
+            }
+            cmd = next;
+            frame.cmd = next;
+        }
+    }
+#endif
     // VR: the window shows the eye scaled to fit (its size is the headset's, not the window's)
     const VkExtent2D window_extent = presenting_ ? ctx_.swapchain.extent : extent;
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
@@ -712,6 +762,23 @@ void Renderer::EndFrame(bool draw_ui) {
             throw std::runtime_error("cannot submit inputs to the external queue");
         }
         segment.submit_external();
+    }
+    // The offscreen part takes over the wait for external queue work; queue order and the barriers on final_ order the rest after it.
+    if (offscreen) {
+        VkCommandBufferSubmitInfo offscreen_cmd{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        offscreen_cmd.commandBuffer = offscreen;
+        VkSemaphoreSubmitInfo offscreen_wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        offscreen_wait.semaphore = frame.wait;
+        offscreen_wait.value = frame.wait_value;
+        offscreen_wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 offscreen_submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        offscreen_submit.commandBufferInfoCount = 1;
+        offscreen_submit.pCommandBufferInfos = &offscreen_cmd;
+        offscreen_submit.waitSemaphoreInfoCount = frame.wait ? 1 : 0;
+        offscreen_submit.pWaitSemaphoreInfos = &offscreen_wait;
+        ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &offscreen_submit, VK_NULL_HANDLE), "offscreen frame submit");
+        frame.wait = VK_NULL_HANDLE;
+        frame.wait_value = 0;
     }
 
     VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};

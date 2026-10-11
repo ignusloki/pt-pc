@@ -231,6 +231,8 @@ public:
     static constexpr uint32_t kShadowAtlasSize = 8192;
     std::function<void(const SceneVfxContext&)> vfx_forward;
     std::function<void(const SceneFilterContext&)> vfx_filter;
+    // Whether vfx_filter would draw anything in the given layers this frame.
+    std::function<bool(uint32_t layers)> vfx_has_filter;
     const RenderStats& Stats() const { return stats_; }
     UpscaleSettings upscale;
     const UpscaleStats& UpscaleStatistics() const { return upscale_stats_; }
@@ -358,6 +360,7 @@ private:
     void RecordMirrorTemporal(VkCommandBuffer cmd);
     bool RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
     bool RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
+    void RecordBloomDispatches(VkCommandBuffer cmd, int passes, float weight);
     bool MotionBlurActive() const;
     void RecordObjectVelocity(VkCommandBuffer cmd, const ViewSetup& view);
     void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push, bool discard = false);
@@ -397,6 +400,7 @@ private:
     // 0 start, 1 shadows, 2 mirror, 3 G-buffer, 4 lighting, 5 compose, forward and effects, 6 end; within them 7 the forward draws,
     // 8 the upscale inputs, 9 the reflections, 10 the upscaler, 11 the bloom (written on every frame, in place when a pass is off)
     static constexpr uint32_t kTimestamps = 12;
+    static constexpr uint32_t kTimingInterval = 8;
     static constexpr uint32_t kReflectMapSize = 512;
     static constexpr float kCameraCutDistance = 3.0f;
 
@@ -514,6 +518,9 @@ private:
     VkPipeline forward_emissive_ = VK_NULL_HANDLE;
     VkPipeline bloom_add_ = VK_NULL_HANDLE;
     VkPipeline kawase_sum_ = VK_NULL_HANDLE;
+    VkPipeline bloom_kawase_ = VK_NULL_HANDLE;
+    // The kawase chain runs as dispatches when the bloom targets can be written as sRGB storage images.
+    bool bloom_compute_ = false;
     VkPipeline gaussian_ = VK_NULL_HANDLE;
     VkPipeline tonemap_ = VK_NULL_HANDLE;
     VkPipeline fxaa_ = VK_NULL_HANDLE;

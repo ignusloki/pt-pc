@@ -89,6 +89,8 @@ public:
     // VR's HUD (docs/vr.md): Record draws on the transparent HUD image, so the full screen fade (VR puts it on the eye images) and
     // the letterbox's bars stay out, and the UI's coverage goes in alpha
     void SetVrHud(bool enabled) { vr_hud_ = enabled; }
+    // Draws with coverage alpha onto a transparent layer, keeping the fades and bars the VR HUD leaves out.
+    void SetCoverageLayer(bool enabled) { coverage_layer_ = enabled; }
     SubtitlePlayer& Subtitles() { return subtitles_; }
     DemoUi& DemoGraphs() { return demo_ui_; }
     // the Archive's theater (archive_theater.h): the menu that opened it stays open but is neither drawn nor driven, the UI follows
@@ -174,6 +176,7 @@ private:
     bool pc_request_ = false;
     float letterbox_ = 0.0f;
     bool vr_hud_ = false;
+    bool coverage_layer_ = false;
     std::string save_dialog_text_;
     bool menu_suspended_ = false;
     // the side not shown: the theater's while the player's game runs, the player's while the theater does (EnterTheater)

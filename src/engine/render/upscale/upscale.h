@@ -20,9 +20,17 @@ class FrameGeneration;
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 // the DLSS Super Resolution model (NGX render preset): Auto takes NVIDIA's default for each quality mode
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
-// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp) or NVIDIA DLSS Frame Generation (Streamline)
-enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Count = 3 };
+// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp), NVIDIA DLSS Frame Generation (Streamline) or Apple MetalFX
+// (metalfx_framegen.mm)
+enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, MetalFx = 3, Count = 4 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
+
+// The frame generator this platform builds in: MetalFX on macOS, FSR 3 on Windows and Linux.
+#ifdef __APPLE__
+inline constexpr FrameGenKind kNativeFrameGen = FrameGenKind::MetalFx;
+#else
+inline constexpr FrameGenKind kNativeFrameGen = FrameGenKind::Fsr;
+#endif
 
 struct UpscaleSettings {
     UpscalerKind kind = UpscalerKind::Off;
@@ -136,6 +144,8 @@ public:
     virtual bool Dispatch(const UpscaleDispatch& dispatch) = 0;
     virtual void Release() = 0;
     virtual float MipBias(float render_over_display) const;
+    // Whether Dispatch reads UpscaleDispatch::reactive; when it does not, the reactive mask pass is skipped.
+    virtual bool UsesReactive() const { return true; }
 };
 
 class UpscaleHost : public vk::ContextHooks {

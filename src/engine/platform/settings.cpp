@@ -281,7 +281,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; DLSS model: auto (NVIDIA's default for each quality), k, l or m (l and m cost about twice as much on RTX 20 and 30)\n"
          << "dlss_model = " << s.upscaling.dlss_model << "\n"
          << "; frame generation, a generated frame between two rendered frames (needs an upscaler, any quality): off, fsr3 (AMD FSR 3),\n"
-         << "; dlss (NVIDIA DLSS Frame Generation, experimental: RTX 40 or newer, starts with the next launch); 1 reads as fsr3\n"
+         << "; dlss (NVIDIA DLSS Frame Generation, experimental: RTX 40 or newer, starts with the next launch),\n"
+         << "; metalfx (Apple MetalFX, macOS 26 or newer, always with v-sync); 1 reads as fsr3\n"
          << "frame_generation = " << s.upscaling.frame_generation << "\n";
     text << "\n[raytracing]\n"
          << "; ray traced shadows in place of the shadow maps, not in the original: 0 off, 1 sharp (as the shadow maps), 2 soft\n"

@@ -861,7 +861,7 @@ void GameUi::Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent) 
     }
     ui::UiBatch& batch = *batch_;
     batch.Begin(extent);
-    batch.SetCoverageAlpha(vr_hud_);
+    batch.SetCoverageAlpha(vr_hud_ || coverage_layer_);
     const UiCanvas canvas = UiCanvas::Fit(extent);
     canvas_ = canvas;
     canvas_ready_ = true;
@@ -1147,7 +1147,7 @@ void GameUi::RecordPhotoMode(VkCommandBuffer cmd, VkExtent2D extent, const Photo
     }
     ui::UiBatch& batch = *batch_;
     batch.Begin(extent);
-    batch.SetCoverageAlpha(false);
+    batch.SetCoverageAlpha(coverage_layer_);
     const UiCanvas canvas = UiCanvas::Fit(extent);
     canvas_ = canvas;
     canvas_ready_ = true;

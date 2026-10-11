@@ -88,6 +88,10 @@ VkPipelineColorBlendAttachmentState BlendState(vfx::BlendMode mode, bool offscre
     return s;
 }
 
+bool Wanted(vfx::Layer layer, uint32_t layers) {
+    return (layer == vfx::Layer::Flare && (layers & 1u) != 0u) || (layer == vfx::Layer::Screen && (layers & 2u) != 0u);
+}
+
 }
 
 bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
@@ -494,15 +498,12 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
     }
 }
 
+bool VfxPass::HasFilter(uint32_t layers) const {
+    return std::any_of(list_.draws.begin(), list_.draws.end(), [&](const vfx::Draw& d) { return Wanted(d.layer, layers); });
+}
+
 void VfxPass::RecordFilter(const SceneFilterContext& context) {
-    if (list_.draws.empty() || !device_ || !context.depth_view) {
-        return;
-    }
-    auto wanted = [&](vfx::Layer layer) {
-        return (layer == vfx::Layer::Flare && (context.layers & 1u) != 0u) || (layer == vfx::Layer::Screen && (context.layers & 2u) != 0u);
-    };
-    const bool any = std::any_of(list_.draws.begin(), list_.draws.end(), [&](const vfx::Draw& d) { return wanted(d.layer); });
-    if (!any) {
+    if (list_.draws.empty() || !device_ || !context.depth_view || !HasFilter(context.layers)) {
         return;
     }
     const uint32_t frame = context.frame_index % Renderer::kFramesInFlight;
@@ -516,7 +517,7 @@ void VfxPass::RecordFilter(const SceneFilterContext& context) {
         slot.filter_scene = context.source;
     }
     for (const vfx::Layer layer : {vfx::Layer::Flare, vfx::Layer::Screen}) {
-        if (!wanted(layer)) {
+        if (!Wanted(layer, context.layers)) {
             continue;
         }
         DrawLayer(context.cmd, slot.filter, layer, context.color_format, VK_FORMAT_UNDEFINED, false, 1, glm::mat4(1.0f), glm::vec3(0.0f),

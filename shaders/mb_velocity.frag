@@ -24,5 +24,5 @@ void main() {
     float len = Saturate(sqrt(d2));
     vec2 velocity = len == 0.0 ? vec2(0.0) : d * (len * inversesqrt(d2));
     vec4 object = ImgFetch(pass.ids.x, ivec2(gl_FragCoord.xy));
-    out_color = vec4(0.0, 0.0, object.x * (object.zw - (0.5 * velocity + 0.5)) + 0.5 * velocity + 0.5);
+    out_color = vec4(object.x * (object.zw - (0.5 * velocity + 0.5)) + 0.5 * velocity + 0.5, 0.0, 0.0);
 }

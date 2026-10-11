@@ -235,11 +235,15 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         instance_info.ppEnabledExtensionNames = extensions.data();
     }
 #ifdef __APPLE__
-    // The MetalFX upscaler exports the Metal device, which the instance has to declare (VUID-VkExportMetalObjectsInfoEXT-pNext-06791).
+    // MetalFX exports the Metal device and, for frame generation, the command queue; the instance has to declare both
+    // (VUID-VkExportMetalObjectsInfoEXT-pNext-06791, -06792).
     VkExportMetalObjectCreateInfoEXT export_device{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
     export_device.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_DEVICE_BIT_EXT;
     export_device.pNext = instance_info.pNext;
-    instance_info.pNext = &export_device;
+    VkExportMetalObjectCreateInfoEXT export_queue{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_queue.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_COMMAND_QUEUE_BIT_EXT;
+    export_queue.pNext = &export_device;
+    instance_info.pNext = &export_queue;
 #endif
     const VkResult instance_result = creator ? creator->CreateInstance(instance_info, instance) : vkCreateInstance(&instance_info, nullptr, &instance);
     if (!Check(instance_result, "vkCreateInstance")) {
@@ -390,6 +394,9 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     VkPhysicalDeviceFeatures supported{};
     vkGetPhysicalDeviceFeatures(physical, &supported);
     features.features.independentBlend = supported.independentBlend;
+    storage_without_format = supported.shaderStorageImageReadWithoutFormat && supported.shaderStorageImageWriteWithoutFormat;
+    features.features.shaderStorageImageReadWithoutFormat = storage_without_format ? VK_TRUE : VK_FALSE;
+    features.features.shaderStorageImageWriteWithoutFormat = storage_without_format ? VK_TRUE : VK_FALSE;
 
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -658,9 +665,12 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
         const bool mailbox = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end();
         present_mode = immediate ? VK_PRESENT_MODE_IMMEDIATE_KHR : mailbox ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
     }
-    LogInfo("vulkan: swapchain present mode {} (v-sync {})",
-            present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "fifo",
-            vsync ? "on" : "off");
+    // A frame generator that takes the swapchain picks its own present mode and logs it.
+    if (!swapchain_hooks) {
+        LogInfo("vulkan: swapchain present mode {} (v-sync {})",
+                present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "fifo",
+                vsync ? "on" : "off");
+    }
     VkExtent2D extent = caps.currentExtent;
     if (extent.width == 0xFFFFFFFFu) {
         extent.width = std::clamp(width, caps.minImageExtent.width, caps.maxImageExtent.width);

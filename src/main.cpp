@@ -96,6 +96,10 @@
 
 namespace {
 
+using pt::kNativeFrameGen;
+constexpr const char* kNativeFrameGenLabel =
+    kNativeFrameGen == pt::FrameGenKind::MetalFx ? "Frame generation (MetalFX)" : "Frame generation (FSR 3)";
+
 #ifdef PT_RELEASE_LOCKS
 constexpr bool kReleaseLocks = true;
 #else
@@ -1362,9 +1366,9 @@ bool DrawUpscaleSettings(App& app) {
         fg_reason = "needs an upscaler (native AA works)";
     }
     ImGui::BeginDisabled(!fg_available);
-    bool fsr_fg = u.frame_generation == pt::FrameGenKind::Fsr;
-    if (ImGui::Checkbox("Frame generation (FSR 3)", &fsr_fg)) {
-        u.frame_generation = fsr_fg ? pt::FrameGenKind::Fsr : pt::FrameGenKind::Off;
+    bool native_fg = u.frame_generation == kNativeFrameGen;
+    if (ImGui::Checkbox(kNativeFrameGenLabel, &native_fg)) {
+        u.frame_generation = native_fg ? kNativeFrameGen : pt::FrameGenKind::Off;
         changed = true;
     }
     ImGui::EndDisabled();
@@ -1917,8 +1921,13 @@ public:
         display.rows.push_back(std::move(resolution));
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
+        const pt::FrameGeneration* native_fg = pt::UpscaleHost::Get().FrameGen();
+        const bool metalfx_vsync = app_.scene.upscale.frame_generation == pt::FrameGenKind::MetalFx && native_fg && native_fg->Generating();
         display.rows.push_back(Row(kVsync, "pc_vsync", OffOn(), s.display.vsync ? 1 : 0,
-                                   dlssg_vsync ? "pc_note_vsync_dlssg" : s.display.vsync ? "pc_note_vsync" : "pc_note_vsync_off"));
+                                   dlssg_vsync     ? "pc_note_vsync_dlssg"
+                                   : metalfx_vsync ? "pc_note_vsync_metalfx_fg"
+                                   : s.display.vsync ? "pc_note_vsync"
+                                                     : "pc_note_vsync_off"));
         pt::game::PcSettingRow cap = Row(kFpsLimit, "pc_fps_limit", {"pc_unlimited","30","60","90","120","144","165","240","360"}, 0, "pc_note_fps_limit");
         constexpr int fps_caps[] = {0,30,60,90,120,144,165,240,360};
         for (int i=0;i<9;++i) if (fps_caps[i]==s.display.fps_limit) cap.value=i;
@@ -1968,25 +1977,30 @@ public:
             sharpness.wrap = false;
             upscaling.rows.push_back(std::move(sharpness));
         }
-        // Off, AMD FSR 3 and NVIDIA DLSS Frame Generation; one this machine cannot run shows greyed with its reason
-        pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS"},
-                                                      static_cast<int>(u.frame_generation), "pc_note_frame_generation");
+        // Off, AMD FSR 3, NVIDIA DLSS Frame Generation and Apple MetalFX; one this machine cannot run shows greyed with its reason
+        const bool native_metalfx = kNativeFrameGen == pt::FrameGenKind::MetalFx;
+        pt::game::PcSettingRow frame_generation =
+            Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS", "MetalFX"}, static_cast<int>(u.frame_generation),
+                native_metalfx ? "pc_note_frame_generation_metalfx" : "pc_note_frame_generation");
         std::string fg_reason;
         pt::FrameGeneration* fg = pt::UpscaleHost::Get().FrameGen();
-        std::string fsr_note;
+        std::string native_note;
         if (!fg) {
-            fsr_note = "pc_note_frame_generation_missing";
+            native_note = "pc_note_frame_generation_missing";
+        } else if (app_.renderer.OutputMode() != pt::RendererOutputMode::Sdr) {
+            native_note = Sentence("needs Native HDR off");
         } else if (!fg->Available(fg_reason)) {
             // the GPU reason has its own text key, as DLSS Frame Generation's has (pc_note_dlssg_gpu); the others stay English
-            fsr_note = fg_reason.starts_with("needs an AMD Radeon RX 5000") ? "pc_note_fsr_fg_gpu" : Sentence(fg_reason);
+            native_note = fg_reason.starts_with("needs an AMD Radeon RX 5000") ? "pc_note_fsr_fg_gpu" : Sentence(fg_reason);
         }
         const pt::DlssFrameGenSupport& dlss_fg = pt::UpscaleHost::Get().DlssFrameGen();
         const std::string dlss_note = dlss_fg.hardware && dlss_fg.built ? std::string() : dlss_fg.note;
         // FSR 3's interpolation swapchain and Streamline's cannot share a start: with Streamline loaded FSR 3 waits for a restart
-        if (pt::streamline::Active() && fsr_note.empty()) {
-            fsr_note = "pc_note_fsr_fg_restart";
+        if (pt::streamline::Active() && native_note.empty()) {
+            native_note = "pc_note_fsr_fg_restart";
         }
-        frame_generation.value_notes = {std::string(), fsr_note, dlss_note};
+        const std::string missing = "pc_note_frame_generation_missing";
+        frame_generation.value_notes = {std::string(), native_metalfx ? missing : native_note, dlss_note, native_metalfx ? native_note : missing};
         if (u.frame_generation == pt::FrameGenKind::Dlss) {
             frame_generation.note = pt::streamline::Active() ? "pc_note_frame_generation_dlss" : "pc_note_dlssg_restart";
         }
@@ -2142,7 +2156,8 @@ public:
         // the upscaling notes that depend on the upscaler, the GPU or the frame generation state
         for (const char* note : {"pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_frame_generation_dlss", "pc_note_dlssg_gpu",
                                  "pc_note_dlssg_driver", "pc_note_dlssg_hags", "pc_note_dlssg_missing", "pc_note_dlssg_failed",
-                                 "pc_note_dlssg_restart", "pc_note_vsync_dlssg", "pc_note_fsr_fg_restart", "pc_note_vsync_off"}) {
+                                 "pc_note_dlssg_restart", "pc_note_vsync_dlssg", "pc_note_fsr_fg_restart", "pc_note_vsync_off",
+                                 "pc_note_vsync_metalfx_fg"}) {
             notes.push_back(note);
         }
         return notes;
@@ -3566,6 +3581,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         game.SetOptionsUiAvailable(app.window != nullptr || options.first_boot_options);
         app.renderer.overlay = [&ui, &hide_game_ui, &photo_view, &app](VkCommandBuffer cmd, VkImageView view, VkExtent2D extent) {
             ui.SetLetterbox(pt::game::LetterboxAspect(app.settings.display.letterbox));
+            ui.SetCoverageLayer(app.renderer.overlay_layer);
             if (!hide_game_ui) {
                 ui.Record(cmd, view, extent);
             } else {
@@ -3656,6 +3672,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     if (vfx_pass.Init(app.renderer, app.textures, vfs)) {
         app.scene.vfx_forward = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordForward(c); };
         app.scene.vfx_filter = [&vfx_pass](const pt::SceneFilterContext& c) { vfx_pass.RecordFilter(c); };
+        app.scene.vfx_has_filter = [&vfx_pass](uint32_t layers) { return vfx_pass.HasFilter(layers); };
     }
     pt::game::RenderSceneBuilder scene_builder;
     pt::SceneLighting lighting;
@@ -5192,6 +5209,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     vkDeviceWaitIdle(app.renderer.Context().device);
     app.scene.vfx_forward = nullptr;
     app.scene.vfx_filter = nullptr;
+    app.scene.vfx_has_filter = nullptr;
     vfx_pass.Shutdown();
     app.renderer.overlay = nullptr;
     ui.Shutdown();

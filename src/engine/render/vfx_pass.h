@@ -29,6 +29,7 @@ public:
     void Submit(vfx::RenderList& list);
     void RecordForward(const SceneVfxContext& context);
     void RecordFilter(const SceneFilterContext& context);
+    bool HasFilter(uint32_t layers) const;
     const vfx::RenderList& List() const { return list_; }
 
 private:

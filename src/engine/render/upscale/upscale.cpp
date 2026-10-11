@@ -32,7 +32,7 @@ constexpr KindInfo kKinds[] = {{"Off", "off"},           {"AMD FSR 3", "fsr3"}, 
                                {"Apple MetalFX", "metalfx"}};
 
 constexpr const char* kDlssModels[] = {"auto", "k", "l", "m"};
-constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss"};
+constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss", "metalfx"};
 
 struct QualityInfo {
     const char* name;

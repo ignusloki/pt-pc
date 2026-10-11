@@ -1,9 +1,11 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 
 #include "engine/render/scene_renderer.h"
 
@@ -127,23 +129,27 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
             // PT_BLOOM_SEPARATE_ADD=1 keeps the separate add pass, for A/B.
             static const bool separate_add = std::getenv("PT_BLOOM_SEPARATE_ADD") != nullptr;
             const glm::vec4 saved_f1 = push.f1;
-            for (int i = 0; i < passes; ++i) {
-                const glm::vec4 kawase(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
-                blur(0, 1, kawase_, kawase, false);
-                if (separate_add) {
-                    blur(1, 0, kawase_, kawase, false);
-                    blur(0, 2, bloom_add_, glm::vec4(0.0f, weight / static_cast<float>(passes), 0.0f, 0.0f), i == 0);
-                    continue;
+            if (bloom_compute_ && !separate_add) {
+                RecordBloomDispatches(cmd, passes, weight);
+            } else {
+                for (int i = 0; i < passes; ++i) {
+                    const glm::vec4 kawase(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
+                    blur(0, 1, kawase_, kawase, false);
+                    if (separate_add) {
+                        blur(1, 0, kawase_, kawase, false);
+                        blur(0, 2, bloom_add_, glm::vec4(0.0f, weight / static_cast<float>(passes), 0.0f, 0.0f), i == 0);
+                        continue;
+                    }
+                    UseTargets(cmd, {{&bloom_[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                     {&bloom_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                                     {&bloom_[2], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
+                    BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}, true}, {&bloom_[2], i == 0, {}}});
+                    push.ids.x = kSlots[1];
+                    push.f0 = kawase;
+                    push.f1 = glm::vec4(weight / static_cast<float>(passes), 0.0f, 0.0f, 0.0f);
+                    Fullscreen(cmd, kawase_sum_, push);
+                    vkCmdEndRendering(cmd);
                 }
-                UseTargets(cmd, {{&bloom_[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                 {&bloom_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-                                 {&bloom_[2], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-                BeginPass(cmd, bloom_[0].Extent(), {{&bloom_[0], false, {}, true}, {&bloom_[2], i == 0, {}}});
-                push.ids.x = kSlots[1];
-                push.f0 = kawase;
-                push.f1 = glm::vec4(weight / static_cast<float>(passes), 0.0f, 0.0f, 0.0f);
-                Fullscreen(cmd, kawase_sum_, push);
-                vkCmdEndRendering(cmd);
             }
             push.f1 = saved_f1;
         }
@@ -153,20 +159,24 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
 
     // The lens flares go into a cleared effect buffer (Draw2D_TppLensFlare, additive) that CopyRenderBuffer adds to the encoded
     // scene before the Tonemap pass, so the flare passes through the tonemap curve and the colour LUT (lantern_trace_f040 ops
-    // 2145 to 2148 after the depth of field, Tonemap at 2161); the tonemap pass below adds the buffer
-    UseTargets(cmd, {{&flare_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-    BeginPass(cmd, output_extent_, {{&flare_, true, {}}});
-    if (vfx_filter && vr_eye_ < 0) {
+    // 2145 to 2148 after the depth of field, Tonemap at 2161); the tonemap pass below adds the buffer. Without flare effects the
+    // buffer would only be cleared to black and added as zero, so both are skipped.
+    UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
+    const bool flare = vfx_filter && vr_eye_ < 0 && vfx_has_filter && vfx_has_filter(1u);
+    if (flare) {
+        UseTargets(cmd, {{&flare_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
+        BeginPass(cmd, output_extent_, {{&flare_, true, {}}});
         vfx_filter(FilterContext(cmd, 1u));
         BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+        vkCmdEndRendering(cmd);
+        UseTargets(cmd, {{&flare_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
     }
-    vkCmdEndRendering(cmd);
-    UseTargets(cmd, {{&flare_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 
     int current = 0;
     UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&ldr_[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
     BeginPass(cmd, output_extent_, {{&ldr_[0], false, {}, true}});
     push.ids.x = 0;
+    push.ids.z = flare ? 1u : 0u;
     const float lut_blend = std::clamp(screen.lut_blend, 0.0f, 1.0f);
     push.f0 = glm::vec4(bloom ? 1.0f : 0.0f, lut_blend, lighting.valid ? 1.0f : renderer_->exposure, 0.0f);
     // PT_TONEMAP_TEST=1: the tonemap alone, without bloom and without the grading pass that follows it, so the curve's
@@ -179,6 +189,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
         push.f0.w = 0.0f;
     }
     Fullscreen(cmd, tonemap_, push);
+    push.ids.z = 0;
     vkCmdEndRendering(cmd);
     UseTargets(cmd, {{&ldr_[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 
@@ -266,6 +277,29 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     }
     vkCmdEndRendering(cmd);
     (void)dt;
+}
+
+// The kawase chain of RecordPost as dispatches (bloom_kawase.comp): its targets are so small that as render passes most of the time
+// went to starting and draining them.
+void SceneRenderer::RecordBloomDispatches(VkCommandBuffer cmd, int passes, float weight) {
+    const VkExtent2D e = bloom_[0].Extent();
+    const uint32_t gx = (e.width + 7) / 8;
+    const uint32_t gy = (e.height + 7) / 8;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, bloom_kawase_);
+    BindSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+    gpu::PassPush step;
+    step.f1 = glm::vec4(weight / static_cast<float>(passes), 0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < passes; ++i) {
+        step.f0 = glm::vec4(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
+        UseTargets(cmd, {{&bloom_[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&bloom_[1], VK_IMAGE_LAYOUT_GENERAL}});
+        step.ids = glm::uvec4(gpu::kImgBloomA, 0u, 0u, 0u);
+        PushConstants(cmd, &step, sizeof(step));
+        vkCmdDispatch(cmd, gx, gy, 1);
+        UseTargets(cmd, {{&bloom_[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&bloom_[0], VK_IMAGE_LAYOUT_GENERAL}, {&bloom_[2], VK_IMAGE_LAYOUT_GENERAL}});
+        step.ids = glm::uvec4(gpu::kImgBloomB, 0u, 1u, i == 0 ? 1u : 0u);
+        PushConstants(cmd, &step, sizeof(step));
+        vkCmdDispatch(cmd, gx, gy, 1);
+    }
 }
 
 // The flare and screen layers do not sample the scene, so both calls bind the same view and the filter set is written once a frame
@@ -467,23 +501,33 @@ void SceneRenderer::ApplyEnvironmentOverrides() {
     }
     if (const char* off = std::getenv("PT_RENDER_OFF")) {
         const std::string list = off;
-        auto has = [&](const char* name) { return list.find(name) != std::string::npos; };
-        toggles.lights = !has("lights");
-        toggles.probes = !has("probes");
-        toggles.shadows = !has("shadows");
-        toggles.bloom = !has("bloom");
-        toggles.color_lut = !has("lut");
-        toggles.fxaa = !has("fxaa");
-        toggles.depth_of_field = !has("dof");
-        toggles.film_grain = !has("grain");
-        toggles.distortion = !has("distortion");
-        toggles.full_screen_blur = !has("blur");
-        toggles.adaptation = !has("adaptation");
-        toggles.mirrors = !has("mirrors");
-        toggles.tpp_atmosphere = !has("tpp");
-        toggles.occlusion = !has("occlusion");
-        toggles.local_reflections = !has("reflections");
-        toggles.motion_blur = !has("motionblur");
+        // Whole names only, so "motionblur" does not also switch off "blur".
+        auto has = [&](std::string_view name) {
+            for (size_t at = list.find(name); at != std::string::npos; at = list.find(name, at + 1)) {
+                const size_t end = at + name.size();
+                const bool starts = at == 0 || !std::isalpha(static_cast<unsigned char>(list[at - 1]));
+                if (starts && (end == list.size() || !std::isalpha(static_cast<unsigned char>(list[end])))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        toggles.lights = toggles.lights && !has("lights");
+        toggles.probes = toggles.probes && !has("probes");
+        toggles.shadows = toggles.shadows && !has("shadows");
+        toggles.bloom = toggles.bloom && !has("bloom");
+        toggles.color_lut = toggles.color_lut && !has("lut");
+        toggles.fxaa = toggles.fxaa && !has("fxaa");
+        toggles.depth_of_field = toggles.depth_of_field && !has("dof");
+        toggles.film_grain = toggles.film_grain && !has("grain");
+        toggles.distortion = toggles.distortion && !has("distortion");
+        toggles.full_screen_blur = toggles.full_screen_blur && !has("blur");
+        toggles.adaptation = toggles.adaptation && !has("adaptation");
+        toggles.mirrors = toggles.mirrors && !has("mirrors");
+        toggles.tpp_atmosphere = toggles.tpp_atmosphere && !has("tpp");
+        toggles.occlusion = toggles.occlusion && !has("occlusion");
+        toggles.local_reflections = toggles.local_reflections && !has("reflections");
+        toggles.motion_blur = toggles.motion_blur && !has("motionblur");
     }
     // ray traced shadows (12.21): the faces a shadow ray culls, for tests; back (the faces toward the light, as the shadow
     // passes cull them) by default

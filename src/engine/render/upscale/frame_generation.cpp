@@ -652,9 +652,15 @@ std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const F
 
 namespace pt {
 
+#ifdef __APPLE__
+std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues&) {
+    return CreateMetalFxFrameGeneration(ctx);
+}
+#else
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context&, const FrameGenQueues&) {
     return nullptr;
 }
+#endif
 
 }
 

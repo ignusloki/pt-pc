@@ -28,6 +28,8 @@ constexpr VkFormat kRefMapFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kPostFormat = SceneRenderer::kPostTargetFormat;
 // 0xDD0D40's bloom chain renders 8-bit sRGB targets and samples them through sRGB textures (liquid_trace_f010 ops 925-985)
 constexpr VkFormat kBloomFormat = VK_FORMAT_R8G8B8A8_SRGB;
+// Screen velocity and its tile maxima only carry two channels.
+constexpr VkFormat kMotionFormat = VK_FORMAT_R16G16_SFLOAT;
 constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 
 const char* const kDebugViewNames =
@@ -129,6 +131,16 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     sampler.compareOp = VK_COMPARE_OP_LESS;
     vkCreateSampler(device_, &sampler, nullptr, &samplers_[gpu::kSmpShadow]);
 
+    VkFormatProperties3 bloom_features{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+    VkFormatProperties2 bloom_format{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &bloom_features};
+    vkGetPhysicalDeviceFormatProperties2(ctx.physical, kBloomFormat, &bloom_format);
+    constexpr VkFormatFeatureFlags2 kBloomStorage = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                                                    VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+    static const bool bloom_passes = [] {
+        const char* v = std::getenv("PT_BLOOM_COMPUTE");
+        return v && v[0] == '0';
+    }();
+    bloom_compute_ = ctx.storage_without_format && (bloom_features.optimalTilingFeatures & kBloomStorage) == kBloomStorage && !bloom_passes;
     if (!CreateDescriptors()) {
         return false;
     }
@@ -222,30 +234,32 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
 }
 
 bool SceneRenderer::CreateDescriptors() {
-    VkDescriptorSetLayoutBinding bindings[6]{};
+    VkDescriptorSetLayoutBinding bindings[7]{};
     bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
     bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
     bindings[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, gpu::kImageSlots, VK_SHADER_STAGE_ALL, nullptr};
     bindings[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLER, gpu::kSmpCount, VK_SHADER_STAGE_ALL, nullptr};
     bindings[4] = {4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_ALL, nullptr};
     bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
-    const VkDescriptorBindingFlags binding_flags[6] = {0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0};
+    bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    const VkDescriptorBindingFlags binding_flags[7] = {0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags_info.bindingCount = 6;
+    flags_info.bindingCount = 7;
     flags_info.pBindingFlags = binding_flags;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout_info.pNext = &flags_info;
-    layout_info.bindingCount = 6;
+    layout_info.bindingCount = 7;
     layout_info.pBindings = bindings;
     if (!vk::Check(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &frame_layout_), "frame set layout")) {
         return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * Renderer::kFramesInFlight},
+    VkDescriptorPoolSize sizes[4] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * Renderer::kFramesInFlight},
                                      {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * (gpu::kImageSlots + 1) * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_SAMPLER, 2 * gpu::kSmpCount * Renderer::kFramesInFlight}};
+                                     {VK_DESCRIPTOR_TYPE_SAMPLER, 2 * gpu::kSmpCount * Renderer::kFramesInFlight},
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * 3 * Renderer::kFramesInFlight}};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = 2 * Renderer::kFramesInFlight;
-    pool_info.poolSizeCount = 3;
+    pool_info.poolSizeCount = 4;
     pool_info.pPoolSizes = sizes;
     if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "frame descriptor pool")) {
         return false;
@@ -369,6 +383,14 @@ bool SceneRenderer::CreatePipelines() {
     post.blends = {BlendMode::None, BlendMode::Additive};
     post.fragment = "kawase_sum.frag";
     kawase_sum_ = CreateGraphicsPipeline(device_, post);
+    if (bloom_compute_) {
+        bloom_kawase_ = CreateComputePipeline(device_, layout_, "bloom_kawase.comp");
+        if (!bloom_kawase_) {
+            LogError("scene renderer: cannot create the bloom dispatch, the bloom stays on render passes");
+            bloom_compute_ = false;
+        }
+    }
+    LogInfo("scene renderer: bloom chain on {}", bloom_compute_ ? "dispatches" : "render passes");
     post.blends.clear();
     post.colors = {kBloomFormat};
     post.fragment = "gaussian.frag";
@@ -398,10 +420,12 @@ bool SceneRenderer::CreatePipelines() {
     dof_down_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "dof_blur.frag";
     dof_blur_ = CreateGraphicsPipeline(device_, post);
+    post.colors = {kMotionFormat};
     post.fragment = "mb_velocity.frag";
     mb_velocity_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "mb_tile.frag";
     mb_tile_pipeline_ = CreateGraphicsPipeline(device_, post);
+    post.colors = {kPostFormat};
     post.fragment = "mb_bake.frag";
     mb_bake_pipeline_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "mb_mcguire.frag";
@@ -459,7 +483,7 @@ bool SceneRenderer::CreatePipelines() {
 
 void SceneRenderer::DestroyPipelines() {
     VkPipeline* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &luminance_, &bright_,
-                         &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
+                         &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &bloom_kawase_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
                          &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &velocity_pipeline_, &fsblur_,
                          &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_, &vfx_depth_down_,
                          &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_};
@@ -479,15 +503,16 @@ void SceneRenderer::Shutdown() {
     vk::Context& ctx = renderer_->Context();
     vkDeviceWaitIdle(device_);
     sss_.Shutdown();
-    if (last_timed_slot_ < Renderer::kFramesInFlight && slots_[last_timed_slot_].timed) {
+    // Only timed frames reset and stamp a pool, so the last timed slot still holds complete results.
+    if (last_timed_slot_ < Renderer::kFramesInFlight) {
         ReadTimestamps(slots_[last_timed_slot_]);
-        LogInfo("scene renderer: last frame {}x{} gpu {:.2f} ms (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, "
+        LogInfo("scene renderer: last timed frame {}x{} gpu {:.2f} ms (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, "
                 "post {:.2f}), cpu {:.2f} ms",
                 extent_.width, extent_.height, stats_.gpu_ms, stats_.pass_ms[0], stats_.pass_ms[1], stats_.pass_ms[2], stats_.pass_ms[3],
                 stats_.pass_ms[4], stats_.pass_ms[5], stats_.cpu_ms);
     }
     if (gpu_samples_ > 0) {
-        LogInfo("scene renderer: {}x{} -> {}x{}, {}: average gpu {:.3f} ms over {} frames, cpu {:.3f} ms", extent_.width, extent_.height,
+        LogInfo("scene renderer: {}x{} -> {}x{}, {}: average gpu {:.3f} ms over {} timed frames, cpu {:.3f} ms", extent_.width, extent_.height,
                 output_extent_.width, output_extent_.height, upscale_samples_ > 0 ? UpscalerName(upscale_stats_.kind) : "native",
                 gpu_ms_sum_ / gpu_samples_, gpu_samples_, cpu_samples_ > 0 ? cpu_ms_sum_ / cpu_samples_ : 0.0);
     }
@@ -639,6 +664,7 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(270.0 * output.width / std::max(output.height, 1u))));
     const VkExtent2D quarter{bloom_width, 270u};
     const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
+    const VkImageUsageFlags bloom_usage = color | (bloom_compute_ ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
     bool ok = CreateTarget(albedo_, kAlbedoFormat, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
               CreateTarget(material_, kMaterialFormat, extent, dumped, c) &&
               CreateTarget(depth_, kDepthFormat, extent,
@@ -657,8 +683,8 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
                            VK_IMAGE_ASPECT_DEPTH_BIT) &&
               CreateTarget(refmap_, kRefMapFormat, extent, color, c) &&
               CreateTarget(mirror_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-              CreateTarget(bloom_[0], kBloomFormat, quarter, color, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, color, c) &&
-              CreateTarget(bloom_[2], kBloomFormat, quarter, color, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
+              CreateTarget(bloom_[0], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, bloom_usage, c) &&
+              CreateTarget(bloom_[2], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
               CreateTarget(ldr_[0], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
               CreateTarget(ldr_[1], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
               CreateTarget(history_, ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
@@ -668,14 +694,14 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     const VkExtent2D shift3{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
     ok = ok && CreateTarget(dof_half_, kPostFormat, shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
          CreateTarget(dof_quarter_[1], kPostFormat, shift2, color, c) && CreateTarget(dof_eighth_[0], kPostFormat, shift3, color, c) &&
-         CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kPostFormat, output, color, c) &&
+         CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kMotionFormat, output, color, c) &&
          CreateTarget(object_velocity_, kPostFormat, extent, color, c) && CreateTarget(mb_blur_[0], kPostFormat, shift1, color, c) &&
          CreateTarget(mb_blur_[1], kPostFormat, shift1, color, c);
     for (uint32_t i = 0; i < 5 && ok; ++i) {
         const uint32_t round = (2u << i) - 1u;
-        ok = CreateTarget(mb_tile_[i], kPostFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
+        ok = CreateTarget(mb_tile_[i], kMotionFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
     }
-    ok = ok && CreateTarget(mb_neighbour_, kPostFormat, mb_tile_[4].Extent(), color, c) &&
+    ok = ok && CreateTarget(mb_neighbour_, kMotionFormat, mb_tile_[4].Extent(), color, c) &&
          CreateTarget(mb_bake_, kPostFormat, {(output.width + 1) >> 1, (output.height + 1) >> 1}, color, c);
     ok = ok && (!upscaling || CreateUpscaleTargets(extent, output));
     ok = ok && (!upscaling ||
@@ -832,7 +858,7 @@ void SceneRenderer::WriteImageDescriptors() {
         VkDescriptorBufferInfo frame_info{slot.frame_data.buffer, 0, VK_WHOLE_SIZE};
         VkDescriptorBufferInfo skin_info{slot.skin.buffer, 0, VK_WHOLE_SIZE};
         VkDescriptorBufferInfo luminance_info{slot.luminance.buffer, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet writes[6]{};
+        VkWriteDescriptorSet writes[7]{};
         for (VkWriteDescriptorSet& w : writes) {
             w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             w.dstSet = post ? slot.post_set : slot.set;
@@ -858,7 +884,16 @@ void SceneRenderer::WriteImageDescriptors() {
         writes[5].dstBinding = 5;
         writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[5].pBufferInfo = &luminance_info;
-        vkUpdateDescriptorSets(device_, 6, writes, 0, nullptr);
+        VkDescriptorImageInfo bloom_storage[3];
+        for (int i = 0; i < 3; ++i) {
+            bloom_storage[i] = {VK_NULL_HANDLE, bloom_[i].image.view, VK_IMAGE_LAYOUT_GENERAL};
+        }
+        writes[6].dstBinding = 6;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[6].descriptorCount = 3;
+        writes[6].pImageInfo = bloom_storage;
+        const bool storage = bloom_compute_ && bloom_[0].Valid() && bloom_[1].Valid() && bloom_[2].Valid();
+        vkUpdateDescriptorSets(device_, storage ? 7 : 6, writes, 0, nullptr);
     }
 }
 
@@ -1326,7 +1361,8 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
                            "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr"};
     for (size_t i = 0; i < std::size(targets); ++i) {
         RenderTarget& target = *targets[i];
-        if (!target.Valid()) {
+        // The reactive mask is not drawn for upscalers that ignore it, so its contents would be stale.
+        if (!target.Valid() || (&target == &reactive_ && !(up_.backend && up_.backend->UsesReactive()))) {
             continue;
         }
         vk::Buffer buffer;

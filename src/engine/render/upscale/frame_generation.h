@@ -49,6 +49,11 @@ public:
     virtual bool Generating() const = 0;
     virtual void Prepare(const FrameGenPrepare& prepare) = 0;
     virtual const vk::Image* Present(uint32_t image_index) = 0;
+    // An image the renderer draws the UI into on its own, with coverage alpha, for generators that composite it themselves.
+    virtual const vk::Image* UiLayer(uint32_t image_index) {
+        (void)image_index;
+        return nullptr;
+    }
     virtual void Shutdown() = 0;
     // The frame boundary, before image acquisition and command recording. KeepCurrentSwapchain leaves a dirty swapchain
     // pending while continuing to render against the existing handle.
@@ -63,5 +68,8 @@ public:
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues& queues);
 // NVIDIA DLSS Frame Generation through Streamline (streamline.cpp); null while Streamline is not loaded
 std::unique_ptr<FrameGeneration> CreateDlssFrameGeneration(vk::Context& ctx);
+#ifdef __APPLE__
+std::unique_ptr<FrameGeneration> CreateMetalFxFrameGeneration(vk::Context& ctx);
+#endif
 
 }
