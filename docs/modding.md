@@ -1,6 +1,7 @@
 # Modding
 
-Start with [the quickstart and model/character/level examples](modding-quickstart.md).
+New to modding the port? Start with [the quickstart](modding-quickstart.md): it shows each kind of change with a working
+example from `examples/mods`.
 
 The port plays P.T. as the PS4 original does. Mods are the one exception, and only when you install one: with no `mods`
 folder (or an empty one) the game reads exactly the files it reads without mod support, and every lookup is a single null
@@ -11,6 +12,8 @@ A mod can:
 - replace any game file under `/Assets/` (packages, data sets, models, scripts, sound packages and so on),
 - replace textures (`.ftex`, or a plain `.png`),
 - replace single sounds by their Wwise media id (`.wem`, or a 16-bit PCM `.wav`),
+- replace a game model with a glTF 2.0 model (`.glb`/`.gltf`), characters included, or add new glTF models,
+- hide, move, turn, scale and replace the models a level places, change its lights and add models to it (`level.json`),
 - run its own Lua script (`init.lua`) that reacts to game events.
 
 ## Installing a mod
@@ -51,6 +54,7 @@ Headless runs (`--headless`, which the comparison and test tools use) load mods 
 ```
 mods/<folder>/
   mod.json          optional
+  level.json        optional (Levels below)
   init.lua          optional
   Assets/           optional; the folder name is not case sensitive
     <path>          replaces the game file /Assets/<path>
@@ -153,6 +157,42 @@ The game's own Lua scripts can be replaced like any other file. Ship the decrypt
 originals is not needed. A replaced script runs in the game's Lua state with the game's full API, so it can change
 anything, including saving. This is the only way a mod can affect the game beyond what it shows and plays.
 
+### Models (glTF)
+
+A `.glb` or `.gltf` beside a game model's path replaces it: `Assets/<path>/<name>.glb` stands in for
+`/Assets/<path>/<name>.fmdl` (a `.gltf` reads its `.bin` and images relative to itself, or embedded `data:` URIs). Any other
+path under `Assets/` is a new model for `level.json`. Read by `src/engine/assets/gltf_model.cpp`:
+
+- Triangles only; positions, normals, tangents (made from the UVs when missing), two UV sets, vertex colours, joints and
+  weights. Node transforms are applied to unskinned meshes.
+- A skinned mesh takes the replaced model's skeleton: each glTF joint is matched by name to the game model's bones (the
+  rest pose is the game's). The game model's mesh groups and collision positions are kept.
+- Materials exported by `tools/fmdl.py export` (their `extras`: shader, technique, textures, parameters, mesh flags) are
+  rebuilt as the game's own, so an unchanged re-export draws identically. Other materials become `fox_3ddf_blin` with the
+  base colour image (or a one-pixel image of the base colour factor) and the normal map; `doubleSided` and alpha mode
+  `MASK` are honoured. Images may be PNG or JPEG; they are colour unless the name ends in `_nrm`, `_srm` or `_lin`.
+- A model that cannot be read is refused with the reason in `pt.log`, and the game's model is drawn.
+
+### Levels (level.json)
+
+`level.json` in the mod's folder has an `edit` and an `add` list (format and examples in the quickstart). Entries apply to
+the level packages whose path contains `stage`, to the models and lights whose entity name (the last `|` part, or the full
+name when the pattern has a `|`; a trailing `*` matches any end) is `model` or `light`.
+
+| key | in | meaning |
+| --- | --- | --- |
+| `hide` | edit | the model is not placed (neither drawn nor solid) |
+| `move`, `turn`, `scale` | edit | the placement becomes move x placement x turn x scale (turn in degrees: y, then x, then z) |
+| `replace` | edit | another model path (`.fmdl` or a mod's `.glb`) drawn with the placement |
+| `collision` | edit | `false` drops the model's collision |
+| `off`, `tint`, `brightness` | edit | a light left out, its colour multiplied, its intensity scaled |
+| `model`, `at`, `turn`, `scale` | add | a model placed in the level's main data set, with no entity (scripts never see it) |
+| `collision` | add | `box` (the model's bounds, default), `mesh` (its triangles) or `none` |
+
+The entries are applied when the level package is parsed, in mod priority order (the winner last), and each one's match
+count is logged. **F8** (with a mod installed) logs the model the camera looks at, its name and position, the nearest
+lights, and where the player stands in the level's space (`Game::LogModInspect`; the input script's `inspect` does the same).
+
 ## Mod scripts: init.lua
 
 `mods/<folder>/init.lua` runs once at start, after the game's own start-up scripts. It does not run in the game's Lua state:
@@ -234,6 +274,10 @@ Other mods keep running.
 - A file is replaced whole. Packages, data sets and banks are not merged.
 - The mod script API is deliberately small: events and read-only queries. Use a replaced game script for gameplay changes.
 - `.dds` textures are not supported. PNG works only for textures drawn through the texture manager.
+- glTF animations, cameras, lights, morph targets and sparse accessors are not read; a character keeps the game's
+  skeleton and animations.
+- `level.json` changes models and lights; doors, traps, puzzle objects and scripts keep their behaviour (moving such a
+  model moves only what is drawn).
 - Sound replacement works per embedded media id or per package. Wwise events and their parameters cannot be edited one by
   one.
 - At most 20 mods are listed on the settings page. More are still loaded and can be switched in `pt.ini`.
@@ -250,4 +294,7 @@ Other mods keep running.
 | `src/engine/script/mod_lua.h/.cpp` | the mod script sandbox |
 | `src/game/game.cpp` (`LoadModScripts`), `floor_level.cpp`, `game_controller.cpp`, `message_system.cpp` | events |
 | `src/main.cpp` (`MountMods`, `ModSections`) | `--mods`, `--no-mods`, the settings page |
+| `src/engine/assets/gltf_model.cpp`, `src/engine/core/json.cpp` | glTF models (`LoadModelFile`, used by the model cache, the stages and the Archive) |
+| `src/engine/fs/mod_level.cpp`, `src/game/stage_manager.cpp` (`ApplyModLevel`), `src/game/render_scene.cpp` | `level.json` |
+| `tools/make_example_glb.py` | the example mods' own glTF models |
 | `tests/mods_test.cpp` (`pt_mods_test`) | priority rules, `mod.json`, file lookups and the sandbox; needs no game files |

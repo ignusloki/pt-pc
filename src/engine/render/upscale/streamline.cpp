@@ -742,6 +742,8 @@ public:
         }
     }
 
+    uint32_t off_failures_ = 0;
+
     const vk::Image* Present(uint32_t image_index) override {
         if (!attached_) {
             prepared_ = false;
@@ -757,9 +759,17 @@ public:
                     preserve_active_mode_ = true;
                     generate = true;
                 } else if (mode_ == sl::DLSSGMode::eOn) {
-                    FatalError("DLSS Frame Generation remained on without current depth and motion inputs, and could not be turned off. Restart P.T.",
-                               ctx_.surface != VK_NULL_HANDLE);
+                    // turning it off can fail for a moment when video memory runs out (a 3 GB card, issue report 10 Oct): the
+                    // frame is presented without generation and the off request is repeated every frame for 5 s before giving up
+                    if (++off_failures_ <= 300) {
+                        if (off_failures_ == 1) LogError("frame generation: could not be turned off, retrying every frame");
+                    } else {
+                        FatalError("DLSS Frame Generation remained on without current depth and motion inputs, and could not be turned off. Restart P.T.",
+                                   ctx_.surface != VK_NULL_HANDLE);
+                    }
                 }
+            } else {
+                off_failures_ = 0;
             }
             if (!generate) {
                 prepared_ = false;

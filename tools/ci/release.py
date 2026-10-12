@@ -231,6 +231,10 @@ if a.linux_setup:
         shutil.copytree(previews[0], folder / "loop-previews")
     report["linux_previews"] = "copied from the Windows package" if previews else "none (the game shoots them at first use)"
     runtime = rezip(folder)
+    # the Linux portable zip as a release file, as the Windows one
+    linux_portable = dest / "P.T.PC.Port-portable-linux.zip"
+    shutil.copy2(runtime, linux_portable)
+    report["files"].append(str(linux_portable))
     extractor = publish_extractor("linux-x64")
     run("linux payload", [sys.executable, "tools/prepare_native_installer.py", "--runtime", runtime, "--extractor", extractor, "--source", source,
                           "--out", linux / "payload"])

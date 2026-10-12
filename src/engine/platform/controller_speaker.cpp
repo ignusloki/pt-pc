@@ -4,6 +4,11 @@
 #include <SDL3/SDL_hidapi.h>
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <array>
 #include <climits>
 #include <cmath>
@@ -245,9 +250,57 @@ std::optional<uint32_t> ResolveSdlDevice(const GUID& container, int expected_cha
 
 }
 
+ControllerSpeakerOutput::ControllerSpeakerOutput() = default;
+
 ControllerSpeakerOutput::~ControllerSpeakerOutput() {
     Close();
 }
+
+struct ControllerSpeakerOutput::HidWriter {
+    explicit HidWriter(SDL_hid_device* device) : device(device), thread([this] { Run(); }) {}
+    ~HidWriter() {
+        {
+            std::lock_guard lock(mutex);
+            stop = true;
+        }
+        wake.notify_one();
+        thread.join();
+    }
+    // false once a write failed
+    bool Push(const std::array<uint8_t, kDualSenseBtHapticsReportSize>& report) {
+        if (failed.load()) return false;
+        {
+            std::lock_guard lock(mutex);
+            // a backlog means the link is slower than the haptics: the oldest report is dropped, the newest goes out
+            if (queue.size() >= 8) queue.pop_front();
+            queue.push_back(report);
+        }
+        wake.notify_one();
+        return true;
+    }
+    void Run() {
+        std::unique_lock lock(mutex);
+        while (true) {
+            wake.wait(lock, [this] { return stop || !queue.empty(); });
+            if (stop) return;
+            const auto report = queue.front();
+            queue.pop_front();
+            lock.unlock();
+            if (SDL_hid_write(device, report.data(), report.size()) < 0) {
+                LogInfo("input: DualSense Bluetooth haptics report failed: {}", SDL_GetError());
+                failed.store(true);
+            }
+            lock.lock();
+        }
+    }
+    SDL_hid_device* device;
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<std::array<uint8_t, kDualSenseBtHapticsReportSize>> queue;
+    std::atomic<bool> failed{false};
+    bool stop = false;
+    std::thread thread;
+};
 
 void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t counter, std::span<uint8_t> report) {
     if (report.size() < kDualSenseBtHapticsReportSize) return;
@@ -294,10 +347,8 @@ bool ControllerSpeakerOutput::WriteBluetoothHaptics(const float* actuator_stereo
         std::array<uint8_t, kDualSenseBtHapticsReportSize> report{};
         BuildDualSenseBtHapticsReport(bt_frames_, bt_counter_++, report);
         bt_frame_count_ = 0;
-        if (SDL_hid_write(hid_, report.data(), report.size()) < 0) {
-            LogInfo("input: DualSense Bluetooth haptics report failed: {}", SDL_GetError());
-            return false;
-        }
+        if (!hid_writer_) hid_writer_ = std::make_unique<HidWriter>(hid_);
+        if (!hid_writer_->Push(report)) return false;
     }
     return true;
 }
@@ -441,6 +492,7 @@ void ControllerSpeakerOutput::Close() {
         SDL_DestroyAudioStream(stream_);
         stream_ = nullptr;
     }
+    hid_writer_.reset();
     if (hid_) {
         SDL_hid_close(hid_);
         SDL_hid_exit();

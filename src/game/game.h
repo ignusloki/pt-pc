@@ -166,7 +166,9 @@ public:
     void SetShowBody(bool on) { show_body_ = on; }
     bool ShowBody() const { return show_body_; }
     // the body is drawn in the camera view: the free camera and the photo mode (ShowBody) or the third person view
-    bool BodyShown() const { return show_body_ || third_person_shown_; }
+    // the third person flag only without a camera override: the photo mode pauses the game, which kept the flag of the frame
+    // before it and drew the body with the photo's "Player body: Hidden" (third person on)
+    bool BodyShown() const { return show_body_ || (third_person_shown_ && !camera_override_); }
     // the free camera (Extras) and the photo mode: the rendered view is not the player's, whose body and handy light stay where
     // the player's own view puts them, with the body shown or not; the third person view while it shows the body, too
     void SetDetachedView(bool on) { detached_view_ = on; }
@@ -356,6 +358,8 @@ public:
     bool StartStreetWalk();
     void UpdateStreetWalk(float dt);
     bool StreetWalkActive() const { return street_walk_; }
+    // the street walk's flashlight (a PC addition, the F key): the handy light on or off with the light switch's sound
+    void ToggleStreetFlashlight();
     // the loop browser's street entry: the ending stage loads and the walk starts in place of the ending demo (controller step 27)
     bool StreetPending() const { return street_pending_; }
     // the end of the credits (FinishEndingRestartGame from step 28): true when the street walk is offered (step 32 waits for the
@@ -391,6 +395,12 @@ public:
     // loop browser's record is (not in the save, so Reset Progress keeps it). An entry can be opened always in the developer
     // build, and in the release build once its key was reached ("finished": once the game was finished)
     void NoteArchive(std::string_view key);
+    // the mods' inspector (F8 with a mod installed, docs/modding.md): logs the model the camera looks at, the lights near it and
+    // where the player stands, in the stage space and with the names level.json takes
+    void LogModInspect(const Camera& camera);
+    // F9: the camera as lines of a shadPS4 capture route (tools/shadps4_capture.py: world space goto and lookat), so a reference
+    // shot is taken from exactly the place and direction a report shows
+    void LogCapturePose(const Camera& camera);
     void SetArchiveSeen(std::set<std::string> keys) { archive_seen_ = std::move(keys); }
     const std::set<std::string>& ArchiveSeen() const { return archive_seen_; }
     bool ArchiveUnlocked(const ArchiveEntry& entry) const;
@@ -428,6 +438,13 @@ public:
     bool GamePlus() const { return game_plus_; }
     // finished games (the save's port count): 1 shows the bathtub Lisa, 2 and more also Lisa's hsh0 arm
     uint32_t Finishes() const { return finishes_; }
+    // The Game+ tier to announce now (1 to 4), once per tier: 0 when the current tier was announced already, before the player
+    // has gone through the start room's door into a hallway loop (its door demo, gc_p00_010 or on f000 gc_p00_160; the start
+    // room, the street, the ending and the credits do not count) or outside play. Called every frame (it follows the door
+    // demo). TakeGamePlusNotice marks it shown and saves it with the next save (the finish count's word; Reset progress clears
+    // it with Game+)
+    int GamePlusNoticeDue();
+    void TakeGamePlusNotice(int tier);
     // the Game+ tier whose content shows (tier N unlocks at the Nth finish and stays): 0 without a finish, and always 0 in a build
     // without PT_GAMEPLUS; PT_GAMEPLUS_TIER=<n> forces a tier for tests
     int GamePlusTier() const;
@@ -595,6 +612,8 @@ private:
     GameAudio* audio_ = nullptr;
     std::set<std::string> bgm_playing_;
     InputState last_input_;
+    // the mouse's light deflection under a demo's camera (UpdateHandyTarget)
+    glm::vec2 demo_light_mouse_{0.0f};
     uint64_t frame_ = 0;
     double time_ = 0.0;
     double last_save_request_ = -1e9;
@@ -676,6 +695,8 @@ private:
     bool gp_laugh_near_ = false;
     int gp_laugh_visits_ = 0;
     uint32_t finishes_ = 0;
+    uint32_t gameplus_announced_ = 0;
+    bool gameplus_door_seen_ = false;
     GamePlusArm game_plus_arm_;
     std::vector<std::pair<const GpuMesh*, glm::mat4>> mockup_draws_;
     void UpdateGamePlus();

@@ -1,3 +1,4 @@
+#include "engine/assets/gltf_model.h"
 #include "game/ui/archive_view.h"
 
 #include <algorithm>
@@ -58,9 +59,8 @@ glm::vec2 ArchiveView::TextureSize(UiAssets& assets, const std::string& path) {
 }
 
 bool ArchiveView::LoadPiece(UiAssets& assets, const std::string& model, const glm::mat4& to_plane, Piece& out) {
-    const auto bytes = assets.Files().ReadFile(model);
     FmdlModel fmdl;
-    if (!bytes || !LoadFmdl(*bytes, model, fmdl) || fmdl.mesh.vertices.empty()) {
+    if (!LoadModelFile(assets.Files(), model, fmdl) || fmdl.mesh.vertices.empty()) {
         LogWarn("archive: photo piece {} unreadable", model);
         return false;
     }
@@ -214,7 +214,7 @@ void ArchiveView::DrawFrame(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
     glm::vec2 b = canvas.ToTarget(hi - glm::vec2(inset));
     glm::vec2 pa = a;
     glm::vec2 pb = b;
-    const bool picture = !locked && FitPicture(assets, panel, a, b, pa, pb);
+    const bool picture = !locked && !panel.audio && FitPicture(assets, panel, a, b, pa, pb);
     if (picture) {
         a = pa - glm::vec2(inset * canvas.scale);
         b = pb + glm::vec2(inset * canvas.scale);
@@ -227,11 +227,33 @@ void ArchiveView::DrawFrame(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
     solid({a.x - line, b.y}, {b.x + line, b.y + line}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
     solid({a.x - line, a.y}, {a.x, b.y}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
     solid({b.x, a.y}, {b.x + line, b.y}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
-    // a theater shot is lit as an exhibit is, the hallway's dark lifted; one not decoded yet leaves the name in the frame
+    if (panel.audio && !locked) {
+        const glm::vec2 center((lo.x + hi.x) * 0.5f, lo.y + (hi.y - lo.y) * 0.38f);
+        const glm::vec4 color(1.0f, 1.0f, 1.0f, selected ? 0.95f : 0.6f);
+        const auto rectangle = [&](glm::vec2 lo, glm::vec2 hi) { solid(canvas.ToTarget(lo), canvas.ToTarget(hi), color); };
+        rectangle(center + glm::vec2(-18.0f, -5.0f), center + glm::vec2(-10.0f, 5.0f));
+        const glm::vec2 cone[] = {center + glm::vec2(-10.0f, -5.0f), center + glm::vec2(0.0f, -13.0f),
+                                 center + glm::vec2(0.0f, 13.0f), center + glm::vec2(-10.0f, 5.0f)};
+        const ui::UiVertex vertices[] = {{canvas.ToTarget(cone[0]), {}, color}, {canvas.ToTarget(cone[1]), {}, color},
+            {canvas.ToTarget(cone[2]), {}, color}, {canvas.ToTarget(cone[0]), {}, color},
+            {canvas.ToTarget(cone[2]), {}, color}, {canvas.ToTarget(cone[3]), {}, color}};
+        batch.Draw(vertices, ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid, ui::UiBlend::Alpha);
+        for (const float radius : {10.0f, 17.0f}) {
+            for (int i = 0; i < 9; ++i) {
+                const float angle = -0.8f + static_cast<float>(i) * 0.2f;
+                const glm::vec2 p = center + glm::vec2(std::cos(angle), std::sin(angle)) * radius;
+                rectangle(p - glm::vec2(1.2f), p + glm::vec2(1.2f));
+            }
+        }
+        DrawLine(batch, canvas, assets, name, 13.0f, {lo.x + 5.0f, lo.y + (hi.y - lo.y) * 0.66f},
+                 {hi.x - 5.0f, hi.y - 4.0f}, ui::TextAlign::Center, selected ? 0.95f : 0.6f, language);
+        return;
+    }
+    // Captured thumbnails retain their original display values; undecoded files show a name.
     const bool drawn = picture && DrawPicture(batch, assets, panel, pa, pb, panel.lift);
     if (drawn) {
         if (!selected) solid(pa, pb, glm::vec4(0.0f, 0.0f, 0.0f, 0.22f));
-    } else if (!locked && !name.empty()) {
+    } else if (!locked && !picture && !name.empty()) {
         // no picture yet (its capture still running, or its file still being decoded): the name in the frame
         DrawLine(batch, canvas, assets, name, 15.0f, lo + glm::vec2(inset + 8.0f), hi - glm::vec2(inset + 8.0f), ui::TextAlign::Center,
                  selected ? 0.8f : 0.45f, language);
@@ -288,6 +310,12 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
         const PcPanel panel = page.PanelOf(index);
         DrawFrame(batch, canvas, assets, panel, row->label, cell.lo, cell.hi, 3.0f, selected, !row->enabled || panel.locked, language);
     }
+    for (const bool right : {false, true}) {
+        const L::Cell arrow = L::WallArrow(right, slots);
+        const bool enabled = right ? cursor < n - 1 : cursor > 0;
+        DrawLine(batch, canvas, assets, right ? ">" : "<", 30.0f, arrow.lo, arrow.hi, ui::TextAlign::Center,
+                 enabled ? 0.95f : 0.22f, language);
+    }
     // the back button keeps the last exhibit in the spotlight
     const int shown = std::min(cursor, n - 1);
     const PcSettingRow* current = page.RowAtIndex(shown);
@@ -296,13 +324,13 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
     const bool locked = !current->enabled || panel.locked;
     if (!panel.lines.empty() && !locked) {
         // a voice: its transcript on a sheet in the frame, the spoken line lit
-        const glm::vec2 a = canvas.ToTarget(L::kSpotlight.lo);
-        const glm::vec2 b = canvas.ToTarget(L::kSpotlight.hi);
+        const glm::vec2 a = canvas.ToTarget(L::kTranscript.lo);
+        const glm::vec2 b = canvas.ToTarget(L::kTranscript.hi);
         PcPanel sheet;
-        DrawFrame(batch, canvas, assets, sheet, {}, L::kSpotlight.lo, L::kSpotlight.hi, 0.0f, true, false, language);
+        DrawFrame(batch, canvas, assets, sheet, {}, L::kTranscript.lo, L::kTranscript.hi, 0.0f, true, false, language);
         batch.Quad(a, b, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), ui::UiDrawParams::Plain(TextureManager::kWhite),
                    ui::UiShade::Solid, ui::UiBlend::Alpha);
-        DrawLines(batch, canvas, assets, panel, L::kSpotlight.lo + glm::vec2(22.0f, 18.0f), L::kSpotlight.hi - glm::vec2(22.0f, 14.0f), language);
+        DrawLines(batch, canvas, assets, panel, L::kTranscript.lo + glm::vec2(22.0f, 18.0f), L::kTranscript.hi - glm::vec2(22.0f, 14.0f), language, true);
     } else {
         DrawFrame(batch, canvas, assets, panel, current->label, L::kSpotlight.lo, L::kSpotlight.hi, 8.0f, true, locked, language);
     }
@@ -315,9 +343,19 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
 }
 
 void ArchiveView::DrawLines(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets& assets, const PcPanel& panel, glm::vec2 lo, glm::vec2 hi,
-                            int language) {
+                            int language, bool complete) {
     UiFont* font = assets.Font(UiFontType::PcSystem, language);
     if (!font || panel.lines.empty()) return;
+    if (complete) {
+        std::string text;
+        for (const std::string& line : panel.lines) {
+            if (!text.empty()) text += "\n";
+            text += line;
+        }
+        const ui::TextLayout layout = ui::LayoutTextInBox(text, PanelStyle(*font, 19.0f), lo, hi, true);
+        DrawText(batch, canvas, *font, layout, glm::vec4(1.0f), ui::UiBlend::Alpha);
+        return;
+    }
     const ui::TextStyle style = PanelStyle(*font, 19.0f);
     const float width = hi.x - lo.x;
     std::vector<ui::TextLayout> layouts;

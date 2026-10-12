@@ -668,6 +668,14 @@ FrameGeneration* UpscaleHost::FrameGen() {
     return frame_gen_.get();
 }
 
+FrameGeneration* UpscaleHost::MetalFxFrameGen() {
+    if (!metalfx_frame_gen_created_ && ctx_) {
+        metalfx_frame_gen_created_ = true;
+        metalfx_frame_gen_ = CreateMetalfxFrameGeneration(*ctx_);
+    }
+    return metalfx_frame_gen_.get();
+}
+
 void UpscaleHost::Shutdown() {
     if (frame_intervals_.size() > 120) {
         std::vector<float> sorted(frame_intervals_.begin() + 60, frame_intervals_.end());
@@ -691,6 +699,11 @@ void UpscaleHost::Shutdown() {
         dlss_frame_gen_.reset();
     }
     dlss_frame_gen_created_ = false;
+    if (metalfx_frame_gen_) {
+        metalfx_frame_gen_->Shutdown();
+        metalfx_frame_gen_.reset();
+    }
+    metalfx_frame_gen_created_ = false;
     for (auto& backend : backends_) {
         if (backend) {
             backend->Release();
@@ -736,17 +749,24 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
         case UpscalerKind::Fsr4: backends_[i] = CreateFsrBackend(*ctx_, 4); break;
         case UpscalerKind::Dlss: backends_[i] = streamline::Active() ? CreateStreamlineDlssBackend(*ctx_) : CreateDlssBackend(*ctx_); break;
         case UpscalerKind::Xess: backends_[i] = CreateXessBackend(*ctx_); break;
-        case UpscalerKind::MetalFx: backends_[i] = CreateMetalFxBackend(*ctx_); break;
+        case UpscalerKind::MetalFx: backends_[i] = CreateMetalfxBackend(*ctx_); break;
         default: break;
         }
         if (!backends_[i]) {
             probed_[i] = true;
-#ifdef _WIN32
+#if defined(_WIN32)
             reasons_[i] = "not built into this executable";
+#elif defined(__APPLE__)
+            // the SDKs ship Windows DLLs, so the macOS build leaves DLSS, FSR and XeSS out (docs/linux.md); players read the
+            // bare "not built into this executable" as a broken install. MetalFX is native to macOS, so here it is only the
+            // build choice (-DPT_METALFX=OFF).
+            reasons_[i] = kind == UpscalerKind::MetalFx ? "Apple MetalFX is not built into this executable"
+                                                        : "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
 #else
             // the SDKs ship Windows DLLs, so the Linux and macOS builds leave DLSS, FSR and XeSS out (docs/linux.md); players read the
             // bare "not built into this executable" as a broken install
-            reasons_[i] = "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
+            reasons_[i] = kind == UpscalerKind::MetalFx ? "macOS only (Apple MetalFX)"
+                                                        : "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
 #endif
             LogInfo("upscale: {} unavailable: {}", UpscalerName(kind), reasons_[i]);
         }
@@ -766,11 +786,5 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
     return available_[i];
 }
 
-#ifndef __APPLE__
-// MetalFX is Apple's; metalfx_backend.mm is only built for macOS.
-std::unique_ptr<UpscaleBackend> CreateMetalFxBackend(vk::Context&) {
-    return nullptr;
-}
-#endif
 
 }

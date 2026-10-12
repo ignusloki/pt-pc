@@ -60,6 +60,18 @@ Off on macOS, as on Linux: FSR 3, DLSS, XeSS (Windows SDKs) and the VR mode. Mol
 ray-traced shadows, ambient occlusion and reflections are greyed out in the settings; Metal has no sampler LOD bias,
 which MoltenVK ignores.
 
+Upscaling on macOS is Apple MetalFX (`upscaling.md`, Apple MetalFX; `src/engine/render/upscale/metalfx_backend.mm`): the
+port's temporal upscaler, run on a Metal command buffer beside MoltenVK's. It uses `VK_EXT_metal_objects` to name the
+Vulkan targets' Metal textures, and splits each frame's submission in two around the Metal pass, ordered by an
+`MTLSharedEvent` imported into a Vulkan timeline semaphore. `MTLFXTemporalScalerDescriptor.supportsDevice:` decides whether
+a machine can run it: Apple silicon and the supported AMD GPUs, not an Intel Mac's integrated GPU, which greys the row out
+with the reason. `PT_UPSCALER=metalfx` selects it for a run (upscaling.md, Test overrides). On Apple silicon with macOS 26
+or newer, `frame_generation = metalfx` also enables MetalFX frame interpolation: the renderer presents a generated image
+between each pair of rendered frames, forces FIFO/v-sync while it runs, and composites the game's UI on both images. This
+is experimental; fast bright lights such as the flashlight can flicker because the frame interpolator has no reactive-mask
+input. The MetalFX framework is part of macOS; nothing of it ships with the app. Built with `-DPT_METALFX=OFF` the
+Objective-C++ backend and both features are left out and the game behaves as before.
+
 Intel Macs: the renderer indexes a bindless array of images, which MoltenVK builds on Metal argument buffers tier 2.
 Intel's own integrated GPUs and older AMD ones may not offer that; the game then stops at start with a log line naming the
 missing Vulkan feature (`pt.log`, "required feature ... is not available"). The user accepted native installation/gameplay on a 2019 MacBook Pro, with slower performance; the exact GPU and frame rate were not supplied. Start at Windowed 1280 × 720, Low, 30 FPS, Reflections Off and Enhanced textures Off. See the [Intel test record](intel-regression-20261011.md) and [checklist](integration/intel-mac-test-checklist.md); the model year alone does not establish GPU compatibility.

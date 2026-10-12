@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,7 +55,7 @@ enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad, D
 
 class ControllerSpeakerOutput {
 public:
-    ControllerSpeakerOutput() = default;
+    ControllerSpeakerOutput();
     ~ControllerSpeakerOutput();
     ControllerSpeakerOutput(const ControllerSpeakerOutput&) = delete;
     ControllerSpeakerOutput& operator=(const ControllerSpeakerOutput&) = delete;
@@ -79,6 +80,10 @@ private:
 
     SDL_AudioStream* stream_ = nullptr;
     SDL_hid_device* hid_ = nullptr;
+    // the Bluetooth reports go out on a thread of their own: a HID write over Bluetooth can block for milliseconds, and in the
+    // main loop it held the frame (one report every 10.7 ms of haptics)
+    struct HidWriter;
+    std::unique_ptr<HidWriter> hid_writer_;
     // 48 kHz actuator frames averaged 16 to one 3 kHz frame, then 32 of those to a report
     std::array<float, 2> bt_sum_{};
     uint32_t bt_summed_ = 0;

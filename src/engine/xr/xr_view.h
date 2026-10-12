@@ -108,6 +108,8 @@ public:
         center_ = head_position - glm::inverse(Rotation()) * (old_rotation * (head_position - center_));
     }
     float BaseYaw() const { return base_yaw_; }
+    // the recentre point moved by a world displacement (the player's body followed the head that far)
+    void Shift(const glm::vec3& world) { center_ += glm::inverse(Rotation()) * world; }
     glm::quat Rotation() const { return YawRotation(WrapAngle(base_yaw_ - center_yaw_)); }
     glm::quat ToWorld(const glm::quat& local) const { return glm::normalize(Rotation() * local); }
     // the head's movement since the recentre in the world, before the anchor

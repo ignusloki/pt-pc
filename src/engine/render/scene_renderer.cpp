@@ -108,7 +108,7 @@ bool SceneRenderer::EnsureShadowTarget() {
 
 bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
-    ldr_format_ = renderer.OutputMode() == RendererOutputMode::Sdr ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R16G16B16A16_SFLOAT;
+    ldr_format_ = VK_FORMAT_R8G8B8A8_UNORM;
     textures_ = &textures;
     vk::Context& ctx = renderer.Context();
     device_ = ctx.device;
@@ -440,6 +440,11 @@ bool SceneRenderer::CreatePipelines() {
     screen_fx_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "debug.frag";
     debug_ = CreateGraphicsPipeline(device_, post);
+    post.fragment = "subliminal_string.frag";
+    post.colors = {ldr_format_};
+    post.blend = BlendMode::None;
+    subliminal_string_ = CreateGraphicsPipeline(device_, post);
+    post.blend = BlendMode::None;
     post.fragment = "ssao.frag";
     post.colors = {kAoFormat};
     occlusion_ = CreateGraphicsPipeline(device_, post);
@@ -471,7 +476,7 @@ bool SceneRenderer::CreatePipelines() {
                               reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
                               mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
                               debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
-                              reflect_layer_pipeline_, reflect_temporal_pipeline_};
+                              reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_};
     for (VkPipeline p : all) {
         if (!p) {
             LogError("scene renderer: pipeline creation failed");
@@ -486,7 +491,7 @@ void SceneRenderer::DestroyPipelines() {
                          &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &bloom_kawase_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
                          &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &velocity_pipeline_, &fsblur_,
                          &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_, &vfx_depth_down_,
-                         &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_};
+                         &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_, &subliminal_string_};
     for (VkPipeline* p : all) {
         if (*p) {
             vkDestroyPipeline(device_, *p, nullptr);
@@ -623,7 +628,8 @@ void SceneRenderer::DestroyTargets() {
                                &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &dof_half_,
                                &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_,
                                &mb_tile_[0], &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_,
-                               &mb_blur_[0], &mb_blur_[1], &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_,
+                               &mb_blur_[0], &mb_blur_[1], &mb_original_bake_, &mb_original_blur_[0], &mb_original_blur_[1],
+                               &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_,
                                &reflect_history_[0], &reflect_history_[1]};
     for (RenderTarget* t : targets) {
         ctx.DestroyImage(t->image);
@@ -695,14 +701,17 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     ok = ok && CreateTarget(dof_half_, kPostFormat, shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
          CreateTarget(dof_quarter_[1], kPostFormat, shift2, color, c) && CreateTarget(dof_eighth_[0], kPostFormat, shift3, color, c) &&
          CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kMotionFormat, output, color, c) &&
-         CreateTarget(object_velocity_, kPostFormat, extent, color, c) && CreateTarget(mb_blur_[0], kPostFormat, shift1, color, c) &&
-         CreateTarget(mb_blur_[1], kPostFormat, shift1, color, c);
+         CreateTarget(object_velocity_, kPostFormat, extent, color, c) && CreateTarget(mb_blur_[0], kPostFormat, output, color, c) &&
+         CreateTarget(mb_blur_[1], kPostFormat, output, color, c) &&
+         CreateTarget(mb_original_bake_, kPostFormat, shift1, color, c) &&
+         CreateTarget(mb_original_blur_[0], kPostFormat, shift1, color, c) &&
+         CreateTarget(mb_original_blur_[1], kPostFormat, shift1, color, c);
     for (uint32_t i = 0; i < 5 && ok; ++i) {
         const uint32_t round = (2u << i) - 1u;
         ok = CreateTarget(mb_tile_[i], kMotionFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
     }
     ok = ok && CreateTarget(mb_neighbour_, kMotionFormat, mb_tile_[4].Extent(), color, c) &&
-         CreateTarget(mb_bake_, kPostFormat, {(output.width + 1) >> 1, (output.height + 1) >> 1}, color, c);
+         CreateTarget(mb_bake_, kPostFormat, output, color, c);
     ok = ok && (!upscaling || CreateUpscaleTargets(extent, output));
     ok = ok && (!upscaling ||
                 (CreateTarget(mirror_history_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
@@ -723,7 +732,7 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
                                   &particles_near_, &particles_far_, &near_far_depth_, &dof_half_,
                                   &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_, &mb_tile_[0],
                                   &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_, &mb_blur_[0],
-                                  &mb_blur_[1]};
+                                  &mb_blur_[1], &mb_original_bake_, &mb_original_blur_[0], &mb_original_blur_[1]};
         for (RenderTarget* t : colors) {
             UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
             BeginPass(cmd, t->Extent(), {{t, true, {}}});
@@ -813,6 +822,9 @@ void SceneRenderer::WriteImageDescriptors() {
     set_target(gpu::kImgMbBake, mb_bake_);
     set_target(gpu::kImgMbBlurA, mb_blur_[0]);
     set_target(gpu::kImgMbBlurB, mb_blur_[1]);
+    set_target(gpu::kImgMbOriginalBake, mb_original_bake_);
+    set_target(gpu::kImgMbOriginalBlurA, mb_original_blur_[0]);
+    set_target(gpu::kImgMbOriginalBlurB, mb_original_blur_[1]);
     set_target(gpu::kImgMirror, mirror_);
     set_target(gpu::kImgMirrorHistory, mirror_history_);
     set_target(gpu::kImgMirrorTemporal, mirror_temporal_);
@@ -1302,6 +1314,10 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
         step = diff;
     }
     ev_ += step;
+    // PT_EV_TRACE=1: each adaptation step (the measured luminance, the EV it moves toward, the EV after the step)
+    if (static const bool ev_trace = std::getenv("PT_EV_TRACE") != nullptr; ev_trace) {
+        LogInfo("ev trace: measured {:.5f} raw {:.5f} target {:.3f} ev {:.3f} dt {:.4f}", measured, raw, target, ev_, dt);
+    }
 }
 
 namespace {

@@ -28,6 +28,7 @@ public:
     uint16_t BackIcon() const { return back_icon_; }
     uint16_t BackGlow() const { return back_glow_; }
     uint16_t Help() const { return help_; }
+    uint16_t NavigationText() const { return navigation_text_; }
     void SetFlash(const ui::UiaAnimation* animation) { flash_animation_ = animation; }
     void Open(PcSettingsSource* source);
     void Refresh();

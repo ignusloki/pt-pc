@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <deque>
 #include <span>
 #include <string>
@@ -26,6 +27,9 @@ namespace pt::game {
 //    weights: its torso bones by her own skin matrices (so it follows every bone of hers exactly), its arm from her real upper
 //    arm joint as a chain of her bone rotations over hsh0's bone offsets at kArmLength, so the long arm hangs from her shoulder.
 // The cuts overlap at her middle and shoulder line. Both bind poses are rotation free T poses, the left arm along +x.
+// The static Lisa at the hallway's end (shsb_hous001_ocho001: her model with a pose baked into its vertices, no bones; the
+// fifth loop's corridor, the start room's door) takes the same side: it is drawn as her skinned model in that pose, fitted
+// once from the two files (FitStaticPose).
 class GamePlusArm {
 public:
     // loads both models once (false when one is missing)
@@ -50,6 +54,12 @@ private:
     std::vector<bool> side_arm_;
     float scale_ = 0.6f;
     std::deque<std::vector<glm::mat4>> skins_;
+    // the static Lisa's mesh and its baked pose as skin matrices of her model (none when the fit failed)
+    const GpuMesh* static_mesh_ = nullptr;
+    std::vector<glm::mat4> static_skin_;
+    bool static_fitted_ = false;
+    uint32_t static_probe_ = 0;
+    void FitStaticPose(ModelCache& models);
 };
 
 }

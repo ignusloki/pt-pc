@@ -1,0 +1,9 @@
+{
+  "edit": [
+    {
+      "stage": "pt14_hallway",
+      "model": "shsb_bskt001_0000",
+      "replace": "/Assets/mods/replace_basket/crate.glb"
+    }
+  ]
+}

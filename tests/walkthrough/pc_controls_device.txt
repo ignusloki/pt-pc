@@ -10,8 +10,6 @@ stap 0 down
 swait 4
 stap 0 down
 swait 4
-stap 0 down
-swait 4
 sexpect pcrow pc_gamepad_sensitivity
 sexpect pcvalue pc_gamepad_sensitivity 2
 stap 0 right

@@ -17,6 +17,8 @@ namespace pt {
 
 class Vfs {
 public:
+    // how many of the packages every loop needs (resident, start, hallway, ...) chunk1.psarc lacks: 0 for a P.T. dump
+    int MissingCorePackages() const;
     bool Mount(const std::filesystem::path& game_dir);
 
     const std::filesystem::path& GameDir() const { return game_dir_; }

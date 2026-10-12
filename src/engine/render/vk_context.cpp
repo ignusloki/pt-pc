@@ -1,3 +1,9 @@
+#if defined(__APPLE__)
+// Apple MetalFX (upscale/metalfx_backend.mm): the export-intent structures of vulkan_metal.h, which the spec asks for when the
+// MetalFX backend exports the device (VkInstanceCreateInfo) and the targets' Metal textures (VkImageCreateInfo)
+#define VK_USE_PLATFORM_METAL_EXT 1
+#endif
+
 #include "engine/render/vk_context.h"
 
 #include <SDL3/SDL.h>
@@ -20,9 +26,7 @@
 
 #include "engine/core/crash_report.h"
 #include "engine/core/log.h"
-#ifdef __APPLE__
-#include <vulkan/vulkan_metal.h>
-#endif
+#include "engine/platform/os.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/pipeline_cache_store.h"
 
@@ -160,6 +164,7 @@ std::string VulkanLibraryPath() {
 }
 
 bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
+    window_ = window;
 #ifdef __APPLE__
     if (!loader) {
         loader = LoadVulkanLibrary(window);
@@ -234,16 +239,12 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         instance_info.ppEnabledExtensionNames = extensions.data();
     }
-#ifdef __APPLE__
-    // MetalFX exports the Metal device and, for frame generation, the command queue; the instance has to declare both
-    // (VUID-VkExportMetalObjectsInfoEXT-pNext-06791, -06792).
-    VkExportMetalObjectCreateInfoEXT export_device{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
-    export_device.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_DEVICE_BIT_EXT;
-    export_device.pNext = instance_info.pNext;
-    VkExportMetalObjectCreateInfoEXT export_queue{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
-    export_queue.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_COMMAND_QUEUE_BIT_EXT;
-    export_queue.pNext = &export_device;
-    instance_info.pNext = &export_queue;
+#if defined(__APPLE__)
+    // the intent MetalFX's device export needs (VUID-VkExportMetalObjectsInfoEXT-pNext-06791); MoltenVK ignores it
+    VkExportMetalObjectCreateInfoEXT export_device_info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_device_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_DEVICE_BIT_EXT;
+    export_device_info.pNext = instance_info.pNext;
+    instance_info.pNext = &export_device_info;
 #endif
     const VkResult instance_result = creator ? creator->CreateInstance(instance_info, instance) : vkCreateInstance(&instance_info, nullptr, &instance);
     if (!Check(instance_result, "vkCreateInstance")) {
@@ -442,6 +443,12 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             features.pNext = &portability;
 #endif
         }
+#ifdef __APPLE__
+        /* Apple MetalFX (upscale/metalfx_backend.mm) exports the Vulkan targets' Metal textures through this extension */
+        if (has("VK_EXT_metal_objects")) {
+            add("VK_EXT_metal_objects");
+        }
+#endif
         if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;
@@ -637,7 +644,7 @@ void Context::Shutdown() {
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
     vkDeviceWaitIdle(device);
     swapchain_refused = false;
-    vsync = vsync && !force_vsync_off;
+    vsync = force_vsync ? true : (vsync && !force_vsync_off);
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
     uint32_t format_count = 0;
@@ -646,6 +653,35 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     if (format_count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
     VkSurfaceFormatKHR chosen{};
     bool hdr_selected = false;
+    // HDR is left out only while a frame generation swapchain is active (its proxy presents SDR). The context hooks (the
+    // upscaler host, set on every start) had kept HDR off on every machine: the native HDR option never took effect (1.0.2
+    // reports: the display stayed SDR)
+    if (want_hdr) {
+        std::string offered;
+        for (const VkSurfaceFormatKHR& f : formats) {
+            offered += std::format(" {}/{}", static_cast<int>(f.format), static_cast<int>(f.colorSpace));
+        }
+        LogInfo("vulkan: HDR requested{}; surface formats (format/color space):{}", swapchain_hooks ? ", but frame generation's swapchain is SDR only" : "",
+                offered);
+    }
+#ifdef _WIN32
+    // an HDR swapchain on a display with Windows HDR off: Windows maps scRGB to SDR and cuts everything over SDR white, so the
+    // picture came out hard and contrasty (1.0.3 test). The display's own HDR state decides; SDR while it is off
+    // PT_HDR_IGNORE_DISPLAY=1 (tests): the HDR formats the driver offers are taken whatever Windows says
+    static const bool ignore_display = std::getenv("PT_HDR_IGNORE_DISPLAY") != nullptr;
+    if (want_hdr && window_ && !ignore_display) {
+        void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+        if (const std::optional<bool> display_hdr = pt::os::WindowDisplayHdr(hwnd); display_hdr && !*display_hdr) {
+            if (!hdr_off_logged_) {
+                LogWarn("vulkan: HDR is on in the game but off for this display in Windows (Settings > Display > Use HDR): SDR is used");
+                hdr_off_logged_ = true;
+            }
+            want_hdr = false;
+        } else {
+            LogInfo("vulkan: Windows HDR for this display: {}", display_hdr ? "on" : "unknown");
+        }
+    }
+#endif
     if (!ChooseSwapchainSurfaceFormat(formats, want_hdr, !swapchain_hooks && (!hooks || hooks->AllowsHdr()), chosen, hdr_selected)) {
         LogError("vulkan: surface has no supported SDR or HDR color format");
         return false;
@@ -837,16 +873,14 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usage;
     info.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
-#ifdef __APPLE__
-    // VUID-VkExportMetalObjectsInfoEXT-pNext-06795: an image whose MTLTexture is exported declares it at creation.
-    VkExportMetalObjectCreateInfoEXT export_texture{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
-    export_texture.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
-    if (metal_export && metal_objects) {
-        export_texture.pNext = info.pNext;
-        info.pNext = &export_texture;
+#if defined(__APPLE__)
+    // the intent MetalFX's vkExportMetalObjectsEXT needs (VUID-VkExportMetalObjectsInfoEXT-pNext-06795); MoltenVK ignores it
+    VkExportMetalObjectCreateInfoEXT export_info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+    if (metal_objects) {
+        export_info.pNext = info.pNext;
+        info.pNext = &export_info;
     }
-#else
-    (void)metal_export;
 #endif
     VmaAllocationCreateInfo alloc{};
     alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;

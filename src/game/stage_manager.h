@@ -196,6 +196,8 @@ private:
     struct ParsedStage {
         std::unique_ptr<Stage> stage;
         std::vector<std::string> errors;
+        // info lines of the parse (a worker logs nothing), logged with the errors
+        std::vector<std::string> notes;
         std::unordered_map<std::string, std::shared_ptr<const PreGeom>> geoms;
         std::unordered_map<std::string, std::shared_ptr<FmdlModel>> models;
         std::vector<std::pair<std::string, std::shared_ptr<FtexTexture>>> textures;
@@ -206,6 +208,7 @@ private:
         std::unordered_set<std::string> geoms;
     };
     static ParsedStage Parse(Vfs& vfs, const std::string& fpk_path, const KnownAssets* known = nullptr);
+    static void ApplyModLevel(Stage& stage, std::vector<std::string>& notes);
     uint32_t load_count_ = 0;
     std::string deferred_prefetch_;
     void StartPrefetch(const std::string& fpk_path);

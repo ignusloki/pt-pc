@@ -1,0 +1,6 @@
+{
+  "edit": [
+    { "stage": "pt14_hallway", "model": "shsb_hous001_pict*", "hide": true },
+    { "stage": "pt14_hallway", "model": "shsb_pctr001*", "hide": true }
+  ]
+}

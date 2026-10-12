@@ -51,6 +51,7 @@ struct PcPanel {
     std::string thumbnail;
     std::string caption;
     bool locked = false;
+    bool audio = false;
     // how much the wall lifts a thumbnail shot in the theater (the hallway and the start room are dark; a model on a table darker)
     float lift = 1.0f;
     bool Empty() const { return texture.empty() && photo.empty() && file.empty() && lines.empty() && thumbnail.empty(); }

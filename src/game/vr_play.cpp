@@ -187,6 +187,24 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     const float height_offset = ClampVrHeightOffset(settings_.height_offset);
     const glm::vec3 anchor = VrEyeAnchor(logic.position, feet, eye, eye_height_, height_offset);
     const xr::ViewPose& head = host_.Head();
+    glm::vec3 anchor_now = anchor;
+    // Room scale (issue #63): the head's walk in the room moves the player's body with it, through the character controller's
+    // collision, and the recentre point follows; only what a wall stopped stays as an offset of the eyes. The body had stayed
+    // at the anchor while the eyes went up to half a metre away: after some walking and turning in the room the game's player
+    // (its doors, triggers and the body in the mirror) was no longer where the player stood
+    {
+        Player& body = game.GetPlayer();
+        const glm::vec3 walked = ScaleVrTrackedOffset(rig_.Offset(head.position), settings_.world_scale);
+        const glm::vec2 flat(walked.x, walked.z);
+        const bool free = !menu_open && body.spawned && !game.Demos().ControlsPlayer() && !(body.locks.Mask('B') & 1) &&
+                          !game.Nazo().IsPeepholeTheaterActive();
+        if (free && glm::length(flat) > 0.02f) {
+            const glm::vec3 moved = body.FollowHead(game.Collision(), glm::vec3(flat.x, 0.0f, flat.y));
+            const float scale = ClampVrWorldScale(settings_.world_scale);
+            rig_.Shift(moved / scale);
+            anchor_now += moved;
+        }
+    }
     const glm::vec3 head_offset = rig_.Offset(head.position);
     const glm::vec3 offset = ScaleVrTrackedOffset(head_offset, settings_.world_scale);
     glm::vec3 kept = offset;
@@ -199,20 +217,20 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     if (const float length = glm::length(kept); length > 1.0e-3f) {
         const glm::vec3 direction = kept / length;
         RayHit hit;
-        if (game.Collision().Raycast(anchor, direction, length + kWallMargin, hit)) {
+        if (game.Collision().Raycast(anchor_now, direction, length + kWallMargin, hit)) {
             kept = direction * std::max(0.0f, hit.distance - kWallMargin);
         }
     }
     const glm::vec3 correction = kept - offset;
-    last_anchor_ = anchor;
+    last_anchor_ = anchor_now;
     last_correction_ = correction;
-    out.head = xr::EyeCamera(anchor + kept, rig_.ToWorld(head.orientation), frusta_[0], kNearPlane);
+    out.head = xr::EyeCamera(anchor_now + kept, rig_.ToWorld(head.orientation), frusta_[0], kNearPlane);
     for (int i = 0; i < 2; ++i) {
         const xr::ViewPose& pose = host_.Eye(i);
         out.poses[i] = pose;
         const glm::vec3 eye_relative_offset = rig_.Offset(pose.position) - head_offset;
         const glm::vec3 eye_offset = MapVrEyeOffset(head_offset, eye_relative_offset, settings_.world_scale);
-        out.eyes[i] = xr::EyeCamera(anchor + eye_offset + correction, rig_.ToWorld(pose.orientation), frusta_[i], kNearPlane);
+        out.eyes[i] = xr::EyeCamera(anchor_now + eye_offset + correction, rig_.ToWorld(pose.orientation), frusta_[i], kNearPlane);
     }
     out.render = {render_size_.x, render_size_.y};
     Place(head.position + glm::vec3(0.0f, height_offset, 0.0f), xr::AnglesOf(head.orientation).yaw, menu_open, dt);

@@ -1,0 +1,15 @@
+# the ending (step 28, the outro the player's input is blocked in): the photo mode and the free camera open and stay open
+# (issue #51; every frame of the ending had stopped the free camera, which closed the photo mode as it opened)
+srate 1
+swait 600
+sphoto 1
+swait 120
+sphotocam 1.5 0.5 -2.0 0 0 2
+swait 30
+sshot {shots}/ending_photo.png
+sphoto 0
+swait 30
+sfreecam 1
+swait 120
+slog
+squit

@@ -522,9 +522,9 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
         const std::string_view name = std::string_view(id).substr(11);
         text.emplace(font->font, art.fields, name, kLetterCap, kLetterBold);
         text->Centre(kCellCentre);
-        paint = [&, centre = kCellCentre](glm::vec2 p) {
-            return Paint{BoxDistance(p, centre, glm::vec2(r * 0.78f), r * 0.24f), 1.0f, 1.0f, text->Ink(p)};
-        };
+        // the Steam Deck's and the Steam Controller's face buttons are round: a rounded square read as a keyboard key, and the
+        // prompts looked like a mix of keys and buttons (Discord report and GitHub, 11 October)
+        paint = [&](glm::vec2 p) { return Paint{disc(p), 1.0f, 1.0f, text->Ink(p)}; };
     } else if (id == "steam:menu") {
         const glm::vec2 half(r * 0.9f, r * 0.72f);
         body = half * 2.0f;

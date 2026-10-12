@@ -116,8 +116,9 @@ Languages
   original English, and the word the microphone listens for is always "Jack".
 
 Mods
-- A `mods` folder next to the executable can replace game files, textures and sounds, and run Lua scripts that react
-  to game events. See docs/modding.md and docs/lua_api.md.
+- A `mods` folder next to the executable: add or replace models with your own glTF (`.glb`) files, Lisa included, edit
+  levels with a `level.json` (hide, move, replace, relight), replace textures and sounds, and run Lua scripts. Start with
+  docs/modding-quickstart.md and the working examples in examples/mods.
 
 ## Building from source
 
@@ -136,8 +137,10 @@ GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-on
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
 vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
-build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
-are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
+build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The Windows upscalers and the
+VR mode are left out there too, and MoltenVK has no ray queries. The macOS build upscales with Apple MetalFX; on Apple silicon
+with macOS 26 or newer it can also interpolate one frame between rendered frames (experimental). `-DPT_METALFX=OFF` leaves
+both out. More in docs/macos.md.
 
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the

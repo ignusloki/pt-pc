@@ -1,0 +1,5 @@
+{
+  "edit": [
+    { "stage": "pt14_hallway", "light": "*", "tint": [1.0, 0.25, 0.2], "brightness": 0.8 }
+  ]
+}

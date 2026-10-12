@@ -1,0 +1,34 @@
+name: Publish macOS artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful macOS build run
+        required: true
+      tag:
+        description: Existing release tag
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Publishing regressions
+        run: python3 tests/macos_publish_test.py
+      - name: Verify and upload the built packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 tools/macos/publish_artifacts.py --repo "$GITHUB_REPOSITORY" --run-id "$RUN_ID" --tag "$TAG"

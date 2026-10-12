@@ -183,6 +183,7 @@ public:
     }
 
     ~FsrFrameGeneration() override { Shutdown(); }
+    bool hdr_refused_ = false;
 
     bool Available(std::string& reason) override {
         if (!checked_) {
@@ -197,6 +198,15 @@ public:
     bool Update(bool wanted) override {
         const bool owned = ctx_.SwapchainOwner() == this;
         bool recreate = false;
+        if (wanted && !owned && ctx_.swapchain.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            // the generation swapchain presents SDR: with the native HDR output on, frame generation stays off rather than
+            // turning the HDR picture into a washed out SDR one mid-session
+            if (!hdr_refused_) {
+                LogWarn("frame generation: off while the native HDR output is on (its swapchain is SDR only)");
+                hdr_refused_ = true;
+            }
+            wanted = false;
+        }
         if (wanted) {
             if (!owned) {
                 if (ctx_.swapchain_hooks != this) {
@@ -652,15 +662,9 @@ std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const F
 
 namespace pt {
 
-#ifdef __APPLE__
-std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues&) {
-    return CreateMetalFxFrameGeneration(ctx);
-}
-#else
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context&, const FrameGenQueues&) {
     return nullptr;
 }
-#endif
 
 }
 

@@ -57,6 +57,10 @@ constexpr uint16_t kSubtitleList = 118;
 constexpr uint16_t kVerticalRow = 79;
 constexpr uint16_t kGaugeGroup = 40;
 constexpr glm::vec2 kEntryAt{32.0f, -26.0f};
+// the hover bars' centres from the buttons' text nodes (Back's and Quit's text starts at the node, PC Settings' row label is
+// laid out from the row's far side)
+constexpr glm::vec2 kButtonBarShift{3.0f, 0.0f};
+constexpr glm::vec2 kEntryBarShift{-15.5f, 0.0f};
 constexpr float kStreetReturnY = -24.0f;
 constexpr float kSwitchOut = 9.0f;
 constexpr float kSwitchIn = 13.0f;
@@ -168,6 +172,23 @@ bool OptionsMenu::Init(UiAssets& assets) {
     bar_image.translate.x = 0.0f;
     bar_image.translate.y = 0.0f;
     derived_->AddNode(std::move(bar_image), StrCode64("option_language_bar_image"));
+    // the hover bars of PC Settings, Back and Quit: copies of the language bar centred on each line's text
+    auto button_bar = [&](uint16_t label, glm::vec2 centre, std::string_view name) {
+        ui::UifNode node = *derived_->FindById(80);
+        const ui::UifNode& text = *derived_->FindById(label);
+        node.parent = text.parent;
+        node.translate = glm::vec4(glm::vec2(text.translate) + centre, 0.0f, 0.0f);
+        const uint16_t id = derived_->AddNode(std::move(node), StrCode64(std::format("option_{}_bar", name)));
+        ui::UifNode image = *derived_->FindById(81);
+        image.parent = derived_->IndexOfId(id);
+        image.translate.x = 0.0f;
+        image.translate.y = 0.0f;
+        derived_->AddNode(std::move(image), StrCode64(std::format("option_{}_bar_image", name)));
+        return id;
+    };
+    entry_bar_ = button_bar(entry_label_, kEntryBarShift, "entry");
+    back_bar_ = button_bar(kBack, kButtonBarShift, "back");
+    quit_bar_ = button_bar(quit_label_, kButtonBarShift, "quit");
     pc_.Build(*derived_, icon_atlas, icon_glow);
     prompt_nodes_ = {
         {kBrightnessIcon, kBrightnessGlow, {PromptButton::DpadLeftRight, KeyAction::PadLeft, KeyAction::PadRight}},
@@ -258,6 +279,7 @@ float OptionsMenu::TrackAlpha(std::string_view animation, float frame) const {
 }
 
 void OptionsMenu::SwitchPage(Game& game, Page page) {
+    LogDebug("ui: options page switch to {}", page == Page::Pc ? "PC" : "original");
     if (switch_frame_ >= 0.0f || page == page_ || (page == Page::Pc && !pc_source_)) {
         return;
     }
@@ -338,14 +360,16 @@ void OptionsMenu::ApplyPrompts() {
             state.positions = std::move(positions);
         }
     }
-    UifNodeState& help = view_.State(pc_.Help());
-    help.inline_picture.reset();
-    if (help.text) {
-        if (const size_t at = help.text->find(kAcceptToken); at != std::string::npos) {
-            const PromptGlyph glyph = assets_->PromptPicture({PromptButton::Cross, KeyAction::Confirm, KeyAction::Confirm}, prompt_style_);
-            help.text->replace(at, kAcceptToken.size(), "\xEE\x80\x80");
-            help.inline_picture = UifInlinePicture{derived_->AddTexture(glyph.icon), derived_->AddTexture(glyph.glow), glyph.uv0, glyph.uv1,
-                                                   glyph.width, glyph.body_width, glyph.body_height};
+    for (const uint16_t id : {pc_.Help(), pc_.NavigationText()}) {
+        UifNodeState& help = view_.State(id);
+        help.inline_picture.reset();
+        if (help.text) {
+            if (const size_t at = help.text->find(kAcceptToken); at != std::string::npos) {
+                const PromptGlyph glyph = assets_->PromptPicture({PromptButton::Cross, KeyAction::Confirm, KeyAction::Confirm}, prompt_style_);
+                help.text->replace(at, kAcceptToken.size(), "\xEE\x80\x80");
+                help.inline_picture = UifInlinePicture{derived_->AddTexture(glyph.icon), derived_->AddTexture(glyph.glow), glyph.uv0, glyph.uv1,
+                                                       glyph.width, glyph.body_width, glyph.body_height};
+            }
         }
     }
     if (!prompts_shown_ || shown_prompts_ != prompt_style_.device) {
@@ -549,6 +573,11 @@ void OptionsMenu::Commit(Game& game) {
 }
 
 void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
+    {
+        const float target = state_ == State::SetIn || state_ == State::Active ? 1.0f : 0.0f;
+        const float step = dt / 0.25f;
+        pillar_alpha_ = target > pillar_alpha_ ? std::min(target, pillar_alpha_ + step) : std::max(target, pillar_alpha_ - step);
+    }
     if (state_ == State::Closed) {
         return;
     }
@@ -579,6 +608,16 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
     }
     if (state_ == State::SetIn && !Playing("UI_sys_opt_setin")) {
         state_ = State::Active;
+    }
+    {
+        // the hover bars only on the original page while it takes input
+        const bool shown = page_ == Page::Original && state_ == State::Active && !switching;
+        if (!shown) hovered_ = Button::None;
+        const float flash = SelectionFlash(hover_frame_);
+        for (const auto& [bar, button] : {std::pair{entry_bar_, Button::PcSettings}, std::pair{back_bar_, Button::Back}, std::pair{quit_bar_, Button::Quit}}) {
+            view_.State(bar).visible = shown && hovered_ == button;
+            view_.State(bar).color = glm::vec4(1.0f, 1.0f, 1.0f, flash);
+        }
     }
     if (state_ == State::Active && !switching) {
         if (page_ == Page::Pc) {
@@ -636,6 +675,16 @@ void OptionsMenu::StreetReturn(Game& game) {
 void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float dt) {
     MenuInput input = raw_input;
     street_shown_ = game.StreetWalkActive();
+    // the pointer over PC Settings, Back or Quit: the bar behind it and the cursor sound, as a row the pad moves to
+    if (input.pointer_valid) {
+        const Button over = ButtonAt(input.pointer);
+        if (over != hovered_) {
+            hovered_ = over;
+            hover_frame_ = 0.0f;
+            if (over != Button::None && game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+        }
+    }
+    hover_frame_ += dt * 30.0f;
     if (street_shown_ && input.street_return) {
         StreetReturn(game);
         return;
@@ -738,6 +787,20 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
     }
 }
 
+OptionsMenu::Button OptionsMenu::ButtonAt(glm::vec2 units) const {
+    if (street_shown_) {
+        const glm::vec2 street = view_.WorldPosition(street_label_);
+        if (units.x >= street.x - 6.0f && units.x <= street.x + 22.0f && std::abs(units.y - street.y) <= 1.2f) return Button::StreetReturn;
+    }
+    const glm::vec2 quit = view_.WorldPosition(quit_label_);
+    if (units.x >= quit.x - 6.0f && units.x <= quit.x + 15.0f && std::abs(units.y - quit.y) <= 1.2f) return Button::Quit;
+    const glm::vec2 entry = view_.WorldPosition(entry_group_);
+    if (pc_source_ && units.x >= entry.x - 22.0f && units.x <= entry.x + 12.0f && std::abs(units.y - entry.y) <= 1.5f) return Button::PcSettings;
+    const glm::vec2 back = view_.WorldPosition(kBack);
+    if (units.x >= back.x - 3.0f && units.x <= back.x + 10.0f && std::abs(units.y - back.y) <= 2.0f) return Button::Back;
+    return Button::None;
+}
+
 void OptionsMenu::OriginalClick(Game& game, glm::vec2 units, MenuInput& input) {
     if (street_shown_) {
         const glm::vec2 street = view_.WorldPosition(street_label_);
@@ -823,6 +886,18 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
         // an Archive picture over the whole screen, in place of the page
         archive_view_.DrawFullScreen(batch, canvas, *assets_, pc_.Panel(), PcText(pc_.FullScreenHint(), text_language_), text_language_);
         return;
+    }
+    // PC (ultrawide): the menu's page is 16:9 and dark; the screen's sides outside it go black with it instead of showing the
+    // game (Discord report 11 October)
+    if (pillar_alpha_ > 0.0f) {
+        const float left = canvas.origin.x;
+        const float right = canvas.origin.x + UiCanvas::kWidth * canvas.scale;
+        const float width = static_cast<float>(batch.Extent().width);
+        const float height = static_cast<float>(batch.Extent().height);
+        const glm::vec4 black(0.0f, 0.0f, 0.0f, pillar_alpha_);
+        const auto plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+        if (left > 0.5f) batch.Quad(glm::vec2(0.0f), glm::vec2(left, height), glm::vec2(0.0f), glm::vec2(1.0f), black, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+        if (width - right > 0.5f) batch.Quad(glm::vec2(right, 0.0f), glm::vec2(width, height), glm::vec2(0.0f), glm::vec2(1.0f), black, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
     }
     view_.Draw(batch, canvas, text_language_, 1.0f);
     if (page_ == Page::Pc && pc_.Gallery() != PcGallery::None && settled) {

@@ -390,6 +390,11 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (GameUi::ScriptCommand(game, c.op, c.text, c.args)) {
         } else if (c.op == "shot") {
             game.RequestScreenshot(c.text);
+        } else if (c.op == "pose") {
+            game.LogCapturePose(game.ViewCamera());
+        } else if (c.op == "inspect") {
+            // the mods' inspector as F8 (Game::LogModInspect)
+            game.LogModInspect(game.ViewCamera());
         } else if (c.op == "camera") {
             // immediate, at its frame (compare_ref --replay's shots, outside the queue): x y z fx fy fz [fov [ux uy uz]]
             if (c.text == "off") {

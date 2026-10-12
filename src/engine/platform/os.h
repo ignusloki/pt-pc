@@ -56,4 +56,8 @@ private:
     intptr_t handle_ = -1;
 };
 
+// Windows: whether the display the window is on shows HDR (Settings > Display > Use HDR), read from DXGI; nullopt when it
+// cannot be told (no DXGI, another system). Vulkan drivers offer the HDR swapchain formats with HDR off as well
+std::optional<bool> WindowDisplayHdr(void* hwnd);
+
 }

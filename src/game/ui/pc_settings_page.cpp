@@ -438,6 +438,19 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         return Result::None;
     }
     if (input.pointer_valid) {
+        if (Gallery() == PcGallery::Wall && input.click && !rows_.empty()) {
+            const int slots = std::min(static_cast<int>(rows_.size()), WallVisible());
+            const glm::vec2 px(MuseumLayout::kCanvasWidth * 0.5f + input.pointer.x * UiCanvas::kUnit,
+                               MuseumLayout::kCanvasHeight * 0.5f - input.pointer.y * UiCanvas::kUnit);
+            for (const int delta : {-1, 1}) {
+                if (MuseumLayout::WallArrow(delta > 0, slots).Contains(px)) {
+                    const int target = std::clamp(cursor_ + delta, 0, static_cast<int>(rows_.size()) - 1);
+                    if (target != cursor_) Move(game, target - cursor_);
+                    last_pointer_ = input.pointer;
+                    return Result::None;
+                }
+            }
+        }
         const int hovered = RowAt(input.pointer);
         if (input.pointer != last_pointer_ && hovered >= 0 && hovered != cursor_) {
             cursor_ = hovered;
@@ -554,6 +567,15 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     const PcGallery gallery = Gallery();
     text(navigation_text_, source_ && source_->IsLoopBrowser() ? "pc_loop_start_hint" : Browser() || gallery != PcGallery::None ? "pc_archive_hint" : "pc_nav_columns");
     view.State(navigation_text_).font_type = UiFontType::PcSystem;
+    view.State(navigation_text_).inline_picture.reset();
+    const bool audio_entry = gallery == PcGallery::Wall && PanelOf(cursor_).audio;
+    if (audio_entry && CurrentRow()) view.State(navigation_text_).text = PcNoteText(ShownNote(*CurrentRow()), language);
+    if (gallery != PcGallery::None) {
+        std::string& hint = *view.State(navigation_text_).text;
+        size_t colon = hint.find(':');
+        if (colon == std::string::npos) colon = hint.find("：");
+        if (colon != std::string::npos) hint.replace(0, colon, "{accept}");
+    }
     // the column hint only where there is a second column to switch to (not on the street question or Extras)
     const bool two_columns = std::any_of(sections_.begin(), sections_.end(), [](const PcSettingSection& s) { return s.column > 0; });
     view.State(navigation_text_).visible = (source_ && source_->IsLoopBrowser()) || two_columns || gallery != PcGallery::None;
@@ -672,13 +694,14 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         }
         view.State(bar_group_).color = glm::vec4(1.0f, 1.0f, 1.0f, alpha * (current->enabled ? 1.0f : 0.4f));
     }
-    std::string_view note = current ? ShownNote(*current) : std::string_view();
+    std::string_view note = current && !audio_entry ? ShownNote(*current) : std::string_view();
     if (current && current->action && confirming_) {
         note = "pc_note_reset_confirm";
     }
     if (quit_selected) note = confirming_ ? "pc_note_quit_confirm" : "pc_note_quit";
     if (source_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) view.State(help_).description_samples = source_->DescriptionSamples();
-    view.State(help_).text_box = glm::vec4(90.0f, 540.0f, 1190.0f, 626.0f);
+    view.State(help_).text_box = gallery == PcGallery::None ? glm::vec4(90.0f, 540.0f, 1190.0f, 626.0f)
+        : glm::vec4(90.0f, MuseumLayout::kHelpTop, 1190.0f, MuseumLayout::kHelpBottom);
     view.State(help_).font_type = UiFontType::PcSystem;
     view.State(help_).mirror_rtl = true;
     view.State(help_).text = note.empty() ? std::string() : PcNoteText(note, language);

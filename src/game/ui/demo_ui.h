@@ -34,6 +34,8 @@ public:
     // The fake crash's bug picture is up and its setin has finished: the original stops presenting new frames until the setout
     // (floor_f120 3900 to 4130: every pixel of every frame identical, no film grain, the scene at the sides frozen)
     bool BugScreenStill() const;
+    // the bug picture's background colour while it fills the screen (the sides of a screen wider than 16:9 take it), or alpha 0
+    glm::vec4 BugPillarColor() const;
 
     bool Create(std::string_view demo_id, uint64_t graph, std::string_view path);
     bool Start(uint64_t graph);
@@ -76,6 +78,7 @@ private:
     std::vector<std::unique_ptr<Instance>> instances_;
     uint64_t bug_graph_ = 0;
     float bug_shown_ = 0.0f;
+    uint32_t bug_pick_ = 0;
     std::map<std::string, std::unique_ptr<ui::UiaAnimation>> animations_;
     std::map<std::string, std::shared_ptr<const ui::UilbLayout>> layouts_;
     std::map<std::string, std::shared_ptr<const ui::UigbGraph>> graphs_;

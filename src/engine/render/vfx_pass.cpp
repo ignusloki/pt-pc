@@ -110,11 +110,11 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
     if (!vk::Check(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &set_layout_), "vfx set layout")) {
         return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 * Renderer::kFramesInFlight}};
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * Renderer::kFramesInFlight},
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * Renderer::kFramesInFlight},
+                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 * Renderer::kFramesInFlight}};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 3 * Renderer::kFramesInFlight;
+    pool_info.maxSets = 4 * Renderer::kFramesInFlight;
     pool_info.poolSizeCount = 3;
     pool_info.pPoolSizes = sizes;
     if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "vfx descriptor pool")) {
@@ -155,11 +155,11 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
         return false;
     }
     for (FrameSlot& slot : slots_) {
-        VkDescriptorSetLayout layouts[3] = {set_layout_, set_layout_, set_layout_};
-        VkDescriptorSet sets[3] = {};
+        VkDescriptorSetLayout layouts[4] = {set_layout_, set_layout_, set_layout_, set_layout_};
+        VkDescriptorSet sets[4] = {};
         VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         alloc.descriptorPool = pool_;
-        alloc.descriptorSetCount = 3;
+        alloc.descriptorSetCount = 4;
         alloc.pSetLayouts = layouts;
         if (!vk::Check(vkAllocateDescriptorSets(device_, &alloc, sets), "vfx descriptor sets")) {
             return false;
@@ -167,6 +167,7 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
         slot.forward = sets[0];
         slot.filter = sets[1];
         slot.effects = sets[2];
+        slot.depth_only = sets[3];
         if (!renderer.Context().CreateBuffer(slot.quads, sizeof(vfx::Quad) * kInitialQuads, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
             return false;
         }
@@ -312,13 +313,14 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depth.depthTestEnable = key.depth_test ? VK_TRUE : VK_FALSE;
-    depth.depthWriteEnable = VK_FALSE;
+    depth.depthWriteEnable = key.depth_write ? VK_TRUE : VK_FALSE;
     depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
     const VkPipelineColorBlendAttachmentState attachment = BlendState(static_cast<vfx::BlendMode>(key.blend), key.offscreen,
                                                                        key.depth_test && !key.offscreen);
     const VkPipelineColorBlendAttachmentState attachments[2] = {attachment, attachment};
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    blend.attachmentCount = key.offscreen ? 2u : 1u;
+    const uint32_t color_count = key.color == VK_FORMAT_UNDEFINED ? 0u : key.offscreen ? 2u : 1u;
+    blend.attachmentCount = color_count;
     blend.pAttachments = attachments;
     const VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
@@ -326,7 +328,7 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     dynamic.pDynamicStates = dynamic_states;
     const VkFormat color_formats[2] = {key.color, key.color};
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = key.offscreen ? 2u : 1u;
+    rendering.colorAttachmentCount = color_count;
     rendering.pColorAttachmentFormats = color_formats;
     rendering.depthAttachmentFormat = key.depth;
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -495,6 +497,54 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
     if (debug && (generation_ % 120) == 0) {
         LogDebug("vfx: exposure {:.5f} ev {:.2f} near {:.3f}, {} scene copies for liquids", context.exposure,
                  -std::log2(std::max(context.exposure, 1e-8f)), near_plane, copies);
+    }
+}
+
+bool VfxPass::HasOpaqueLiquids() const {
+    return std::any_of(list_.draws.begin(), list_.draws.end(),
+                       [](const vfx::Draw& d) { return d.layer == vfx::Layer::World && d.refract && d.opaque && d.count > 0; });
+}
+
+void VfxPass::RecordLiquidDepth(const SceneVfxContext& context) {
+    if (context.mirrored || !device_ || !HasOpaqueLiquids() || !context.scene_copy_view) {
+        return;
+    }
+    const uint32_t frame = context.frame_index % Renderer::kFramesInFlight;
+    if (!Upload(frame)) {
+        return;
+    }
+    FrameSlot& slot = slots_[frame];
+    // the depth binding holds the scene copy instead: the depth image is the attachment written here, and the alpha tested
+    // liquid reads no depth (it has no soft blend)
+    if (slot.depth_only_scene != context.scene_copy_view) {
+        WriteSet(slot, slot.depth_only, context.scene_copy_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, context.scene_copy_view, 0);
+        slot.depth_only_scene = context.scene_copy_view;
+    }
+    VkDescriptorSet sets[2] = {textures_->Set(), slot.depth_only};
+    vkCmdBindDescriptorSets(context.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
+    VkViewport viewport{0.0f, 0.0f, static_cast<float>(context.extent.width), static_cast<float>(context.extent.height), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, context.extent};
+    vkCmdSetViewport(context.cmd, 0, 1, &viewport);
+    vkCmdSetScissor(context.cmd, 0, 1, &scissor);
+    const float near_plane = context.projection[3][2];
+    for (uint32_t index : order_) {
+        const vfx::Draw& d = list_.draws[index];
+        if (d.layer != vfx::Layer::World || !d.refract || !d.opaque || d.count == 0) {
+            continue;
+        }
+        const VkPipeline pipeline = Pipeline({VK_FORMAT_UNDEFINED, context.depth_format, static_cast<uint8_t>(d.blend), true, d.cull, false, true});
+        if (!pipeline) {
+            continue;
+        }
+        vkCmdBindPipeline(context.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        Push push;
+        push.view_projection = context.view_projection;
+        push.eye = glm::vec4(context.eye, 0.0f);
+        push.frame = glm::vec4(context.exposure, near_plane, 1.0f / static_cast<float>(std::max(1u, context.extent.width)),
+                               1.0f / static_cast<float>(std::max(1u, context.extent.height)));
+        push.ids = glm::uvec4(d.first, 0u, static_cast<uint32_t>(d.blend), 0u);
+        vkCmdPushConstants(context.cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
+        vkCmdDraw(context.cmd, d.count * 6, 1, 0, 0);
     }
 }
 

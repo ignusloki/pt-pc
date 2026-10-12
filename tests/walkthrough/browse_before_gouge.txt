@@ -1,0 +1,5 @@
+# Loop 7 precedes the gouge puzzle; entering it must not remove the eye.
+sloop 7
+swait 10
+sstep 15
+swait 60

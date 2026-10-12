@@ -1,5 +1,7 @@
 #include "engine/render/model_cache.h"
 
+#include "engine/assets/gltf_model.h"
+
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -361,8 +363,7 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
     FmdlModel read;
     FmdlModel& model = parsed ? *parsed : read;
     if (!parsed) {
-        auto bytes = vfs_.ReadFile(path);
-        if (!bytes || !LoadFmdl(*bytes, path, read)) {
+        if (!LoadModelFile(vfs_, path, read)) {
             ++failed_;
             entries_.emplace(key, std::move(entry));
             return nullptr;
@@ -497,9 +498,8 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
 }
 
 bool ModelCache::ReadMesh(const std::string& path, MeshData& out) {
-    auto bytes = vfs_.ReadFile(path);
     FmdlModel model;
-    if (!bytes || !LoadFmdl(*bytes, path, model)) return false;
+    if (!LoadModelFile(vfs_, path, model)) return false;
     out = std::move(model.mesh);
     return true;
 }

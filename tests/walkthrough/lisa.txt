@@ -7,10 +7,10 @@ glisa 600
 swait 120
 slog
 swait 300
-ffile 0 -0.2 -8
+ffile 8 -0.2 3.0
 swait 40
-ffile 0 -0.2 7.5
+ffile -8 -0.2 3.0
 swait 40
-ffile 0 -0.2 -8
+ffile 8 -0.2 3.0
 swait 600
 slog

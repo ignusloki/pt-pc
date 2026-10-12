@@ -32,6 +32,31 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
 // The installer accepts every release of P.T. (docs/installer.md) and writes what it was made from to source.txt. Data that
 // another release may lack is named here once at start, and the game keeps running: a missing package is reported again
 // where it is loaded, and subtitles fall back to English (SubtitleTable::Load).
+namespace {
+constexpr const char* kCoreArchive[] = {
+    "as/sh/level/common/resident.fpk",
+    "as/sh/level/promotion/pt_2014/start/pt14_start.fpk",
+    "as/sh/level/promotion/pt_2014/hallway/pt14_hallway.fpk",
+    "as/sh/level/promotion/pt_2014/hallway_maze_A/pt14_hallway_maze_A.fpk",
+    "as/sh/level/promotion/pt_2014/hallway_maze_B/pt14_hallway_maze_B.fpk",
+    "as/sh/level/promotion/pt_2014/hallway_maze_C/pt14_hallway_maze_C.fpk",
+    "as/sh/level/promotion/pt_2014/ending/ending.fpk",
+    "as/sh/level_asset/chara/player/game_object/player2_common_motion.fpk",
+    "as/sh/level_asset/chara/player/game_object/plparts_normal.fpk",
+    "as/sh/ui/ui_default_data.fpk",
+    "as/sh/ui/ui_default_lang.fpk",
+    "as/sh/level/ui/subtitles/EngVoice/EngText/subtitle.fpk",
+};
+}
+
+int Vfs::MissingCorePackages() const {
+    int missing = 0;
+    for (const char* path : kCoreArchive) {
+        if (!archive_.Contains(path)) ++missing;
+    }
+    return missing;
+}
+
 void Vfs::ReportDataDifferences() const {
     std::error_code ec;
     const auto source = game_dir_ / "source.txt";
@@ -45,29 +70,16 @@ void Vfs::ReportDataDifferences() const {
             }
         }
     }
-    static constexpr const char* kCore[] = {
-        "as/sh/level/common/resident.fpk",
-        "as/sh/level/promotion/pt_2014/start/pt14_start.fpk",
-        "as/sh/level/promotion/pt_2014/hallway/pt14_hallway.fpk",
-        "as/sh/level/promotion/pt_2014/hallway_maze_A/pt14_hallway_maze_A.fpk",
-        "as/sh/level/promotion/pt_2014/hallway_maze_B/pt14_hallway_maze_B.fpk",
-        "as/sh/level/promotion/pt_2014/hallway_maze_C/pt14_hallway_maze_C.fpk",
-        "as/sh/level/promotion/pt_2014/ending/ending.fpk",
-        "as/sh/level_asset/chara/player/game_object/player2_common_motion.fpk",
-        "as/sh/level_asset/chara/player/game_object/plparts_normal.fpk",
-        "as/sh/ui/ui_default_data.fpk",
-        "as/sh/ui/ui_default_lang.fpk",
-        "as/sh/level/ui/subtitles/EngVoice/EngText/subtitle.fpk",
-    };
+
     int missing = 0;
-    for (const char* path : kCore) {
+    for (const char* path : kCoreArchive) {
         if (!archive_.Contains(path)) {
             LogWarn("data: {} missing from chunk1.psarc, dependent content will not load", path);
             ++missing;
         }
     }
     if (missing == 0) {
-        LogInfo("data: {} core packages present", std::size(kCore));
+        LogInfo("data: {} core packages present", std::size(kCoreArchive));
     }
 }
 

@@ -1,0 +1,10 @@
+# Re-enter the hallway without interacting with the gouge picture.
+swait 240
+sstep 15
+goto 0 0 12.5
+swait 10
+sfree
+sanchor
+gfile 0 -1.4 -4.0
+swait 90
+sstate save

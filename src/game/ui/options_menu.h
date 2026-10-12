@@ -130,6 +130,15 @@ private:
     void StreetReturn(Game& game);
     uint16_t entry_icon_ = 0;
     uint16_t entry_glow_ = 0;
+    // PC: the selection bar behind PC Settings, Back and Quit while the pointer is over them (the language list's bar), so
+    // they read as buttons; Button names which one the pointer is over
+    enum class Button { None, PcSettings, Back, Quit, StreetReturn };
+    Button ButtonAt(glm::vec2 units) const;
+    uint16_t entry_bar_ = 0;
+    uint16_t back_bar_ = 0;
+    uint16_t quit_bar_ = 0;
+    Button hovered_ = Button::None;
+    float hover_frame_ = 0.0f;
     struct PromptNodes {
         uint16_t icon = 0;
         uint16_t glow = 0;
@@ -163,6 +172,8 @@ private:
     bool resume_ = false;
     bool resume_sent_ = false;
     float clock_ = 0.0f;
+    // the black at the sides of a screen wider than 16:9 (ultrawide), faded in and out with the menu
+    float pillar_alpha_ = 0.0f;
 };
 
 }

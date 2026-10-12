@@ -162,6 +162,7 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
         x ^= x >> 7;
         x ^= x << 5;
         const uint32_t pick = bug_screen >= 0 && bug_screen < kBugCases ? static_cast<uint32_t>(bug_screen) : x % kBugCases;
+        bug_pick_ = pick;
         LogInfo("ui: bug screen {} of {} ({}){}", pick, kBugCases, kBugPictures[pick], bug_screen >= 0 ? ", forced" : "");
         if (pick == 6) {
             // case 0's actions (the setin and the seven meshes' visibility) with sh_bug_3's mesh the one shown
@@ -187,6 +188,14 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
     LogInfo("ui: demo graph {:#x} event {:#x} ({} actions)", graph, text, event->actions.size());
     Run(*instance, event->actions);
     return true;
+}
+
+glm::vec4 DemoUi::BugPillarColor() const {
+    // the pictures' backgrounds as drawn (kBugPictures' order): grey, black, white, red, yellow, black, yellow
+    static constexpr glm::vec3 kColors[kBugCases] = {{105.0f, 105.0f, 106.0f}, {0.0f, 0.0f, 0.0f}, {255.0f, 255.0f, 255.0f}, {232.0f, 4.0f, 6.0f},
+                                                     {248.0f, 248.0f, 2.0f}, {0.0f, 0.0f, 0.0f}, {248.0f, 248.0f, 2.0f}};
+    if (!BugScreenStill() || bug_pick_ >= static_cast<uint32_t>(kBugCases)) return glm::vec4(0.0f);
+    return glm::vec4(kColors[bug_pick_] / 255.0f, 1.0f);
 }
 
 bool DemoUi::BugScreenStill() const {

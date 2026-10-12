@@ -1,3 +1,4 @@
+#include <chrono>
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -49,12 +50,12 @@ const vk::Image* PresentFrameGeneration(uint32_t image_index) {
             hud = dlss->Present(image_index);
         }
     }
+    if (!hud) {
+        if (FrameGeneration* metalfx = UpscaleHost::Get().MetalFxFrameGen()) {
+            hud = metalfx->Present(image_index);
+        }
+    }
     return hud;
-}
-
-const vk::Image* FrameGenerationUiLayer(uint32_t image_index) {
-    FrameGeneration* fg = UpscaleHost::Get().FrameGen();
-    return fg ? fg->UiLayer(image_index) : nullptr;
 }
 
 void UpdateDlssFrameGeneration(Renderer& renderer, bool wanted) {
@@ -99,10 +100,41 @@ void UpdateFrameGeneration(Renderer& renderer, bool wanted) {
     }
     if (!renderer.hudless) {
         renderer.hudless = PresentFrameGeneration;
-        renderer.ui_layer = FrameGenerationUiLayer;
     }
     if (fg->Update(wanted)) {
         renderer.Resize(0, 0);
+    }
+}
+
+void UpdateMetalfxFrameGeneration(Renderer& renderer, bool wanted) {
+    FrameGeneration* fg = UpscaleHost::Get().MetalFxFrameGen();
+    if (!fg) {
+        return;
+    }
+    std::string reason;
+    if (wanted && !fg->Available(reason)) {
+        wanted = false;
+    }
+    if (!renderer.hudless) {
+        renderer.hudless = PresentFrameGeneration;
+    }
+    // no swapchain recreation: the MetalFX frame generation owns no swapchain, the renderer presents the generated frame
+    // itself (GeneratedFrameHooks)
+    const bool was_generating = fg->Generating();
+    fg->Update(wanted && !UpscaleHost::Get().MenuOpen());
+    if (fg->Generating() != was_generating) {
+        // MetalFX interpolation presents two FIFO images a rendered frame; rebuild a MAILBOX/IMMEDIATE swapchain as FIFO
+        // on entry and restore the user's v-sync selection when leaving it.
+        renderer.Resize(0, 0);
+    }
+    if (fg->Generating()) {
+        renderer.generated_frame.generate = [fg]() -> const vk::Image* { return fg->GeneratedImage(); };
+        renderer.generated_frame.sync = [fg](VkSemaphore& s, uint64_t& sv, VkSemaphore& w, uint64_t& wv) {
+            return fg->ExternalSync(s, sv, w, wv);
+        };
+    } else {
+        renderer.generated_frame.generate = nullptr;
+        renderer.generated_frame.sync = nullptr;
     }
 }
 
@@ -173,7 +205,8 @@ bool SceneRenderer::CreateUpscaleTargets(VkExtent2D render, VkExtent2D output) {
                     CreateTarget(handy_factor_, kHandyFactorFormat, render, color, c) &&
                     CreateTarget(exposure_image_, kExposureFormat, {1, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
                     CreateTarget(upscaled_, kUpscaleColorFormat, output,
-                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c, true) &&
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, c) &&
                     CreateTarget(post_hdr_, kUpscaleColorFormat, output, color, c) && CreateTarget(post_depth_, kPostDepthFormat, output, color, c) &&
                     CreateTarget(post_object_velocity_, kUpscaleColorFormat, output, color, c);
     if (!ok) {
@@ -217,8 +250,10 @@ bool SceneRenderer::BeginUpscaleFrame(VkExtent2D output) {
     const bool generate = active && up_.backend != nullptr;
     if (streamline::Active()) {
         UpdateDlssFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Dlss && generate);
+    } else if (upscale.frame_generation == FrameGenKind::Metalfx) {
+        UpdateMetalfxFrameGeneration(*renderer_, generate && vr_eye_ < 0);
     } else {
-        UpdateFrameGeneration(*renderer_, upscale.frame_generation == kNativeFrameGen && generate);
+        UpdateFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Fsr && generate);
     }
     return active;
 }
@@ -288,7 +323,10 @@ bool SceneRenderer::SetupUpscaler(VkExtent2D output) {
     if (changed) {
         const std::string failed_key = std::format("{}|{}|{}x{}|{}x{}", UpscalerKey(kind), UpscaleQualityKey(upscale.quality), render.width,
                                                    render.height, output.width, output.height);
-        if (failed_key == up_.failed_key) {
+        // a failed creation is retried after 3 s: it can fail for a moment (a frame generation or swapchain change in flight
+        // during quick menu switching), and refusing that key for good left the game without its upscaler (aliased) until the
+        // setting changed again
+        if (failed_key == up_.failed_key && std::chrono::steady_clock::now() - up_.failed_at < std::chrono::seconds(3)) {
             return false;
         }
         vkDeviceWaitIdle(device_);
@@ -300,6 +338,7 @@ bool SceneRenderer::SetupUpscaler(VkExtent2D output) {
         if (kind != UpscalerKind::Spatial) {
             if (!up_.backend) {
                 up_.failed_key = failed_key;
+                up_.failed_at = std::chrono::steady_clock::now();
                 upscale_stats_.error = "backend unavailable";
                 return false;
             }
@@ -315,6 +354,7 @@ bool SceneRenderer::SetupUpscaler(VkExtent2D output) {
                 LogError("upscale: {} could not be created for {}x{} -> {}x{}", UpscalerName(kind), render.width, render.height, output.width,
                          output.height);
                 up_.failed_key = failed_key;
+                up_.failed_at = std::chrono::steady_clock::now();
                 upscale_stats_.error = "creation failed, see pt.log";
                 up_.backend = nullptr;
                 return false;
@@ -414,7 +454,7 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     }();
     push.f0 = glm::vec4(kReactiveScale, 0.9f, flashlight_reactive.x, flashlight_reactive.y);
     static const bool reactive_all = std::getenv("PT_REACTIVE_ALL") != nullptr;
-    push.ids.x = reactive_all ? 1u : 0u;
+    push.ids.x = reactive_all || reactive_frame_ ? 1u : 0u;
     push.f1 = glm::vec4(0.0f, 0.0f, 0.0f, -2.0f);
     if (lighting_) {
         for (const SceneLight& l : lighting_->lights) {
@@ -482,93 +522,104 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     }
 }
 
-void SceneRenderer::RecordUpscale(VkCommandBuffer& cmd, float dt) {
+void SceneRenderer::RecordUpscalePrepare(float dt) {
     FrameSlot& slot = slots_[renderer_->FrameIndex()];
-    if (queries_) {
-        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 2);
-    }
+    VkCommandBuffer cmd = renderer_->Cmd();
+    up_dispatch_ = UpscaleDispatch{};
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 2);
     UseTargets(cmd, {{&exposure_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL}});
     VkClearColorValue value{};
     value.float32[0] = exposure_;
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cmd, exposure_image_.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
     UseTargets(cmd, {{&exposure_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
-    bool upscaled = false;
-    if (up_.backend) {
-        UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                         {&depth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                         {&motion_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                         {&reactive_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                         {&upscaled_, VK_IMAGE_LAYOUT_GENERAL}});
-        UpscaleDispatch d;
-        d.cmd = cmd;
-        d.renderer = renderer_;
-        d.color = Wrap(handy_demod_ ? opaque_ : hdr_);
-        d.depth = Wrap(depth_);
-        d.motion = Wrap(motion_);
-        d.reactive = Wrap(reactive_);
-        d.exposure = Wrap(exposure_image_);
-        d.output = Wrap(upscaled_);
-        d.render = extent_;
-        d.display = output_extent_;
-        d.jitter = up_.jitter_pixels;
-        d.motion_scale = glm::vec2(static_cast<float>(extent_.width), static_cast<float>(extent_.height));
-        d.pre_exposure = std::max(exposure_, 1.0e-12f);
-        d.sharpness = upscale.sharpness;
-        d.frame_ms = std::clamp(dt, 1.0e-4f, 0.25f) * 1000.0f;
-        d.near_plane = camera_.near_plane;
-        d.fov_y = camera_.fov_y;
-        d.reset = up_.reset;
-        d.frame_index = frame_counter_;
-        if (streamline::Active()) {
-            // Streamline's common constants, once for the frame: sl.dlss and DLSS Frame Generation read them
-            const float aspect = static_cast<float>(output_extent_.width) / static_cast<float>(std::max(1u, output_extent_.height));
-            streamline::FrameConstants k;
-            k.view_to_clip = camera_.Projection(aspect);
-            k.world_to_clip = k.view_to_clip * camera_.View();
-            k.previous_world_to_clip = previous_view_projection_;
-            k.jitter = d.jitter;
-            k.motion_scale = glm::vec2(1.0f);
-            k.position = camera_.position;
-            k.up = camera_.Up();
-            k.right = camera_.Right();
-            k.forward = camera_.Forward();
-            k.near_plane = camera_.near_plane;
-            k.fov_y = camera_.fov_y;
-            k.aspect = aspect;
-            k.reset = d.reset;
-            streamline::SetConstants(k);
-        }
-        upscaled = up_.backend->Dispatch(d);
-        if (cmd != renderer_->Cmd()) {
-            cmd = renderer_->Cmd();
-            // Command-buffer state does not carry across the external queue handoff.
-            BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
-            BindSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
-        }
-        FrameGeneration* fg = streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
-        if (upscaled && fg && fg->Generating()) {
-            FrameGenPrepare prepare;
-            prepare.cmd = cmd;
-            prepare.depth = d.depth;
-            prepare.motion = d.motion;
-            prepare.render = extent_;
-            prepare.jitter = d.jitter;
-            prepare.motion_scale = d.motion_scale;
-            prepare.frame_ms = d.frame_ms;
-            prepare.near_plane = d.near_plane;
-            prepare.fov_y = d.fov_y;
-            prepare.position = camera_.position;
-            prepare.forward = camera_.Forward();
-            prepare.up = camera_.Up();
-            prepare.right = camera_.Right();
-            prepare.reset = d.reset;
-            fg->Prepare(prepare);
-        }
-        UseTargets(cmd, {{&upscaled_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
-        if (!upscaled && upscale_stats_.error.empty()) {
-            upscale_stats_.error = "dispatch failed, see pt.log";
-        }
+    if (!up_.backend) {
+        return;
+    }
+    UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                     {&depth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                     {&motion_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                     {&reactive_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                     {&upscaled_, VK_IMAGE_LAYOUT_GENERAL}});
+    UpscaleDispatch d;
+    d.cmd = cmd;
+    d.color = Wrap(handy_demod_ ? opaque_ : hdr_);
+    d.depth = Wrap(depth_);
+    d.motion = Wrap(motion_);
+    d.reactive = Wrap(reactive_);
+    d.exposure = Wrap(exposure_image_);
+    d.output = Wrap(upscaled_);
+    d.render = extent_;
+    d.display = output_extent_;
+    d.jitter = up_.jitter_pixels;
+    d.motion_scale = glm::vec2(static_cast<float>(extent_.width), static_cast<float>(extent_.height));
+    d.pre_exposure = std::max(exposure_, 1.0e-12f);
+    d.sharpness = upscale.sharpness;
+    d.frame_ms = std::clamp(dt, 1.0e-4f, 0.25f) * 1000.0f;
+    d.near_plane = camera_.near_plane;
+    d.fov_y = camera_.fov_y;
+    d.reset = up_.reset;
+    d.frame_index = frame_counter_;
+    if (streamline::Active()) {
+        // Streamline's common constants, once for the frame: sl.dlss and DLSS Frame Generation read them
+        const float aspect = static_cast<float>(output_extent_.width) / static_cast<float>(std::max(1u, output_extent_.height));
+        streamline::FrameConstants k;
+        k.view_to_clip = camera_.Projection(aspect);
+        k.world_to_clip = k.view_to_clip * camera_.View();
+        k.previous_world_to_clip = previous_view_projection_;
+        k.jitter = d.jitter;
+        k.motion_scale = glm::vec2(1.0f);
+        k.position = camera_.position;
+        k.up = camera_.Up();
+        k.right = camera_.Right();
+        k.forward = camera_.Forward();
+        k.near_plane = camera_.near_plane;
+        k.fov_y = camera_.fov_y;
+        k.aspect = aspect;
+        k.reset = d.reset;
+        streamline::SetConstants(k);
+    }
+    up_dispatch_ = d;
+}
+
+bool SceneRenderer::RecordUpscaleDispatch() {
+    if (!up_.backend || !up_dispatch_.cmd) {
+        return false;
+    }
+    const bool upscaled = up_.backend->Dispatch(up_dispatch_);
+    PrepareFrameGeneration(up_dispatch_, upscaled);
+    return upscaled;
+}
+
+void SceneRenderer::PrepareFrameGeneration(const UpscaleDispatch& d, bool upscaled) {
+    FrameGeneration* fg = upscale.frame_generation == FrameGenKind::Metalfx ? UpscaleHost::Get().MetalFxFrameGen()
+                          : streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
+    if (!upscaled || !fg || !fg->Generating()) {
+        return;
+    }
+    FrameGenPrepare prepare;
+    prepare.cmd = d.cmd;
+    prepare.depth = d.depth;
+    prepare.motion = d.motion;
+    prepare.render = extent_;
+    prepare.jitter = d.jitter;
+    prepare.motion_scale = d.motion_scale;
+    prepare.frame_ms = d.frame_ms;
+    prepare.near_plane = d.near_plane;
+    prepare.fov_y = d.fov_y;
+    prepare.position = camera_.position;
+    prepare.forward = camera_.Forward();
+    prepare.up = camera_.Up();
+    prepare.right = camera_.Right();
+    prepare.reset = d.reset;
+    fg->Prepare(prepare);
+}
+
+void SceneRenderer::RecordUpscaleResolve(VkCommandBuffer cmd, bool upscaled) {
+    FrameSlot& slot = slots_[renderer_->FrameIndex()];
+    UseTargets(cmd, {{&upscaled_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
+    if (!upscaled && upscale_stats_.error.empty()) {
+        upscale_stats_.error = "dispatch failed, see pt.log";
     }
     up_.reset = false;
     UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -605,6 +656,12 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer& cmd, float dt) {
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.upscale_queries, 3);
     }
     slot.upscale_timed = queries_ != VK_NULL_HANDLE;
+}
+
+void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
+    RecordUpscalePrepare(dt);
+    const bool upscaled = RecordUpscaleDispatch();
+    RecordUpscaleResolve(cmd, upscaled);
 }
 
 void SceneRenderer::ReadUpscaleTimestamps(FrameSlot& slot) {
