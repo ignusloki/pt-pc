@@ -1,0 +1,11 @@
+--- a/.github/workflows/publish-macos.yml
++++ b/.github/workflows/publish-macos.yml
+@@ -28,7 +28,7 @@
+           set -euo pipefail
+           test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)" = success
+           build_sha="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)"
+-          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
++          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+           test "$build_sha" = "$tag_sha"
+           gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts
+           mapfile -t files < <(find artifacts -type f \( -name 'P.T.PC.Port-macOS-*.zip' -o -name 'P.T.PC.Port-macOS-*.dmg' \) | sort)
