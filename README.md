@@ -46,8 +46,9 @@ macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later
 `P.T.PC.Port.Setup-macOS-x64.zip` (Intel). Unzip `P.T. PC Port Setup.app`, select your own complete fake PKG or decrypted
 folder, and choose an installation location. The portable `P.T.PC.Port-macOS-arm64.zip` / `...-x64.zip` apps still accept
 an extracted folder directly. Both apps use the selected forest/P.T. icon. Downloads are signed ad hoc; the opening
-steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). Intel compilation, packaging and Rosetta
-checks pass; native Intel graphics and live microphone testing are pending. See the [integration report](docs/integration/upstream-integration-20261011.md).
+steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The macOS 1.0.7 release synchronizes this
+fork with upstream's 1.0.3 line. See the [Mac release notes](docs/release-notes-macos-1.0.7.md) and
+[integration report](docs/integration/upstream-regression-20261012.md) for validation and Intel GPU limitations.
 
 Portable downloads: `P.T.PC.Port-portable-windows.zip` and `P.T.PC.Port-portable-linux.zip` hold the same files the
 setups install. Unpack one anywhere you can write to, then either put your extracted `CUSA01127` folder next to `pt.exe`

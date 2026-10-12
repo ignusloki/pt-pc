@@ -67,7 +67,8 @@ jobs:
       - name: Build, package and test
         run: |
           test "$(uname -m)" = "${{ matrix.cmake_arch }}"
-          python3 tools/macos/build.py --arch "${{ matrix.arch }}" --build build/macos --out dist --version "${{ steps.version.outputs.version }}" --jobs 4
+          python3 tools/macos/build.py --arch "${{ matrix.arch }}" --build build/macos --out dist --version "${{ steps.version.outputs.version }}" --jobs 4 \
+            --cmake-arg="-DPT_UPDATE_MANIFEST_URL_OVERRIDE=https://api.github.com/repos/${{ github.repository }}/releases/latest"
           mv "dist/pt-port-${{ steps.version.outputs.version }}-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
           mv "dist/pt-port-${{ steps.version.outputs.version }}-setup-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
           lipo -archs "dist/P.T. PC Port.app/Contents/MacOS/pt"
