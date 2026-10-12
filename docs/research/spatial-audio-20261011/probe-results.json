@@ -1,0 +1,290 @@
+{
+  "date": "2026-10-11",
+  "source_commit": "b05adee04ec484bffc6d672ec57a830445817367",
+  "host": {
+    "processor": "Apple M1 Pro",
+    "macos": "26.6.2",
+    "build": "25G83"
+  },
+  "build": {
+    "sdk": "macOS 15.5",
+    "deployment_target": "14.0",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ]
+  },
+  "execution": {
+    "arm64": "native",
+    "x64": "Rosetta on Apple silicon; not a physical Intel Mac"
+  },
+  "configuration": {
+    "renderer": "AUSpatialMixer",
+    "input": "8-channel MPEG_7_1_C ambience bed",
+    "output": "stereo headphones",
+    "sample_rate": 48000,
+    "frames": 48000,
+    "maximum_frames_per_slice": 512,
+    "impulse_frame": 4096,
+    "impulse_amplitude": 0.25,
+    "extra_reverb": false,
+    "extra_distance_attenuation": false,
+    "personalized_hrtf": false,
+    "head_tracking": false,
+    "sdl_to_apple_channel_indices": [
+      0,
+      1,
+      2,
+      3,
+      6,
+      7,
+      4,
+      5
+    ]
+  },
+  "compatibility": "The x64 instance cannot write the optional head-tracking property. Skipping unsupported optional properties allows fixed headphone rendering to succeed.",
+  "source_sha256": "eef303253f86b5937fc65f76f0ae5ef19197b5b8e6c1de3f8e065abd62e5cb2a",
+  "results": {
+    "arm64": {
+      "front-left": {
+        "energy_lr": [
+          0.07921120457199093,
+          0.007611532573267454
+        ],
+        "peak_lr": [
+          0.17412354052066803,
+          0.056571654975414276
+        ],
+        "first_frame_lr": [
+          4096,
+          4107
+        ]
+      },
+      "front-right": {
+        "energy_lr": [
+          0.006409823094431915,
+          0.09756689167857935
+        ],
+        "peak_lr": [
+          0.04890407621860504,
+          0.18745584785938263
+        ],
+        "first_frame_lr": [
+          4107,
+          4096
+        ]
+      },
+      "center": {
+        "energy_lr": [
+          0.04733551192608389,
+          0.05336764780843951
+        ],
+        "peak_lr": [
+          0.11552034318447113,
+          0.12300935387611389
+        ],
+        "first_frame_lr": [
+          4096,
+          4096
+        ]
+      },
+      "lfe": {
+        "energy_lr": [
+          0.004327516677853042,
+          0.004327516677853042
+        ],
+        "peak_lr": [
+          0.007067860569804907,
+          0.007067860569804907
+        ],
+        "first_frame_lr": [
+          4097,
+          4097
+        ]
+      },
+      "side-left": {
+        "energy_lr": [
+          0.06963385745746849,
+          0.0015342471332960238
+        ],
+        "peak_lr": [
+          0.2166614681482315,
+          0.019469507038593292
+        ],
+        "first_frame_lr": [
+          4096,
+          4122
+        ]
+      },
+      "side-right": {
+        "energy_lr": [
+          0.0016763190244273097,
+          0.06636786544306718
+        ],
+        "peak_lr": [
+          0.020383670926094055,
+          0.20420745015144348
+        ],
+        "first_frame_lr": [
+          4124,
+          4096
+        ]
+      },
+      "back-left": {
+        "energy_lr": [
+          0.040637082059922204,
+          0.005381965839209286
+        ],
+        "peak_lr": [
+          0.14516209065914154,
+          0.046782419085502625
+        ],
+        "first_frame_lr": [
+          4096,
+          4108
+        ]
+      },
+      "back-right": {
+        "energy_lr": [
+          0.006176803129115963,
+          0.03898930217224759
+        ],
+        "peak_lr": [
+          0.053248122334480286,
+          0.12306393682956696
+        ],
+        "first_frame_lr": [
+          4108,
+          4096
+        ]
+      },
+      "front_vs_back_left_waveform_cosine_similarity": 0.7813674171438297,
+      "front_vs_back_right_waveform_cosine_similarity": 0.689685089763626
+    },
+    "x64": {
+      "front-left": {
+        "energy_lr": [
+          0.07921119879818093,
+          0.007611532449775069
+        ],
+        "peak_lr": [
+          0.17412352561950684,
+          0.05657165125012398
+        ],
+        "first_frame_lr": [
+          4096,
+          4107
+        ]
+      },
+      "front-right": {
+        "energy_lr": [
+          0.006409823132819719,
+          0.09756690089881782
+        ],
+        "peak_lr": [
+          0.04890407994389534,
+          0.18745586276054382
+        ],
+        "first_frame_lr": [
+          4107,
+          4096
+        ]
+      },
+      "center": {
+        "energy_lr": [
+          0.0473355140607393,
+          0.053367648004069464
+        ],
+        "peak_lr": [
+          0.11552034318447113,
+          0.1230093464255333
+        ],
+        "first_frame_lr": [
+          4096,
+          4096
+        ]
+      },
+      "lfe": {
+        "energy_lr": [
+          0.004327516605391492,
+          0.004327516605391492
+        ],
+        "peak_lr": [
+          0.007067860569804907,
+          0.007067860569804907
+        ],
+        "first_frame_lr": [
+          4097,
+          4097
+        ]
+      },
+      "side-left": {
+        "energy_lr": [
+          0.06963385988360032,
+          0.0015342472668012175
+        ],
+        "peak_lr": [
+          0.2166614681482315,
+          0.01946951076388359
+        ],
+        "first_frame_lr": [
+          4096,
+          4122
+        ]
+      },
+      "side-right": {
+        "energy_lr": [
+          0.0016763189766964164,
+          0.06636786453746639
+        ],
+        "peak_lr": [
+          0.020383670926094055,
+          0.20420745015144348
+        ],
+        "first_frame_lr": [
+          4124,
+          4096
+        ]
+      },
+      "back-left": {
+        "energy_lr": [
+          0.04063706873271995,
+          0.005381965142032766
+        ],
+        "peak_lr": [
+          0.14516204595565796,
+          0.04678241163492203
+        ],
+        "first_frame_lr": [
+          4096,
+          4108
+        ]
+      },
+      "back-right": {
+        "energy_lr": [
+          0.0061768031239391565,
+          0.03898930487708536
+        ],
+        "peak_lr": [
+          0.053248126059770584,
+          0.12306395173072815
+        ],
+        "first_frame_lr": [
+          4108,
+          4096
+        ]
+      },
+      "front_vs_back_left_waveform_cosine_similarity": 0.7813674074429154,
+      "front_vs_back_right_waveform_cosine_similarity": 0.6896850899509763
+    }
+  },
+  "maximum_absolute_arm64_x64_sample_difference": 4.470348358154297e-08,
+  "limitations": [
+    "No physical Intel Mac",
+    "No Windows output",
+    "No listening test",
+    "No live SDL integration",
+    "No full-game performance measurement",
+    "No head tracking or personalized profile"
+  ]
+}
