@@ -23,6 +23,7 @@ See [upstream's full 1.0.3 changelog](https://github.com/LoreanXavier/pt-pc/blob
 - Fixed Vulkan/Metal submission recovery when an upscale pass fails, motion-blur target formats and UI composition
   on interpolated frames.
 - Fixed microphone worker lifetime and cancellation handling.
+- Made package architecture verification compatible with older and newer Xcode tools.
 - Retained startup microphone permission, the saved microphone On/Off setting, first-boot settings rendering,
   fullscreen mouse alignment, optional Fast Walk and the forest/P.T. icon in both apps.
 - Apple silicon and Intel each have a graphical PKG/folder installer and a portable app. Updates follow this fork's

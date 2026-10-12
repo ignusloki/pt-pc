@@ -136,7 +136,8 @@ class PackagingTests(unittest.TestCase):
             mac.audit_dependencies(app)
         self.assertEqual(run.call_count, 2)
         for call in run.call_args_list:
-            self.assertEqual(call.args[:3], ("lipo", "-verify_arch", "arm64"))
+            self.assertEqual(call.args[0], "lipo")
+            self.assertEqual(call.args[-2:], ("-verify_arch", "arm64"))
 
     def test_missing_and_developer_machine_dependencies_refused(self):
         app = self.macho_bundle()
@@ -158,7 +159,8 @@ class PackagingTests(unittest.TestCase):
     def test_wrong_architecture_prevents_signing(self):
         app = self.macho_bundle()
         def reject(*args):
-            self.assertEqual(args[:3], ("lipo", "-verify_arch", "arm64"))
+            self.assertEqual(args[0], "lipo")
+            self.assertEqual(args[-2:], ("-verify_arch", "arm64"))
             raise subprocess.CalledProcessError(1, args)
         with patch.object(mac, "run", side_effect=reject), patch.object(mac.subprocess, "check_output") as output:
             with self.assertRaises(subprocess.CalledProcessError):

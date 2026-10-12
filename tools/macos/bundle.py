@@ -78,7 +78,9 @@ def audit_dependencies(root, arch="arm64"):
     rpaths = {}
     dependencies = {}
     for file in binaries:
-        run("lipo", "-verify_arch", cpu, file)
+        # Put the input first: newer Xcode lipo consumes all arguments after
+        # -verify_arch as architecture names, including a trailing file path.
+        run("lipo", file, "-verify_arch", cpu)
         commands = subprocess.check_output(["otool", "-arch", cpu, "-l", str(file)], text=True)
         minimums = re.findall(r"\bminos ([\d.]+)|cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)", commands)
         def numeric(value):
