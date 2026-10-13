@@ -51,6 +51,8 @@ target_link_libraries(pt_setup_macos PRIVATE zlibstatic Threads::Threads "-frame
 target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
 set_source_files_properties(src/engine/platform/macos_permissions.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")
+target_sources(pt_engine PRIVATE src/engine/audio/spatial_audio_macos.mm)
+target_link_libraries(pt_engine PUBLIC "-framework AudioToolbox" "-framework CoreAudio")
 
 # MetalFX scaling is optional at runtime. Its framework and Objective-C++ source remain Apple-only.
 if(NOT pt_moltenvk_dylib MATCHES "[.]dylib$" OR NOT EXISTS "${pt_moltenvk_dylib}")

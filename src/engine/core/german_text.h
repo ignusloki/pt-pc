@@ -6,6 +6,15 @@
 namespace pt::german {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Audioausgabe"},
+    {"pc_audio_stereo","Stereo"},
+    {"pc_audio_surround","Surround-Lautsprecher"},
+    {"pc_audio_spatial","Räumlicher Kopfhörer"},
+    {"pc_note_audio_output","Gilt nach einem Neustart. Räumliche Kopfhörerausgabe ohne Kopfverfolgung. Andere Raumeffekte des Kopfhörers ausschalten."},
+    {"pc_audio_active","Aktive Ausgabe"},
+    {"pc_audio_stereo_fallback","Stereo (Ersatz)"},
+    {"pc_audio_unavailable","Kein Audiogerät"},
+    {"pc_note_audio_unsupported","Räumliche Kopfhörerausgabe ist in dieser Plattformversion nicht enthalten."},
     {"pc_restart_needed","Starte das Spiel neu, damit diese Änderung wirksam wird."},
     {"pc_controller_speaker","Controller-Lautsprecher"},
     {"pc_note_controller_speaker","Gibt Lisas aufgezeichnete Schreie über unterstützte Sony-Controller-Lautsprecher wieder. Unter Windows ist USB erforderlich; nicht unterstützte Geräte und Bluetooth bleiben stumm. Unabhängig von der Haptik; standardmäßig aus."},

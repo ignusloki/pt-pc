@@ -6,6 +6,15 @@
 namespace pt::polish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Wyjście dźwięku"},
+    {"pc_audio_stereo","Stereo"},
+    {"pc_audio_surround","Głośniki przestrzenne"},
+    {"pc_audio_spatial","Słuchawki przestrzenne"},
+    {"pc_note_audio_output","Działa po ponownym uruchomieniu. Dźwięk kierunkowy bez śledzenia głowy. Wyłącz inne efekty przestrzenne słuchawek."},
+    {"pc_audio_active","Aktywne wyjście"},
+    {"pc_audio_stereo_fallback","Stereo (zastępcze)"},
+    {"pc_audio_unavailable","Brak urządzenia audio"},
+    {"pc_note_audio_unsupported","Dźwięk przestrzenny w słuchawkach nie jest dostępny w tej wersji na tę platformę."},
     {"pc_restart_needed","Aby ta zmiana zaczęła obowiązywać, uruchom grę ponownie."},
     {"pc_controller_speaker","Głośnik kontrolera"},
     {"pc_note_controller_speaker","Odtwarza nagrane krzyki Lisy przez głośniki obsługiwanych kontrolerów Sony. W systemie Windows wymaga połączenia USB; nieobsługiwane urządzenia i Bluetooth pozostają wyciszone. Działa niezależnie od wibracji i jest domyślnie wyłączone."},

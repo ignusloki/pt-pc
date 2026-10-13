@@ -6,6 +6,15 @@
 namespace pt::ukrainian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Вивід звуку"},
+    {"pc_audio_stereo","Стерео"},
+    {"pc_audio_surround","Об'ємні колонки"},
+    {"pc_audio_spatial","Просторові навушники"},
+    {"pc_note_audio_output","Застосовується після перезапуску. Напрямлений звук у навушниках без відстеження голови. Вимкніть інші просторові ефекти навушників."},
+    {"pc_audio_active","Активний вивід"},
+    {"pc_audio_stereo_fallback","Стерео (резерв)"},
+    {"pc_audio_unavailable","Немає аудіопристрою"},
+    {"pc_note_audio_unsupported","Просторовий звук у навушниках не включено в цю версію для цієї платформи."},
     {"pc_restart_needed","Щоб зміна набула чинності, перезапустіть гру."},
     {"pc_controller_speaker","Динамік контролера"},
     {"pc_note_controller_speaker","Відтворює записані в грі крики Лізи через підтримувані динаміки контролерів Sony. У Windows потрібне USB-з’єднання; непідтримувані пристрої та Bluetooth залишаються без звуку. Незалежний від тактильного відгуку; типово вимкнений."},

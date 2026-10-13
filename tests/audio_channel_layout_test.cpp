@@ -44,13 +44,13 @@ int main() {
     if (!forced_device || !SDL_GetAudioDeviceFormat(forced_device, &forced_format, nullptr) || forced_format.channels != 8) {
         return fail_audio_output("dummy audio driver did not open an 8-channel device");
     }
-    if (!output.Open(48000, false, render_silence) || output.Channels() != 2) {
+    if (!output.Open(48000, OutputMode::Stereo, render_silence) || output.Channels() != 2) {
         return fail_audio_output("stereo mode did not keep a 2-channel renderer on an 8-channel device");
     }
     output.Close();
     SDL_CloseAudioDevice(forced_device);
     forced_device = 0;
-    if (!output.Open(48000, true, render_silence) || output.Channels() != 8) {
+    if (!output.Open(48000, OutputMode::Surround, render_silence) || output.Channels() != 8) {
         return fail_audio_output("surround mode did not use the actual 8-channel device format");
     }
     output.Close();

@@ -24,7 +24,7 @@ bool Near(float a, float b) { return std::abs(a - b) <= 1e-5f * std::max(1.0f, s
 bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
-    return x.hdr==y.hdr && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
+    return x.hdr==y.hdr && x.fps_limit==y.fps_limit && a.audio.output_mode==b.audio.output_mode && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
            x.pause_on_focus_loss == y.pause_on_focus_loss && x.mute_in_background == y.mute_in_background && x.letterbox == y.letterbox &&
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
@@ -65,7 +65,8 @@ int main(int argc, char** argv) {
         {"display.fps_limit", [](auto& s) { s.display.fps_limit = 144; }},
         {"audio.controller_speaker", [](auto& s) { s.audio.controller_speaker = true; }},
         {"audio.controller_speaker_volume", [](auto& s) { s.audio.controller_speaker_volume = 0.25f; }},
-        {"audio.surround", [](auto& s) { s.audio.surround = true; }},
+        {"audio.output_mode surround", [](auto& s) { s.audio.output_mode = pt::audio::OutputMode::Surround; }},
+        {"audio.output_mode spatial", [](auto& s) { s.audio.output_mode = pt::audio::OutputMode::SpatialHeadphones; }},
         {"input.rumble_profile", [](auto& s) { s.input.rumble_profile = 1; }},
         {"vr.height_offset", [](auto& s) { s.vr.height_offset = -0.2f; }},
         {"vr.world_scale", [](auto& s) { s.vr.world_scale = 1.5f; }},
@@ -121,7 +122,7 @@ int main(int argc, char** argv) {
     };
     for (const auto& [name, change] : changes) {
         pt::AppSettings s;
-    s.display.hdr=true; s.display.fps_limit=144; s.audio.surround=true; s.input.rumble_profile=1; s.vr.height_offset=-0.15f;
+    s.display.hdr=true; s.display.fps_limit=144; s.audio.output_mode=pt::audio::OutputMode::Surround; s.input.rumble_profile=1; s.vr.height_offset=-0.15f;
         change(s);
         const pt::AppSettings loaded = RoundTrip(ini, s);
         Check(name + " changes the settings", !Same(s, pt::AppSettings{}));
@@ -157,6 +158,18 @@ int main(int argc, char** argv) {
     Check("microphone off retains optional trigger", !mic_off.voice.microphone_enabled && mic_off.voice.key == "J");
     Check("microphone off persists", !RoundTrip(ini, mic_off).voice.microphone_enabled);
     Check("microphone on persists", RoundTrip(ini, {}).voice.microphone_enabled);
+    using pt::audio::OutputMode;
+    Check("output defaults to stereo", pt::AppSettings{}.audio.output_mode == OutputMode::Stereo);
+    Check("legacy surround migrates", LoadText(ini, "[audio]\nsurround=1\n").audio.output_mode == OutputMode::Surround);
+    Check("legacy stereo migrates", LoadText(ini, "[audio]\nsurround=0\n").audio.output_mode == OutputMode::Stereo);
+    Check("explicit stereo overrides legacy surround", LoadText(ini, "[audio]\nsurround=1\noutput_mode=stereo\n").audio.output_mode == OutputMode::Stereo);
+    Check("invalid mode uses stereo", LoadText(ini, "[audio]\nsurround=1\noutput_mode=unknown\n").audio.output_mode == OutputMode::Stereo);
+    const auto spatial = LoadText(ini, "[audio]\noutput_mode=spatial\n[voice]\nmicrophone_enabled=0\n[progress]\ngame_finished=1\nloops_reached=3ffff\n");
+    const auto spatial_roundtrip = RoundTrip(ini, spatial);
+    Check("spatial round trip keeps profile and microphone", spatial_roundtrip.audio.output_mode == OutputMode::SpatialHeadphones &&
+          !spatial_roundtrip.voice.microphone_enabled && spatial_roundtrip.progress.game_finished && spatial_roundtrip.progress.loops_reached == 0x3ffff);
+    std::ifstream saved(ini); const std::string text((std::istreambuf_iterator<char>(saved)), {});
+    Check("legacy projection is stereo for spatial", text.find("surround = 0") != std::string::npos);
     std::filesystem::remove(ini);
     std::printf("%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

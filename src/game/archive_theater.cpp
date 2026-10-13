@@ -106,7 +106,7 @@ bool ArchiveTheater::Start() {
     game_->Demos().time_scale = settings_.demo_rate;
     if (settings_.sound) {
         sound_ = std::make_unique<GameSound>(*game_);
-        if (sound_->Init(settings_.open_device, "Eng")) {
+        if (sound_->Init(settings_.open_device, "Eng", settings_.output_mode)) {
             sound_->System().SetMasterVolume(settings_.volume);
             game_->SetAudio(sound_.get());
         } else {

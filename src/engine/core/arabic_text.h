@@ -6,6 +6,15 @@
 namespace pt::arabic {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","خرج الصوت"},
+    {"pc_audio_stereo","ستيريو"},
+    {"pc_audio_surround","سماعات محيطية"},
+    {"pc_audio_spatial","سماعات بصوت مكاني"},
+    {"pc_note_audio_output","يسري بعد إعادة التشغيل. صوت اتجاهي في سماعات الرأس دون تتبع الرأس. أوقف المؤثرات المكانية الأخرى للسماعات."},
+    {"pc_audio_active","الخرج الحالي"},
+    {"pc_audio_stereo_fallback","ستيريو (بديل)"},
+    {"pc_audio_unavailable","لا يوجد جهاز صوت"},
+    {"pc_note_audio_unsupported","صوت سماعات الرأس المكاني غير متوفر في إصدار هذه المنصة."},
     {"pc_restart_needed","يجب إعادة تشغيل اللعبة حتى يسري هذا التغيير."},
     {"pc_controller_speaker","مكبر صوت وحدة التحكم"},
     {"pc_note_controller_speaker","يشغّل صرخات ليزا المسجلة في اللعبة عبر مكبرات الصوت المدعومة في وحدات تحكم Sony. يتطلب Windows اتصال USB؛ وتبقى الأجهزة غير المدعومة واتصالات Bluetooth صامتة. مستقل عن الاستجابة اللمسية، ومعطّل افتراضيًا."},

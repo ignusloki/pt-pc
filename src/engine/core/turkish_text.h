@@ -6,6 +6,15 @@
 namespace pt::turkish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Ses çıkışı"},
+    {"pc_audio_stereo","Stereo"},
+    {"pc_audio_surround","Çevresel hoparlörler"},
+    {"pc_audio_spatial","Uzamsal kulaklık"},
+    {"pc_note_audio_output","Yeniden başlatınca uygulanır. Baş takibi olmadan yönlü kulaklık sesi sağlar. Kulaklığın diğer uzamsal efektlerini kapatın."},
+    {"pc_audio_active","Etkin çıkış"},
+    {"pc_audio_stereo_fallback","Stereo (yedek)"},
+    {"pc_audio_unavailable","Ses aygıtı yok"},
+    {"pc_note_audio_unsupported","Uzamsal kulaklık sesi bu platform sürümünde bulunmuyor."},
     {"pc_restart_needed","Bu değişikliğin geçerli olması için oyunu yeniden başlatmalısın."},
     {"pc_controller_speaker","Kontrolcü hoparlörü"},
     {"pc_note_controller_speaker","Lisa’nın oyunda kaydedilmiş çığlıklarını desteklenen Sony kontrolcü hoparlörlerinden çalar. Windows’ta USB bağlantısı gerekir; desteklenmeyen aygıtlar ve Bluetooth sessiz kalır. Dokunsal geri bildirimden bağımsızdır ve varsayılan olarak kapalıdır."},

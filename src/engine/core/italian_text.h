@@ -6,6 +6,15 @@
 namespace pt::italian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Uscita audio"},
+    {"pc_audio_stereo","Stereo"},
+    {"pc_audio_surround","Altoparlanti surround"},
+    {"pc_audio_spatial","Cuffie spaziali"},
+    {"pc_note_audio_output","Si applica al riavvio. Audio direzionale in cuffia senza rilevamento della testa. Disattiva gli altri effetti spaziali delle cuffie."},
+    {"pc_audio_active","Uscita attiva"},
+    {"pc_audio_stereo_fallback","Stereo (alternativa)"},
+    {"pc_audio_unavailable","Nessun dispositivo audio"},
+    {"pc_note_audio_unsupported","L'audio spaziale in cuffia non è incluso in questa versione per questa piattaforma."},
     {"pc_restart_needed","Devi riavviare il gioco perché questa modifica abbia effetto."},
     {"pc_controller_speaker","Altoparlante del controller"},
     {"pc_note_controller_speaker","Riproduce le urla registrate di Lisa dagli altoparlanti supportati dei controller Sony. Su Windows serve una connessione USB; i dispositivi non supportati e Bluetooth restano silenziosi. Indipendente dal feedback aptico; disattivato per impostazione predefinita."},

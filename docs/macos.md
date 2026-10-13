@@ -37,6 +37,11 @@ is experimental, Off by default, and available only on supported Apple silicon w
 Fast Walk is also Off by default. PC Settings → Extras enables a 1.5× walking boost while Shift or the controller's
 bottom face button is held; normal interactions and game timing are retained. See [Fast Walk](fast-walk.md).
 
+On the experimental `v1.0.8-spatial.1` research branch, PC Settings → Sound also offers **Spatial headphones**.
+It is optional, requires a restart, and uses fixed native headphone rendering without head tracking or personalization.
+Stereo remains the default, and **Playing through** reports the actual output or fallback. See the
+[experimental listening checklist](release-notes-macos-1.0.8-spatial.1.md) and [diagnostics](experimental-spatial-audio.md).
+
 ## Platform layer
 
 macOS takes the POSIX side of `src/engine/platform` (docs/linux.md), with these differences:

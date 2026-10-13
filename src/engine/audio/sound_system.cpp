@@ -17,8 +17,9 @@ SoundSystem::~SoundSystem() {
     Shutdown();
 }
 
-bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
+bool SoundSystem::Init(Vfs& vfs, bool open_device, OutputMode output_mode) {
     Shutdown();
+    output_mode_ = output_mode;
     vfs_ = &vfs;
     auto banks = std::make_unique<SoundBankSet>();
     std::string error;
@@ -48,7 +49,7 @@ bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
     if (open_device) {
         auto output = std::make_unique<AudioOutput>();
         SoundEngine* engine = engine_.get();
-        if (output->Open(kOutputRate, surround_output,
+        if (output->Open(kOutputRate, output_mode,
                          [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); })) {
             output_ = std::move(output);
         } else {
@@ -179,6 +180,10 @@ void SoundSystem::SetListener(const glm::vec3& position, const glm::vec3& forwar
     if (engine_) {
         engine_->SetListener(position, forward, up);
     }
+    if (output_ && output_->DiagnosticsEnabled()) {
+        diagnostic_listener_position_ = position;
+        diagnostic_listener_forward_ = forward;
+    }
 }
 
 void SoundSystem::SetState(std::string_view group, std::string_view state) {
@@ -248,6 +253,17 @@ void SoundSystem::Update(float) {
     if (!engine_) {
         return;
     }
+    if (output_) {
+        output_->ReportPendingFailure();
+        if (output_->ReportDiagnostics()) {
+            const auto stats = Stats();
+            LogInfo("audio diag [{}]: voices={} virtual_voices={} playing_ids={} sequencers={} engine_frames={} "
+                    "listener_position=({:.3f},{:.3f},{:.3f}) listener_forward=({:.3f},{:.3f},{:.3f})",
+                    output_->DiagnosticSession(), stats.voices, stats.virtual_voices, stats.playing_ids, stats.sequencers,
+                    RenderedFrames(), diagnostic_listener_position_.x, diagnostic_listener_position_.y, diagnostic_listener_position_.z,
+                    diagnostic_listener_forward_.x, diagnostic_listener_forward_.y, diagnostic_listener_forward_.z);
+        }
+    }
     for (const auto& notification : engine_->TakeNotifications()) {
         if (notification.kind == EngineNotification::Kind::Marker) {
             if (marker_callback_) {
@@ -300,6 +316,9 @@ void SoundSystem::SetRandomSeed(uint32_t seed) {
 void SoundSystem::SetMasterVolume(float gain) {
     if (engine_) {
         engine_->SetMasterGain(gain);
+        if (output_ && output_->DiagnosticsEnabled()) {
+            LogInfo("audio diag [{}]: master_gain={:.3f}", output_->DiagnosticSession(), gain);
+        }
     }
 }
 
@@ -323,6 +342,14 @@ bool SoundSystem::HasEvent(uint32_t event_id) const {
 
 bool SoundSystem::DeviceOpen() const {
     return output_ != nullptr;
+}
+
+OutputMode SoundSystem::ActiveOutputMode() const {
+    return output_ ? output_->ActiveMode() : OutputMode::Stereo;
+}
+
+bool SoundSystem::SpatialFallback() const {
+    return output_ && output_->SpatialFallback();
 }
 
 uint64_t SoundSystem::RenderedFrames() const {

@@ -36,6 +36,7 @@
 #include <unordered_map>
 
 #include "engine/anim/anim_test.h"
+#include "engine/audio/audio_diagnostics.h"
 #include "engine/assets/fmdl.h"
 #include "engine/assets/enhanced_textures.h"
 #include "engine/assets/geom.h"
@@ -2076,7 +2077,22 @@ public:
         }
         volume.wrap = false;
         sound.rows.push_back(std::move(volume));
-        sound.rows.push_back(Row(kSurround,"pc_surround",OffOn(),s.audio.surround?1:0,"pc_note_surround"));
+        auto audio_output = Row(kAudioOutput, "pc_audio_output", {"pc_audio_stereo", "pc_audio_surround", "pc_audio_spatial"},
+                                static_cast<int>(s.audio.output_mode), "pc_note_audio_output");
+        if (!pt::audio::SpatialAudioBuilt()) audio_output.value_notes = {"", "", "pc_note_audio_unsupported"};
+        sound.rows.push_back(std::move(audio_output));
+        pt::audio::SoundSystem* playing_sound = game_.Audio() ? &static_cast<pt::game::GameSound*>(game_.Audio())->System() : nullptr;
+        const char* active_audio = "pc_audio_unavailable";
+        if (playing_sound && playing_sound->DeviceOpen()) {
+            switch (playing_sound->ActiveOutputMode()) {
+            case pt::audio::OutputMode::SpatialHeadphones: active_audio = "pc_audio_spatial"; break;
+            case pt::audio::OutputMode::Surround: active_audio = "pc_audio_surround"; break;
+            default: active_audio = playing_sound->SpatialFallback() ? "pc_audio_stereo_fallback" : "pc_audio_stereo"; break;
+            }
+        }
+        auto audio_status = Row(kAudioActive, "pc_audio_active", {active_audio}, 0, "");
+        audio_status.enabled = false;
+        sound.rows.push_back(std::move(audio_status));
         sound.rows.push_back(Row(kControllerSpeaker, "pc_controller_speaker", OffOn(), s.audio.controller_speaker ? 1 : 0,
                                  "pc_note_controller_speaker"));
         pt::game::PcSettingRow controller_speaker_volume = Row(
@@ -2118,8 +2134,8 @@ public:
         sound.rows.push_back(std::move(microphone_test));
         if (page_ == kSoundPage) {
             pt::game::PcSettingSection voice{"pc_microphone", 1, {}};
-            voice.rows.assign(std::make_move_iterator(sound.rows.begin() + 4), std::make_move_iterator(sound.rows.end()));
-            sound.rows.resize(4);
+            voice.rows.assign(std::make_move_iterator(sound.rows.begin() + 5), std::make_move_iterator(sound.rows.end()));
+            sound.rows.resize(5);
             sound.column = 0;
             return {std::move(sound), std::move(voice)};
         }
@@ -2295,10 +2311,19 @@ public:
             s.display.hdr = value == 1;
             app_.renderer.SetHdr(s.display.hdr);
             break;
-        case kSurround:
-            if (s.audio.surround != (value == 1)) game_.ShowNoticeDialog("pc_restart_needed");
-            s.audio.surround = value == 1;
+        case kAudioOutput: {
+            const auto mode = static_cast<pt::audio::OutputMode>(std::clamp(value, 0, 2));
+            if (mode == pt::audio::OutputMode::SpatialHeadphones && !pt::audio::SpatialAudioBuilt()) break;
+            if (s.audio.output_mode != mode) game_.ShowNoticeDialog("pc_restart_needed");
+            s.audio.output_mode = mode;
+            if (pt::audio::AudioDiagnosticsEnabled()) {
+                const auto* playing = game_.Audio() ? &static_cast<pt::game::GameSound*>(game_.Audio())->System() : nullptr;
+                pt::LogInfo("audio diag: menu selection={} active={} restart_pending={} playback_open={}",
+                            pt::audio::OutputModeName(mode), playing ? pt::audio::OutputModeName(playing->ActiveOutputMode()) : "unavailable",
+                            playing && mode != playing->RequestedOutputMode(), playing && playing->DeviceOpen());
+            }
             break;
+        }
         case kControllerSpeaker:
             s.audio.controller_speaker = value == 1;
             break;
@@ -2744,7 +2769,7 @@ private:
     enum RowId {
         kDisplayMode,
         kResolution,
-        kVsync, kFpsLimit, kHdr, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile,
+        kVsync, kFpsLimit, kHdr, kAudioOutput, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile,
         kFocusPause,
         kFocusMute,
         kUpscaler,
@@ -2781,6 +2806,7 @@ private:
         kArchive, kArchiveLock,
         kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
         kFastWalk,
+        kAudioActive,
         kLoopFirst = 1000,
         kRunSplitFirst = 3000,
         kModFirst = 2000,
@@ -3609,7 +3635,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     game.SetThirdPerson(app.settings.camera.third_person || options.third_person);
     pt::game::GameSound sound(game);
     std::vector<float> captured;
-    if ((app.window || options.audio_offline) && sound.Init(app.window != nullptr, "Eng", app.settings.audio.surround)) {
+    if ((app.window || options.audio_offline) && sound.Init(app.window != nullptr, "Eng", app.settings.audio.output_mode)) {
         sound.System().SetMasterVolume(app.settings.audio.volume);
         if (options.seed) {
             sound.System().SetRandomSeed(options.seed);
@@ -3932,6 +3958,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pt::game::ArchiveTheater::Settings settings;
         settings.sound = sound.Ready();
         settings.open_device = sound.Ready() && sound.System().DeviceOpen();
+        settings.output_mode = sound.System().RequestedOutputMode();
         settings.volume = app.settings.audio.volume;
         settings.demo_rate = options.demo_rate;
         settings.options = game.Options();
@@ -5441,6 +5468,11 @@ int main(int argc, char** argv) {
     // the crashed session's log, kept beside its dump before this start rewrites it (crash_upload.h)
     if (!tool) pt::PreserveCrashLog(log_path);
     pt::LogSetFile(log_path);
+    if (pt::audio::AudioDiagnosticsEnabled()) {
+        const char* session = std::getenv("PT_AUDIO_LOG_SESSION");
+        pt::LogInfo("audio diag: launch session={} version={} build={} executable={} log={} capture=off",
+                    session ? session : "manual", pt::update::CurrentVersion(), PT_BUILD_ID, argv[0], pt::os::PathToUtf8(log_path));
+    }
     // PT_HEADLESS_ONLY (set by the workers' slot limiter, C:/Projects/pt-port/shared/ptslot.py): a run that would open a
     // window or a message box stops here, before SDL starts video (tools/run_guard_check.py)
     // A start that fails before the first frame used to end without a word (issue #25 and pt.log reports: "Installed Vulkan doesn't
@@ -5659,6 +5691,15 @@ int main(int argc, char** argv) {
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
+    if (pt::audio::AudioDiagnosticsEnabled()) {
+        pt::LogInfo("audio diag: settings={} loaded={} selected={} volume={:.3f} microphone_enabled={} microphone_device=\"{}\" "
+                    "controller_speaker={} controller_speaker_volume={:.3f} mute_in_background={} saving_disabled={}",
+                    pt::os::PathToUtf8(app.settings_path), settings_loaded, pt::audio::OutputModeName(app.settings.audio.output_mode),
+                    app.settings.audio.volume, app.settings.voice.microphone_enabled,
+                    app.settings.voice.device.empty() ? "system default" : app.settings.voice.device,
+                    app.settings.audio.controller_speaker, app.settings.audio.controller_speaker_volume,
+                    app.settings.display.mute_in_background, options.no_save);
+    }
     if (!options.headless) {
         if (!settings_loaded) {
             pt::SaveAppSettings(app.settings_path, app.settings);

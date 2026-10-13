@@ -8,6 +8,14 @@ Add an optional **Spatial headphones** output mode for macOS and Windows, off by
 
 The game's current banks, PKG conversion, saves, game events and microphone puzzle do not need replacement. Source height is already reduced to horizontal speaker panning before the eight-channel output; this first version cannot recover it. See [the feasibility report](spatial-audio-feasibility.md) for the later object-audio scope and hardware test matrix.
 
+## Playable Mac preview status
+
+The research branch now implements the shared mode/settings contract, legacy migration, Mac native processor, bounded SDL adapter, stereo-linked peak guard, failure transition, theater mode propagation and translated menu/status. The first packaged preview is Apple silicon, version `1.0.7-spatial1`. Windows and Linux keep their existing Stereo/Surround paths; their Spatial choice is unavailable, with a safe stereo fallback for a hand-edited Spatial configuration. Windows native spatial output is still planned work.
+
+Local checks passed for saved settings/migration, limiting and single-render failure handoff, existing speaker layouts, controller routing, microphone worker cleanup, localized text/font coverage and native speaker directions/variable buffers. The packaged game opened the real Mac playback device in Spatial mode and passed its startup, Sound menu and gameplay checks. Manual AirPods sessions confirmed active spatial rendering and rear-channel content without errors, but the user reported little audible difference. Bluetooth route changes, physical Intel spatial gameplay and Windows providers remain hardware checks. See [preview instructions](spatial-audio-macos-preview.md) and the [listening-session review](research/spatial-audio-20261013/listening-log-review.md).
+
+The user approved an experimental community prerelease, `v1.0.8-spatial.1`, from this research branch. It remains separate from the stable Mac branch and upstream. The standalone Audio Lab app, private radio clip, source and logs were archived outside the game repository; its direct mono 3D mode is not integrated into this release. See [experimental release notes](release-notes-macos-1.0.8-spatial.1.md).
+
 ## Verified compatibility with the latest release
 
 `git diff b05adee..07bc902 -- src/engine/audio src/game/game_sound.cpp src/engine/platform/settings.cpp src/engine/platform/settings.h` is empty. Existing surround rendering and the audio settings storage boundary are unchanged by the upstream synchronization. The merge into this branch had no conflicts.
@@ -78,4 +86,4 @@ Preserve startup microphone permission and `voice.microphone_enabled`. Do not mo
 4. **Settings and full-game checks:** expose Stereo / Surround / Spatial headphones, translate the menu, show real active/fallback state, and test the main game plus archive sessions.
 5. **Release decision:** require unchanged original output, no missing audio or clipping, correct directions, microphone/final puzzle, controller routes, pause/reset, device changes and measured callback deadlines. Native Intel gameplay and Windows listening remain hardware gates; Rosetta and hosted CI do not replace them.
 
-The next development milestone is step 1 followed by the Mac playable prototype. Object-based 3D output and AirPods-specific features remain subsequent decisions after comparing the first mode with stereo using the available AirPods Pro 3 and Maxwell 2.
+The next milestone is listening and route testing of the Mac preview, followed by the Windows native output implementation. Object-based 3D output and AirPods-specific features remain subsequent decisions after comparing the first mode with stereo using the available AirPods Pro 3 and Maxwell 2.

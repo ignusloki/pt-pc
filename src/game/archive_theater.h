@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "engine/platform/input.h"
+#include "engine/audio/output_mode.h"
 #include "engine/render/camera.h"
 #include "engine/render/free_camera.h"
 #include "engine/render/scene_renderer.h"
@@ -44,6 +45,7 @@ public:
         // a sound system of its own (the player's is paused with the menu); with a device when the game has a window
         bool sound = false;
         bool open_device = false;
+        audio::OutputMode output_mode = audio::OutputMode::Stereo;
         float volume = 1.0f;
         // tests: --demo-rate
         float demo_rate = 1.0f;

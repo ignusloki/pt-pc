@@ -16,7 +16,9 @@ The first stage is a moderate output-layer change. The second changes how voices
 | Individual 3D sounds | Retains individual source positions, including elevation, instead of reducing everything to horizontal speakers | Approximately 10–20 additional engineering days; mixing and hardware findings may extend this |
 | AirPods head tracking and personalization | Optional head movement and personal profile support | Estimate after validating runtime support and distribution entitlements |
 
-These are rough engineering estimates, not measured completion times. Hardware test availability affects the schedule. Two Mac offline experiments are complete; no production spatial-audio feature has been implemented.
+These are rough engineering estimates, not measured completion times. Hardware test availability affects the schedule. Two Mac offline experiments are complete. A Mac-only playable preview is now implemented on this branch; Windows native output and the remaining hardware acceptance checks are still pending.
+
+The preview adds Stereo / Surround speakers / Spatial headphones in PC Settings > Sound. Changes require a restart; "Playing through" reports the current session. Stereo remains the normal default. Mac Spatial uses the generic fixed-headphone renderer, a stereo-linked peak guard and audible stereo fallback. The isolated local test copy starts with Spatial selected and microphone input disabled for the first listening comparison. See [the preview checklist](spatial-audio-macos-preview.md).
 
 ## Recheck after the v1.0.7 update
 

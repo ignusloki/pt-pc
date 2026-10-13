@@ -6,6 +6,15 @@
 namespace pt::portuguese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Saída de áudio"},
+    {"pc_audio_stereo","Estéreo"},
+    {"pc_audio_surround","Alto-falantes surround"},
+    {"pc_audio_spatial","Fones com áudio espacial"},
+    {"pc_note_audio_output","Aplica após reiniciar. Adiciona som direcional nos fones sem rastrear a cabeça. Desative outros efeitos espaciais dos fones."},
+    {"pc_audio_active","Saída em uso"},
+    {"pc_audio_stereo_fallback","Estéreo (alternativa)"},
+    {"pc_audio_unavailable","Sem dispositivo de áudio"},
+    {"pc_note_audio_unsupported","Áudio espacial nos fones não está incluído nesta versão para esta plataforma."},
     {"pc_restart_needed","Você precisa reiniciar o jogo para que esta alteração tenha efeito."},
     {"pc_controller_speaker","Altifalante do comando"},
     {"pc_note_controller_speaker","Reproduz os gritos gravados da Lisa nos altifalantes compatíveis dos comandos Sony. No Windows, requer ligação USB; dispositivos não suportados e Bluetooth ficam em silêncio. É independente da resposta háptica e está desativado por predefinição."},

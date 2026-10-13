@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "engine/audio/motion_generator.h"
+#include "engine/audio/output_mode.h"
 #include "engine/audio/controller_pcm_capture.h"
 #include "engine/audio/subtitles.h"
 #include "engine/audio/wwise_bank.h"
@@ -50,7 +51,7 @@ public:
     SoundSystem(const SoundSystem&) = delete;
     SoundSystem& operator=(const SoundSystem&) = delete;
 
-    bool Init(Vfs& vfs, bool open_device, bool surround_output = false);
+    bool Init(Vfs& vfs, bool open_device, OutputMode output_mode = OutputMode::Stereo);
     void Shutdown();
 
     PlayingId PostEvent(std::string_view event_name, GameObjectId object = 0);
@@ -102,6 +103,9 @@ public:
     SoundSystemStats Stats() const;
     bool HasEvent(uint32_t event_id) const;
     bool DeviceOpen() const;
+    OutputMode RequestedOutputMode() const { return output_mode_; }
+    OutputMode ActiveOutputMode() const;
+    bool SpatialFallback() const;
     uint64_t RenderedFrames() const;
     MotionLevels Motion() const;
     void SetControllerCaptureEvent(uint32_t event_id);
@@ -116,6 +120,7 @@ private:
     Vfs* vfs_ = nullptr;
     std::unique_ptr<SoundEngine> engine_;
     std::unique_ptr<AudioOutput> output_;
+    OutputMode output_mode_ = OutputMode::Stereo;
     std::function<void(PlayingId, std::string_view)> marker_callback_;
     std::function<void(PlayingId)> end_callback_;
     SubtitleTable subtitles_;
@@ -123,6 +128,8 @@ private:
     std::unordered_set<uint32_t> warned_events_;
     // PT_SOLO_EVENT: the one event posted, 0 all
     uint32_t solo_event_ = 0;
+    glm::vec3 diagnostic_listener_position_{0};
+    glm::vec3 diagnostic_listener_forward_{0, 0, 1};
 };
 
 }

@@ -74,8 +74,8 @@ std::vector<glm::mat4> ShapeTransforms(const Stage& stage, const fox2::DataSetFi
 
 }
 
-bool GameSound::Init(bool open_device, std::string_view language, bool surround) {
-    ready_ = system_.Init(game_.GetVfs(), open_device, surround);
+bool GameSound::Init(bool open_device, std::string_view language, audio::OutputMode mode) {
+    ready_ = system_.Init(game_.GetVfs(), open_device, mode);
     if (!ready_) {
         LogError("sound: init failed");
         return false;

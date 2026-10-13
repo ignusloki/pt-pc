@@ -6,6 +6,15 @@
 namespace pt::czech {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","Zvukový výstup"},
+    {"pc_audio_stereo","Stereo"},
+    {"pc_audio_surround","Prostorové reproduktory"},
+    {"pc_audio_spatial","Prostorová sluchátka"},
+    {"pc_note_audio_output","Platí po restartu. Směrový zvuk ve sluchátkách bez sledování hlavy. Vypněte ostatní prostorové efekty sluchátek."},
+    {"pc_audio_active","Aktivní výstup"},
+    {"pc_audio_stereo_fallback","Stereo (náhradní)"},
+    {"pc_audio_unavailable","Žádné zvukové zařízení"},
+    {"pc_note_audio_unsupported","Prostorový zvuk ve sluchátkách není v této verzi pro danou platformu zahrnut."},
     {"pc_restart_needed","Aby se tato změna projevila, musíte hru restartovat."},
     {"pc_controller_speaker","Reproduktor ovladače"},
     {"pc_note_controller_speaker","Přehrává nahrané výkřiky Lisy z podporovaných reproduktorů ovladačů Sony. Ve Windows je nutné připojení USB; nepodporovaná zařízení a Bluetooth zůstávají potichu. Nezávislé na haptice; ve výchozím stavu vypnuté."},

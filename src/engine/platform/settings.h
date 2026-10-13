@@ -5,6 +5,8 @@
 #include <map>
 #include <string>
 
+#include "engine/audio/output_mode.h"
+
 namespace pt {
 
 struct AppSettings {
@@ -38,7 +40,7 @@ struct AppSettings {
     } camera;
     struct Audio {
         float volume = 1.0f;
-        bool surround = false;
+        audio::OutputMode output_mode = audio::OutputMode::Stereo;
         bool controller_speaker = false;
         float controller_speaker_volume = 0.5f;
     } audio;

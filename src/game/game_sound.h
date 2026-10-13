@@ -74,7 +74,7 @@ public:
 
     explicit GameSound(Game& game) : game_(game) {}
 
-    bool Init(bool open_device, std::string_view language, bool surround = false);
+    bool Init(bool open_device, std::string_view language, audio::OutputMode mode = audio::OutputMode::Stereo);
     void Shutdown();
     audio::SoundSystem& System() { return system_; }
     bool Ready() const { return ready_; }

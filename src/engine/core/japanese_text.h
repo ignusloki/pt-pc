@@ -6,6 +6,15 @@
 namespace pt::japanese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_audio_output","音声出力"},
+    {"pc_audio_stereo","ステレオ"},
+    {"pc_audio_surround","サラウンド"},
+    {"pc_audio_spatial","空間オーディオ"},
+    {"pc_note_audio_output","再起動後に適用。ヘッドトラッキングなしで音の方向を表現します。他の空間オーディオ効果はオフにしてください。"},
+    {"pc_audio_active","現在の出力"},
+    {"pc_audio_stereo_fallback","ステレオ（代替）"},
+    {"pc_audio_unavailable","音声出力なし"},
+    {"pc_note_audio_unsupported","このプラットフォーム版では空間オーディオに対応していません。"},
     {"pc_restart_needed","この変更を反映するには、ゲームを再起動してください。"},
     {"pc_controller_speaker","コントローラーのスピーカー"},
     {"pc_note_controller_speaker","Lisaのゲーム内の叫び声を、対応するSonyコントローラーのスピーカーから再生します。WindowsではUSB接続が必要です。非対応機器やBluetoothでは音は出ません。ハプティクスとは独立しており、初期設定ではオフです。"},

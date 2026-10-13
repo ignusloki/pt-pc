@@ -42,7 +42,7 @@ file(GLOB_RECURSE PT_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp src/game/*.h 
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.7")
+set(PT_VERSION "1.0.8-spatial.1")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()
@@ -269,6 +269,9 @@ target_link_libraries(pt_dualsense_probe PRIVATE pt_engine)
 
 add_executable(pt_audio_channel_layout_test tests/audio_channel_layout_test.cpp)
 target_link_libraries(pt_audio_channel_layout_test PRIVATE pt_engine)
+
+add_executable(pt_spatial_audio_test tests/spatial_audio_test.cpp)
+target_link_libraries(pt_spatial_audio_test PRIVATE pt_engine)
 
 add_executable(pt_controller_feedback_test tests/controller_feedback_test.cpp)
 target_link_libraries(pt_controller_feedback_test PRIVATE pt_engine)

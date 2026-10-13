@@ -110,7 +110,13 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "camera.roll", out.camera.roll);
     Read(v, "camera.third_person", out.camera.third_person);
     Read(v, "audio.volume", out.audio.volume);
-    Read(v, "audio.surround", out.audio.surround);
+    if (const auto mode = v.find("audio.output_mode"); mode != v.end()) {
+        out.audio.output_mode = audio::ParseOutputMode(mode->second);
+    } else {
+        bool surround = false;
+        Read(v, "audio.surround", surround);
+        out.audio.output_mode = surround ? audio::OutputMode::Surround : audio::OutputMode::Stereo;
+    }
     Read(v, "audio.controller_speaker", out.audio.controller_speaker);
     Read(v, "audio.controller_speaker_volume", out.audio.controller_speaker_volume);
     Read(v, "voice.microphone_enabled", out.voice.microphone_enabled);
@@ -252,7 +258,10 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "third_person = " << (s.camera.third_person ? 1 : 0) << "\n\n"
          << "[audio]\n"
          << "volume = " << s.audio.volume << "\n"
-         << "surround = " << (s.audio.surround ? 1 : 0) << "\n\n"
+         << "; stereo, surround (5.1/7.1 speakers), spatial (headphones); applies after restarting\n"
+         << "output_mode = " << audio::OutputModeName(s.audio.output_mode) << "\n"
+         << "; compatibility with older builds\n"
+         << "surround = " << (s.audio.output_mode == audio::OutputMode::Surround ? 1 : 0) << "\n\n"
          << "controller_speaker = " << (s.audio.controller_speaker ? 1 : 0) << "\n"
          << "; separate controller-speaker level, 0 to 1; does not change game volume or DualSense haptics\n"
          << "controller_speaker_volume = " << s.audio.controller_speaker_volume << "\n\n"

@@ -5,6 +5,7 @@ extracted/
 build/
 Build/
 /dist/
+/logs/
 /.deps/
 .DS_Store
 
