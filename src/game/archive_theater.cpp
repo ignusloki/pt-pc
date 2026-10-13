@@ -145,13 +145,7 @@ Camera ArchiveTheater::ViewCamera() const {
     if (!model_mode_) {
         return game_->GetCamera();
     }
-    Camera camera;
-    const glm::vec3 look(-std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), -std::cos(yaw_) * std::cos(pitch_));
-    camera.position = target_ - look * distance_;
-    camera.yaw = yaw_;
-    camera.pitch = pitch_;
-    camera.fov_y = glm::radians(40.0f);
-    return camera;
+    return model_camera_;
 }
 
 void ArchiveTheater::CollectDraws(std::vector<DrawItem>& out) {
@@ -168,6 +162,10 @@ void ArchiveTheater::CollectDraws(std::vector<DrawItem>& out) {
         return;
     }
     out.insert(out.end(), model_draws_.begin(), model_draws_.end());
+}
+
+void ArchiveTheater::ApplyModelLighting(SceneLighting& lighting) const {
+    if (model_mode_) LightArchiveModel(lighting, ViewCamera(), model_home_, model_radius_, settings_.model_ev);
 }
 
 void ArchiveTheater::Update(float dt, const InputState& input) {
@@ -420,7 +418,7 @@ void ArchiveTheater::Present() {
     phase_time_ = 0.0;
 }
 
-// the model at the start room's player start, facing where the player faces, in the room's light; the camera turns around it
+// The model at the start room's player start; the camera and museum lights turn around it.
 void ArchiveTheater::StartModel() {
     game_->Theater().traps = false;
     game_->Theater().ocho = false;
@@ -479,7 +477,7 @@ void ArchiveTheater::StartModel() {
     const glm::vec3 extent = glm::max(hi - lo, glm::vec3(0.02f));
     const float size = std::max({extent.x, extent.y, extent.z});
     if (extent.y < kTableBelow) {
-        // a small thing stands at a table's height, as the radio and the phone do in the hallway, nearer the room's light
+        // Small objects stand at a table's height, as the radio and phone do in the hallway.
         const glm::vec3 lift(0.0f, kTableHeight, 0.0f);
         for (DrawItem& item : model_draws_) item.transform = glm::translate(glm::mat4(1.0f), lift) * item.transform;
         if (gimmick_) model_offset_ = glm::translate(glm::mat4(1.0f), lift) * model_offset_;
@@ -495,15 +493,20 @@ void ArchiveTheater::StartModel() {
     model_radius_ = size * 0.5f;
     distance_ = std::clamp(size * 1.9f + 0.05f, 0.1f, 6.0f);
     min_distance_ = std::max(0.08f, size * 0.6f);
-    // the model alone on black: the floor's auto exposure would meter the black, so the exposure is held where the room's
-    // lit surfaces read as in play (Settings::model_ev; the thumbnail capture holds it higher)
+    // The model alone on black must not meter the empty background.
     game_->Effects().ev_pinned = true;
     game_->Effects().pinned_ev = settings_.model_ev;
     max_distance_ = std::max(distance_ * 2.0f, 1.5f);
     // in front of the model: looking back along its facing
     const glm::vec3 facing = FoxForward(spot_yaw_);
-    yaw_ = std::atan2(facing.x, facing.z);
+    yaw_ = ArchiveModelFrontYaw(entry_.id, std::atan2(facing.x, facing.z));
     pitch_ = -0.12f;
+    const glm::vec3 look(-std::sin(yaw_) * std::cos(pitch_), std::sin(pitch_), -std::cos(yaw_) * std::cos(pitch_));
+    model_camera_.position = target_ - look * distance_;
+    model_camera_.yaw = yaw_;
+    model_camera_.pitch = pitch_;
+    model_camera_.fov_y = glm::radians(40.0f);
+    model_camera_origin_ = model_camera_.position;
     phase_ = Phase::Model;
 }
 
@@ -518,21 +521,13 @@ void ArchiveTheater::UpdateModel(float dt, const InputState& input) {
         g.world = place * model_offset_;
         if (type == GimmickType::Ocho) game_->Objects().SetOchoTransform(g.world);
     }
-    // the left stick (WASD) pans; the right stick and D-pad (arrows) turn; the triggers zoom
-    float turn = input.right_stick.x;
-    float tilt = input.right_stick.y;
-    if (input.raw_held & kRawLeft) turn -= 1.0f;
-    if (input.raw_held & kRawRight) turn += 1.0f;
-    if (input.raw_held & kRawUp) tilt += 1.0f;
-    if (input.raw_held & kRawDown) tilt -= 1.0f;
-    float zoom = 0.0f;
-    if (input.raw_held & kRawR2) zoom -= 1.0f;
-    if (input.raw_held & kRawL2) zoom += 1.0f;
-    yaw_ -= turn * 1.6f * dt;
-    pitch_ = std::clamp(pitch_ - tilt * 1.2f * dt, -1.2f, 1.2f);
-    distance_ = std::clamp(distance_ * (1.0f + zoom * 1.2f * dt), min_distance_, max_distance_);
-    const Camera camera = ViewCamera();
-    target_ = PanArchiveModel(target_, model_home_, camera.Right(), camera.Up(), input.left_stick, dt, distance_, model_radius_);
+
+}
+
+void ArchiveTheater::UpdateModelCamera(float dt, const FreeCameraControls& input) {
+    if (!model_mode_ || phase_ != Phase::Model) return;
+    AdvanceFreeCamera(model_camera_, input, dt, settings_.options.invert_x, settings_.options.invert_y);
+    LimitFreeCameraRange(model_camera_, model_camera_origin_, 15.0f);
 }
 
 }

@@ -4,19 +4,98 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 #include "engine/core/log.h"
 #include "engine/platform/sdl_diag.h"
 
 namespace pt {
 
+struct Microphone::PendingOpen {
+    std::mutex mutex;
+    std::thread worker;
+    bool done = false;
+    bool cancelled = false;
+    SDL_AudioStream* stream = nullptr;
+};
+
+Microphone::~Microphone() {
+    Close();
+    ReapOpenWorkers(true);
+}
+
+void Microphone::ReapOpenWorkers(bool wait) {
+    for (auto it = cancelled_opens_.begin(); it != cancelled_opens_.end();) {
+        const auto state = *it;
+        bool done = false;
+        {
+            std::lock_guard lock(state->mutex);
+            done = state->done;
+        }
+        if (wait || done) {
+            if (state->worker.joinable()) state->worker.join();
+            it = cancelled_opens_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 bool Microphone::Open(int sample_rate, const std::string& device_name) {
     Close();
+    ReapOpenWorkers(true);
     sample_rate_ = sample_rate;
     if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})", SDL_GetError(), SdlCompiledAudioDrivers());
         return false;
     }
+    stream_ = OpenStream(sample_rate, device_name);
+    return stream_ != nullptr;
+}
+
+Microphone::AsyncState Microphone::OpenAsync(int sample_rate, const std::string& device_name) {
+    ReapOpenWorkers(false);
+    if (stream_) {
+        return AsyncState::Opened;
+    }
+    if (!pending_) {
+        // A cancelled driver call can still be opening its endpoint. Wait without blocking the game before starting another.
+        if (!cancelled_opens_.empty()) return AsyncState::Pending;
+        sample_rate_ = sample_rate;
+        if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+            LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})", SDL_GetError(), SdlCompiledAudioDrivers());
+            return AsyncState::Failed;
+        }
+        pending_ = std::make_shared<PendingOpen>();
+        pending_->worker = std::thread([state = pending_, sample_rate, device_name] {
+            SDL_AudioStream* stream = OpenStream(sample_rate, device_name);
+            std::lock_guard lock(state->mutex);
+            if (state->cancelled) {
+                if (stream) SDL_DestroyAudioStream(stream);
+                stream = nullptr;
+            }
+            state->stream = stream;
+            state->done = true;
+        });
+        return AsyncState::Pending;
+    }
+    // Keep the state alive until the guard releases its mutex, even after the worker has exited.
+    const auto state = pending_;
+    {
+        std::lock_guard lock(state->mutex);
+        if (!state->done) return AsyncState::Pending;
+        stream_ = state->stream;
+        state->stream = nullptr;
+        pending_.reset();
+    }
+    if (state->worker.joinable()) state->worker.join();
+    return stream_ ? AsyncState::Opened : AsyncState::Failed;
+}
+
+SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& device_name) {
+    const auto started = std::chrono::steady_clock::now();
     SDL_AudioDeviceID device = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
     if (!device_name.empty()) {
         auto lower = [](std::string text) {
@@ -40,19 +119,30 @@ bool Microphone::Open(int sample_rate, const std::string& device_name) {
         }
     }
     SDL_AudioSpec spec{SDL_AUDIO_S16, 1, sample_rate};
-    stream_ = SDL_OpenAudioDeviceStream(device, &spec, nullptr, nullptr);
-    if (!stream_) {
+    SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(device, &spec, nullptr, nullptr);
+    if (!stream) {
         LogWarn("microphone: no recording device: {}", SDL_GetError());
         LogSdlAudioDevices(true);
-        return false;
+        return nullptr;
     }
-    SDL_ResumeAudioStreamDevice(stream_);
-    LogInfo("microphone: recording at {} Hz", sample_rate);
+    SDL_ResumeAudioStreamDevice(stream);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    LogInfo("microphone: recording at {} Hz (opened in {:.2f} s)", sample_rate, seconds);
     LogSdlAudioDevices(true);
-    return true;
+    return stream;
 }
 
 void Microphone::Close() {
+    if (pending_) {
+        // the worker drops the stream it opens after this
+        std::lock_guard lock(pending_->mutex);
+        pending_->cancelled = true;
+        if (pending_->stream) SDL_DestroyAudioStream(pending_->stream);
+        pending_->stream = nullptr;
+        cancelled_opens_.push_back(pending_);
+    }
+    pending_.reset();
+    ReapOpenWorkers(false);
     SetMonitor(false);
     if (stream_) {
         SDL_DestroyAudioStream(stream_);

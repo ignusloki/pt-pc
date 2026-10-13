@@ -47,6 +47,23 @@ int main(int argc, char** argv) {
     write("PT_Save_Data1", {1, 2, 3});
     const SaveLoadResult mixed = store.LoadDetailed();
     check(mixed.status == SaveLoadStatus::Ok && mixed.file && mixed.file->progress.floor == "f050", "a valid slot wins over a broken one");
+    // A pre-update finished save has only the finish count in this word; the new announcement field must read as zero.
+    auto legacy = header(SaveStore::kMagic, 3);
+    const uint32_t tag = 0x3150474E, finish = 1, sequence = 42;
+    std::memcpy(legacy.data() + 0x70, &tag, sizeof(tag));
+    std::memcpy(legacy.data() + 0x74, &finish, sizeof(finish));
+    std::memcpy(legacy.data() + 0x78, &sequence, sizeof(sequence));
+    write("PT_Save_Data1", legacy);
+    const auto finished = store.LoadDetailed();
+    check(finished.file && finished.file->progress.game_plus && finished.file->progress.finishes == 1 &&
+              finished.file->progress.gameplus_announced == 0, "an existing finished save retains its completion count");
+    file.progress.game_plus = true;
+    file.progress.finishes = 1;
+    file.progress.gameplus_announced = 1;
+    check(store.Save(file), "the Game+ announcement can be saved");
+    const auto announced = store.LoadDetailed();
+    check(announced.file && announced.file->progress.finishes == 1 && announced.file->progress.gameplus_announced == 1,
+          "the announcement tier is separate from the finish count");
     // a save directory that is a file: the write fails, and with free space it is not the no-space case
     SaveStore blocked;
     std::ofstream(root / "blocker") << "x";

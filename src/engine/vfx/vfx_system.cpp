@@ -782,11 +782,25 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
     case ExprOp::Zero:
         return glm::vec4(0.0f);
     case ExprOp::Const:
+    case ExprOp::Random:
+    case ExprOp::Spread: {
+        glm::vec4 v = e.op == ExprOp::Const ? e.v0 : e.slot >= 0 ? c.slots[e.slot] : glm::vec4(0.0f);
+        if ((e.flags & 1u) && !(e.flags & 8u)) {
+            // a global vector holds world axes: in the effect's frame it is turned back by the frame's rotation, so after the
+            // particle's transform it points along the world's (the f070 window glass lies to +x +z of its locator whatever way
+            // the hallway copy faces; taken in the locator's frame it lay a quarter turn off in the copies turned by 90 degrees)
+            const glm::vec3 x = glm::vec3(c.world[0]), y = glm::vec3(c.world[1]), z = glm::vec3(c.world[2]);
+            const float lx = glm::length(x), ly = glm::length(y), lz = glm::length(z);
+            if (lx > 1e-6f && ly > 1e-6f && lz > 1e-6f) {
+                const glm::mat3 r(x / lx, y / ly, z / lz);
+                v = glm::vec4(glm::transpose(r) * glm::vec3(v), v.w);
+            }
+        }
+        return v;
+    }
     case ExprOp::UvMap:
         return e.v0;
-    case ExprOp::Random:
     case ExprOp::UvRandom:
-    case ExprOp::Spread:
         return e.slot >= 0 ? c.slots[e.slot] : glm::vec4(0.0f);
     case ExprOp::Composition: {
         const glm::vec4 a = Eval(c, e.in[0]);

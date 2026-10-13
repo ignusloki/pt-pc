@@ -1,0 +1,21 @@
+# Crossing back from a late solved loop must rebuild the untouched gouge puzzle.
+sloop 15
+swait 10
+sstep 15
+goto 0 0 12.5
+swait 10
+sfree
+sanchor
+gfile 0 -1.4 -4.0
+swait 90
+sstate save
+sloop 7
+swait 10
+sstep 15
+goto 0 0 12.5
+swait 10
+sfree
+sanchor
+gfile 0 -1.4 -4.0
+swait 90
+sstate save

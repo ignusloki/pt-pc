@@ -34,6 +34,9 @@ struct MuseumLayout {
     static constexpr float kThumbHeight = 72.0f;
     static constexpr float kThumbGap = 12.0f;
     static constexpr float kStripTop = 503.0f;
+    static constexpr float kHelpTop = 594.0f;
+    static constexpr float kHelpBottom = 642.0f;
+    static constexpr Cell kTranscript{{210.0f, 156.0f}, {1070.0f, 436.0f}};
     static constexpr float kCanvasWidth = 1280.0f;
     static constexpr float kCanvasHeight = 720.0f;
     // the exhibit in the spotlight (16:9, a picture of another shape is fitted inside) and its plaque
@@ -66,6 +69,12 @@ struct MuseumLayout {
         const float room = std::max(width, kCanvasWidth) - 180.0f;
         return std::clamp(static_cast<int>(std::floor((room + kThumbGap) / (kThumbWidth + kThumbGap))), 4, 16);
     }
+    static Cell WallArrow(bool right, int visible) {
+        const Cell end = WallCell(right ? visible - 1 : 0, visible);
+        const float x = right ? end.hi.x + 16.0f : end.lo.x - 60.0f;
+        return {{x, kStripTop}, {x + 44.0f, kStripTop + kThumbHeight}};
+    }
+
     // the frame of strip slot `slot` of `visible`, centred on the canvas
     static Cell WallCell(int slot, int visible) {
         const float total = visible * kThumbWidth + (visible - 1) * kThumbGap;

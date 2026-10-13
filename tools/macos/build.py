@@ -20,6 +20,7 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_save_reset_test", "pt_language_default_test", "pt_graphics_preset_test",
          "pt_voice_match_test", "pt_installer_update_test", "pt_unicode_paths_test", "pt_user_data_test",
          "pt_fast_walk_test", "pt_display_modes_test", "pt_pipeline_cache_store_test", "pt_blur_sway_test",
+         "pt_microphone_async_test", "pt_archive_model_camera_test", "pt_audio_channel_layout_test",
          "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_texture_cache_test", "pt_upscaler_gpu_test")
 
 

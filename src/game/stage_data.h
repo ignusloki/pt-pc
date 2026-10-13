@@ -20,10 +20,16 @@ struct StaticModelPlacement {
     glm::vec4 color{1.0f};
     bool visible_geom = false;
     int draw_rejection_level = 0;
+    // a mod's model (level.json "add", no entity): its collision from the model, "none", "box" or "mesh"
+    std::string mod_collision;
 };
 
 struct LightPlacement {
     std::string name;
+    // level.json edits: the light left out, its colour multiplied, its brightness scaled
+    bool mod_off = false;
+    glm::vec3 mod_tint{1.0f};
+    float mod_brightness = 1.0f;
     const fox2::Entity* entity = nullptr;
     std::string class_name;
     glm::mat4 world{1.0f};

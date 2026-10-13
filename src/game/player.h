@@ -31,6 +31,9 @@ struct PlayerFrameContext {
     bool invert_y = false;
     bool peephole_theater = false;
     bool fast_walk = false;
+    // the hole's direction as a player yaw: the look limits are centred on it (peephole_look_f110), not on the yaw at the start
+    bool peephole_center_valid = false;
+    float peephole_center_yaw = 0.0f;
 };
 
 class PadLocks {
@@ -38,6 +41,8 @@ public:
     void Add(char set, const std::string& key, uint32_t mask);
     void Remove(char set, const std::string& key);
     uint32_t Mask(char set) const;
+    // the mask without one key's lock (the port's own "Demo" lock, which the original does not have)
+    uint32_t MaskExcept(char set, const std::string& key) const;
     bool Any() const { return !a_.empty() || !b_.empty() || !c_.empty(); }
     std::string Describe() const;
 
@@ -116,6 +121,9 @@ public:
     // stick with the invert options (zero while the look is locked), half the left stick's x (zero while the left stick is
     // locked) and 0.25 per held digital look button, each axis clamped to [-1, 1]
     glm::vec2 LightStick() const { return light_stick_; }
+    // the light stick 0x1282C50 reads while a demo holds the player (UpdateLook does not run then): the right stick, half the
+    // left stick's X and the d-pad's look bits, each unless the player's locks hold them, clamped to [-1, 1]
+    glm::vec2 DemoLightStick(const InputState& input, bool invert_x, bool invert_y) const;
     // input script `slightstick x y` (compare_ref's replays feed the capture's pad log; the look does not turn)
     // VR (docs/vr.md): the turns the game gave the player since the VR view last took them; the view turns its world by them
     float TakeVrTurn() { return std::exchange(vr_turn_, 0.0f); }
@@ -166,6 +174,9 @@ public:
 
     void SetDisableLeftStick(bool disable);
     void Warp(const glm::vec3& position, float fox_yaw);
+    // VR room scale: the body walked by a displacement with the character controller's collision (the tracked head moved
+    // that far in the room); returns the displacement it made
+    glm::vec3 FollowHead(const CollisionWorld& world, const glm::vec3& displacement);
     void HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value);
     void FollowCamera(float yaw_value, float pitch_value);
 

@@ -124,6 +124,8 @@ struct ScreenSettings {
     float aperture = 100.0f;
     uint32_t dof_flags = 0;
     bool motion_blur = true;
+    // Street exploration smooths uneven mouse frames; the house uses the original previous-camera blur.
+    bool smooth_camera_motion_blur = false;
     bool fixed_shutter = false;
     float shutter_speed = 0.0f;
     float zoom = 1.0f;

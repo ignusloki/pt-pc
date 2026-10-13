@@ -56,7 +56,7 @@ private:
                    glm::vec2 hi, float inset, bool selected, bool locked, int language);
     void DrawLine(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets& assets, std::string_view text, float size, glm::vec2 lo, glm::vec2 hi,
                   ui::TextAlign align, float alpha, int language);
-    void DrawLines(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets& assets, const PcPanel& panel, glm::vec2 lo, glm::vec2 hi, int language);
+    void DrawLines(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets& assets, const PcPanel& panel, glm::vec2 lo, glm::vec2 hi, int language, bool complete = false);
     glm::vec2 TextureSize(UiAssets& assets, const std::string& path);
 
     std::map<std::string, Photo> photos_;

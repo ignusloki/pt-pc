@@ -26,8 +26,16 @@ float PqEncode(float nits) {
     return pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
 }
 
+// Every output brings the frame here sRGB encoded (Renderer::SceneColorFormat); the film grain and the brightness work on
+// encoded values, and the HDR outputs take the result to light at the end
+
 void main() {
     vec3 color = texture(scene_color, in_uv).rgb;
+    // Interpolated frames carry encoded scene colour. Copy it into the UI target without applying output transforms twice.
+    if (params.mode < -0.5) {
+        out_color = vec4(color, 1.0);
+        return;
+    }
     if (params.mode > 0.5) {
         if (params.grain.x > 0.0) {
             // Draw2D_ShFilmGrain, Draw2D layer 200 (0x9398E0)
@@ -55,6 +63,10 @@ void main() {
             color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / params.brightness));
         }
         if (params.grain_offset.w > 0.5) {
+            // to light as a gamma 2.2 display shows SDR: the piecewise sRGB curve lifts the tones near black about three
+            // times over it (0.05 encoded gives 0.0039 against 0.0014), which kept the brightness page's right picture visible
+            // at the lowest setting and greyed the dark rooms with HDR on (1.0.3 test). The curve carries on past 1
+            color = pow(clamp(color, vec3(0.0), vec3(3.0)), vec3(2.2));
             if (params.grain_offset.w < 1.5) {
                 out_color = vec4(color * (203.0 / 80.0), 1.0);
             } else {

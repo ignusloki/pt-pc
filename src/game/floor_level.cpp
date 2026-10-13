@@ -232,6 +232,24 @@ void FloorLevel::RelocateGimmicks() {
             game_.SetFloorLighting(setup->light_row);
         }
     }
+    // a floor past a puzzle's own is only reached with the puzzle solved (f050's X mark, f090's hello, f110's peephole): a save or
+    // a loop browser pick whose cleared flags lag behind (a session resumed on f120 showed the final loop's photo without its X,
+    // Discord report 11 October) takes the solved state the floor implies
+    {
+        const bool past_xmark = floor == "f070" || floor == "f080" || floor == "f090" || floor == "f100" || floor == "f110" ||
+                                floor == "f120" || floor == "f160";
+        const bool past_hello = floor == "f100" || floor == "f110" || floor == "f120" || floor == "f160";
+        const bool past_peephole = floor == "f120" || floor == "f160";
+        bool forced = false;
+        for (const auto& [past, id] : {std::pair{past_xmark, NazoId::XMark}, std::pair{past_hello, NazoId::Hello}, std::pair{past_peephole, NazoId::Peephole}}) {
+            if (past && !nazo.IsCleared(id)) {
+                LogInfo("floor: {} implies {} solved; it was not", floor, NazoName(id));
+                nazo.ForceClear(id);
+                forced = true;
+            }
+        }
+        if (forced) nazo.CancelPendingClearSound();
+    }
     nazo.ApplyVisuals(NazoId::Photo);
     nazo.ApplyVisuals(NazoId::XMark);
     nazo.ApplyVisuals(NazoId::Hello);

@@ -204,6 +204,8 @@ public:
     void Render(const Camera& camera, const std::vector<DrawItem>& items);
     // the next frame's temporal upscaler starts without history
     void ResetUpscaleHistory() { up_.reset = true; }
+    // the whole frame reactive (the upscaler trusts the current frame over its history) while set
+    void SetUpscaleReactiveFrame(bool on) { reactive_frame_ = on; }
     void Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt);
     void DrawDebugUi();
     void ResetExposure() { adaptation_valid_ = false; }
@@ -230,6 +232,8 @@ public:
     static constexpr uint32_t kShadowTile = 2048;
     static constexpr uint32_t kShadowAtlasSize = 8192;
     std::function<void(const SceneVfxContext&)> vfx_forward;
+    // the opaque liquids' depth after the effect pass (VfxPass::RecordLiquidDepth), so the depth of field takes them where they are
+    std::function<void(const SceneVfxContext&)> vfx_liquid_depth;
     std::function<void(const SceneFilterContext&)> vfx_filter;
     // Whether vfx_filter would draw anything in the given layers this frame.
     std::function<bool(uint32_t layers)> vfx_has_filter;
@@ -251,6 +255,14 @@ public:
     // the lens flares and the screen sprites); the second eye repeats the first eye's frame (the frame counter, which drives the
     // time, the temporal patterns and the ray tracing structures, does not advance)
     void SetVrEye(int eye) { vr_eye_ = eye; }
+    // the subliminal handwriting of this frame (Draw2D_ShSubliminalString, GameUi): its texture, position and envelope; a
+    // value of 0 draws none. It is composited after motion blur, preserving its tonemap contribution before the colour LUT
+    struct SubliminalString {
+        uint32_t texture = 0;
+        glm::vec2 position{0.0f};
+        float value = 0.0f;
+    };
+    void SetSubliminalString(const SubliminalString& s) { subliminal_string_state_ = s; }
 
 private:
     struct FrameSlot {
@@ -389,12 +401,22 @@ private:
     void WriteUpscaleDescriptors(VkDescriptorImageInfo* images, bool post);
     bool BeginUpscaleFrame(VkExtent2D output);
     bool SetupUpscaler(VkExtent2D output);
+    // the upscale split into the pass's pieces, for the backends that run outside the Vulkan command buffer (Apple MetalFX):
+    // Prepare records the inputs' barriers and exposure, Dispatch runs a Vulkan-recorded backend, Resolve reads the upscaler's
+    // output. RecordUpscale calls all three on the frame's command buffer; the external path calls Prepare, submits, runs the
+    // backend, then Resolve on the resume buffer.
+    void RecordUpscalePrepare(float dt);
+    bool RecordUpscaleDispatch();
+    void PrepareFrameGeneration(const UpscaleDispatch& d, bool upscaled);
+    void RecordUpscaleResolve(VkCommandBuffer cmd, bool upscaled);
     void RecordOpaqueSnapshot(VkCommandBuffer cmd, RenderTarget& output);
     void RecordSceneCopy(VkCommandBuffer cmd, RenderTarget& output);
     void RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer);
     void RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context);
     void RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& view);
-    void RecordUpscale(VkCommandBuffer& cmd, float dt);
+    void RecordUpscale(VkCommandBuffer cmd, float dt);
+    // the dispatch RecordUpscalePrepare built, for the backend that runs outside the Vulkan command buffer
+    UpscaleDispatch up_dispatch_;
     void ReadUpscaleTimestamps(FrameSlot& slot);
 
     // 0 start, 1 shadows, 2 mirror, 3 G-buffer, 4 lighting, 5 compose, forward and effects, 6 end; within them 7 the forward draws,
@@ -444,6 +466,8 @@ private:
     RenderTarget mb_neighbour_;
     RenderTarget mb_bake_;
     RenderTarget mb_blur_[2];
+    RenderTarget mb_original_bake_;
+    RenderTarget mb_original_blur_[2];
     RenderTarget mirror_;
     RenderTarget mirror_history_;
     RenderTarget mirror_temporal_;
@@ -538,6 +562,7 @@ private:
     VkPipeline fsblur_ = VK_NULL_HANDLE;
     VkPipeline banding_ = VK_NULL_HANDLE;
     VkPipeline screen_fx_ = VK_NULL_HANDLE;
+    VkPipeline subliminal_string_ = VK_NULL_HANDLE;
     VkPipeline debug_ = VK_NULL_HANDLE;
     VkPipeline reflect_make_ = VK_NULL_HANDLE;
     VkPipeline reflect_blend_ = VK_NULL_HANDLE;
@@ -571,7 +596,9 @@ private:
     uint32_t rt_cull_ = 0x10;
     // rays per lit pixel and shadowed light for soft shadows (rt_shadow.glsl)
     static constexpr uint32_t kRtSoftSamples = 4;
-    uint64_t rt_built_frame_ = ~0ull;
+    // the frame each frame slot's acceleration structures were last built for (they are per slot: in VR the two eyes of one
+    // frame use two slots, and the second eye had traced the first's slot's stale scene)
+    uint64_t rt_built_frame_[Renderer::kFramesInFlight] = {~0ull, ~0ull};
     std::vector<RtCaster> rt_casters_;
     // ray traced contact shadows (12.21): light_contact.frag (the maps and the contact rays) unless light_rt.frag runs
     bool rt_contact_active_ = false;
@@ -662,6 +689,11 @@ private:
     Camera last_camera_;
     bool has_last_camera_ = false;
     glm::mat4 previous_view_projection_{1.0f};
+    // Exact previous camera in the house; street exploration smooths motion over about 100 ms (UpdateMotion).
+    glm::mat4 blur_previous_view_projection_{1.0f};
+    glm::vec4 blur_rates_{0.0f};          // yaw, pitch, roll per second
+    glm::vec3 blur_velocity_{0.0f};       // metres per second
+    bool blur_rates_valid_ = false;
     double frame_time_ = 1.0 / 60.0;
     uint32_t frame_counter_ = 0;
     RenderStats stats_;
@@ -685,6 +717,7 @@ private:
         bool warp_test = false;
         bool warp_history = false;
         std::string failed_key;
+        std::chrono::steady_clock::time_point failed_at{};
     } up_;
     uint32_t post_view_ = 0;
     bool post_bindings_ = false;
@@ -738,6 +771,8 @@ private:
     std::map<std::string, std::string> shadow_reasons_;
     std::chrono::steady_clock::time_point previous_frame_start_{};
     int vr_eye_ = -1;
+    SubliminalString subliminal_string_state_;
+    bool reactive_frame_ = false;
 };
 
 }

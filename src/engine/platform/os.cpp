@@ -163,4 +163,70 @@ FileLock::~FileLock() {
 
 #endif
 
+#ifdef _WIN32
+std::optional<bool> WindowDisplayHdr(void* hwnd) {
+    if (!hwnd) return std::nullopt;
+    // DXGI by hand (no import library): CreateDXGIFactory1, the adapters' outputs, IDXGIOutput6::GetDesc1's colour space for
+    // the output whose monitor holds the window
+    HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+    if (!dxgi) return std::nullopt;
+    using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+    const auto create = reinterpret_cast<CreateFactory>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1")));
+    if (!create) return std::nullopt;
+    const HMONITOR monitor = MonitorFromWindow(static_cast<HWND>(hwnd), MONITOR_DEFAULTTONEAREST);
+    static const GUID kFactory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
+    static const GUID kOutput6 = {0x068346e8, 0xaaec, 0x4b84, {0xad, 0xd7, 0x13, 0x7f, 0x51, 0x3f, 0x77, 0xa1}};
+    struct Unknown {
+        virtual HRESULT __stdcall QueryInterface(REFIID, void**) = 0;
+        virtual ULONG __stdcall AddRef() = 0;
+        virtual ULONG __stdcall Release() = 0;
+    };
+    // the vtable slots used: IDXGIFactory1::EnumAdapters1 (12), IDXGIAdapter::EnumOutputs (7), IDXGIOutput6::GetDesc1 (27)
+    struct OutputDesc1 {
+        WCHAR name[32];
+        RECT coordinates;
+        BOOL attached;
+        UINT rotation;
+        HMONITOR monitor;
+        UINT bits;
+        UINT color_space;
+        FLOAT red[2], green[2], blue[2], white[2];
+        FLOAT min_luminance, max_luminance, max_full_frame;
+    };
+    using Slot = void**;
+    auto call = [](void* object, int slot) { return (*reinterpret_cast<Slot*>(object))[slot]; };
+    void* factory = nullptr;
+    if (FAILED(create(kFactory1, &factory)) || !factory) return std::nullopt;
+    std::optional<bool> result;
+    for (UINT a = 0; !result; ++a) {
+        void* adapter = nullptr;
+        using EnumAdapters = HRESULT(__stdcall*)(void*, UINT, void**);
+        if (FAILED(reinterpret_cast<EnumAdapters>(call(factory, 12))(factory, a, &adapter)) || !adapter) break;
+        for (UINT o = 0; !result; ++o) {
+            void* output = nullptr;
+            using EnumOutputs = HRESULT(__stdcall*)(void*, UINT, void**);
+            if (FAILED(reinterpret_cast<EnumOutputs>(call(adapter, 7))(adapter, o, &output)) || !output) break;
+            void* output6 = nullptr;
+            if (SUCCEEDED(static_cast<Unknown*>(output)->QueryInterface(kOutput6, &output6)) && output6) {
+                OutputDesc1 desc{};
+                using GetDesc1 = HRESULT(__stdcall*)(void*, OutputDesc1*);
+                if (SUCCEEDED(reinterpret_cast<GetDesc1>(call(output6, 27))(output6, &desc)) && desc.monitor == monitor) {
+                    // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 (12): the display runs in HDR
+                    result = desc.color_space == 12;
+                }
+                static_cast<Unknown*>(output6)->Release();
+            }
+            static_cast<Unknown*>(output)->Release();
+        }
+        static_cast<Unknown*>(adapter)->Release();
+    }
+    static_cast<Unknown*>(factory)->Release();
+    return result;
+}
+#else
+std::optional<bool> WindowDisplayHdr(void*) {
+    return std::nullopt;
+}
+#endif
+
 }

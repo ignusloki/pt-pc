@@ -336,6 +336,10 @@ void OchoLogic::UpdateWarp() {
         if (appear_request_) {
             Appear();
             appear_request_ = false;
+            // the distance and facing were sensed at the frame's start, with her at the spot she was hidden at (the last spawn,
+            // often the one beside the phone table): tested against those, she dashed the moment she appeared 8 m away, the
+            // player facing the hidden spot within its 4 m. The test takes the spawn she now stands at
+            Sense(0.0f);
         }
         if (Detect()) {
             LogicControl(4);
@@ -389,13 +393,12 @@ bool OchoLogic::UpdateLookBack() {
     ring_[ring_count_++ % ring_.size()] = player_yaw_;
     // The eboot takes the plain mean of the raw samples (yaw in -pi..pi) and wraps yaw - mean. Facing +-pi (down the hallway toward
     // the start room) a still player whose yaw flips between +pi and -pi gets a mean near 0 and a deviation near pi: an arm, then
-    // the kill (issue #7). The port averages each sample's wrapped offset from the current yaw instead: the same number for
-    // samples that do not cross the seam, the true angular deviation for those that do.
-    float offset_sum = 0.0f;
+    // the kill on a slight mouse movement. Players asked to keep the original's behaviour, so the port takes the same plain mean.
+    float sum = 0.0f;
     for (float v : ring_) {
-        offset_sum += Wrap(player_yaw_ - v);
+        sum += v;
     }
-    const float deviation = std::abs(Wrap(offset_sum / static_cast<float>(ring_.size())));
+    const float deviation = std::abs(Wrap(player_yaw_ - sum / static_cast<float>(ring_.size())));
     if (deviation <= 1.8325957f) {
         if (look_phase_ != 0 && timer_a_ > 5.0f) {
             timer_a_ = 0.0f;

@@ -1,0 +1,21 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.3
+swait 10
+sfree
+sdemo gc_p01_110
+slog
+gfile -1.0 -1.4 7.4
+gfile -3.2 -1.4 7.4
+gfile -3.3 -1.4 5.7
+slog
+fent shsb_lght005_0000
+swait 300
+sshot {shots}/pickup_rest.png
+srstick 1 0 40
+sshot {shots}/pickup_right.png
+srstick -1 0 60
+sshot {shots}/pickup_left.png
+sfree
+sdemo gc_p00_030
+slog

@@ -8,8 +8,10 @@
 #include <thread>
 
 #include "engine/assets/fmdl.h"
+#include "engine/assets/gltf_model.h"
 #include "engine/core/log.h"
 #include "engine/core/parallel_for.h"
+#include "engine/fs/mods.h"
 
 namespace pt::game {
 namespace {
@@ -72,6 +74,68 @@ const BodyState* Stage::FindBody(const fox2::Entity* entity) const {
     return it == bodies_.end() ? nullptr : &it->second;
 }
 
+namespace {
+glm::mat4 TurnScale(const std::array<float, 3>& turn, const std::array<float, 3>& scale) {
+    glm::mat4 m(1.0f);
+    m = glm::rotate(m, glm::radians(turn[1]), glm::vec3(0, 1, 0));
+    m = glm::rotate(m, glm::radians(turn[0]), glm::vec3(1, 0, 0));
+    m = glm::rotate(m, glm::radians(turn[2]), glm::vec3(0, 0, 1));
+    return glm::scale(m, glm::vec3(scale[0], scale[1], scale[2]));
+}
+}
+
+// The mods' level.json (docs/modding.md, Levels): edits of the stage's models and lights by entity name, and the models mods add
+// (to the stage's main file, no entity). Runs on the parse (a worker), reading only the mod set fixed at start-up.
+void StageManager::ApplyModLevel(Stage& stage, std::vector<std::string>& notes) {
+    const mods::ModSet* set = mods::Active();
+    if (!set || (set->level_edits.empty() && set->level_adds.empty())) return;
+    for (const mods::LevelEdit& edit : set->level_edits) {
+        if (!mods::LevelStageMatches(edit.stage, stage.package_path)) continue;
+        int matched = 0;
+        for (const auto& file : stage.files) {
+            auto& models = file->static_models;
+            for (size_t i = 0; !edit.model.empty() && i < models.size();) {
+                StaticModelPlacement& m = models[i];
+                if (!mods::LevelNameMatches(edit.model, m.name)) {
+                    ++i;
+                    continue;
+                }
+                ++matched;
+                if (edit.hide) {
+                    models.erase(models.begin() + static_cast<ptrdiff_t>(i));
+                    continue;
+                }
+                m.world = glm::translate(glm::mat4(1.0f), glm::vec3(edit.move[0], edit.move[1], edit.move[2])) * m.world *
+                          TurnScale(edit.turn, edit.scale);
+                if (!edit.collision) m.geom_file.clear();
+                if (!edit.replace.empty()) m.model_file = edit.replace;
+                ++i;
+            }
+            for (LightPlacement& l : file->lights) {
+                if (edit.light.empty() || !mods::LevelNameMatches(edit.light, l.name)) continue;
+                ++matched;
+                l.mod_off = l.mod_off || edit.off;
+                l.mod_tint *= glm::vec3(edit.tint[0], edit.tint[1], edit.tint[2]);
+                l.mod_brightness *= edit.brightness;
+            }
+        }
+        notes.push_back(std::format("mods: {} level.json: {} {} in {}: {} matched{}", edit.mod, edit.model.empty() ? "light" : "model",
+                                    edit.model.empty() ? edit.light : edit.model, stage.package_path, matched,
+                                    matched ? "" : " (check the entity name and the stage)"));
+    }
+    for (const mods::LevelAdd& add : set->level_adds) {
+        if (!mods::LevelStageMatches(add.stage, stage.package_path)) continue;
+        StaticModelPlacement m;
+        m.name = add.name;
+        m.model_file = add.model;
+        m.world = glm::translate(glm::mat4(1.0f), glm::vec3(add.at[0], add.at[1], add.at[2])) * TurnScale(add.turn, add.scale);
+        m.mod_collision = add.collision;
+        stage.main->static_models.push_back(std::move(m));
+        notes.push_back(std::format("mods: {} level.json: {} added to {} at ({:.2f} {:.2f} {:.2f})", add.mod, add.model, stage.package_path,
+                                    add.at[0], add.at[1], add.at[2]));
+    }
+}
+
 StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_path, const KnownAssets* known) {
     ParsedStage parsed;
     auto stage = std::make_unique<Stage>();
@@ -108,6 +172,7 @@ StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_p
     if (!stage->main) {
         stage->main = stage->files.front().get();
     }
+    ApplyModLevel(*stage, parsed.notes);
     stage->file_root = stage->main->has_root ? stage->main->root : glm::mat4(1.0f);
     if (known) {
         std::unordered_set<std::string> stems;
@@ -117,8 +182,7 @@ StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_p
                     continue;
                 }
                 auto model = std::make_shared<FmdlModel>();
-                auto bytes = vfs.ReadFile(placement.model_file);
-                if (!bytes || !LoadFmdl(*bytes, placement.model_file, *model)) {
+                if (!LoadModelFile(vfs, placement.model_file, *model)) {
                     model.reset();
                 }
                 if (model) {
@@ -162,8 +226,7 @@ StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_p
                         auto& slot = position_models[placement.model_file];
                         if (!slot) {
                             slot = std::make_shared<FmdlModel>();
-                            auto bytes = vfs.ReadFile(placement.model_file);
-                            if (!bytes || !LoadFmdl(*bytes, placement.model_file, *slot)) {
+                            if (!LoadModelFile(vfs, placement.model_file, *slot)) {
                                 slot.reset();
                             }
                         }
@@ -241,6 +304,9 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
     for (const std::string& error : parsed.errors) {
         LogError("{}", error);
     }
+    for (const std::string& note : parsed.notes) {
+        LogInfo("{}", note);
+    }
     if (!parsed.stage) {
         return nullptr;
     }
@@ -281,6 +347,40 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
                 // are stacked** and the rule only changed behaviour without removing a duplicate
                 // (scratch/dedup/stacked_meshes.py, scratch/dedup/FINDINGS.md).
                 stage->draws.push_back({file.get(), placement.entity, model->mesh.get(), placement.world, placement.color});
+            }
+            if (model && (placement.mod_collision == "box" || placement.mod_collision == "mesh")) {
+                // a mod's added model: solid as its bounds or its triangles, both sides (level.json "collision")
+                Stage::CollisionPiece piece;
+                piece.file_transform = placement.world;
+                piece.model_file = placement.model_file;
+                auto triangle = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+                    GeomTriangle t{};
+                    t.a = a;
+                    t.b = b;
+                    t.c = c;
+                    t.shape_flags = 0x200;
+                    piece.triangles.push_back(t);
+                };
+                MeshData mesh;
+                if (placement.mod_collision == "mesh" && models_.ReadMesh(placement.model_file, mesh)) {
+                    for (const SubMesh& sub : mesh.submeshes) {
+                        for (uint32_t i = 0; i + 2 < sub.index_count; i += 3) {
+                            const uint32_t* k = mesh.indices.data() + sub.first_index + i;
+                            auto at = [&](uint32_t j) { return mesh.vertices[static_cast<size_t>(sub.vertex_offset + static_cast<int32_t>(j))].position; };
+                            triangle(at(k[0]), at(k[1]), at(k[2]));
+                        }
+                    }
+                } else {
+                    const glm::vec3 lo = model->mesh->bounds_min, hi = model->mesh->bounds_max;
+                    const glm::vec3 p[8] = {{lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z},
+                                            {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}};
+                    const int faces[6][4] = {{0, 1, 2, 3}, {4, 7, 6, 5}, {0, 4, 5, 1}, {3, 2, 6, 7}, {0, 3, 7, 4}, {1, 5, 6, 2}};
+                    for (const auto& f : faces) {
+                        triangle(p[f[0]], p[f[1]], p[f[2]]);
+                        triangle(p[f[0]], p[f[2]], p[f[3]]);
+                    }
+                }
+                if (!piece.triangles.empty()) stage->collision.push_back(std::move(piece));
             }
             if (!placement.geom_file.empty()) {
                 Stage::CollisionPiece piece;
@@ -663,7 +763,7 @@ std::shared_ptr<const std::vector<GeomTriangle>> StageManager::BuildSurfaces(Vfs
         FmdlModel read;
         const FmdlModel* parsed = model;
         if (!parsed) {
-            if (auto bytes = vfs.ReadFile(model_file); bytes && LoadFmdl(*bytes, model_file, read)) {
+            if (LoadModelFile(vfs, model_file, read)) {
                 parsed = &read;
             }
         }

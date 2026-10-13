@@ -1,5 +1,6 @@
-# issue #7: Lisa follows in loop 2 (KillChase). The player stands facing -z (yaw +-pi, down the hallway toward the start room) and moves
-# the mouse a few degrees: the look-back ring must not arm (the raw mean broke at the +-pi seam). A full turn still arms it.
+# Lisa follows in loop 2 (KillChase). The player stands facing -z (yaw +-pi, down the hallway toward the start room) and moves the mouse
+# a few degrees: as in the original, the look-back ring's plain mean breaks at the +-pi seam, so the small movements arm it and the next
+# one kills (issue #7 had fixed this; players asked to keep the original's behaviour).
 sanchor
 swait 700
 sexpect ocho 3
@@ -73,8 +74,4 @@ swait 20
 slook 0.03 0 3
 swait 20
 swait 300
-sexpect ocholook 0
-sexpect ocho 3
-sface -17.51 -1.4 100
-swait 400
 slog

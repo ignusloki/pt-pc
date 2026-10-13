@@ -10,7 +10,7 @@ constexpr uint32_t kMaxViews = 64;
 constexpr uint32_t kMaxLights = 256;
 constexpr uint32_t kMaxProbes = 512;
 constexpr uint32_t kMaxSkinMatrices = 16384;
-constexpr uint32_t kImageSlots = 59;
+constexpr uint32_t kImageSlots = 62;
 constexpr uint32_t kInvalid = 0xFFFFFFFFu;
 // The luminance buffer (set 1 binding 5) of each frame slot: luminance.comp's partial sums of up to kLuminanceGroups groups,
 // then the flashlight reflection's colour (reflect_colour.comp, two vec2: r g, b 1)
@@ -148,6 +148,9 @@ enum Image : uint32_t {
     kImgParticlesNear = 56,
     kImgParticlesFar = 57,
     kImgNearFarDepth = 58,
+    kImgMbOriginalBake = 59,
+    kImgMbOriginalBlurA = 60,
+    kImgMbOriginalBlurB = 61,
 };
 
 enum Sampler : uint32_t {

@@ -1,0 +1,12 @@
+{
+  // a new model in the hallway: the corridor right after the start room's door, against its right wall
+  "add": [
+    {
+      "stage": "pt14_hallway",
+      "model": "/Assets/mods/added_table/table.glb",
+      "at": [0.45, -1.4, 4.2],
+      "turn": [0, 90, 0],
+      "collision": "box"
+    }
+  ]
+}

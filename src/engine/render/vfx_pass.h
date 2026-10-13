@@ -30,6 +30,10 @@ public:
     void RecordForward(const SceneVfxContext& context);
     void RecordFilter(const SceneFilterContext& context);
     bool HasFilter(uint32_t layers) const;
+    // the opaque liquids' depth (Primitive_Liquid2Final with the alpha test writes depth, DB_DEPTH_CONTROL 0x7e6 in
+    // liquid_trace_f010), drawn after the effect pass with only the depth attachment bound; false when the frame has none
+    bool HasOpaqueLiquids() const;
+    void RecordLiquidDepth(const SceneVfxContext& context);
     const vfx::RenderList& List() const { return list_; }
 
 private:
@@ -41,6 +45,8 @@ private:
         bool cull = false;
         // effect buffer draw: alpha is the transmittance (SceneVfxContext::subset kVfxOffscreen)
         bool offscreen = false;
+        // depth only (RecordLiquidDepth): no colour attachment, depth written
+        bool depth_write = false;
         bool operator==(const PipelineKey&) const = default;
     };
 
@@ -51,6 +57,8 @@ private:
         VkDescriptorSet forward = VK_NULL_HANDLE;
         VkDescriptorSet filter = VK_NULL_HANDLE;
         VkDescriptorSet effects = VK_NULL_HANDLE;
+        VkDescriptorSet depth_only = VK_NULL_HANDLE;
+        VkImageView depth_only_scene = VK_NULL_HANDLE;
         VkImageView forward_view = VK_NULL_HANDLE;
         VkImageView filter_view = VK_NULL_HANDLE;
         VkImageView effects_depth_view = VK_NULL_HANDLE;

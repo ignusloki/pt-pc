@@ -147,6 +147,24 @@ void NazoManager::SetAssetEnable(std::string_view name, bool on) {
     }
 }
 
+bool NazoManager::PeepholeTransform(glm::mat4& out) const {
+    auto it = assets_.find("Peephole");
+    if (it == assets_.end()) {
+        return false;
+    }
+    for (const AssetRef& ref : it->second) {
+        Stage* stage = game_.Stages().FindById(ref.stage_id);
+        if (!stage || stage->label != "current") {
+            continue;
+        }
+        if (const StageData* file = stage->FileOf(ref.entity)) {
+            out = stage->ToWorld(file->file->WorldTransform(*ref.entity));
+            return true;
+        }
+    }
+    return false;
+}
+
 bool NazoManager::AssetPosition(std::string_view name, glm::vec3& out) const {
     auto it = assets_.find(name);
     if (it == assets_.end()) {

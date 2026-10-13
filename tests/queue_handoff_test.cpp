@@ -40,19 +40,19 @@ std::shared_ptr<Timelines> CreateTimelines(VkDevice device) {
 }
 
 bool Handoff(pt::Renderer& renderer, const std::shared_ptr<Timelines>& timelines, uint64_t value) {
-    return renderer.QueueHandoff(renderer.Cmd(), timelines->inputs, value, timelines->output, value, [timelines, value] {
-        ++submitted;
-        VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        wait.semaphoreCount = 1;
-        wait.pSemaphores = &timelines->inputs;
-        wait.pValues = &value;
-        Expect(vkWaitSemaphores(timelines->device, &wait, 5'000'000'000ull) == VK_SUCCESS,
-               "external work starts only after the Vulkan inputs finish");
-        VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-        signal.semaphore = timelines->output;
-        signal.value = value;
-        Expect(vkSignalSemaphore(timelines->device, &signal) == VK_SUCCESS, "external work releases the continuation");
-    }) != VK_NULL_HANDLE;
+    if (!renderer.SplitForExternal(timelines->inputs, value, timelines->output, value)) return false;
+    ++submitted;
+    VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wait.semaphoreCount = 1;
+    wait.pSemaphores = &timelines->inputs;
+    wait.pValues = &value;
+    Expect(vkWaitSemaphores(timelines->device, &wait, 5'000'000'000ull) == VK_SUCCESS,
+           "external work starts only after the submitted Vulkan inputs finish");
+    VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    signal.semaphore = timelines->output;
+    signal.value = value;
+    Expect(vkSignalSemaphore(timelines->device, &signal) == VK_SUCCESS, "external work releases the continuation");
+    return true;
 }
 }
 
@@ -66,30 +66,27 @@ int main() {
     if (!renderer.Init(nullptr, settings)) return 1;
     auto timelines = CreateTimelines(renderer.Context().device);
     if (!timelines) return 1;
-    std::weak_ptr<Timelines> lifetime = timelines;
     if (!renderer.BeginFrame(false)) return 1;
     Expect(Handoff(renderer, timelines, 1), "first handoff records a continuation");
-    Expect(Handoff(renderer, timelines, 2), "a second handoff can follow the first in the same frame");
-    Expect(submitted == 0, "recording does not submit external work");
+    Expect(submitted == 1, "the external boundary submits its Vulkan inputs immediately");
+    Expect(!Handoff(renderer, timelines, 2), "a second split cannot overwrite a pending resume buffer");
+    renderer.EndFrame(false);
+    if (!renderer.BeginFrame(false)) return 1;
+    Expect(Handoff(renderer, timelines, 2), "the next frame can use another handoff");
+    renderer.EndFrame(false);
+    if (!renderer.BeginFrame(false)) return 1;
+    uint64_t complete = 0;
+    Expect(vkGetSemaphoreCounterValue(timelines->device, timelines->output, &complete) == VK_SUCCESS && complete >= 1,
+           "reusing a frame slot waits for its external continuation");
+    renderer.EndFrame(false);
+    Expect(vkDeviceWaitIdle(renderer.Context().device) == VK_SUCCESS, "backend resources can retire after the consuming queue finishes");
     timelines.reset();
-    renderer.EndFrame(false);
-    Expect(submitted == 2, "both external submissions execute");
-    Expect(!lifetime.expired(), "synchronization resources remain alive until the frame fence retires them");
-    if (!renderer.BeginFrame(false)) return 1;
-    renderer.EndFrame(false);
-    if (!renderer.BeginFrame(false)) return 1;
-    Expect(lifetime.expired() && retired == 1, "reusing the frame waits for completion before releasing synchronization resources");
-    renderer.EndFrame(false);
+    Expect(retired == 1, "completed backend synchronization resources retire safely");
 
-    // Abandon a recorded frame: no command on the external queue should be waiting for unsubmitted Vulkan inputs.
-    timelines = CreateTimelines(renderer.Context().device);
-    if (!timelines || !renderer.BeginFrame(false)) return 1;
-    Expect(Handoff(renderer, timelines, 1), "abandoned frame records a handoff");
-    lifetime = timelines;
-    timelines.reset();
+    // Before the external boundary nothing has been submitted, so abandoning this frame cannot leave external work waiting.
+    if (!renderer.BeginFrame(false)) return 1;
     renderer.Shutdown();
-    Expect(submitted == 2, "abandoning the frame does not commit external work");
-    Expect(lifetime.expired() && retired == 2, "shutdown releases the abandoned handoff before destroying the device");
+    Expect(submitted == 2, "abandoning a frame before its external boundary does not submit work");
     SDL_Quit();
     std::printf("queue handoff: %d failures\n", failures);
     return failures ? 1 : 0;

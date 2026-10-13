@@ -37,6 +37,9 @@ struct SaveProgress {
     // finished games counted by the port (Game+ content by finish: 1 the bathtub Lisa, 2 Lisa's hsh0 arm); a tag without a
     // count (before the count was kept) reads as 1
     uint32_t finishes = 0;
+    // the highest Game+ tier the in-game notice has shown (GameUi::ShowNotice), so each tier is announced once; kept with the
+    // finish count and cleared with it
+    uint32_t gameplus_announced = 0;
 };
 
 struct SaveFile {

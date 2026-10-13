@@ -39,11 +39,20 @@ struct XrTarget {
 
 struct XrFrame {
     // the composited frame (fade, brightness, film grain as the window's), cropped to the target's rect
-    const XrTarget* eye = nullptr;
-    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
+    const XrTarget* eye = nullptr;    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
     const XrTarget* hud = nullptr;
     // the overlay over the frame as without VR (the virtual screen), else only on the hud
     bool overlay_on_frame = false;
+};
+
+// Apple MetalFX frame interpolation (metalfx_backend.mm) does not own the swapchain: the renderer presents the generated frame
+// itself, one extra swapchain image per rendered frame, before the rendered one. Set from scene_upscale.cpp only while the
+// MetalFX frame generation is generating.
+struct GeneratedFrameHooks {
+    // runs the interpolation and returns the generated frame (output extent) to composite; null repeats the rendered frame
+    std::function<const vk::Image*()> generate;
+    // the ordering semaphores of the frame's submit (signal) and of the generated frame's composite (wait)
+    std::function<bool(VkSemaphore&, uint64_t&, VkSemaphore&, uint64_t&)> sync;
 };
 
 class Renderer {
@@ -54,21 +63,30 @@ public:
     // present: whether this frame goes to the window (VR draws the second eye without presenting)
     bool BeginFrame(bool present = true);
     void EndFrame(bool draw_ui);
+    // Apple MetalFX: the upscaler runs on a Metal command buffer, which cannot be part of a Vulkan one. This ends and submits
+    // the frame recorded so far, signaling `signal` at `signal_value`; the upscaler runs between the submits; the command
+    // buffer that follows (and the rest of the frame with it) waits on `wait` at `wait_value`.
+    bool SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSemaphore wait, uint64_t wait_value);
     void Resize(uint32_t width, uint32_t height);
     void SetVsync(bool enabled);
+    // the HDR output switched while the game runs (the PC setting, or Windows HDR turned on or off for the display): the
+    // swapchain is made again at the next frame with the output the display offers; nothing else depends on it
+    void SetHdr(bool enabled);
+    void RecheckOutput();
     bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f});
 
     vk::Context& Context() { return ctx_; }
-    VkCommandBuffer Cmd() const { return frames_[frame_index_].cmd; }
+    // the command buffer the frame records into: the frame's own until SplitForExternal, then the resume buffer
+    VkCommandBuffer Cmd() const { return active_cmd_; }
     const vk::Image& SceneColor() const { return scene_color_; }
     VkExtent2D RenderExtent() const { return {scene_color_.extent.width, scene_color_.extent.height}; }
     uint32_t FrameIndex() const { return frame_index_; }
-    // Finish the current segment, then resume after work on another GPU queue. Submission is deferred to EndFrame.
-    VkCommandBuffer QueueHandoff(VkCommandBuffer current, VkSemaphore inputs_ready, uint64_t inputs_value,
-                                 VkSemaphore output_ready, uint64_t output_value, std::function<void()> submit_external);
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    VkFormat SceneColorFormat() const { return output_mode_ == RendererOutputMode::Sdr ? kSceneColorFormat : VK_FORMAT_R16G16B16A16_SFLOAT; }
+    // The frame is built the same for every output (sRGB encoded colour, the scene colour 8 bit, the final image 16 bit float):
+    // only the last composite into the swapchain differs, so the output can change while the game runs
+    VkFormat SceneColorFormat() const { return kSceneColorFormat; }
+    VkFormat FinalFormat() const { return final_format_; }
     RendererOutputMode OutputMode() const { return output_mode_; }
 
     int photo_filter = 0;
@@ -81,12 +99,10 @@ public:
     float grain_offset[2] = {0.0f, 0.0f};
     std::function<void(VkCommandBuffer, VkImageView, VkExtent2D)> overlay;
     std::function<const vk::Image*(uint32_t)> hudless;
+    GeneratedFrameHooks generated_frame;
     // frame generation's hooks, applied before swapchain creation and image acquisition
     std::function<FrameStartAction(bool)> frame_start;
     std::function<bool()> swapchain_failed;
-    // A frame generator's UI layer; the overlay draws into it a second time with coverage alpha while overlay_layer is set.
-    std::function<const vk::Image*(uint32_t)> ui_layer;
-    bool overlay_layer = false;
 
     void SetGrainNoise(VkImageView view);
 
@@ -98,30 +114,33 @@ public:
     static constexpr VkExtent2D kHudExtent{1920, 1080};
 
 private:
-    struct FrameSegment {
-        VkCommandBuffer cmd = VK_NULL_HANDLE;
-        VkSemaphore wait = VK_NULL_HANDLE;
-        uint64_t wait_value = 0;
-        VkSemaphore signal = VK_NULL_HANDLE;
-        uint64_t signal_value = 0;
-        std::function<void()> submit_external;
-    };
-
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
+        // the buffer the frame continues in after SplitForExternal (Apple MetalFX)
+        VkCommandBuffer resume = VK_NULL_HANDLE;
+        // the buffer the generated frame's composite records into (Apple MetalFX frame interpolation)
+        VkCommandBuffer gen_cmd = VK_NULL_HANDLE;
+        // Generated frames use the same format as the normal UI pass, before the swapchain conversion.
+        vk::Image gen_final;
         VkSemaphore image_available = VK_NULL_HANDLE;
+        // the generated frame's swapchain image acquisition (Apple MetalFX frame interpolation)
+        VkSemaphore gen_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
-        std::vector<VkCommandBuffer> commands;
-        std::vector<FrameSegment> segments;
-        VkSemaphore wait = VK_NULL_HANDLE;
-        uint64_t wait_value = 0;
+        // covers the generated frame's composite, which is submitted after the frame's own (the pool is reset at the next
+        // use of this slot, when both must be done)
+        VkFence gen_in_flight = VK_NULL_HANDLE;
+        bool gen_pending = false;
     };
 
-    VkCommandBuffer BeginContinuation(Frame& frame);
     bool CreateTargets(uint32_t width, uint32_t height);
     void DestroyTargets();
+    // the generated frame's composite, submit and present (Apple MetalFX frame interpolation); source nullptr repeats the
+    // rendered frame
+    void PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui);
     bool CreateCompositePipeline(VkFormat output_format);
+    bool BuildCompositePipeline(VkFormat format, VkPipeline& pipeline);
+    void UpdateOutputMode();
     bool InitImGui(SDL_Window* window);
     void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format,
                    VkOffset2D offset = {0, 0});
@@ -137,6 +156,18 @@ private:
     Frame frames_[kFramesInFlight];
     uint32_t frame_index_ = 0;
     uint32_t image_index_ = 0;
+    // the swapchain image the generated frame is composited into, and whether one was acquired this frame (Apple MetalFX
+    // frame interpolation)
+    uint32_t gen_index_ = 0;
+    bool gen_acquired_ = false;
+    // the composite sets that bind the generated frame's image (one per frame slot)
+    VkDescriptorSet gen_set_[kFramesInFlight] = {};
+    VkDescriptorSet gen_final_set_[kFramesInFlight] = {};
+    // the command buffer the frame records into (frame.cmd until the split, frames_[frame_index_].resume after)
+    VkCommandBuffer active_cmd_ = VK_NULL_HANDLE;
+    // the wait the resume buffer is submitted with (SplitForExternal)
+    VkSemaphore split_wait_ = VK_NULL_HANDLE;
+    uint64_t split_wait_value_ = 0;
     bool swapchain_dirty_ = false;
     bool imgui_ready_ = false;
     bool output_ready_ = false;
@@ -146,7 +177,7 @@ private:
     vk::Image final_;
     vk::Image output_;
     VkFormat output_format_ = VK_FORMAT_R8G8B8A8_UNORM;
-    VkFormat final_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat final_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
     RendererOutputMode output_mode_ = RendererOutputMode::Sdr;
     VkSampler linear_sampler_ = VK_NULL_HANDLE;
     VkSampler wrap_sampler_ = VK_NULL_HANDLE;

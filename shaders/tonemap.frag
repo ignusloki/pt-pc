@@ -1,5 +1,6 @@
 #version 460
 #include "common.glsl"
+#include "tonemap_curve.glsl"
 
 layout(push_constant) uniform PassPush {
     uvec4 ids;
@@ -36,21 +37,19 @@ void main() {
         // Tonemap samples the bloom half a bloom texel down and right of the pixel (m_renderBuffer.zw * 2 at 1080p)
         vec2 bloom_uv = in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);
         vec3 b = pass.f0.x > 0.0 ? min(vec3(0.5), Img(IMG_BLOOM_SUM, SMP_LINEAR_CLAMP, bloom_uv).rgb) : vec3(0.0);
-        vec3 x2 = x * x;
-        // Tonemap ps: r rsqrt(max(1/512, r))
-        vec3 r = clamp(x2 + b - x2 * b, 0.0, 1.0);
-        c = clamp(r * inversesqrt(max(vec3(1.0 / 512.0), r)), 0.0, 1.0);
+        c = ScreenTonemap(x, b);
     }
     vec3 graded = c;
     if (pass.f0.w > 0.0) {
-        graded = Lut16(RES_COLOR_LUT, c);
+        // the LUT takes the colour within 0 to 1 (a value past 1 from the HDR target had reached into the next blue slice of the
+        // strip: cyan lamp bulbs with HDR on)
+        vec3 within = clamp(c, 0.0, 1.0);
+        graded = Lut16(RES_COLOR_LUT, within);
         if (pass.f0.y < 1.0) {
-            graded = mix(Lut16(RES_COLOR_LUT_PREV, c), graded, pass.f0.y);
+            graded = mix(Lut16(RES_COLOR_LUT_PREV, within), graded, pass.f0.y);
         }
     }
-    if (pass.f1.x > 0.5 && pass.ids.y != 1u) {
-        vec3 extended = SrgbEncode(max(hdr, vec3(1.0)));
-        graded = mix(graded, max(graded, extended), greaterThan(hdr, vec3(1.0)));
-    }
+    // HDR outputs keep the tonemapped range (paper white at the top) as the original's clipped image: the lamp globes are
+    // translucent and made to clip, and every extended range tried showed the wall's lines through them (1.0.3 tests)
     out_color = vec4(graded, Luma601(graded));
 }

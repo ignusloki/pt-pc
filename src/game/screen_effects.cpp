@@ -40,6 +40,16 @@ void ScreenEffects::CallFadeOut(float seconds) {
         const glm::vec4 target = fade_ignore ? glm::vec4(0.0f) : fade_color;
         fade_current = glm::vec4(glm::vec3(target), fade_current.a);
     }
+    // a cut to the colour (0 s: gc_p02_080's Endf120 as its bug picture goes): covered on this frame, not after the shown fade's
+    // hold, which let the hallway show between the picture and the black (1.0.2 reports; the PS4 cuts straight to black)
+    if (seconds <= 0.0f) {
+        fade_current = fade_ignore ? glm::vec4(0.0f) : fade_color;
+        fade_shown = fade_current;
+        fade_shown_hold = 0.0f;
+        fade_shown_called = false;
+        fade_remaining = 0.0f;
+        fade_state = 3;
+    }
     LogDebug("fade: out {:.2f} s", fade_remaining);
 }
 

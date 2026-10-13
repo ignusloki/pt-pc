@@ -3,6 +3,7 @@
 #include <volk.h>
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <random>
 #include <span>
@@ -109,6 +110,8 @@ public:
     // (controller step 15, no demo camera, no theater) or in the pause menu; `note` is a PC text key with its arguments
     // (PcNoteText), translated when drawn. It waits while held (the photo mode, VR).
     void ShowUpdateNotice(std::string note);
+    // another line in the update notice's place (the Game+ tier, Game::GamePlusTier), shown after the one before it
+    void ShowNotice(std::string note);
     void HoldUpdateNotice(bool held) { update_notice_held_ = held; }
     bool UpdateNoticeShown() const { return update_notice_time_ >= 0.0f && update_notice_time_ < kUpdateNoticeLength; }
 
@@ -169,6 +172,15 @@ private:
     bool overlay_ = false;
     std::unordered_map<std::string, uint32_t> overlay_cache_;
     uint32_t subliminal_textures_[SubliminalEffect::kImageCount] = {};
+public:
+    struct SubliminalStringDraw {
+        uint32_t texture = 0;
+        glm::vec2 position{0.0f};
+        float value = 0.0f;
+    };
+    // the handwriting to add to the scene this frame (value 0: none)
+    SubliminalStringDraw SubliminalString() const;
+private:
     uint32_t noise_texture_ = 0;
     uint32_t noise_normal_texture_ = 0;
     UiCanvas canvas_;
@@ -212,6 +224,8 @@ private:
     static constexpr float kUpdateNoticeFadeOut = 1.0f;
     static constexpr float kUpdateNoticeLength = kUpdateNoticeFadeIn + kUpdateNoticeHold + kUpdateNoticeFadeOut;
     std::string update_notice_;
+    bool update_notice_given_ = false;
+    std::deque<std::string> notice_queue_;
     float update_notice_time_ = -1.0f;
     bool update_notice_held_ = false;
 };

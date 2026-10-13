@@ -168,7 +168,10 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     /* 'NGP1' at 0x70, bytes the original always leaves zero, so a save from the PS4 never reads as finished. */
     file.progress.game_plus = Get<uint32_t>(buffer, 0x70) == 0x3150474E;
     // the port's finish count next to its tag (0x74, zero in the original's buffer)
-    file.progress.finishes = file.progress.game_plus ? std::max<uint32_t>(1, Get<uint32_t>(buffer, 0x74)) : 0;
+    // the low 16 bits; bits 16 to 23 hold the tier the Game+ notice last showed (0 in saves from before it)
+    const uint32_t finish_word = Get<uint32_t>(buffer, 0x74);
+    file.progress.finishes = file.progress.game_plus ? std::max<uint32_t>(1, finish_word & 0xFFFFu) : 0;
+    file.progress.gameplus_announced = file.progress.game_plus ? (finish_word >> 16) & 0xFFu : 0;
     for (size_t i = 0; i < 5; ++i) {
         file.progress.cleared[i] = buffer[0x68 + i];
     }
@@ -244,7 +247,7 @@ bool SaveStore::Save(const SaveFile& file) {
     std::memcpy(buffer.data() + 0x40, file.progress.floor.data(), std::min<size_t>(file.progress.floor.size(), 7));
     Put<uint32_t>(buffer, 0x5C, file.progress.photo_word);
     Put<uint32_t>(buffer, 0x70, file.progress.game_plus ? 0x3150474E : 0);
-    Put<uint32_t>(buffer, 0x74, file.progress.game_plus ? file.progress.finishes : 0);
+    Put<uint32_t>(buffer, 0x74, file.progress.game_plus ? (std::min<uint32_t>(file.progress.finishes, 0xFFFFu) | (std::min<uint32_t>(file.progress.gameplus_announced, 0xFFu) << 16)) : 0);
     for (size_t i = 0; i < 5; ++i) {
         buffer[0x68 + i] = file.progress.cleared[i];
     }

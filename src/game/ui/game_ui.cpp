@@ -110,6 +110,18 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         if (ui) {
             ui->QueueMenuInput(input);
         }
+    } else if (op == "streetlight") {
+        // streetlight: the street walk's flashlight switched as the F key does
+        game.ToggleStreetFlashlight();
+    } else if (op == "menuclick" || op == "menupoint") {
+        // menuclick x y / menupoint x y: the pointer at (x, y) in the menu's units (centre origin, y up), with a click or only over
+        MenuInput input;
+        input.pointer_valid = true;
+        input.pointer = glm::vec2(arg(0), arg(1));
+        input.click = op == "menuclick";
+        if (ui) {
+            ui->QueueMenuInput(input);
+        }
     } else if (op == "subtitle") {
         if (ui) {
             ui->ShowSubtitle(text, arg(0));
@@ -534,6 +546,12 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
     DrawText(batch, canvas, *font, layout, subtitle_color, ui::UiBlend::Alpha, shade);
 }
 
+GameUi::SubliminalStringDraw GameUi::SubliminalString() const {
+    const int image = subliminal_.Image();
+    if (!ready_ || subliminal_.StringValue() <= 0.0f || image < 0 || image >= SubliminalEffect::kImageCount) return {};
+    return {subliminal_textures_[image], subliminal_.Position(), subliminal_.StringValue()};
+}
+
 void GameUi::DrawSubliminal(ui::UiBatch& batch, bool string_pass) {
     const glm::vec2 extent(static_cast<float>(batch.Extent().width), static_cast<float>(batch.Extent().height));
     // the original's full-screen passes span 0 to 1 across its 16:9 frame; a wider (or narrower) window shows more (or less) of the
@@ -542,6 +560,9 @@ void GameUi::DrawSubliminal(ui::UiBatch& batch, bool string_pass) {
     const glm::vec2 uv0(0.5f - 0.5f * across, 0.0f);
     const glm::vec2 uv1(0.5f + 0.5f * across, 1.0f);
     if (string_pass) {
+        // the scene composites the handwriting after motion blur (SceneRenderer::SetSubliminalString, SubliminalString below);
+        // the UI draws it only where no scene takes it (the VR HUD)
+        if (!vr_hud_) return;
         const int image = subliminal_.Image();
         if (subliminal_.StringValue() <= 0.0f || image < 0 || image >= SubliminalEffect::kImageCount) {
             return;
@@ -652,12 +673,12 @@ void GameUi::DrawTheaterHint(ui::UiBatch& batch, const UiCanvas& canvas) {
         ui::TextStyle style;
         style.font = &font->font;
         style.font_width = style.font_height = 18.0f;
-        ui::TextLayout layout = ui::LayoutText(text, style, hi.x - lo.x);
+        ui::TextLayout layout = ui::LayoutTextInBox(text, style, glm::vec2(0.0f), hi - lo);
         ui::PlaceText(layout, lo, hi, align, align, ui::TextAlign::Center, true);
         DrawText(batch, canvas, *font, layout, glm::vec4(1.0f, 1.0f, 1.0f, 0.55f), ui::UiBlend::Alpha);
     };
     line(theater_title_, {30.0f, 14.0f}, {UiCanvas::kWidth - 30.0f, 40.0f}, ui::TextAlign::Start);
-    line(theater_hint_, {30.0f, UiCanvas::kHeight - 40.0f}, {UiCanvas::kWidth - 30.0f, UiCanvas::kHeight - 14.0f}, ui::TextAlign::Center);
+    line(theater_hint_, {30.0f, UiCanvas::kHeight - 64.0f}, {UiCanvas::kWidth - 30.0f, UiCanvas::kHeight - 14.0f}, ui::TextAlign::Center);
 }
 
 // The port's credits page (port_credits.h): the ending's off-white fade over the whole screen and the current card in the
@@ -807,9 +828,15 @@ void GameUi::DrawSpeedrun(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
 }
 
 void GameUi::ShowUpdateNotice(std::string note) {
-    if (!update_notice_.empty() || note.empty()) return;
-    update_notice_ = std::move(note);
-    update_notice_time_ = -1.0f;
+    if (update_notice_given_ || note.empty()) return;
+    update_notice_given_ = true;
+    ShowNotice(std::move(note));
+}
+
+void GameUi::ShowNotice(std::string note) {
+    if (note.empty()) return;
+    notice_queue_.push_back(std::move(note));
+    LogInfo("notice: queued {}", notice_queue_.back());
 }
 
 // The notice's clock runs only in the game proper (controller step 15: not the boot, the first start's option screen and preface,
@@ -817,13 +844,19 @@ void GameUi::ShowUpdateNotice(std::string note) {
 // theater, under no full fade, and not while held (the photo mode draws in the UI's place, VR has no place for it); the pause
 // menu and the PC settings page over the game count as the game. Elsewhere it waits, and it is never lost.
 void GameUi::UpdateUpdateNotice(Game& game, float dt) {
+    // the next line once the one on screen has gone
+    if ((update_notice_.empty() || update_notice_time_ >= kUpdateNoticeLength) && !notice_queue_.empty()) {
+        update_notice_ = std::move(notice_queue_.front());
+        notice_queue_.pop_front();
+        update_notice_time_ = -1.0f;
+    }
     if (update_notice_.empty() || update_notice_time_ >= kUpdateNoticeLength) return;
     const bool allowed = game.Controller().Step() == 15 && !game.Demos().HasActiveCamera() && !menu_suspended_ && !update_notice_held_ &&
                          fade_.a < 0.5f && !(menu_.IsOpen() && menu_.FirstBoot());
     if (!allowed) return;
     if (update_notice_time_ < 0.0f) {
         update_notice_time_ = 0.0f;
-        LogInfo("update: notice shown");
+        LogInfo("notice: shown {}", update_notice_);
     } else {
         update_notice_time_ += dt;
     }
@@ -910,7 +943,17 @@ void GameUi::Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent) 
         layers.push_back({SaveIcon::kPriority - 1, [&] { DrawTheaterHint(batch, canvas); }});
     }
     if (demo_ui_.Active()) {
-        layers.push_back({DemoUi::kPriority, [&] { demo_ui_.Draw(batch, canvas, language_); }});
+        layers.push_back({DemoUi::kPriority, [&] {
+                              // PC (ultrawide): the bug picture's colour at the sides of a screen wider than 16:9
+                              if (const glm::vec4 color = demo_ui_.BugPillarColor(); color.a > 0.0f) {
+                                  const float left = canvas.origin.x;
+                                  const float right = canvas.origin.x + UiCanvas::kWidth * canvas.scale;
+                                  const auto plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+                                  if (left > 0.5f) batch.Quad(glm::vec2(0.0f), glm::vec2(left, full.y), glm::vec2(0.0f), glm::vec2(1.0f), color, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+                                  if (full.x - right > 0.5f) batch.Quad(glm::vec2(right, 0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), color, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+                              }
+                              demo_ui_.Draw(batch, canvas, language_);
+                          }});
     }
     if (boot_splash_ != 0 && boot_splash_time_ > 0.0f) {
         layers.push_back({SaveIcon::kPriority - 2, [&] {
@@ -960,8 +1003,11 @@ constexpr float kPhotoScale = 0.8f;
 constexpr float kPhotoLabelX = -58.0f;
 constexpr float kPhotoValueX = kPhotoLabelX + 32.0f * kPhotoScale;
 constexpr float kPhotoArrow = 12.0f * kPhotoScale;
-constexpr float kPhotoTitleY = 30.0f;
-constexpr float kPhotoTop = 25.5f;
+constexpr float kPhotoTitleY = 32.0f;
+constexpr float kPhotoTop = 27.5f;
+// the lowest the help line may reach (the screen's edge is at -36) and the note's and help's room under the rows
+constexpr float kPhotoBottom = -35.0f;
+constexpr float kPhotoTipRoom = 11.6f;
 constexpr float kPhotoRowStep = 3.0f * kPhotoScale;
 constexpr float kPhotoSectionGap = 3.5f * kPhotoScale;
 constexpr float kPhotoPanelRight = -14.0f;
@@ -1103,6 +1149,13 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
 
     text(kOptionTitle, glm::vec2(1.0f), PcText("pc_photo_title", language), kPhotoLabelX, text_right, kPhotoTitleY, ui::TextAlign::Start,
          root_color * node_color(kOptionTitle));
+    // the rows close up when they would push the note and the help line off the screen (the resolution, colour filter and
+    // flashlight rows had put the help's last lines under the screen's edge)
+    int sections = 0;
+    for (const PhotoPanelRow& row : view.rows) sections += row.section ? 1 : 0;
+    const int steps = static_cast<int>(view.rows.size());
+    const float room = kPhotoTop - (kPhotoBottom + kPhotoTipRoom) - std::max(0, sections - 1) * (kPhotoSectionGap - kPhotoRowStep);
+    const float row_step = steps > 0 ? std::min(kPhotoRowStep, room / static_cast<float>(steps)) : kPhotoRowStep;
     float y = kPhotoTop;
     bool first = true;
     for (const PhotoPanelRow& row : view.rows) {
@@ -1111,7 +1164,7 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
             text(kOptionHeaderText, glm::vec2(1.0f), row.label, kPhotoLabelX, kPhotoValueX + kPhotoArrow + 2.0f, y, ui::TextAlign::Start,
                  root_color * node_color(kOptionHeaderText));
             mesh(kOptionHeaderLine, glm::vec2(1.0f), glm::vec2(kPhotoLabelX, y) + glm::vec2(16.0f, -1.0f) * kPhotoScale, root_color);
-            y -= kPhotoRowStep;
+            y -= row_step;
             first = false;
             continue;
         }
@@ -1132,12 +1185,12 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
                      tint(available ? (row.selected ? 1.0f : 0.65f) : 0.25f));
             }
         }
-        y -= kPhotoRowStep;
+        y -= row_step;
     }
     const glm::vec4 tip_color = root_color * node_color(kOptionTipText);
     const float note_top = y - 0.6f;
     box_text(kOptionTipText, view.note, {kPhotoLabelX, note_top - 5.4f}, {text_right, note_top}, tip_color);
-    box_text(kOptionTipText, view.hint, {kPhotoLabelX, note_top - 11.0f}, {text_right, note_top - 6.2f},
+    box_text(kOptionTipText, view.hint, {kPhotoLabelX, std::max(note_top - 11.0f, kPhotoBottom)}, {text_right, note_top - 6.2f},
              tip_color * glm::vec4(1.0f, 1.0f, 1.0f, 0.6f));
 }
 

@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -21,7 +20,6 @@
 #include "engine/core/crash_report.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/pipeline_cache_store.h"
-#include "engine/render/render_viewport.h"
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale.h"
@@ -83,7 +81,13 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         SDL_GetWindowSizeInPixels(window_, &w, &h);
         width = static_cast<uint32_t>(w);
         height = static_cast<uint32_t>(h);
-        if (!ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr)) {
+        bool created = ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr);
+        if (!created && settings.hdr) {
+            // an HDR swapchain the driver or an overlay refuses: SDR rather than no window
+            LogWarn("vulkan: the HDR swapchain was refused, SDR is used");
+            created = ctx_.CreateSwapchain(width, height, settings.vsync, false);
+        }
+        if (!created) {
             /* DLSS-G's swapchain hook can refuse the window (borderless fullscreen on some setups); the game goes on without it. */
             if (!streamline::DisableFrameGenFeature()) {
                 return false;
@@ -95,14 +99,12 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
             }
         }
         output_format = ctx_.swapchain.format;
-        output_mode_ = ctx_.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
-                           ? RendererOutputMode::ScRgb
-                           : ctx_.swapchain.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT ? RendererOutputMode::Hdr10 : RendererOutputMode::Sdr;
+        UpdateOutputMode();
         width = ctx_.swapchain.extent.width;
         height = ctx_.swapchain.extent.height;
     }
     output_format_ = output_format;
-    final_format_ = output_mode_ == RendererOutputMode::Sdr ? output_format_ : VK_FORMAT_R16G16B16A16_SFLOAT;
+    final_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
     for (Frame& frame : frames_) {
         VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pool_info.queueFamilyIndex = ctx_.queue_family;
@@ -110,14 +112,21 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         alloc.commandPool = frame.pool;
         alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc.commandBufferCount = 1;
-        vkAllocateCommandBuffers(ctx_.device, &alloc, &frame.cmd);
-        frame.commands.push_back(frame.cmd);
+        // three: the frame's own, the one it continues in after SplitForExternal, and the generated frame's composite
+        // (Apple MetalFX)
+        VkCommandBuffer buffers[3] = {};
+        alloc.commandBufferCount = 3;
+        vkAllocateCommandBuffers(ctx_.device, &alloc, buffers);
+        frame.cmd = buffers[0];
+        frame.resume = buffers[1];
+        frame.gen_cmd = buffers[2];
         VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.image_available);
+        vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.gen_available);
         VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.in_flight);
+        vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.gen_in_flight);
     }
     VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampler_info.magFilter = VK_FILTER_LINEAR;
@@ -238,6 +247,7 @@ void Renderer::DestroyTargets() {
     ctx_.DestroyImage(scene_color_);
     ctx_.DestroyImage(final_);
     ctx_.DestroyImage(output_);
+    for (Frame& frame : frames_) ctx_.DestroyImage(frame.gen_final);
 }
 
 bool Renderer::CreateCompositePipeline(VkFormat output_format) {
@@ -250,20 +260,23 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
         LogError("renderer: composite set layout failed ({})", static_cast<int>(r));
         return false;
     }
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
+    constexpr uint32_t kCompositeSets = 2 + 2 * kFramesInFlight;
+    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kCompositeSets};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 2;
+    // Normal scene/final sets and input/final sets for each generated-frame slot.
+    pool_info.maxSets = kCompositeSets;
     pool_info.poolSizeCount = 1;
     pool_info.pPoolSizes = &pool_size;
     if (const VkResult r = vkCreateDescriptorPool(ctx_.device, &pool_info, nullptr, &composite_pool_); r != VK_SUCCESS) {
         LogError("renderer: composite descriptor pool failed ({})", static_cast<int>(r));
         return false;
     }
-    const VkDescriptorSetLayout layouts[2] = {composite_set_layout_, composite_set_layout_};
-    VkDescriptorSet sets[2] = {};
+    VkDescriptorSetLayout layouts[kCompositeSets];
+    std::fill(std::begin(layouts), std::end(layouts), composite_set_layout_);
+    VkDescriptorSet sets[kCompositeSets] = {};
     VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     alloc.descriptorPool = composite_pool_;
-    alloc.descriptorSetCount = 2;
+    alloc.descriptorSetCount = kCompositeSets;
     alloc.pSetLayouts = layouts;
     if (const VkResult r = vkAllocateDescriptorSets(ctx_.device, &alloc, sets); r != VK_SUCCESS) {
         LogError("renderer: composite descriptor sets failed ({})", static_cast<int>(r));
@@ -271,6 +284,10 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     }
     composite_set_ = sets[0];
     final_set_ = sets[1];
+    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+        gen_set_[i] = sets[2 + i];
+        gen_final_set_[i] = sets[2 + kFramesInFlight + i];
+    }
     WriteCompositeSets();
 
     VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64};
@@ -280,7 +297,10 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     layout_info.pushConstantRangeCount = 1;
     layout_info.pPushConstantRanges = &push;
     vkCreatePipelineLayout(ctx_.device, &layout_info, nullptr, &composite_layout_);
+    return BuildCompositePipeline(output_format, composite_pipeline_) && BuildCompositePipeline(final_format_, final_composite_pipeline_);
+}
 
+bool Renderer::BuildCompositePipeline(VkFormat format, VkPipeline& pipeline) {
     VkShaderModule vert = vk::LoadShaderModule(ctx_.device, "fullscreen.vert");
     VkShaderModule frag = vk::LoadShaderModule(ctx_.device, "composite.frag");
     if (!vert || !frag) {
@@ -317,7 +337,7 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     dynamic.pDynamicStates = dynamic_states;
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &output_format;
+    rendering.pColorAttachmentFormats = &format;
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     info.pNext = &rendering;
     info.stageCount = 2;
@@ -330,12 +350,7 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = composite_layout_;
-    bool ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &composite_pipeline_), "composite pipeline");
-    if (ok && final_format_ != output_format) {
-        rendering.pColorAttachmentFormats = &final_format_;
-        ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &final_composite_pipeline_),
-                       "composite intermediate pipeline");
-    }
+    const bool ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &pipeline), "composite pipeline");
     vkDestroyShaderModule(ctx_.device, vert, nullptr);
     vkDestroyShaderModule(ctx_.device, frag, nullptr);
     return ok;
@@ -362,13 +377,30 @@ void Renderer::Shutdown() {
     vkDestroySampler(ctx_.device, wrap_sampler_, nullptr);
     DestroyTargets();
     for (Frame& frame : frames_) {
-        // The final frame fence also covers its earlier segments and external queue work.
-        frame.segments.clear();
         vkDestroyFence(ctx_.device, frame.in_flight, nullptr);
+        vkDestroyFence(ctx_.device, frame.gen_in_flight, nullptr);
         vkDestroySemaphore(ctx_.device, frame.image_available, nullptr);
+        vkDestroySemaphore(ctx_.device, frame.gen_available, nullptr);
         vkDestroyCommandPool(ctx_.device, frame.pool, nullptr);
     }
     ctx_.Shutdown();
+}
+
+void Renderer::UpdateOutputMode() {
+    output_mode_ = ctx_.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT ? RendererOutputMode::ScRgb
+                   : ctx_.swapchain.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT     ? RendererOutputMode::Hdr10
+                                                                                       : RendererOutputMode::Sdr;
+}
+
+void Renderer::SetHdr(bool enabled) {
+    if (settings_.hdr == enabled) return;
+    settings_.hdr = enabled;
+    if (window_) swapchain_dirty_ = true;
+    LogInfo("display: HDR {} (applied at next frame)", enabled ? "on" : "off");
+}
+
+void Renderer::RecheckOutput() {
+    if (window_) swapchain_dirty_ = true;
 }
 
 void Renderer::SetVsync(bool enabled) {
@@ -385,11 +417,6 @@ void Renderer::Resize(uint32_t, uint32_t) {
 bool Renderer::BeginFrame(bool present) {
     Frame& frame = frames_[frame_index_];
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
-    ctx_.ReclaimUploads(VK_WHOLE_SIZE);
-    frame.segments.clear();
-    frame.wait = VK_NULL_HANDLE;
-    frame.wait_value = 0;
-    frame.cmd = frame.commands.front();
     // a frame generation switch (DLSS-G's swapchain and plugin) happens here, between frames: the previous frame is presented,
     // and no command buffer or swapchain image of this one exists yet
     bool keep_current_swapchain = false;
@@ -423,11 +450,30 @@ bool Renderer::BeginFrame(bool present) {
             if (w == 0 || h == 0) {
                 return false;
             }
-            if (!ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync, settings_.hdr)) {
+            // the output the display offers now (Windows HDR may have been switched): only the last composite depends on it
+            const VkFormat previous_format = ctx_.swapchain.format;
+            const RendererOutputMode previous_mode = output_mode_;
+            bool created = ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync, settings_.hdr);
+            if (!created && settings_.hdr && !ctx_.swapchain_refused) {
+                created = ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync, false);
+            }
+            if (!created) {
                 if (ctx_.swapchain_refused && swapchain_failed) {
                     swapchain_failed();
                 }
                 return false;
+            }
+            UpdateOutputMode();
+            if (ctx_.swapchain.format != previous_format) {
+                if (composite_pipeline_) vkDestroyPipeline(ctx_.device, composite_pipeline_, nullptr);
+                composite_pipeline_ = VK_NULL_HANDLE;
+                output_format_ = ctx_.swapchain.format;
+                if (!BuildCompositePipeline(output_format_, composite_pipeline_)) {
+                    return false;
+                }
+            }
+            if (output_mode_ != previous_mode) {
+                LogInfo("display: output {} while running", output_mode_ == RendererOutputMode::Sdr ? "SDR" : output_mode_ == RendererOutputMode::ScRgb ? "HDR (scRGB)" : "HDR (HDR10)");
             }
             DestroyTargets();
             if (render_extent_.width > 0 && render_extent_.height > 0) {
@@ -458,10 +504,34 @@ bool Renderer::BeginFrame(bool present) {
         }
     }
     vkResetFences(ctx_.device, 1, &frame.in_flight);
+    if (frame.gen_pending) {
+        // the generated frame's composite is submitted after the frame's own and must be done before this slot's command
+        // buffers are reset (Apple MetalFX frame interpolation)
+        ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.gen_in_flight, VK_TRUE, UINT64_MAX), "generated frame fence wait");
+        vkResetFences(ctx_.device, 1, &frame.gen_in_flight);
+        frame.gen_pending = false;
+    }
+    vkResetFences(ctx_.device, 1, &frame.gen_in_flight);
     vkResetCommandPool(ctx_.device, frame.pool, 0);
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.cmd, &begin);
+    active_cmd_ = frame.cmd;
+    split_wait_ = VK_NULL_HANDLE;
+    split_wait_value_ = 0;
+    gen_acquired_ = false;
+    if (presenting_ && generated_frame.generate) {
+        // the generated frame's swapchain image, acquired beside the rendered one; both are presented at EndFrame, the
+        // generated frame first. The hooks may go away while the frame renders (a mid-frame switch off): the image is then
+        // presented with the rendered frame's content repeated.
+        const VkResult gen_acquire = ctx_.AcquireNextImage(frame.gen_available, &gen_index_);
+        if (gen_acquire == VK_SUCCESS || gen_acquire == VK_SUBOPTIMAL_KHR) {
+            gen_acquired_ = true;
+        } else if (gen_acquire != VK_NOT_READY && gen_acquire != VK_TIMEOUT) {
+            ctx_.CheckDeviceLost(gen_acquire, "generated frame acquire");
+            swapchain_dirty_ = true;
+        }
+    }
 
     vk::ImageBarrier(frame.cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -484,56 +554,13 @@ bool Renderer::BeginFrame(bool present) {
     return true;
 }
 
-VkCommandBuffer Renderer::QueueHandoff(VkCommandBuffer current, VkSemaphore inputs_ready, uint64_t inputs_value,
-                                      VkSemaphore output_ready, uint64_t output_value, std::function<void()> submit_external) {
-    Frame& frame = frames_[frame_index_];
-    if (current != frame.cmd || !inputs_ready || !output_ready || !submit_external) {
-        return VK_NULL_HANDLE;
-    }
-    const VkCommandBuffer next = BeginContinuation(frame);
-    if (!next) {
-        return VK_NULL_HANDLE;
-    }
-    if (!vk::Check(vkEndCommandBuffer(current), "external queue segment end")) {
-        throw std::runtime_error("cannot finish the frame before external queue work");
-    }
-    frame.segments.push_back({current, frame.wait, frame.wait_value, inputs_ready, inputs_value, std::move(submit_external)});
-    frame.cmd = next;
-    frame.wait = output_ready;
-    frame.wait_value = output_value;
-    return next;
-}
-
-// Begins the command buffer after the frame's current one, allocating it the first time a frame needs that many.
-VkCommandBuffer Renderer::BeginContinuation(Frame& frame) {
-    const size_t next_index = static_cast<size_t>(std::find(frame.commands.begin(), frame.commands.end(), frame.cmd) - frame.commands.begin()) + 1;
-    if (next_index == frame.commands.size()) {
-        VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        alloc.commandPool = frame.pool;
-        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc.commandBufferCount = 1;
-        VkCommandBuffer next = VK_NULL_HANDLE;
-        if (!vk::Check(vkAllocateCommandBuffers(ctx_.device, &alloc, &next), "frame continuation")) {
-            return VK_NULL_HANDLE;
-        }
-        frame.commands.push_back(next);
-    }
-    const VkCommandBuffer next = frame.commands[next_index];
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (!vk::Check(vkBeginCommandBuffer(next, &begin), "frame continuation begin")) {
-        return VK_NULL_HANDLE;
-    }
-    return next;
-}
-
 void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format, VkOffset2D offset) {
     VkViewport viewport{static_cast<float>(offset.x), static_cast<float>(offset.y), static_cast<float>(extent.width), static_cast<float>(extent.height),
                         0.0f, 1.0f};
     VkRect2D scissor{offset, extent};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    const VkPipeline pipeline = target_format == final_format_ && final_format_ != output_format_ ? final_composite_pipeline_ : composite_pipeline_;
+    const VkPipeline pipeline = target_format == final_format_ ? final_composite_pipeline_ : composite_pipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_layout_, 0, 1, &set, 0, nullptr);
     const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
@@ -550,7 +577,7 @@ void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, V
 
 void Renderer::EndFrame(bool draw_ui) {
     Frame& frame = frames_[frame_index_];
-    VkCommandBuffer cmd = frame.cmd;
+    VkCommandBuffer cmd = active_cmd_;
     vk::ImageBarrier(cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -572,18 +599,13 @@ void Renderer::EndFrame(bool draw_ui) {
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
-    // ImGui goes only onto the swapchain image (below), so a generator that lays its own UI layer over the frames it makes would
-    // show the debug windows every other refresh; such frames are presented without generation.
-    const ImDrawData* imgui = output_mode_ == RendererOutputMode::Sdr && draw_ui && imgui_ready_ ? ImGui::GetDrawData() : nullptr;
-    const bool imgui_on_target = imgui && imgui->TotalVtxCount > 0;
-    const bool generator_ui = ui_layer && ui_layer(image_index_);
-    const vk::Image* hud = presenting_ && hudless && !xr && !(imgui_on_target && generator_ui) ? hudless(image_index_) : nullptr;
+    const vk::Image* hud = presenting_ && hudless && !xr ? hudless(image_index_) : nullptr;
     vkCmdBeginRendering(cmd, &rendering);
     Composite(cmd, composite_set_, 0.0f, extent, final_format_);
     if (overlay && !hud && (!xr || xr_frame_.overlay_on_frame)) {
         overlay(cmd, final_.view, extent);
     }
-    if (output_mode_ != RendererOutputMode::Sdr && draw_ui && imgui_ready_ && presenting_) {
+    if (draw_ui && imgui_ready_ && presenting_) {
         ImDrawData* data = ImGui::GetDrawData();
         if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
             const ImVec2 saved_scale = data->FramebufferScale;
@@ -603,7 +625,8 @@ void Renderer::EndFrame(bool draw_ui) {
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         color.imageView = hud->view;
         vkCmdBeginRendering(cmd, &rendering);
-        Composite(cmd, final_set_, 1.0f, extent, hud->format);
+        // MetalFX composes UI and applies output brightness/grain after interpolation. Other generators keep their existing input.
+        Composite(cmd, final_set_, generated_frame.generate ? -1.0f : 1.0f, extent, hud->format);
         vkCmdEndRendering(cmd);
         vk::ImageBarrier(cmd, hud->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -625,46 +648,10 @@ void Renderer::EndFrame(bool draw_ui) {
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
-        // The same UI again on a transparent layer, which the generator lays over the frames it makes; cleared even without UI.
-        if (const vk::Image* layer = ui_layer ? ui_layer(image_index_) : nullptr) {
-            vk::ImageBarrier(cmd, layer->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            color.imageView = layer->view;
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-            vkCmdBeginRendering(cmd, &rendering);
-            if (overlay) {
-                overlay_layer = true;
-                overlay(cmd, layer->view, extent);
-                overlay_layer = false;
-            }
-            vkCmdEndRendering(cmd);
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            vk::ImageBarrier(cmd, layer->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                             VK_ACCESS_2_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        }
     }
     if (xr) {
         RecordXr(cmd);
     }
-    VkCommandBuffer offscreen = VK_NULL_HANDLE;
-#ifdef __APPLE__
-    /* MoltenVK takes the drawable from the compositor while it encodes the first command buffer that writes the swapchain image, and in a
-       window that waits until the compositor frees one. Submitted together with that wait, the whole post chain sat behind it and the GPU
-       idled; submitting the offscreen frame first keeps the GPU busy through the wait and leaves only the final composite after it. */
-    if (presenting_ && target_image) {
-        if (const VkCommandBuffer next = BeginContinuation(frame)) {
-            offscreen = cmd;
-            if (!vk::Check(vkEndCommandBuffer(offscreen), "offscreen frame end")) {
-                throw std::runtime_error("cannot finish the offscreen part of the frame");
-            }
-            cmd = next;
-            frame.cmd = next;
-        }
-    }
-#endif
     // VR: the window shows the eye scaled to fit (its size is the headset's, not the window's)
     const VkExtent2D window_extent = presenting_ ? ctx_.swapchain.extent : extent;
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
@@ -680,13 +667,13 @@ void Renderer::EndFrame(bool draw_ui) {
         }
         vkCmdBeginRendering(cmd, &rendering);
         if (fitted) {
-            const VkRect2D viewport = FitRenderViewport(extent, window_extent);
-            Composite(cmd, final_set_, 1.0f, viewport.extent, ctx_.swapchain.format, viewport.offset);
+            const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
+                                         static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
+            const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
+            Composite(cmd, final_set_, 1.0f, shown, ctx_.swapchain.format,
+                      {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
         } else {
             Composite(cmd, final_set_, 1.0f, extent, window_ ? ctx_.swapchain.format : output_.format);
-        }
-        if (output_mode_ == RendererOutputMode::Sdr && draw_ui && imgui_ready_) {
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
         }
         vkCmdEndRendering(cmd);
     }
@@ -736,81 +723,62 @@ void Renderer::EndFrame(bool draw_ui) {
                          VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     }
     vkEndCommandBuffer(cmd);
-
-    // Each prefix releases its inputs to the external queue. Only then is that queue's command buffer committed.
-    for (const FrameSegment& segment : frame.segments) {
-        VkCommandBufferSubmitInfo segment_cmd{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-        segment_cmd.commandBuffer = segment.cmd;
-        VkSemaphoreSubmitInfo segment_wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        segment_wait.semaphore = segment.wait;
-        segment_wait.value = segment.wait_value;
-        segment_wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        VkSemaphoreSubmitInfo segment_signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        segment_signal.semaphore = segment.signal;
-        segment_signal.value = segment.signal_value;
-        segment_signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        VkSubmitInfo2 prefix{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-        prefix.commandBufferInfoCount = 1;
-        prefix.pCommandBufferInfos = &segment_cmd;
-        prefix.waitSemaphoreInfoCount = segment.wait ? 1 : 0;
-        prefix.pWaitSemaphoreInfos = &segment_wait;
-        prefix.signalSemaphoreInfoCount = 1;
-        prefix.pSignalSemaphoreInfos = &segment_signal;
-        const VkResult result = vkQueueSubmit2(ctx_.queue, 1, &prefix, VK_NULL_HANDLE);
-        ctx_.CheckDeviceLost(result, "external queue inputs submit");
-        if (!vk::Check(result, "external queue inputs submit")) {
-            throw std::runtime_error("cannot submit inputs to the external queue");
-        }
-        segment.submit_external();
-    }
-    // The offscreen part takes over the wait for external queue work; queue order and the barriers on final_ order the rest after it.
-    if (offscreen) {
-        VkCommandBufferSubmitInfo offscreen_cmd{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-        offscreen_cmd.commandBuffer = offscreen;
-        VkSemaphoreSubmitInfo offscreen_wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        offscreen_wait.semaphore = frame.wait;
-        offscreen_wait.value = frame.wait_value;
-        offscreen_wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        VkSubmitInfo2 offscreen_submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-        offscreen_submit.commandBufferInfoCount = 1;
-        offscreen_submit.pCommandBufferInfos = &offscreen_cmd;
-        offscreen_submit.waitSemaphoreInfoCount = frame.wait ? 1 : 0;
-        offscreen_submit.pWaitSemaphoreInfos = &offscreen_wait;
-        ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &offscreen_submit, VK_NULL_HANDLE), "offscreen frame submit");
-        frame.wait = VK_NULL_HANDLE;
-        frame.wait_value = 0;
+    if (split_wait_) {
+        // MetalFX cannot signal a Vulkan queue semaphore directly (the completion callback host-signals this timeline). Wait
+        // here before submitting the resumed command buffer so both Vulkan validation and the present queue see the completed
+        // cross-API dependency rather than an unresolved imported-event signal.
+        VkSemaphoreWaitInfo split_wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        split_wait.semaphoreCount = 1;
+        split_wait.pSemaphores = &split_wait_;
+        split_wait.pValues = &split_wait_value_;
+        ctx_.CheckDeviceLost(vkWaitSemaphores(ctx_.device, &split_wait, UINT64_MAX), "MetalFX upscale wait");
+        split_wait_ = VK_NULL_HANDLE;
     }
 
     VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     cmd_info.commandBuffer = cmd;
-    VkSemaphoreSubmitInfo waits[2]{};
-    uint32_t wait_count = 0;
-    if (frame.wait) {
-        auto& wait = waits[wait_count++];
-        wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        wait.semaphore = frame.wait;
-        wait.value = frame.wait_value;
-        wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    }
-    if (presenting_) {
-        auto& wait = waits[wait_count++];
-        wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        wait.semaphore = frame.image_available;
-        wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    }
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = frame.image_available;
+    wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    // the frame generation's ordering: the frame's command buffer signals the value the Metal interpolation waits on
+    VkSemaphoreSubmitInfo fg_signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    VkSemaphore fg_wait = VK_NULL_HANDLE;
+    uint64_t fg_signal_value = 0;
+    uint64_t fg_wait_value = 0;
+    const bool fg_sync = presenting_ && gen_acquired_ && generated_frame.sync &&
+                         generated_frame.sync(fg_signal.semaphore, fg_signal_value, fg_wait, fg_wait_value);
+    fg_signal.value = fg_signal_value;
+    fg_signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSemaphoreSubmitInfo waits[2] = {wait, fg_signal};
+    VkSemaphoreSubmitInfo signals[2] = {signal, fg_signal};
+    uint32_t wait_count = 0;
+    uint32_t signal_count = 0;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cmd_info;
-    submit.waitSemaphoreInfoCount = wait_count;
-    submit.pWaitSemaphoreInfos = waits;
     if (presenting_) {
         signal.semaphore = ctx_.swapchain.render_finished[image_index_];
-        submit.signalSemaphoreInfoCount = 1;
-        submit.pSignalSemaphoreInfos = &signal;
+        waits[wait_count++] = wait;
+        signals[signal_count++] = signal;
     }
+    if (fg_sync) {
+        signals[signal_count++] = fg_signal;
+    }
+    submit.waitSemaphoreInfoCount = wait_count;
+    submit.pWaitSemaphoreInfos = waits;
+    submit.signalSemaphoreInfoCount = signal_count;
+    submit.pSignalSemaphoreInfos = signals;
+    active_cmd_ = VK_NULL_HANDLE;
     ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, frame.in_flight), "frame submit");
+    if (presenting_ && gen_acquired_) {
+        // the generated frame, presented before the rendered one: the interpolation of the previous and this frame's
+        // HUD-less copies (Apple MetalFX). Repeats the rendered frame when the interpolation did not run, and then waits
+        // nothing on the Metal side (the wait would never be signaled).
+        const vk::Image* generated = fg_sync && !xr ? generated_frame.generate() : nullptr;
+        PresentGeneratedFrame(frame, generated, generated ? fg_wait : VK_NULL_HANDLE, fg_wait_value, draw_ui);
+    }
     streamline::SetMarker(streamline::Marker::RenderSubmitEnd);
     if (presenting_) {
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -828,6 +796,194 @@ void Renderer::EndFrame(bool draw_ui) {
         }
     }
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
+}
+
+bool Renderer::SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSemaphore wait, uint64_t wait_value) {
+    if (!active_cmd_ || active_cmd_ != frames_[frame_index_].cmd) {
+        return false;
+    }
+    Frame& frame = frames_[frame_index_];
+    const VkResult ended = vkEndCommandBuffer(active_cmd_);
+    if (ended != VK_SUCCESS) {
+        LogError("renderer: the upscale split could not end the frame's command buffer ({})", vk::ResultName(ended));
+        return false;
+    }
+    VkSemaphoreSubmitInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signal_info.semaphore = signal;
+    signal_info.value = signal_value;
+    signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmd_info.commandBuffer = active_cmd_;
+    submit.pCommandBufferInfos = &cmd_info;
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &signal_info;
+    ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, VK_NULL_HANDLE), "upscale split submit");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    const VkResult begun = vkBeginCommandBuffer(frame.resume, &begin);
+    if (begun != VK_SUCCESS) {
+        LogError("renderer: the upscale split could not begin the resume command buffer ({})", vk::ResultName(begun));
+        active_cmd_ = VK_NULL_HANDLE;
+        return false;
+    }
+    active_cmd_ = frame.resume;
+    split_wait_ = wait;
+    split_wait_value_ = wait_value;
+    return true;
+}
+
+void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui) {
+    if (gen_index_ >= ctx_.swapchain.images.size() || !gen_set_[frame_index_]) {
+        gen_acquired_ = false;
+        return;
+    }
+    if (source && fg_wait) {
+        VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        wait_info.semaphoreCount = 1;
+        wait_info.pSemaphores = &fg_wait;
+        wait_info.pValues = &fg_wait_value;
+        const VkResult waited = vkWaitSemaphores(ctx_.device, &wait_info, UINT64_MAX);
+        ctx_.CheckDeviceLost(waited, "MetalFX interpolation wait");
+        if (waited != VK_SUCCESS) {
+            source = nullptr;
+            fg_wait = VK_NULL_HANDLE;
+        }
+    }
+    VkImage target = ctx_.swapchain.images[gen_index_];
+    VkImageView view = ctx_.swapchain.views[gen_index_];
+    VkCommandBuffer cmd = frame.gen_cmd;
+    const VkExtent2D extent = RenderExtent();
+    if (!frame.gen_final.image &&
+        !ctx_.CreateImage(frame.gen_final, final_format_, {extent.width, extent.height, 1},
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+        LogError("renderer: the generated frame's UI target could not be created");
+        gen_acquired_ = false;
+        return;
+    }
+    const vk::Image& from = source ? *source : final_;
+    // this slot's gen set binds the image to composite (the generated frame, or the rendered frame repeated)
+    const VkImageView noise = grain_noise_ ? grain_noise_ : scene_color_.view;
+    VkDescriptorImageInfo infos[4] = {{linear_sampler_, from.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                      {linear_sampler_, frame.gen_final.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    VkWriteDescriptorSet writes[4]{};
+    for (int i = 0; i < 4; ++i) {
+        writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[i].dstSet = i < 2 ? gen_set_[frame_index_] : gen_final_set_[frame_index_];
+        writes[i].dstBinding = i % 2;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(ctx_.device, 4, writes, 0, nullptr);
+
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS) {
+        gen_acquired_ = false;
+        return;
+    }
+    const VkExtent2D window_extent = ctx_.swapchain.extent;
+    const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
+    vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    if (source) {
+        // Metal wrote the generated frame between the Vulkan submits. The render submit signaled the Metal shared event, and
+        // this composite submit waits for the signal back before transitioning from the Metal pass's GENERAL layout.
+        vk::ImageBarrier(cmd, source->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                         VK_ACCESS_2_MEMORY_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    vk::ImageBarrier(cmd, frame.gen_final.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = frame.gen_final.view;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea = {{0, 0}, extent};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &rendering);
+    Composite(cmd, gen_set_[frame_index_], -1.0f, extent, final_format_);
+    // UI pipelines target the floating-point final format, never a swapchain format. A repeated frame already contains UI.
+    if (source && overlay) {
+        overlay(cmd, frame.gen_final.view, extent);
+    }
+    if (source && draw_ui && imgui_ready_) {
+        ImDrawData* data = ImGui::GetDrawData();
+        if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
+            const ImVec2 saved_scale = data->FramebufferScale;
+            data->FramebufferScale = ImVec2(static_cast<float>(extent.width) / data->DisplaySize.x,
+                                            static_cast<float>(extent.height) / data->DisplaySize.y);
+            ImGui_ImplVulkan_RenderDrawData(data, cmd);
+            data->FramebufferScale = saved_scale;
+        }
+    }
+    vkCmdEndRendering(cmd);
+    vk::ImageBarrier(cmd, frame.gen_final.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    color.imageView = view;
+    color.loadOp = fitted ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    rendering.renderArea = {{0, 0}, fitted ? window_extent : extent};
+    vkCmdBeginRendering(cmd, &rendering);
+    if (fitted) {
+        const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
+                                     static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
+        const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
+        Composite(cmd, gen_final_set_[frame_index_], 1.0f, shown, ctx_.swapchain.format,
+                  {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
+    } else {
+        Composite(cmd, gen_final_set_[frame_index_], 1.0f, extent, ctx_.swapchain.format);
+    }
+    vkCmdEndRendering(cmd);
+    vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
+    const VkResult ended = vkEndCommandBuffer(cmd);
+    if (ended != VK_SUCCESS) {
+        LogError("renderer: the generated frame's composite failed ({})", vk::ResultName(ended));
+        gen_acquired_ = false;
+        return;
+    }
+    VkSemaphoreSubmitInfo waits[1]{};
+    waits[0] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    waits[0].semaphore = frame.gen_available;
+    waits[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signal.semaphore = ctx_.swapchain.render_finished[gen_index_];
+    signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmd_info.commandBuffer = cmd;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmd_info;
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = waits;
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &signal;
+    ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, frame.gen_in_flight), "generated frame submit");
+    frame.gen_pending = true;
+    VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    present.waitSemaphoreCount = 1;
+    present.pWaitSemaphores = &ctx_.swapchain.render_finished[gen_index_];
+    present.swapchainCount = 1;
+    present.pSwapchains = &ctx_.swapchain.handle;
+    present.pImageIndices = &gen_index_;
+    const VkResult result = ctx_.QueuePresent(present);
+    ctx_.CheckDeviceLost(result, "generated frame present");
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        swapchain_dirty_ = true;
+    }
 }
 
 bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop) {

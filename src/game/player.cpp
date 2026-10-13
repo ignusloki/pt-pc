@@ -100,6 +100,15 @@ uint32_t PadLocks::Mask(char set) const {
     return mask;
 }
 
+uint32_t PadLocks::MaskExcept(char set, const std::string& except) const {
+    const auto& slots = set == 'A' ? a_ : set == 'B' ? b_ : c_;
+    uint32_t mask = 0;
+    for (const auto& [key, value] : slots) {
+        if (key != except) mask |= value;
+    }
+    return mask;
+}
+
 std::string PadLocks::Describe() const {
     std::string text;
     for (const auto* slots : {&a_, &b_, &c_}) {
@@ -141,6 +150,15 @@ void Player::Warp(const glm::vec3& position, float fox_yaw) {
     ResetLocomotion();
     UpdateEye(0.0f);
     PublishNow();
+}
+
+glm::vec3 Player::FollowHead(const CollisionWorld& world, const glm::vec3& displacement) {
+    const glm::vec3 before = controller.position;
+    controller.Move(world, glm::vec3(displacement.x, 0.0f, displacement.z), 0.0f, 0.0f);
+    UpdateEye(0.0f);
+    PublishNow();
+    const glm::vec3 moved = controller.position - before;
+    return glm::vec3(moved.x, 0.0f, moved.z);
 }
 
 void Player::ResetLocomotion() {
@@ -301,9 +319,29 @@ void Player::LocomotionFrame(const PlayerFrameContext& context) {
     }
 }
 
+glm::vec2 Player::DemoLightStick(const InputState& input, bool invert_x, bool invert_y) const {
+    // the port's "Demo" lock (Game::Update: every bit while a demo drives the player) is not the original's: its demos leave
+    // the pad's locks to the scripts, so 0x1282C50 still reads the stick under gc_p00_030
+    const uint32_t lock_b = locks.MaskExcept('B', "Demo");
+    glm::vec2 light(0.0f);
+    if (!(lock_b & 2)) {
+        light = glm::vec2(PadAxis(input.right_stick.x) * (invert_x ? -1.0f : 1.0f), PadAxis(input.right_stick.y) * (invert_y ? -1.0f : 1.0f));
+    }
+    if (!(lock_b & 1)) {
+        light.x += 0.5f * PadAxis(input.left_stick.x);
+    }
+    if (input.from_gamepad) {
+        const uint32_t held = input.held & ~locks.MaskExcept('A', "Demo");
+        light.y += ((held & kPadLookDown) ? 0.25f : 0.0f) - ((held & kPadLookUp) ? 0.25f : 0.0f);
+        light.x += ((held & kPadLookRight) ? 0.25f : 0.0f) - ((held & kPadLookLeft) ? 0.25f : 0.0f);
+    }
+    return glm::clamp(light, glm::vec2(-1.0f), glm::vec2(1.0f));
+}
+
 void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameContext& context) {
     if (context.peephole_theater && !peephole_look_active_) {
-        peephole_yaw_ = yaw;
+        // PS4 (peephole_look_f110): from a start at 8.8 degrees the view reaches -14.8 and +15.3, +-15 round the hole's axis
+        peephole_yaw_ = context.peephole_center_valid ? context.peephole_center_yaw : yaw;
         look_velocity_ = glm::vec2(0.0f);
     }
     peephole_look_active_ = context.peephole_theater;

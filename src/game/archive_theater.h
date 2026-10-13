@@ -9,8 +9,10 @@
 
 #include "engine/platform/input.h"
 #include "engine/render/camera.h"
+#include "engine/render/free_camera.h"
 #include "engine/render/scene_renderer.h"
 #include "game/save_data.h"
+#include "game/archive_model_camera.h"
 
 namespace pt {
 class Vfs;
@@ -34,7 +36,7 @@ struct Stage;
 // preface and the openings run the boot's own steps; a hallway demo enters its loop through the start room's door as a loop browser
 // pick does (Game::PrepareTheaterLoop, the walk of the loop browser's previews), then plays at the place the level data gives it (the
 // trap or script that starts it in play, its demo center locator) with the player in that trap when the demo has no camera; the
-// ending loads the ending as the f160 exit does. Models stand at the start room's player start in the room's own light, alone in
+// ending loads the ending as the f160 exit does. Models stand at the start room's player start in museum light, alone in
 // the picture: a gimmick in its own motion, any other model as its file holds it.
 class ArchiveTheater {
 public:
@@ -47,9 +49,8 @@ public:
         float demo_rate = 1.0f;
         // the player's subtitle and language options
         GameOptions options;
-        // the model viewer's held exposure (ScreenEffects::pinned_ev): the room's lit surfaces as in play; the Museum's thumbnail
-        // capture (main.cpp, kMuseumPreviewModelEv) holds it higher, since its shots of the dark start room read near black
-        float model_ev = -5.5f;
+        // The same held exposure for interactive inspection and thumbnail capture.
+        float model_ev = kArchiveModelEv;
     };
 
     ArchiveTheater(Vfs& vfs, ModelCache& models, const ArchiveEntry& entry, const Settings& settings);
@@ -60,6 +61,7 @@ public:
     bool Start();
     // one game tick; `input` is the player's (the model viewer turns with it)
     void Update(float dt, const InputState& input);
+    void UpdateModelCamera(float dt, const FreeCameraControls& input);
     bool Finished() const { return phase_ == Phase::Done; }
     // the viewer is left (the menu's back)
     void Stop();
@@ -71,6 +73,8 @@ public:
     bool ModelView() const { return model_mode_; }
     Camera ViewCamera() const;
     void CollectDraws(std::vector<DrawItem>& out);
+    // After the scene builder and VFX prepare their lighting; cutscenes retain their own lights.
+    void ApplyModelLighting(SceneLighting& lighting) const;
 
 private:
     enum class Kind { Model, Preface, Opening, Room, Hallway, Kill, Ending, Teaser };
@@ -106,6 +110,8 @@ private:
     glm::vec3 look_target_{0.0f};
     // the model viewer
     bool model_mode_ = false;
+    Camera model_camera_;
+    glm::vec3 model_camera_origin_{0.0f};
     bool gimmick_ = false;
     int gimmick_type_ = -1;
     const void* model_mesh_ = nullptr;

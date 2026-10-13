@@ -112,8 +112,8 @@ bool UiBatch::Init(Renderer& renderer, TextureManager& textures) {
 }
 
 VkFormat UiBatch::TargetFormat() const {
-    const VkFormat swapchain = renderer_->Context().swapchain.format;
-    return swapchain != VK_FORMAT_UNDEFINED ? swapchain : VK_FORMAT_R8G8B8A8_UNORM;
+    // the UI draws into the renderer's final image (Renderer::EndFrame's overlay)
+    return renderer_->FinalFormat();
 }
 
 bool UiBatch::CreatePipelines(VkFormat format) {

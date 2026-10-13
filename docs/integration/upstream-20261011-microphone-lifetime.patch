@@ -1,0 +1,21 @@
+--- a/src/engine/voice/microphone.cpp
++++ b/src/engine/voice/microphone.cpp
+@@ -54,12 +54,14 @@
+         }).detach();
+         return AsyncState::Pending;
+     }
+-    std::lock_guard lock(pending_->mutex);
+-    if (!pending_->done) {
++    // Keep the state alive until the guard releases its mutex, even after the worker has exited.
++    const auto state = pending_;
++    std::lock_guard lock(state->mutex);
++    if (!state->done) {
+         return AsyncState::Pending;
+     }
+-    stream_ = pending_->stream;
+-    pending_->stream = nullptr;
++    stream_ = state->stream;
++    state->stream = nullptr;
+     pending_.reset();
+     return stream_ ? AsyncState::Opened : AsyncState::Failed;
+ }

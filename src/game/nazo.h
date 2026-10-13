@@ -59,6 +59,8 @@ public:
     void AbortPeephole();
     // translation of the `Peephole` control asset (GetAssetTransform 0x9125D0), the pivot of the theater camera
     bool PeepholePosition(glm::vec3& out) const { return AssetPosition("Peephole", out); }
+    // the Peephole asset's world transform in the current stage (its axes give the hole's direction)
+    bool PeepholeTransform(glm::mat4& out) const;
     // any control asset's translation (XMarkText, HELL_H, ...), for the input script's fent
     bool ControlAssetPosition(std::string_view name, glm::vec3& out) const { return AssetPosition(name, out); }
     bool PeepholeEye(glm::vec3& out) const {

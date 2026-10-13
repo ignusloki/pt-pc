@@ -519,7 +519,8 @@ private:
         if (cls == "FxConstVectorNode") {
             e.op = ExprOp::Const;
             e.v0 = Degrees(n.Vec4("vector"), n.UInt("vectorType") == 1) * n.Float("force", 1.0f);
-            e.flags = n.Bool("global") ? 1u : 0u;
+            // bit 0 global (world axes), bit 3 an angle vector (System::Eval turns only the others)
+            e.flags = (n.Bool("global") ? 1u : 0u) | (n.UInt("vectorType") == 1 ? 8u : 0u);
         } else if (cls == "FxColorVectorNode") {
             e.op = ExprOp::Const;
             e.v0 = n.Vec4("color");
@@ -529,7 +530,7 @@ private:
             const float force = n.Float("force", 1.0f);
             e.v0 = Degrees(n.Vec4("randomMin"), rot) * force;
             e.v1 = Degrees(n.Vec4("randomMax"), rot) * force;
-            e.flags = (n.Bool("xySquere") ? 2u : 0u) | (n.Bool("global") ? 1u : 0u);
+            e.flags = (n.Bool("xySquere") ? 2u : 0u) | (n.Bool("global") ? 1u : 0u) | (rot ? 8u : 0u);
             e.seed = n.UInt("randomGatherSeedValue");
             e.seed_type = static_cast<uint8_t>(n.UInt("randomGatherType"));
             e.slot = static_cast<int32_t>(NewSlot());
@@ -668,6 +669,7 @@ private:
                              random_force ? force - range : force, random_force ? force + range : force);
             e.v1 = n.Vec4(kHashSpreadRotation, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
             e.mode = (n.Bool(kHashSpreadFixedElevation) ? 1u : 0u) | (n.Bool(kHashSpreadEvenAngles) ? 2u : 0u);
+            e.flags = n.Bool("global") ? 1u : 0u;
             e.seed = n.UInt("randomGatherSeedValue");
             e.seed_type = static_cast<uint8_t>(n.UInt("randomGatherType"));
             e.slot = static_cast<int32_t>(NewSlot());

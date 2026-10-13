@@ -113,8 +113,10 @@ public:
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
     // DLSS Frame Generation on Vulkan presents without v-sync (Streamline's eVSyncOffRequired): the swapchain ignores the
-    // v-sync setting while it is set
+    // v-sync setting while it is set. Apple MetalFX frame generation is the opposite (force_vsync): it presents two images a
+    // rendered frame and paces them on the refreshes, so the swapchain is FIFO whatever the setting.
     bool force_vsync_off = false;
+    bool force_vsync = false;
     // the last CreateSwapchain failed in Vulkan (the surface or a swapchain hook refused it), not for want of a window size
     bool swapchain_refused = false;
 
@@ -146,7 +148,8 @@ private:
         Submission submission;
         Buffer staging;
     };
-
+    bool hdr_off_logged_ = false;
+    SDL_Window* window_ = nullptr;
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
     std::deque<PendingUpload> pending_uploads_;
     VkDeviceSize pending_upload_bytes_ = 0;

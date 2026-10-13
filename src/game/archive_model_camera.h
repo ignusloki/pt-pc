@@ -2,10 +2,60 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 #include <glm/glm.hpp>
 
+#include "engine/render/camera.h"
+#include "engine/render/scene_lighting.h"
+
 namespace pt::game {
+
+inline constexpr float kArchiveModelEv = 0.0f;
+
+inline float ArchiveModelFrontYaw(std::string_view id, float placement_yaw) {
+    return placement_yaw + (id == "radio" ? glm::radians(90.0f) : 0.0f);
+}
+
+// The museum draws no room geometry. Its lights therefore belong to the orbit camera,
+// rather than to the start room or the player's flashlight. Scale their intensity with
+// distance squared so a phone and Lisa receive the same illumination.
+inline void LightArchiveModel(SceneLighting& lighting, const Camera& camera, const glm::vec3& center,
+                              float radius, float ev) {
+    lighting = SceneLighting{};
+    lighting.valid = true;
+    const float reach = std::max(radius, 0.05f) * 4.0f;
+    const glm::vec3 toward_camera = -camera.Forward();
+    const glm::vec3 offsets[] = {
+        toward_camera - camera.Right() * 0.65f + camera.Up() * 0.8f,
+        toward_camera + camera.Right() * 0.9f + camera.Up() * 0.15f,
+        -toward_camera + camera.Up() * 0.8f,
+    };
+    const float strengths[] = {0.65f, 0.3f, 0.25f};
+    for (size_t i = 0; i < 3; ++i) {
+        SceneLight light;
+        light.id = 0x4D555345554D0000ull + i;
+        light.name = "Museum";
+        light.position = center + glm::normalize(offsets[i]) * reach;
+        light.intensity = glm::vec3(strengths[i] * reach * reach);
+        light.inner_range = reach * 0.1f;
+        light.outer_range = reach * 4.0f;
+        light.source_radius = reach * 0.15f;
+        light.specular_scale = 0.35f;
+        lighting.lights.push_back(light);
+    }
+    lighting.exposure.pinned = true;
+    lighting.exposure.pinned_ev = ev;
+    lighting.exposure.compensation = 0.0f;
+    for (float& compensation : lighting.exposure.add_comp) compensation = 0.0f;
+    lighting.exposure.bloom_weight = 0.0f;
+    lighting.screen.color_scale = glm::vec3(1.0f);
+    lighting.screen.film_grain = false;
+    lighting.screen.screen_distortion = false;
+    lighting.screen.depth_of_field = false;
+    lighting.screen.motion_blur = false;
+    lighting.screen.local_reflections = false;
+}
 
 // Move the model's look point in the camera plane. The limit is relative to the framing chosen at StartModel,
 // so panning can reveal the face or other details without losing the model altogether.

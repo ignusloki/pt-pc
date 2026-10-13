@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace pt::http {
 
@@ -26,6 +27,19 @@ struct Request {
 
 // nullopt when there is no answer at all (offline, DNS, TLS, timeout, no libcurl)
 std::optional<Response> Get(const Request& request);
+
+// One part of a multipart/form-data POST: a field, or a file when filename is set
+struct FormPart {
+    std::string name;
+    std::string filename;
+    std::string content_type = "application/octet-stream";
+    std::string data;
+};
+// HTTPS POST of a multipart form (the crash report upload); Windows only, nullopt elsewhere or without an answer
+std::optional<Response> PostForm(const std::string& url, const std::vector<FormPart>& parts, int timeout_ms = 60000);
+// HTTPS POST of one body with its content type (the log report's Sentry envelope); Windows only, nullopt elsewhere or without
+// an answer
+std::optional<Response> PostBody(const std::string& url, const std::string& content_type, const std::string& body, int timeout_ms = 60000);
 
 // "Tue, 06 Oct 2026 09:25:00 GMT" as a Unix second
 std::optional<int64_t> ParseHttpDate(const std::string& text);

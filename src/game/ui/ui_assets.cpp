@@ -68,10 +68,11 @@ void UiAssets::UploadDecodedPreviews() {
         std::lock_guard lock(preview_mutex_);
         done.swap(preview_done_);
     }
+    // Preview PNGs are already display-encoded, as is the UI target: sample their stored values.
     for (DecodedPreview& decoded : done) {
         std::erase(preview_pending_, decoded.path);
         // a picture that failed to decode is decoded again on demand (LocalPreview)
-        if (!decoded.rgba.empty()) UploadImage(decoded.path, decoded.width, decoded.height, true, decoded.rgba);
+        if (!decoded.rgba.empty()) UploadImage(decoded.path, decoded.width, decoded.height, false, decoded.rgba);
     }
 }
 
@@ -86,7 +87,7 @@ uint32_t UiAssets::LocalPreview(const std::string& path) {
     if (!pixels) return 0;
     std::vector<uint8_t> rgba(pixels, pixels + width * height * 4);
     stbi_image_free(pixels);
-    const auto texture = UploadImage(path, width, height, true, rgba);
+    const auto texture = UploadImage(path, width, height, false, rgba);
     texture_cache_[path] = texture;
     return texture;
 }
