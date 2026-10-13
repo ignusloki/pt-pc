@@ -1,6 +1,8 @@
 # Spatial audio feasibility and implementation scope
 
-Evaluated on 11 October 2026 against v1.0.6, commit `b05adee04ec484bffc6d672ec57a830445817367`.
+Initially evaluated on 11 October 2026 against v1.0.6. Rechecked on 13 October 2026 against released v1.0.7, commit `07bc9029c3a6b6b25d7e0fb1ff45c3df107e69da`, after merging it into `codex/spatial-audio-research`.
+
+The current implementation sequence, file changes and acceptance gates are in [the v1.0.7 integration plan](spatial-audio-implementation.md). Research experiments remain separate from the game executable.
 
 ## Recommendation
 
@@ -14,7 +16,17 @@ The first stage is a moderate output-layer change. The second changes how voices
 | Individual 3D sounds | Retains individual source positions, including elevation, instead of reducing everything to horizontal speakers | Approximately 10–20 additional engineering days; mixing and hardware findings may extend this |
 | AirPods head tracking and personalization | Optional head movement and personal profile support | Estimate after validating runtime support and distribution entitlements |
 
-These are rough engineering estimates, not measured completion times. Hardware test availability affects the schedule. The Mac offline prototype below is already complete; no production spatial-audio feature has been implemented.
+These are rough engineering estimates, not measured completion times. Hardware test availability affects the schedule. Two Mac offline experiments are complete; no production spatial-audio feature has been implemented.
+
+## Recheck after the v1.0.7 update
+
+The branch now contains the complete v1.0.7 Mac release and upstream synchronization work. Comparing v1.0.6 with v1.0.7 found no changes in `src/engine/audio/`, `game_sound.cpp`, or the audio settings model. The eight-channel rendering boundary used by this proposal is intact. This finding is a source comparison, not a new playback regression result.
+
+Nearby changes matter for integration: microphone opening now uses a cancellable worker, and controller Bluetooth haptics use a bounded background writer. Preserve those lifetimes and leave the controller PCM capture before the new main-output processing. The archive theater also opens its own `GameSound` with the default stereo argument; it must receive the selected mode when the feature is implemented.
+
+The streaming experiment on 13 October exercised requests of 1, 7, 127, 255, 511, 512, 997 and 4096 frames, chunked to a preallocated 512-frame native slice. On this Mac, the native component accepted the prepared block range; no extra source render was needed for its input callback. Regular and irregular requests produced the same signal within floating-point rounding, on both arm64 and Rosetta x86_64. That supports the proposed adapter shape, but live SDL playback and hardware route recovery still need tests.
+
+The experiment confirmed a headroom requirement: seven correlated 0.9-amplitude tones, with silent LFE, produced a native headphone peak of approximately 3.1465 where full scale is 1.0. This is a synthetic stress signal, not evidence that normal gameplay currently clips. Per-speaker limiting is insufficient for the Mac's resulting stereo sum. Add protection in the spatial output path and measure actual game scenes before choosing its gain/limiter behavior. Windows hands objects to the system provider rather than exposing the final headphone PCM, so its headroom validation needs a separate capture/listening approach.
 
 ## What the game already provides
 
@@ -34,7 +46,7 @@ Existing surround output negotiates the actual playback-device format. Requestin
 
 Use Apple's `AUSpatialMixer` with one eight-channel ambience-bed input and stereo headphone output. Apple documents this configuration for game-engine multichannel streams. [Apple multichannel spatial-audio sample](https://developer.apple.com/documentation/audiotoolbox/generating-spatial-audio-from-a-multichannel-audio-stream).
 
-The offline probe demonstrates that the mixer can run without replacing the whole engine. The proposed first integration pulls eight-channel engine PCM through the native mixer and sends the resulting stereo PCM through SDL. Live callback, routing and device-change behavior still need validation.
+The offline probes demonstrate that the mixer can run without replacing the whole engine. The proposed first integration prepares eight-channel engine PCM once per block, lets the native mixer pull that prepared data, and sends the resulting stereo PCM through SDL. Live callback, routing and device-change behavior still need validation.
 
 Use generic, fixed headphone rendering initially. Disable extra native reverb and distance attenuation because the game already applies them. Query optional properties before setting them; the x64 probe exposed an unsupported head-tracking setting.
 
@@ -46,7 +58,7 @@ Speaker order needs an explicit conversion:
 | Existing eight-channel engine output / SDL | FL, FR, FC, LFE, BL, BR, SL, SR |
 | Apple's `MPEG_7_1_C` input used by the probe | FL, FR, FC, LFE, SL, SR, BL, BR |
 
-Build the Apple input from SDL indices `{0, 1, 2, 3, 6, 7, 4, 5}`. Apple's sample uses a different 7.1 layout with front-wide channels; copying that layout would mislabel our side/rear channels. The layout definitions were checked in the installed SDK and exercised in the probe.
+Build the Apple input from SDL indices `{0, 1, 2, 3, 6, 7, 4, 5}`. The current Apple article's prose references a different 7.1 layout with front-wide channels, while its displayed code references a 7.1.4 layout. Neither should be copied into our eight-channel adapter. Our `MPEG_7_1_C` layout was checked in the installed SDK and exercised with independently isolated SDL input channels in the streaming probe.
 
 ### Windows
 
@@ -61,7 +73,7 @@ The desktop API starts at Windows 10 version 1703. Initialization and format che
 | Area | Intended work |
 | --- | --- |
 | `AudioOutput` | Select SDL or native spatial output; report the active mode; handle start, stop, failure and route changes |
-| `SoundSystem` and `GameSound` initialization | Pass an output mode instead of a surround boolean |
+| `SoundSystem`, `GameSound` and archive theater initialization | Pass the selected output mode to every playback session; report native output as open even without an SDL stream |
 | Settings and PC Settings menu | Offer Stereo, Surround and Spatial; retain Stereo as default; require restart initially |
 | Existing settings migration | When the new key is absent, map `audio.surround=1` to Surround and `0` to Stereo |
 | English menu strings and 13 translated text tables | Add the mode label, restart note and relevant platform help |
@@ -112,7 +124,9 @@ Both builds used the macOS 15.5 SDK and a macOS 14 deployment target. Execution 
 
 These results verify a rendering primitive, not listening quality, full-game performance, macOS 14 behavior or physical Intel compatibility. Windows playback, live SDL integration, head tracking and personalized profiles remain untested.
 
-The probe source, analysis script and numerical results are archived under `docs/research/spatial-audio-20261011/` on the research branch. Executable builds and raw captures remain ignored scratch data at `/Users/suporte/PT-Mac/.deps/spatial-audio-evaluation-20261011/`. The archive includes reproduction instructions so the experiment can be rebuilt if scratch data is cleaned later.
+The original probe source, analysis script and numerical results are archived under `docs/research/spatial-audio-20261011/` on the research branch. Executable builds and raw captures remain ignored scratch data at `/Users/suporte/PT-Mac/.deps/spatial-audio-evaluation-20261011/`. The archive includes reproduction instructions so the experiment can be rebuilt if scratch data is cleaned later.
+
+The follow-up streaming source, runner, metadata and results are under [the 13 October archive](research/spatial-audio-20261013/README.md). Both executables compile with warnings treated as errors, macOS 15.5 SDK and macOS 14 deployment target. Neither experiment opens a device or uses a player profile. The x86_64 results are still Rosetta evidence, not a physical Intel test.
 
 ## Test plan with available hardware
 
@@ -131,7 +145,7 @@ Acceptance checks:
 2. Check hallway/bathroom room transitions, jumpscares, music, menu sounds and the ending. Listen for changed room effects, missing voices or clipping; verify subtitle timing.
 3. Enable the microphone and test the final puzzle while each headset is connected. Check capture initialization, playback format changes and recovery when a device disconnects.
 4. Disable system/headset spatial processing for the stereo baseline. Avoid running two headphone spatializers together. Check that unsupported native output falls back visibly and audibly.
-5. Verify unchanged stereo reference captures and existing 5.1/7.1 speaker mappings. Test settings migration, restart, pause/resume and loop reset.
+5. Verify unchanged stereo reference captures and existing 5.1/7.1 speaker mappings. Test settings migration, restart, pause/resume, loop reset and entering/leaving archive theater sessions.
 6. Measure worst-case callback time against its buffer deadline, underruns, latency and bounded buffer memory during busy scenes. For stage 2, also record active voices and available native object slots.
 
 The next implementation milestone is the optional 7.1-based headphone mode with both native paths and fallback. Evaluate its listening and performance results before expanding the mixer to individual 3D objects.

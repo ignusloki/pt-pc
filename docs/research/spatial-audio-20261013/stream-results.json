@@ -1,0 +1,172 @@
+{
+  "recorded_at_utc": "2026-10-13T14:53:09.984012+00:00",
+  "release_baseline": "07bc9029c3a6b6b25d7e0fb1ff45c3df107e69da",
+  "research_branch_head_before_record": "6b6645dbeac6af8f5ecd497ba4d0c46f7112af76",
+  "host_cpu": "Apple M1 Pro",
+  "host_architecture": "arm64",
+  "macos_version": "26.6.2",
+  "macos_build": "25G83",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "sdk": "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk",
+  "deployment_target": "14.0",
+  "results": {
+    "arm64": {
+      "sample_rate": 48000,
+      "native_max_slice": 512,
+      "request_sizes": [
+        1,
+        7,
+        127,
+        255,
+        511,
+        512,
+        997,
+        4096
+      ],
+      "regular_variable_max_difference": 8.94069672e-08,
+      "variable_produced_frames": 96000,
+      "variable_native_pulls": 237,
+      "variable_native_slices": 237,
+      "offline_render_ms": 9.624125,
+      "max_slice_with_synthetic_source_ms": 0.102375,
+      "correlated_seven_channel_peak": 3.14650416,
+      "correlated_samples_above_full_scale": 141084,
+      "sdl_channel_impulses": [
+        {
+          "sdl_index": 0,
+          "speaker": "front-left",
+          "left_energy": 0.0792112063,
+          "right_energy": 0.00761153227
+        },
+        {
+          "sdl_index": 1,
+          "speaker": "front-right",
+          "left_energy": 0.00640982309,
+          "right_energy": 0.0975668912
+        },
+        {
+          "sdl_index": 2,
+          "speaker": "center",
+          "left_energy": 0.0473355121,
+          "right_energy": 0.0533676456
+        },
+        {
+          "sdl_index": 3,
+          "speaker": "lfe",
+          "left_energy": 0.00432786627,
+          "right_energy": 0.00432786627
+        },
+        {
+          "sdl_index": 4,
+          "speaker": "back-left",
+          "left_energy": 0.0406370762,
+          "right_energy": 0.00538196534
+        },
+        {
+          "sdl_index": 5,
+          "speaker": "back-right",
+          "left_energy": 0.00617680276,
+          "right_energy": 0.0389893054
+        },
+        {
+          "sdl_index": 6,
+          "speaker": "side-left",
+          "left_energy": 0.0696338597,
+          "right_energy": 0.0015342471
+        },
+        {
+          "sdl_index": 7,
+          "speaker": "side-right",
+          "left_energy": 0.00167631903,
+          "right_energy": 0.0663678666
+        }
+      ],
+      "passed": true,
+      "execution": "native"
+    },
+    "x86_64": {
+      "sample_rate": 48000,
+      "native_max_slice": 512,
+      "request_sizes": [
+        1,
+        7,
+        127,
+        255,
+        511,
+        512,
+        997,
+        4096
+      ],
+      "regular_variable_max_difference": 5.96046448e-08,
+      "variable_produced_frames": 96000,
+      "variable_native_pulls": 237,
+      "variable_native_slices": 237,
+      "offline_render_ms": 18.574292,
+      "max_slice_with_synthetic_source_ms": 0.201583,
+      "correlated_seven_channel_peak": 3.1465044,
+      "correlated_samples_above_full_scale": 141084,
+      "sdl_channel_impulses": [
+        {
+          "sdl_index": 0,
+          "speaker": "front-left",
+          "left_energy": 0.0792111989,
+          "right_energy": 0.00761153248
+        },
+        {
+          "sdl_index": 1,
+          "speaker": "front-right",
+          "left_energy": 0.00640982327,
+          "right_energy": 0.0975669029
+        },
+        {
+          "sdl_index": 2,
+          "speaker": "center",
+          "left_energy": 0.0473355144,
+          "right_energy": 0.0533676478
+        },
+        {
+          "sdl_index": 3,
+          "speaker": "lfe",
+          "left_energy": 0.00432786624,
+          "right_energy": 0.00432786624
+        },
+        {
+          "sdl_index": 4,
+          "speaker": "back-left",
+          "left_energy": 0.040637068,
+          "right_energy": 0.00538196512
+        },
+        {
+          "sdl_index": 5,
+          "speaker": "back-right",
+          "left_energy": 0.00617680315,
+          "right_energy": 0.0389893054
+        },
+        {
+          "sdl_index": 6,
+          "speaker": "side-left",
+          "left_energy": 0.0696338609,
+          "right_energy": 0.00153424727
+        },
+        {
+          "sdl_index": 7,
+          "speaker": "side-right",
+          "left_energy": 0.00167631898,
+          "right_energy": 0.0663678655
+        }
+      ],
+      "passed": true,
+      "execution": "Rosetta on Apple silicon"
+    }
+  },
+  "limitations": [
+    "Offline processing only; no SDL playback device, headphones or microphone opened.",
+    "Deterministic synthetic source, not the complete game mixer or actual gameplay audio.",
+    "x86_64 on Apple silicon uses Rosetta; physical Intel and macOS 14 remain unverified.",
+    "Timings include synthetic generation and conversion but exclude initialization and the game mixer.",
+    "Offline timings do not prove real-time deadlines or end-to-end latency.",
+    "Stress signal uses seven correlated 0.9-amplitude tones, with silent LFE; it is not recorded gameplay.",
+    "Windows Spatial Sound playback, endpoint recovery and native providers remain unverified."
+  ],
+  "probe_source_sha256": "d7962dd92dbcf9621dbd28ad064d076d5fd9fb6d4e9b63b7467b612dcdc75163"
+}
