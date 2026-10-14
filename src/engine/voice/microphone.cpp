@@ -10,6 +10,7 @@
 
 #include "engine/core/log.h"
 #include "engine/platform/sdl_diag.h"
+#include "engine/platform/android.h"
 
 namespace pt {
 
@@ -95,14 +96,18 @@ Microphone::AsyncState Microphone::OpenAsync(int sample_rate, const std::string&
 }
 
 SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& device_name) {
+#ifdef __ANDROID__
+    return OpenAndroidPhoneMicrophone(sample_rate);
+#else
     const auto started = std::chrono::steady_clock::now();
     SDL_AudioDeviceID device = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
-    if (!device_name.empty()) {
+    const std::string& desired_device = device_name;
+    if (!desired_device.empty()) {
         auto lower = [](std::string text) {
             std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return text;
         };
-        const std::string wanted = lower(device_name);
+        const std::string wanted = lower(desired_device);
         int count = 0;
         SDL_AudioDeviceID* devices = SDL_GetAudioRecordingDevices(&count);
         for (int i = 0; devices && i < count; ++i) {
@@ -115,7 +120,7 @@ SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& devi
         }
         SDL_free(devices);
         if (device == SDL_AUDIO_DEVICE_DEFAULT_RECORDING) {
-            LogWarn("microphone: no device matches '{}', using default", device_name);
+            LogWarn("microphone: no device matches '{}', using default", desired_device);
         }
     }
     SDL_AudioSpec spec{SDL_AUDIO_S16, 1, sample_rate};
@@ -130,6 +135,7 @@ SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& devi
     LogInfo("microphone: recording at {} Hz (opened in {:.2f} s)", sample_rate, seconds);
     LogSdlAudioDevices(true);
     return stream;
+#endif
 }
 
 void Microphone::Close() {
@@ -172,6 +178,9 @@ size_t Microphone::Read(std::vector<int16_t>& out) {
     if (!stream_) {
         return 0;
     }
+#ifdef __ANDROID__
+    PumpAndroidPhoneMicrophone(stream_);
+#endif
     const int available = SDL_GetAudioStreamAvailable(stream_);
     if (available <= 0) {
         return 0;

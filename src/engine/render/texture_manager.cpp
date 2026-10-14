@@ -21,8 +21,13 @@ namespace pt {
 namespace {
 
 // Staging memory allowed in flight before Create waits on the oldest uploads; bounds the peak of a stage load on 8 GB machines.
+#ifdef __ANDROID__
+constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(32) << 20;
+constexpr size_t kMaxDecodeWorkers = 2;
+#else
 constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(256) << 20;
 constexpr size_t kMaxDecodeWorkers = 4;
+#endif
 
 // A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
 // light for a colour texture). Uncompressed, so loading never stalls on an encoder.
@@ -302,6 +307,16 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
     if (mips.empty() || images_.size() >= kMaxTextures) {
         return kWhite;
     }
+#ifdef __ANDROID__
+    VkImageFormatProperties supported{};
+    const VkResult support = vkGetPhysicalDeviceImageFormatProperties(ctx_->physical, format, VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0, &supported);
+    if (support != VK_SUCCESS) {
+        LogError("android: texture {} format {} unsupported ({})", name, static_cast<int>(format), static_cast<int>(support));
+        return kWhite;
+    }
+#endif
     vk::Image image;
     const uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;
     if (!ctx_->CreateImage(image, format, {mips[0].width, mips[0].height, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,

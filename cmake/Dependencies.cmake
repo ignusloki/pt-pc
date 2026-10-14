@@ -5,8 +5,13 @@ set(FETCHCONTENT_QUIET ON)
 find_package(Vulkan REQUIRED COMPONENTS glslc)
 find_package(Threads REQUIRED)
 
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
+if(ANDROID)
+  set(SDL_SHARED ON CACHE BOOL "" FORCE)
+  set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+else()
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+endif()
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(sdl3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git GIT_TAG release-3.4.16 GIT_SHALLOW TRUE)
@@ -82,7 +87,9 @@ set(PT_GGML_VARIANT_FLAGS
   "alderlake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavxvnni")
 # the Apple silicon variants (apple_m1, apple_m2_m3, apple_m4) are MODULE libraries, libggml-cpu-apple_m4.so even on macOS
 foreach(variant x64 sse42 sandybridge ivybridge piledriver haswell skylakex cannonlake cascadelake icelake cooperlake zen4 alderlake sapphirerapids
-    apple_m1 apple_m2_m3 apple_m4)
+    apple_m1 apple_m2_m3 apple_m4
+    android_armv8.0_1 android_armv8.2_1 android_armv8.2_2 android_armv8.6_1
+    android_armv9.0_1 android_armv9.2_1 android_armv9.2_2)
   if(TARGET ggml-cpu-${variant})
     add_dependencies(pt_voice_runtime ggml-cpu-${variant})
     set_target_properties(ggml-cpu-${variant} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PT_VOICE_DIR} LIBRARY_OUTPUT_DIRECTORY ${PT_VOICE_DIR})
@@ -160,6 +167,36 @@ endif()
 
 file(GLOB LUA51_SOURCES ${lua51_SOURCE_DIR}/src/*.c)
 list(FILTER LUA51_SOURCES EXCLUDE REGEX ".*/(lua|luac|print)\\.c$")
+if(ANDROID)
+  # Lua 5.1's TString payload follows a union member. Bionic FORTIFY gives strchr(svalue(mode)) a zero object bound,
+  # although Lua allocated and terminated the trailing payload. Search using Lua's stored length, retaining NUL semantics.
+  # Generate a local compatibility copy; the pinned dependency checkout and all desktop sources stay intact.
+  file(READ "${lua51_SOURCE_DIR}/src/lgc.c" pt_android_lgc)
+  foreach(mode k v)
+    set(old "(strchr(svalue(mode), '${mode}') != NULL)")
+    string(FIND "${pt_android_lgc}" "${old}" found)
+    if(found EQUAL -1)
+      message(FATAL_ERROR "Lua weak-mode code changed; review the Android string compatibility patch")
+    endif()
+    string(REPLACE "${old}" "pt_android_weakmode(rawtsvalue(mode), '${mode}')" pt_android_lgc "${pt_android_lgc}")
+  endforeach()
+  string(REPLACE "static int traversetable (global_State *g, Table *h) {" [=[
+/* P.T. Android compatibility: bound the search by the allocated Lua string length. */
+static int pt_android_weakmode (const TString *ts, char wanted) {
+  const char *data = getstr(ts);
+  size_t i;
+  for (i = 0; i < ts->tsv.len && data[i] != '\0'; ++i) {
+    if (data[i] == wanted) return 1;
+  }
+  return 0;
+}
+
+static int traversetable (global_State *g, Table *h) {]=] pt_android_lgc "${pt_android_lgc}")
+  set(pt_android_lgc_file "${CMAKE_BINARY_DIR}/generated/lgc_android.c")
+  file(WRITE "${pt_android_lgc_file}" "${pt_android_lgc}")
+  list(REMOVE_ITEM LUA51_SOURCES "${lua51_SOURCE_DIR}/src/lgc.c")
+  list(APPEND LUA51_SOURCES "${pt_android_lgc_file}")
+endif()
 
 add_library(pt_thirdparty STATIC
   ${volk_SOURCE_DIR}/volk.c
@@ -186,7 +223,7 @@ elseif(APPLE)
   # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
   target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS VK_USE_PLATFORM_METAL_EXT)
 endif()
-target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3-static zlibstatic pt_bc7enc)
+target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3 zlibstatic pt_bc7enc)
 if(NOT WIN32)
   # Unicode text shaping for the added languages (src/engine/ui/unicode_font_harfbuzz.cpp); Windows uses Uniscribe instead
   FetchContent_Declare(harfbuzz GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git GIT_TAG 14.6.0 GIT_SHALLOW TRUE)

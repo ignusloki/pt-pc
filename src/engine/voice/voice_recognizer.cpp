@@ -156,7 +156,16 @@ std::string LoadError() {
 
 std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) + name + kLibraryExtension; }
 
-bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& failure) {
+std::filesystem::path RuntimeDirectory(const std::filesystem::path& model_dir) {
+#ifdef __ANDROID__
+    const char* native_libraries = std::getenv("PT_ANDROID_NATIVE_LIBRARIES");
+    if (native_libraries && native_libraries[0]) return std::filesystem::path(native_libraries);
+#endif
+    return model_dir;
+}
+
+bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failure& failure) {
+    const std::filesystem::path dir = RuntimeDirectory(model_dir);
     std::lock_guard lock(g_api_mutex);
     if (g_api.ready) return true;
     failure = VoiceRecognizer::Failure::Runtime;
@@ -441,9 +450,10 @@ bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::st
     ApplyTune(settings);
     if (const char* prompt = std::getenv("PT_VOICE_PROMPT")) settings.prompt = prompt;
     if (const char* model = std::getenv("PT_VOICE_RESCUE_MODEL")) settings.rescue_model = model;
-    for (const std::string& name : {WhisperModelName(), std::string(kVadModel), LibraryName("whisper")}) {
-        if (!std::filesystem::is_regular_file(model_dir / name)) {
-            LogError("voice: {} is missing from {}", name, os::PathToUtf8(model_dir));
+    for (const auto& file : {model_dir / WhisperModelName(), model_dir / kVadModel,
+                             RuntimeDirectory(model_dir) / LibraryName("whisper")}) {
+        if (!std::filesystem::is_regular_file(file)) {
+            LogError("voice: {} is missing from {}", os::PathToUtf8(file.filename()), os::PathToUtf8(file.parent_path()));
             failure_ = Failure::Files;
             state_ = State::Failed;
             return false;

@@ -387,13 +387,20 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     features12.scalarBlockLayout = VK_TRUE;
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.pNext = &features12;
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physical, &supported);
     features.features.samplerAnisotropy = VK_TRUE;
+#ifdef __ANDROID__
+    // Some mobile GPUs support the original game's BC1/2/3 formats without the whole BC family (BC5/7).
+    // Texture uploads check individual format support; do not request an unavailable family feature.
+    features.features.textureCompressionBC = supported.textureCompressionBC;
+    LogInfo("vulkan: Android BC family feature {} (individual formats checked at upload)", supported.textureCompressionBC);
+#else
     features.features.textureCompressionBC = VK_TRUE;
+#endif
     features.features.fillModeNonSolid = VK_TRUE;
     features.features.shaderInt16 = VK_TRUE;
     features.features.shaderClipDistance = VK_TRUE;
-    VkPhysicalDeviceFeatures supported{};
-    vkGetPhysicalDeviceFeatures(physical, &supported);
     features.features.independentBlend = supported.independentBlend;
     storage_without_format = supported.shaderStorageImageReadWithoutFormat && supported.shaderStorageImageWriteWithoutFormat;
     features.features.shaderStorageImageReadWithoutFormat = storage_without_format ? VK_TRUE : VK_FALSE;
@@ -730,6 +737,17 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = caps.currentTransform;
+#ifdef __ANDROID__
+    // This renderer produces landscape images without pre-rotation. Let Android compose them into the display's
+    // natural orientation; claiming currentTransform here rotated the settings page 90 degrees on portrait-native phones.
+    if (!(caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)) {
+        LogError("android: surface requires render pre-rotation, which this prototype does not support");
+        return false;
+    }
+    info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    LogInfo("android: presentation transform identity, display transform {}, drawable {}x{}",
+            static_cast<uint32_t>(caps.currentTransform), info.imageExtent.width, info.imageExtent.height);
+#endif
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     info.presentMode = present_mode;
     info.clipped = VK_TRUE;

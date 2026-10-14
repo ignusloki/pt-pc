@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android36.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ApplicationId>org.ignusloki.pt.prototype</ApplicationId>
+    <ApplicationTitle>P.T. Android Prototype</ApplicationTitle>
+    <ApplicationDisplayVersion>1.0.7-android.1</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>android-arm64</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AndroidPackageFormats>apk</AndroidPackageFormats>
+    <AndroidUseSharedRuntime>false</AndroidUseSharedRuntime>
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidLinkMode>None</AndroidLinkMode>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <AndroidIgnoreAllJniPreload>true</AndroidIgnoreAllJniPreload>
+    <AndroidManifest>AndroidManifest.xml</AndroidManifest>
+    <PtAndroidStage Condition="'$(PtAndroidStage)' == ''">../../build/android-prototype/stage</PtAndroidStage>
+  </PropertyGroup>
+  <ItemGroup>
+    <AndroidResource Include="$(PtAndroidStage)/resources/drawable/pt_icon.png" Link="Resources/drawable/pt_icon.png" />
+    <Compile Include="../../installer/Extractor/Program.cs" Link="Extraction.cs" />
+    <ProjectReference Include="$(LibOrbisSource)/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj" Condition="'$(LibOrbisSource)' != ''" />
+    <AndroidJavaSource Include="$(PtAndroidStage)/java/**/*.java" Bind="false" />
+    <AndroidJavaSource Update="Java/**/*.java" Bind="false" />
+    <AndroidNativeLibrary Include="$(PtAndroidStage)/lib/arm64-v8a/*.so" Abi="arm64-v8a" />
+    <AndroidAsset Include="$(PtAndroidStage)/assets/**/*" Link="%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

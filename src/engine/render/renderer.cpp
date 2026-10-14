@@ -29,6 +29,22 @@ namespace {
 
 VkFormat g_imgui_format = VK_FORMAT_UNDEFINED;
 
+bool RecreateForSuboptimal(const vk::Context& context, SDL_Window* window) {
+#ifdef __ANDROID__
+    // The deliberate identity transform asks Android to compose the landscape buffer, so a rotated display keeps
+    // returning SUBOPTIMAL. The image remains usable; recreate on actual extent changes or OUT_OF_DATE instead.
+    VkSurfaceCapabilitiesKHR caps{};
+    if (!context.surface || vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context.physical, context.surface, &caps) != VK_SUCCESS) return true;
+    if (caps.currentExtent.width != UINT32_MAX)
+        return caps.currentExtent.width != context.swapchain.extent.width || caps.currentExtent.height != context.swapchain.extent.height;
+    int width = 0, height = 0;
+    return !window || !SDL_GetWindowSizeInPixels(window, &width, &height) || width != static_cast<int>(context.swapchain.extent.width) ||
+           height != static_cast<int>(context.swapchain.extent.height);
+#else
+    return true;
+#endif
+}
+
 void ImGuiCheck(VkResult result) {
     if (result != VK_SUCCESS) {
         LogError("imgui vulkan: {}", vk::ResultName(result));
@@ -499,7 +515,7 @@ bool Renderer::BeginFrame(bool present) {
             swapchain_dirty_ = true;
             return false;
         }
-        if (acquire == VK_SUBOPTIMAL_KHR) {
+        if (acquire == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_)) {
             swapchain_dirty_ = true;
         }
     }
@@ -791,7 +807,7 @@ void Renderer::EndFrame(bool draw_ui) {
         const VkResult result = ctx_.QueuePresent(present);
         streamline::SetMarker(streamline::Marker::PresentEnd);
         ctx_.CheckDeviceLost(result, "present");
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || (result == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_))) {
             swapchain_dirty_ = true;
         }
     }
@@ -981,7 +997,7 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
     present.pImageIndices = &gen_index_;
     const VkResult result = ctx_.QueuePresent(present);
     ctx_.CheckDeviceLost(result, "generated frame present");
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || (result == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_))) {
         swapchain_dirty_ = true;
     }
 }

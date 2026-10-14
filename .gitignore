@@ -56,3 +56,5 @@ scratch/*
 # .NET build output of the installer helper and its tests (tools/ci/release.py publishes the helper itself)
 installer/*/bin/
 installer/*/obj/
+/android/Launcher/bin/
+/android/Launcher/obj/

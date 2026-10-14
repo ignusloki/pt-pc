@@ -223,8 +223,14 @@ inline constexpr Text kMenu[] = {
     {"pc_microphone_enabled","Entrada do microfone"},
     {"pc_note_microphone_enabled","Ativa o microfone para o enigma de voz ou o teste do microfone. O acionador opcional continua a funcionar quando esta opção está desligada."},
     {"pc_mic_disabled","A entrada do microfone está desligada. Ative-a nas definições de som para usar o microfone ou o seu teste."},
+#ifdef __ANDROID__
+    {"pc_mic_permission_pending","A aguardar permissão para o microfone. Escolha uma opção no aviso de permissão do Android."},
+    {"pc_mic_permission_denied","O acesso ao microfone está bloqueado. Permita-o nas definições do Android > Aplicações > P.T. Android Prototype > Permissões > Microfone."},
+#else
     {"pc_mic_permission_pending","A aguardar permissão para o microfone. Escolha Permitir ou Não Permitir no aviso do macOS."},
     {"pc_mic_permission_denied","O acesso ao microfone está bloqueado. Ative P.T. nas Definições do Sistema > Privacidade e Segurança > Microfone, ou use o acionador opcional."},
+#endif
+    {"pc_phone_microphone","Microfone do telefone"},
     {"pc_mic_st_permission","Permissão necessária"},
     {"pc_microphone_test","Teste do microfone"},
     {"pc_mic_level","Nível de entrada"},

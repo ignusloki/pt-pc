@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include "engine/platform/android.h"
 #include "engine/platform/update_check.h"
 
 #ifdef _WIN32
@@ -671,6 +672,9 @@ std::filesystem::path GameExecutable() {
 std::filesystem::path UserDataDir();
 
 std::filesystem::path DefaultModsDir() {
+#ifdef __ANDROID__
+    return UserDataDir() / "mods";
+#endif
 #ifdef __APPLE__
     /* the app bundle is no place for user files: mods/ in ~/Library/Application Support/pt-port/pt (docs/macos.md), unless a
        build folder has one next to pt */
@@ -719,6 +723,10 @@ void MountMods(App& app) {
 }
 
 void RequestEnhancedTextures(App& app, bool enabled) {
+#ifdef __ANDROID__
+    if (enabled) pt::LogWarn("android: enhanced textures are unavailable in this prototype");
+    enabled = false;
+#endif
     app.texture_requested = enabled;
     if (!enabled) {
         app.texture_job.Cancel();
@@ -806,6 +814,9 @@ std::filesystem::path g_output_dir;
 std::filesystem::path g_log_path;
 
 std::filesystem::path UserDataDir() {
+#ifdef __ANDROID__
+    return std::filesystem::path(SDL_GetAndroidInternalStoragePath()) / "profile";
+#endif
 #ifdef __APPLE__
     /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
        /Applications; the data folder is then the user's (docs/macos.md). A build folder keeps it next to pt. */
@@ -820,7 +831,7 @@ std::filesystem::path UserDataDir() {
 }
 
 std::filesystem::path LegacyUserDataDir() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
     return {};  // no earlier macOS profile exists
 #elif defined(_WIN32)
     PWSTR roaming = nullptr;
@@ -2090,10 +2101,18 @@ public:
 #ifdef __APPLE__
         if (s.voice.microphone_enabled && pt::GetMacMicrophoneAccess() == pt::MacMicrophoneAccess::Denied)
             microphone_note = "pc_mic_permission_denied";
+#elif defined(__ANDROID__)
+        if (s.voice.microphone_enabled && pt::GetAndroidMicrophoneAccess() == pt::AndroidMicrophoneAccess::Denied)
+            microphone_note = "pc_mic_permission_denied";
 #endif
         sound.rows.push_back(Row(kMicrophoneEnabled, "pc_microphone_enabled", OffOn(), s.voice.microphone_enabled ? 1 : 0, microphone_note));
         // The microphone listens on f160 or in its test; the optional trigger is independent of microphone input.
         pt::game::PcSettingRow microphone = Row(kMicrophone, "pc_microphone", {"pc_system_default"}, 0, "pc_note_voice");
+#ifdef __ANDROID__
+        // Phone input is explicitly routed with AAudio, independent of SDL's default recording device.
+        microphone.values = {"pc_phone_microphone"};
+        microphone.enabled = false;
+#else
         microphone.enabled = s.voice.microphone_enabled;
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -2102,6 +2121,7 @@ public:
                 microphone.value = static_cast<int>(i) + 1;
             }
         }
+#endif
         sound.rows.push_back(std::move(microphone));
         std::string trigger_input = s.voice.key.empty() ? "J" : s.voice.key;
         if(input_.Prompts().device != pt::PromptDevice::Keyboard) {
@@ -2873,6 +2893,9 @@ private:
     }
     // the capture of the thumbnails still missing, once a session, when the Museum opens (not headless, not from a test's folder)
     void GenerateMuseumPreviews() {
+#ifdef __ANDROID__
+        return; // Desktop preview subprocesses are unavailable; the archive still opens with placeholder thumbnails.
+#endif
         if (museum_started_ || app_.options.headless || !app_.options.museum_previews.empty()) return;
         const auto dir = MuseumPreviewDirectory();
         if (dir.empty()) return;
@@ -3011,6 +3034,9 @@ private:
         return false;
     }
     void GeneratePreviews() {
+#ifdef __ANDROID__
+        return;
+#endif
         // at most two runs a session (the second only for the pictures the first dropped); later ones wait for the next start
         if (preview_started_ || preview_runs_ >= 2 || app_.options.headless || !BundledPreviewDirectory().empty()) return;
         const auto dir = PreviewDirectory();
@@ -4735,6 +4761,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pt::LogInfo("voice: microphone input {}", previous_microphone_enabled ? "on" : "off");
 #ifdef __APPLE__
             if (app.window && previous_microphone_enabled && !voice_file) pt::RequestMacMicrophoneAccess();
+#elif defined(__ANDROID__)
+            if (app.window && previous_microphone_enabled && !voice_file) pt::RequestAndroidMicrophoneAccess();
 #endif
         }
         if (active_microphone_device != app.settings.voice.device || previous_microphone_test != app.microphone_test) {
@@ -4760,6 +4788,16 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 access == pt::MacMicrophoneAccess::NotDetermined) {
                 microphone_allowed = false;
                 app.microphone_status = access == pt::MacMicrophoneAccess::Denied ? "pc_mic_permission_denied" : "pc_mic_permission_pending";
+                app.microphone_reason = "pc_mic_st_permission";
+            }
+        }
+#endif
+#ifdef __ANDROID__
+        if (microphone_allowed && app.window && !voice_file) {
+            const auto access = pt::GetAndroidMicrophoneAccess();
+            if (access != pt::AndroidMicrophoneAccess::Granted) {
+                microphone_allowed = false;
+                app.microphone_status = access == pt::AndroidMicrophoneAccess::Denied ? "pc_mic_permission_denied" : "pc_mic_permission_pending";
                 app.microphone_reason = "pc_mic_st_permission";
             }
         }
@@ -5296,6 +5334,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     }
                 }
                 const VkExtent2D render_extent = app.renderer.RenderExtent();
+#ifdef __ANDROID__
+                pt::LogAndroidMemoryStatus();
+                VkDeviceSize allocated = 0;
+                for (uint32_t h = 0; memory && h < memory->memoryHeapCount; ++h) allocated += budgets[h].statistics.allocationBytes;
+                pt::LogInfo("android memory: this engine's live Vulkan allocations {:.0f} MiB", static_cast<double>(allocated) / 1048576.0);
+#endif
                 pt::LogInfo("status: {:.0f} fps, gpu {:.2f} ms, vram {:.0f} of {:.0f} MB, {}x{}, upscaler {} {}, frame generation {}, vsync {}, "
                             "fps limit {}, floor {}{}",
                             status_frames / status_seconds, status_gpu / std::max<uint64_t>(status_frames, 1), used / 1048576.0,
@@ -5655,10 +5699,26 @@ int main(int argc, char** argv) {
         pt::OfferCrashUpload(g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()), true);
     }
     // a headless run without --settings keeps the defaults, never an installation's own pt.ini
+#ifdef __ANDROID__
+    pt::ApplyGraphicsPreset(app.settings, pt::GraphicsPreset::Low, false);
+    app.settings.display.width = 960;
+    app.settings.display.height = 540;
+    app.settings.display.fps_limit = 30;
+    app.settings.network.check_updates = false;
+    pt::InitAndroidTouchController();
+#endif
     app.settings_path = !options.settings_path.empty() ? options.settings_path
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
+#ifdef __ANDROID__
+    app.settings.graphics.enhanced_textures = false;
+    app.settings.vr.enabled = false;
+    app.settings.display.hdr = false;
+    app.settings.display.fullscreen = 1;
+    app.settings.upscaling.frame_generation = "off";
+    pt::LogInfo("android: prototype uses original textures, 1024 px mip cap, low graphics defaults and private profile");
+#endif
     if (!options.headless) {
         if (!settings_loaded) {
             pt::SaveAppSettings(app.settings_path, app.settings);
@@ -5733,6 +5793,9 @@ int main(int argc, char** argv) {
     // the ray query extensions and features only when the option is on at start
     const pt::RayTracingSettings& rt = app.scene.raytracing;
     app.renderer.Context().want_ray_query = true;
+#ifdef __ANDROID__
+    app.renderer.Context().want_ray_query = false;
+#endif
     pt::UpscaleHost::Get().SetStartupUpscaler(app.scene.upscale.kind);
     app.streamline_marker = StartStreamline(app);
     int result = 1;
@@ -5786,6 +5849,9 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
         if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
             pt::RequestMacMicrophoneAccess();
+#elif defined(__ANDROID__)
+        if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
+            pt::RequestAndroidMicrophoneAccess(false);
 #endif
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
         app.texture_job.Cancel();
@@ -5806,6 +5872,9 @@ int main(int argc, char** argv) {
     if (app.window) {
         SDL_DestroyWindow(app.window);
     }
+#ifdef __ANDROID__
+    pt::ShutdownAndroidTouchController();
+#endif
     SDL_Quit();
     pt::LogExit(result, "normal end");
     return result;

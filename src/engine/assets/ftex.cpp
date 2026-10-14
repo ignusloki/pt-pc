@@ -96,6 +96,9 @@ bool LoadFtex(const QarArchive& qar, std::string_view path, FtexTexture& out) {
     out.height = Read<uint16_t>(*header, 0x0C);
     out.depth = std::max<uint16_t>(1, Read<uint16_t>(*header, 0x0E));
     out.mip_count = Read<uint8_t>(*header, 0x10);
+#ifdef __ANDROID__
+    if (!out.width || !out.height || !out.mip_count || out.mip_count > 16) return false;
+#endif
     out.filter = Read<uint8_t>(*header, 0x11);
     out.address_mode = Read<uint16_t>(*header, 0x12);
     out.flags = Read<uint32_t>(*header, 0x1C);
@@ -104,6 +107,12 @@ bool LoadFtex(const QarArchive& qar, std::string_view path, FtexTexture& out) {
     std::map<uint8_t, std::optional<std::vector<uint8_t>>> files;
     out.mips.assign(entries, {});
     for (uint32_t i = 0; i < entries; ++i) {
+#ifdef __ANDROID__
+        // Discard oversized mip levels before reading their streams or allocating their decoded CPU data.
+        // Empty leading levels are already handled by TextureManager::Load, including all faces of a cube.
+        const uint32_t level = i % out.mip_count;
+        if (std::max(out.MipWidth(level), out.MipHeight(level)) > 1024 && level + 1 < out.mip_count) continue;
+#endif
         const size_t e = 0x40 + size_t(i) * 16;
         const uint32_t offset = Read<uint32_t>(*header, e);
         const uint32_t unpacked = Read<uint32_t>(*header, e + 4);

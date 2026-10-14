@@ -107,6 +107,10 @@ uint32_t ProcessId() { return static_cast<uint32_t>(getpid()); }
 
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
+#ifdef __ANDROID__
+    // APK libraries run in this process. Desktop executables/upscaling helpers are not supported on Android.
+    return {};
+#else
     ProcessResult result;
     const int log_fd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (log_fd < 0) return result;
@@ -144,6 +148,7 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     }
     result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     return result;
+#endif
 }
 
 FileLock::FileLock(const std::filesystem::path& path) {
