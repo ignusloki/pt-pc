@@ -22,7 +22,9 @@ $BT/d8 --release --min-api 30 --lib $PLATFORM/android.jar --output $B/apk $(find
 # native library
 $NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip --strip-debug -o $B/apk/lib/arm64-v8a/libmain.so $B/libmain.so
 # package
-$BT/aapt2 link -o $B/unaligned.apk --manifest android/AndroidManifest.xml -I $PLATFORM/android.jar -A $B/assets
+# PT_ANDROID_PACKAGE: another application id than the manifest's org.ignusloki.pt.mobile (the activity's class keeps its name)
+$BT/aapt2 link -o $B/unaligned.apk --manifest android/AndroidManifest.xml -I $PLATFORM/android.jar -A $B/assets \
+  ${PT_ANDROID_PACKAGE:+--rename-manifest-package $PT_ANDROID_PACKAGE}
 (cd $B/apk && zip -q -0 -r ../unaligned.apk lib && zip -q ../unaligned.apk classes.dex)
 $BT/zipalign -f -P 16 4 $B/unaligned.apk $B/aligned.apk
 KS=$HOME/.android/debug.keystore

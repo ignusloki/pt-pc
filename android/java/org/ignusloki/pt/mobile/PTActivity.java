@@ -1,5 +1,5 @@
 // P.T. on Android (docs/mobile.md): SDL's activity running the game in libmain.so (SDL is linked into it statically).
-package com.blounty.pt;
+package org.ignusloki.pt.mobile;
 
 import android.os.Bundle;
 import android.view.WindowManager;

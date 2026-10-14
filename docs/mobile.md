@@ -29,11 +29,14 @@ Android (NDK 27 or later):
     cmake --build build/android --target pt
     android/build_apk.sh    # build/android/PT.apk, signed with the debug keystore; no Gradle
 
+The application ids default to `org.ignusloki.pt.mobile`: `-DPT_IOS_BUNDLE_ID=` for one your signing team has, and
+`PT_ANDROID_PACKAGE=` for `build_apk.sh`.
+
 Copy the game files to the app's folder, then start it:
 
     adb install -r build/android/PT.apk
-    adb push CUSA01127 /sdcard/Android/data/com.blounty.pt/files/
-    adb shell chmod -R 777 /sdcard/Android/data/com.blounty.pt/files/CUSA01127
+    adb push CUSA01127 /sdcard/Android/data/org.ignusloki.pt.mobile/files/
+    adb shell chmod -R 777 /sdcard/Android/data/org.ignusloki.pt.mobile/files/CUSA01127
 
 (files `adb push` makes belong to the shell user; some phones, a RedMagic 11 Pro among them, do not let the app read them
 without the `chmod`)

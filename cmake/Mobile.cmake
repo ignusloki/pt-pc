@@ -26,7 +26,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   add_custom_command(TARGET pt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PT_MOLTENVK_IOS}" "$<TARGET_FILE_DIR:pt>/Frameworks/MoltenVK.framework" VERBATIM)
 
-  set(PT_IOS_BUNDLE_ID "com.blounty.pt" CACHE STRING "iOS bundle identifier")
+  set(PT_IOS_BUNDLE_ID "org.ignusloki.pt.mobile" CACHE STRING "iOS bundle identifier (a development team's own for signing)")
   set_target_properties(pt PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/ios/Info.plist.in"
     MACOSX_BUNDLE_GUI_IDENTIFIER "${PT_IOS_BUNDLE_ID}"
