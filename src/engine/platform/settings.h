@@ -21,7 +21,7 @@ struct AppSettings {
         bool mute_in_background = false;
         // frames per second at most, 0 for no limit (v-sync still applies); menus and the paused game are held to 60 either way
 #if PT_MOBILE
-        int fps_limit = 60;  // steady on a 120 Hz phone screen, and cooler
+        int fps_limit = 30;  // phones: half the GPU work of 60 (the iPhone ran hot at 60), P.T. is slow paced
 #else
         int fps_limit = 0;
 #endif

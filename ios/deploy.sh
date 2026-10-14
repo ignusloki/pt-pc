@@ -30,6 +30,8 @@ if [ -n "${PT_GAME:-}" ]; then
       --source "$PT_GAME/$f" --destination "Documents/CUSA01127/$f"
   done
 fi
-LAUNCH_ENV='{}'
-[ -n "${PT_LAUNCH_ENV:-}" ] && LAUNCH_ENV=$PT_LAUNCH_ENV
-xcrun devicectl device process launch --device "$DEVICE" --terminate-existing --environment-variables "$LAUNCH_ENV" "$BUNDLE_ID"
+if [ -n "${PT_LAUNCH_ENV:-}" ]; then
+  xcrun devicectl device process launch --device "$DEVICE" --terminate-existing --environment-variables "$PT_LAUNCH_ENV" "$BUNDLE_ID"
+else
+  xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "$BUNDLE_ID"
+fi

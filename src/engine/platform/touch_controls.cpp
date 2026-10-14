@@ -68,6 +68,11 @@ void TouchControls::ButtonCentre(int index, float& x, float& y, float& r) const 
 
 void TouchControls::ProcessEvent(const SDL_Event& event, SDL_Window* window) {
     if (!pads_) return;
+    static const bool debug = std::getenv("PT_DEBUG_TOUCH") != nullptr;
+    if (debug && event.type >= SDL_EVENT_FINGER_DOWN && event.type <= SDL_EVENT_FINGER_CANCELED && event.type != SDL_EVENT_FINGER_MOTION) {
+        LogInfo("touch: {} finger {:x} at {:.3f} {:.3f}, {} held before", event.type == SDL_EVENT_FINGER_DOWN ? "down" : event.type == SDL_EVENT_FINGER_UP ? "up" : "cancel",
+                static_cast<uint64_t>(event.tfinger.fingerID), event.tfinger.x, event.tfinger.y, fingers_.size());
+    }
     int w = 0, h = 0;
     SDL_GetWindowSize(window, &w, &h);  // points, as ImGui draws
     if (w > 0 && h > 0) {
@@ -116,9 +121,12 @@ void TouchControls::Begin(SDL_FingerID id, float x, float y) {
 void TouchControls::Move(SDL_FingerID id, float x, float y) {
     auto it = fingers_.find(id);
     if (it == fingers_.end()) return;
+    if (it->second.role == Role::Look) {
+        look_ += glm::vec2(x - it->second.x, y - it->second.y) / height_;
+    }
     it->second.x = x;
     it->second.y = y;
-    if (it->second.role != Role::Button) Publish();
+    if (it->second.role == Role::Move) Publish();
 }
 
 void TouchControls::End(SDL_FingerID id) {
@@ -128,13 +136,14 @@ void TouchControls::End(SDL_FingerID id) {
 void TouchControls::Publish() {
     if (!pads_) return;
     const float range = 1.2f * height_ / 10.0f;
-    float lx = 0, ly = 0, rx = 0, ry = 0;
+    float lx = 0, ly = 0;
     bool held[kButtonCount] = {};
     for (const auto& [id, f] : fingers_) {
         if (f.role == Role::Button) {
             held[f.button] = true;
             continue;
         }
+        if (f.role != Role::Move) continue;
         float dx = (f.x - f.x0) / range, dy = (f.y - f.y0) / range;
         const float len = std::hypot(dx, dy);
         if (len > 1.0f) {
@@ -144,15 +153,12 @@ void TouchControls::Publish() {
         if (f.role == Role::Move) {
             lx = dx;
             ly = dy;
-        } else {
-            rx = dx;
-            ry = dy;
         }
     }
     pads_->SetAxis(slot_, "lx", lx);
     pads_->SetAxis(slot_, "ly", ly);
-    pads_->SetAxis(slot_, "rx", rx);
-    pads_->SetAxis(slot_, "ry", ry);
+    pads_->SetAxis(slot_, "rx", 0.0f);
+    pads_->SetAxis(slot_, "ry", 0.0f);
     bool jack = false;
     for (int i = 0; i < kButtonCount; ++i) {
         if (kButtons[i].button) {
@@ -163,6 +169,12 @@ void TouchControls::Publish() {
     }
     pads_->SetAxis(slot_, "l2", jack ? 1.0f : 0.0f);
     pads_->SetAxis(slot_, "r2", jack ? 1.0f : 0.0f);
+}
+
+glm::vec2 TouchControls::TakeLook() {
+    const glm::vec2 look = look_;
+    look_ = glm::vec2(0.0f);
+    return look;
 }
 
 void TouchControls::Draw(ImDrawList* list, float width, float height) {
@@ -185,8 +197,13 @@ void TouchControls::Draw(ImDrawList* list, float width, float height) {
     }
     bool move = false, look = false;
     for (const auto& [id, f] : fingers_) {
-        if (f.role != Role::Move && f.role != Role::Look) continue;
-        (f.role == Role::Move ? move : look) = true;
+        if (f.role == Role::Look) {
+            look = true;
+            list->AddCircle(ImVec2(f.x, f.y), 0.6f * u, IM_COL32(255, 255, 255, 60), 32, 2.0f);
+            continue;
+        }
+        if (f.role != Role::Move) continue;
+        move = true;
         const float range = 1.2f * u, dx = f.x - f.x0, dy = f.y - f.y0, len = std::max(range, std::hypot(dx, dy));
         list->AddCircleFilled(ImVec2(f.x0, f.y0), range, fill, 48);
         list->AddCircle(ImVec2(f.x0, f.y0), range, ring, 48, std::max(2.0f, u * 0.04f));
@@ -194,7 +211,7 @@ void TouchControls::Draw(ImDrawList* list, float width, float height) {
     }
     // where the sticks usually sit
     if (!move) list->AddCircle(ImVec2(2.8f * u, height - 2.8f * u), 1.2f * u, IM_COL32(255, 255, 255, 40), 48, 2.0f);
-    if (!look) list->AddCircle(ImVec2(width * 0.62f, height - 2.8f * u), 1.2f * u, IM_COL32(255, 255, 255, 25), 48, 2.0f);
+    (void)look;  // the right half has no stick: a drag turns the view
 }
 
 }  // namespace pt

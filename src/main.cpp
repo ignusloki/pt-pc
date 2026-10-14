@@ -4247,6 +4247,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        if (g_touch) {
+            // a drag on the right of the screen turns the view directly, as the mouse does (no stick's acceleration and
+            // coasting): about 150 degrees per screen height at the default sensitivity
+            const glm::vec2 drag = g_touch->TakeLook();
+            polled.mouse_look += drag * 2.6f * app.settings.input.mouse_sensitivity;
+        }
         // the menu's cursor hides while a controller drives the menu (issue #45); moving or clicking the mouse brings it back
         if (app.window) {
             static bool cursor_hidden = false;
@@ -4296,6 +4302,26 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 toggle_settings();
             } else if (ui_ready) {
                 ui.OpenPcSettings();
+            }
+        }
+        if (static const bool debug_touch = std::getenv("PT_DEBUG_TOUCH") != nullptr; debug_touch) {
+            static glm::vec2 last_left{}, last_right{};
+            static glm::vec3 last_feet{};
+            static uint64_t last_feet_tick = 0;
+            if (frame - last_feet_tick >= 15) {
+                const glm::vec3 feet = game.GetPlayer().Feet();
+                if (glm::length(feet - last_feet) > 0.001f) {
+                    pt::LogInfo("touch: feet {:.3f} {:.3f} {:.3f} moved {:.3f}", feet.x, feet.y, feet.z, glm::length(feet - last_feet));
+                }
+                last_feet = feet;
+                last_feet_tick = frame;
+            }
+            if (glm::length(polled.left_stick - last_left) > 0.05f || glm::length(polled.right_stick - last_right) > 0.05f ||
+                (glm::length(polled.left_stick) == 0.0f) != (glm::length(last_left) == 0.0f)) {
+                pt::LogInfo("touch: game reads left {:.2f} {:.2f} right {:.2f} {:.2f}", polled.left_stick.x, polled.left_stick.y,
+                            polled.right_stick.x, polled.right_stick.y);
+                last_left = polled.left_stick;
+                last_right = polled.right_stick;
             }
         }
         pending_input.left_stick = polled.left_stick;
@@ -5371,6 +5397,17 @@ int main(int argc, char** argv) {
 #ifdef __ANDROID__
     pt::PrepareBundledFiles();  // the shaders and fonts from the APK (docs/mobile.md)
 #endif
+#if PT_MOBILE
+    // phones have no command line: env.txt in the user data folder sets environment variables (KEY=VALUE lines), for the
+    // PT_DEBUG_* switches (docs/mobile.md)
+    if (std::ifstream env(UserDataDir() / "env.txt"); env) {
+        for (std::string line; std::getline(env, line);) {
+            if (const size_t eq = line.find('='); eq != std::string::npos && line[0] != '#') {
+                setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+            }
+        }
+    }
+#endif
     App app;
     app.options = ParseOptions(argc, argv);
     if (!app.options.make_loop_previews.empty()) {
@@ -5590,6 +5627,12 @@ int main(int argc, char** argv) {
         SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
         // landscape either way up (SDL would otherwise pick from the window's size, and a resizable one may turn to portrait)
         SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        /* iOS holds back touches near the screen's edges for its own swipes, and sometimes their end until the next touch:
+           a stick thumb near the edge kept walking for seconds after it was lifted. The edges' system gestures wait for a
+           second swipe instead (and the home indicator hides) */
+        SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+#endif
 #else
         SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");
 #endif
