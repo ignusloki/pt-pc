@@ -88,9 +88,29 @@ public sealed class MainActivity : Activity {
         };
         layout.AddView(diagnostics);
         var scroll = new ScrollView(this);
+        scroll.SetBackgroundColor(Android.Graphics.Color.Rgb(18, 22, 20));
+        scroll.SetOnApplyWindowInsetsListener(new LauncherInsets());
         scroll.AddView(layout);
         SetContentView(scroll);
+        scroll.RequestApplyInsets();
         UpdateReady();
+    }
+
+    sealed class LauncherInsets : Java.Lang.Object, View.IOnApplyWindowInsetsListener {
+        public WindowInsets? OnApplyWindowInsets(View? view, WindowInsets? insets) {
+            if (view == null || insets == null) return insets;
+            if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+                var safe = insets.GetInsets(WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout())!;
+                view.SetPadding(safe.Left, safe.Top, safe.Right, safe.Bottom);
+            } else {
+                var cutout = insets.DisplayCutout;
+                view.SetPadding(Math.Max(insets.SystemWindowInsetLeft, cutout?.SafeInsetLeft ?? 0),
+                    Math.Max(insets.SystemWindowInsetTop, cutout?.SafeInsetTop ?? 0),
+                    Math.Max(insets.SystemWindowInsetRight, cutout?.SafeInsetRight ?? 0),
+                    Math.Max(insets.SystemWindowInsetBottom, cutout?.SafeInsetBottom ?? 0));
+            }
+            return insets;
+        }
     }
 
     protected override void OnResume() {

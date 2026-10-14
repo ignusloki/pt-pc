@@ -2,7 +2,7 @@
 
 Worktree branch: `codex/android-beta-fixes`, based on
 `66ec5464d278a08ec5b7f4e4d80fbea8fafbca5e` / `1.0.7-android-beta.1`.
-Local test APK version: `1.0.7-android-beta.1-fix.1`, version code 4.
+Local test APK version: `1.0.7-android-beta.1-fix.2`, version code 5.
 This is an in-place, release-signed test update to `org.ignusloki.pt.beta`;
 it is not a published release. The prototype app keeps its separate files/profile.
 
@@ -43,12 +43,26 @@ Touch controls are saved in the app's launcher preferences. Microphone and subti
 choices are saved when changed and refreshed from the game profile on return.
 The scrollable launcher follows the phone's orientation settings. Gameplay retains
 its tested landscape orientation and controls.
+The launcher pads its content for system bars and the display cutout after rotation,
+so the landscape navigation bar does not cover text or controls.
+
+## Android display settings
+
+The old PC page showed stored desktop window dimensions (960×540 initially, or
+2340×1080 after choosing the S22's display mode), while Android still rendered at
+960×443. Its desktop display-mode choices could change this stored value without
+changing the activity's fixed surface.
+
+Android now shows the live Vulkan surface extent, labels the display Fullscreen,
+and disables desktop display-mode/resolution changes with Android-specific notes.
+Desktop rows retain their existing behavior. The render width, aspect ratio,
+uploaded-mip limit and 30 fps default are unchanged.
 
 ## Build and verification
 
-Use `tools/android/build.py` with the retained SDK, JDK and `--liborbis` checkout;
+Use Python 3.11+ and `tools/android/build.py` with the retained SDK, JDK and `--liborbis` checkout;
 omit `--source-cache` for the fresh build. Keep all outputs in this worktree.
-Build Release with the existing private beta signing files, version code 4 and
+Build Release with the existing private beta signing files, version code 5 and
 `--out dist/android/beta-fixes`. Do not publish or push this branch.
 
 Keep `AndroidEnableMarshalMethods=false` and `AndroidIgnoreAllJniPreload=true`.

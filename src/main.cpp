@@ -1949,6 +1949,15 @@ public:
         const pt::AppSettings& s = app_.settings;
         std::vector<pt::game::PcSettingSection> out;
         pt::game::PcSettingSection display{"pc_section_display", 0, {}};
+#ifdef __ANDROID__
+        auto display_mode = Row(kDisplayMode, "pc_display_mode", {"pc_fullscreen"}, 0, "pc_note_android_display");
+        display_mode.enabled = false;
+        display.rows.push_back(std::move(display_mode));
+        const auto extent = app_.renderer.RenderExtent();
+        auto resolution = Row(kResolution, "pc_resolution", {std::format("{} x {}", extent.width, extent.height)}, 0, "pc_note_android_resolution");
+        resolution.enabled = false;
+        display.rows.push_back(std::move(resolution));
+#else
         const int mode = std::clamp(s.display.fullscreen, 0, 2);
         display.rows.push_back(Row(kDisplayMode, "pc_display_mode", {"pc_window", "pc_borderless", "pc_fullscreen"}, mode, "pc_note_display_mode"));
         const char* resolution_note = mode == 0 ? "pc_note_resolution" : "pc_note_resolution_fullscreen";
@@ -1962,6 +1971,7 @@ public:
         // borderless covers the desktop at its own size: a smaller size there shrank the picture and left the mouse on the desktop's
         resolution.enabled = mode != 1;
         display.rows.push_back(std::move(resolution));
+#endif
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
         const pt::FrameGeneration* native_fg = pt::UpscaleHost::Get().MetalFxFrameGen();
@@ -2242,6 +2252,10 @@ public:
     }
 
     void Set(int id, int value) override {
+#ifdef __ANDROID__
+        // The Android activity owns the fullscreen surface; desktop choices cannot resize it.
+        if (id == kDisplayMode || id == kResolution) return;
+#endif
         pt::AppSettings& s = app_.settings;
         pt::UpscaleSettings& u = app_.scene.upscale;
         if (id >= kModFirst) {
