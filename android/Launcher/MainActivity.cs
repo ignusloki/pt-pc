@@ -87,6 +87,8 @@ public sealed class MainActivity : Activity {
     }
 
     void UpdateReady() {
+        if (busy) Window!.AddFlags(WindowManagerFlags.KeepScreenOn);
+        else Window!.ClearFlags(WindowManagerFlags.KeepScreenOn);
         play.Enabled = !busy && File.Exists(Path.Combine(Game, "chunk1.psarc")) && File.Exists(Path.Combine(Game, "texture.qar"));
         select.Enabled = !busy;
         diagnostics.Enabled = !busy;

@@ -45,7 +45,8 @@ not be added to those figures as a separate VRAM requirement.
 4. Put your compatible P.T. `.pkg` somewhere Android's file picker can access,
    such as **Downloads**, then tap **Select P.T. .pkg** and select it. A local
    file avoids having to wait for a cloud provider to download it first.
-5. **Keep the app open and the phone awake until import finishes.** The first
+5. **Keep the app open until import finishes.** It keeps the screen awake while
+   importing and preparing runtime files. The first
    S22 import took about **8½ minutes**. The app copies the package, extracts the
    archives and verifies them; the game starts only after a successful import.
    Background import, cancellation and recovery after process termination are

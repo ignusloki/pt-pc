@@ -195,6 +195,9 @@ original game archives, or native/ZIP alignment below 16 KiB. It writes
 `PT-1.0.7-android-beta.1-arm64.apk`, `SHA256SUMS` and public `BUILD.json` metadata.
 The engine still uses the developer target deliberately, to unlock beta loop
 navigation; the launcher is a signed, non-debuggable Release build.
+Managed callbacks use dynamic JNI registration in both configurations, rather
+than Release marshal-method exports, while native CPU variants stay lazily loaded.
+The launcher keeps its screen awake while importing/preparing runtime files.
 The version-header generator accepts hyphens in prerelease identifiers, and the
 macOS release workflow skips `-android-` tags so it cannot attach desktop packages
 to this APK prerelease. These changes also remain on the Android branch.

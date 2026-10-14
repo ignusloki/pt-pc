@@ -17,6 +17,9 @@
     <AndroidLinkMode>None</AndroidLinkMode>
     <PublishTrimmed>false</PublishTrimmed>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <!-- Keep managed callbacks on the tested dynamic JNI registration path.
+         Native CPU variants must stay lazily loaded, including in Release. -->
+    <AndroidEnableMarshalMethods>false</AndroidEnableMarshalMethods>
     <AndroidIgnoreAllJniPreload>true</AndroidIgnoreAllJniPreload>
     <AndroidManifest>AndroidManifest.xml</AndroidManifest>
     <PtAndroidStage Condition="'$(PtAndroidStage)' == ''">../../build/android-prototype/stage</PtAndroidStage>
