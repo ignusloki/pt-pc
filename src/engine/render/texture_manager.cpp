@@ -1,5 +1,7 @@
 #include "engine/render/texture_manager.h"
 
+#include <bc7decomp.h>
+#include <rgbcx.h>
 #include <stb_image.h>
 
 #include <algorithm>
@@ -17,6 +19,66 @@
 
 namespace pt {
 namespace {
+
+// BC compressed levels decoded to a plain format, for GPUs without BC textures (Context::bc_textures): RGBA8 for BC1, BC2,
+// BC3 and BC7, R8 for BC4 and R8G8 for BC5 (normal maps keep their two channels). False for formats with no decoder here.
+bool DecodeBcLevels(VkFormat& format, std::span<const TextureMip> mips, std::vector<std::vector<uint8_t>>& storage,
+                    std::vector<TextureMip>& out) {
+    enum class Kind { Bc1, Bc2, Bc3, Bc4, Bc5, Bc7 } kind;
+    VkFormat plain = VK_FORMAT_UNDEFINED;
+    switch (format) {
+    case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: kind = Kind::Bc1; plain = VK_FORMAT_R8G8B8A8_UNORM; break;
+    case VK_FORMAT_BC1_RGB_SRGB_BLOCK: case VK_FORMAT_BC1_RGBA_SRGB_BLOCK: kind = Kind::Bc1; plain = VK_FORMAT_R8G8B8A8_SRGB; break;
+    case VK_FORMAT_BC2_UNORM_BLOCK: kind = Kind::Bc2; plain = VK_FORMAT_R8G8B8A8_UNORM; break;
+    case VK_FORMAT_BC2_SRGB_BLOCK: kind = Kind::Bc2; plain = VK_FORMAT_R8G8B8A8_SRGB; break;
+    case VK_FORMAT_BC3_UNORM_BLOCK: kind = Kind::Bc3; plain = VK_FORMAT_R8G8B8A8_UNORM; break;
+    case VK_FORMAT_BC3_SRGB_BLOCK: kind = Kind::Bc3; plain = VK_FORMAT_R8G8B8A8_SRGB; break;
+    case VK_FORMAT_BC4_UNORM_BLOCK: kind = Kind::Bc4; plain = VK_FORMAT_R8_UNORM; break;
+    case VK_FORMAT_BC5_UNORM_BLOCK: kind = Kind::Bc5; plain = VK_FORMAT_R8G8_UNORM; break;
+    case VK_FORMAT_BC7_UNORM_BLOCK: kind = Kind::Bc7; plain = VK_FORMAT_R8G8B8A8_UNORM; break;
+    case VK_FORMAT_BC7_SRGB_BLOCK: kind = Kind::Bc7; plain = VK_FORMAT_R8G8B8A8_SRGB; break;
+    default: return false;
+    }
+    const uint32_t block_bytes = kind == Kind::Bc1 || kind == Kind::Bc4 ? 8 : 16;
+    const uint32_t texel_bytes = kind == Kind::Bc4 ? 1 : kind == Kind::Bc5 ? 2 : 4;
+    storage.resize(mips.size());
+    out.resize(mips.size());
+    for (size_t m = 0; m < mips.size(); ++m) {
+        const TextureMip& mip = mips[m];
+        const uint32_t w = std::max(mip.width, 1u), h = std::max(mip.height, 1u), bw = (w + 3) / 4, bh = (h + 3) / 4;
+        if (mip.data.size() < size_t(bw) * bh * block_bytes) return false;
+        std::vector<uint8_t>& texels = storage[m];
+        texels.assign(size_t(w) * h * texel_bytes, 0);
+        for (uint32_t by = 0; by < bh; ++by) {
+            for (uint32_t bx = 0; bx < bw; ++bx) {
+                const uint8_t* block = mip.data.data() + (size_t(by) * bw + bx) * block_bytes;
+                uint8_t px[16 * 4];
+                switch (kind) {
+                case Kind::Bc1: rgbcx::unpack_bc1(block, px); break;
+                case Kind::Bc2:
+                    rgbcx::unpack_bc1(block + 8, px);
+                    for (int i = 0; i < 16; ++i) {
+                        const uint8_t a = (block[i / 2] >> ((i & 1) * 4)) & 15;
+                        px[i * 4 + 3] = static_cast<uint8_t>(a * 17);
+                    }
+                    break;
+                case Kind::Bc3: rgbcx::unpack_bc3(block, px); break;
+                case Kind::Bc4: rgbcx::unpack_bc4(block, px, 1); break;
+                case Kind::Bc5: rgbcx::unpack_bc5(block, px, 0, 1, 2); break;
+                case Kind::Bc7: bc7decomp::unpack_bc7(block, reinterpret_cast<bc7decomp::color_rgba*>(px)); break;
+                }
+                for (uint32_t y = 0; y < 4 && by * 4 + y < h; ++y) {
+                    const uint32_t cols = std::min(4u, w - bx * 4);
+                    std::memcpy(texels.data() + (size_t(by * 4 + y) * w + bx * 4) * texel_bytes, px + y * 4 * texel_bytes,
+                                cols * texel_bytes);
+                }
+            }
+        }
+        out[m] = {w, h, texels};
+    }
+    format = plain;
+    return true;
+}
 
 // A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
 // light for a colour texture). Uncompressed, so loading never stalls on an encoder.
@@ -291,6 +353,15 @@ uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::s
     }
     if (mips.empty() || images_.size() >= kMaxTextures) {
         return kWhite;
+    }
+    std::vector<std::vector<uint8_t>> decoded;
+    std::vector<TextureMip> decoded_mips;
+    if (bool compressed = false; !ctx_->bc_textures && (FormatBlockBytes(format, compressed), compressed)) {
+        if (!DecodeBcLevels(format, mips, decoded, decoded_mips)) {
+            LogWarn("textures: {} is in a compressed format this GPU cannot sample ({})", name, static_cast<int>(format));
+            return kWhite;
+        }
+        mips = decoded_mips;
     }
     vk::Image image;
     const uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;

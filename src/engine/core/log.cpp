@@ -1,4 +1,8 @@
 #include "engine/core/log.h"
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include "engine/platform/os.h"
 
 #include <chrono>
@@ -47,6 +51,10 @@ void LogWrite(LogLevel level, std::string_view text) {
         std::snprintf(tick, sizeof(tick), "#%llu ", static_cast<unsigned long long>(g_tick));
     }
     std::fprintf(stderr, "[%9.3f] %-5s %s%.*s\n", seconds, LevelTag(level), tick, static_cast<int>(text.size()), text.data());
+#ifdef __ANDROID__
+    // stderr goes nowhere on Android: logcat (adb logcat -s pt)
+    __android_log_print(ANDROID_LOG_INFO, "pt", "[%9.3f] %-5s %s%.*s", seconds, LevelTag(level), tick, static_cast<int>(text.size()), text.data());
+#endif
     if (g_log_file) {
         std::fprintf(g_log_file, "[%9.3f] %-5s %s%.*s\n", seconds, LevelTag(level), tick, static_cast<int>(text.size()), text.data());
         std::fflush(g_log_file);

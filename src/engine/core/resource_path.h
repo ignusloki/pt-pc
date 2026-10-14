@@ -12,5 +12,10 @@ std::filesystem::path ExecutableDir();
 std::filesystem::path ExecutablePath();
 #endif
 std::filesystem::path ResourceDir(std::string_view name, const std::filesystem::path& build_dir);
+#ifdef __ANDROID__
+/* Android (docs/mobile.md): ExecutableDir() is the app's external files folder (the game files, data/, and the shaders and
+   fonts). The APK carries those two as assets with a manifest.txt; this copies any that are missing or changed. */
+void PrepareBundledFiles();
+#endif
 
 }

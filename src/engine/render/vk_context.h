@@ -65,6 +65,7 @@ public:
 
     bool CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr = false);
     void DestroySwapchain();
+    bool RecreateSurface();
     VkResult AcquireNextImage(VkSemaphore semaphore, uint32_t* index);
     VkResult QueuePresent(const VkPresentInfoKHR& info);
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
@@ -109,6 +110,8 @@ public:
     // Ray queries (the ray traced shadows PC option): set want_ray_query before Init to create the device with
     // VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations and buffer device addresses
     // when the GPU has them. ray_query_supported says whether it has them, requested or not; ray_query whether they are on.
+    // BC compressed textures (the game's): without them (phone GPUs) the texture manager decodes them to plain formats
+    bool bc_textures = true;
     bool want_ray_query = false;
     bool ray_query_supported = false;
     bool ray_query = false;

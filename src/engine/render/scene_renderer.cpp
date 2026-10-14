@@ -15,6 +15,18 @@
 #include "engine/fs/vfs.h"
 
 namespace pt {
+
+// The bloom chain's rows: the original's 270, or 135 on phones, where its 41 passes on a 480 x 270 target were a third of
+// the frame (2.65 of 7.9 ms at 1721 x 792); the Kawase offsets shrink with it, so the glow keeps its size on screen.
+// PT_BLOOM_ROWS overrides (A/B).
+uint32_t BloomRows() {
+    if (const char* env = std::getenv("PT_BLOOM_ROWS"); env && std::atoi(env) >= 16) return static_cast<uint32_t>(std::atoi(env));
+#if PT_MOBILE
+    return 135u;
+#else
+    return 270u;
+#endif
+}
 namespace {
 
 constexpr VkFormat kAlbedoFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -639,9 +651,10 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     const VkImageUsageFlags color = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     // the G-buffer and light targets can be copied out for PT_TARGET_DUMP
     const VkImageUsageFlags dumped = color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    // 0xDD0D40: the 480x270 chain of a 1080p frame, 270 rows at any output size
-    const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(270.0 * output.width / std::max(output.height, 1u))));
-    const VkExtent2D quarter{bloom_width, 270u};
+    // 0xDD0D40: the 480x270 chain of a 1080p frame, 270 rows at any output size (phones: 135, BloomRows)
+    const uint32_t rows = BloomRows();
+    const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(double(rows) * output.width / std::max(output.height, 1u))));
+    const VkExtent2D quarter{bloom_width, rows};
     const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
     bool ok = CreateTarget(albedo_, kAlbedoFormat, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
               CreateTarget(material_, kMaterialFormat, extent, dumped, c) &&

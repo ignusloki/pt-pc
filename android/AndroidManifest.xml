@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.ignusloki.pt.mobile" android:versionCode="1" android:versionName="1.0.3">
+  <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
+  <uses-feature android:name="android.hardware.vulkan.version" android:version="0x403000" android:required="true" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+  <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+  <uses-feature android:name="android.hardware.microphone" android:required="false" />
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <application android:label="P.T." android:hasCode="true" android:extractNativeLibs="false"
+      android:appCategory="game" android:isGame="true" android:hardwareAccelerated="true"
+      android:enableOnBackInvokedCallback="false"
+      android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+    <activity android:name="org.ignusloki.pt.mobile.PTActivity" android:exported="true"
+        android:alwaysRetainTaskState="true" android:launchMode="singleInstance"
+        android:screenOrientation="sensorLandscape" android:preferMinimalPostProcessing="true"
+        android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

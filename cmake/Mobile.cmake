@@ -1,0 +1,47 @@
+# iOS and Android (docs/mobile.md). The game target is an iOS app bundle or Android's libmain.so (CMakeLists.txt); here the
+# platform's libraries and the files the game reads beside its executable (shaders/, fonts/).
+
+target_compile_definitions(pt_engine PUBLIC PT_MOBILE=1 PT_WHISPER_STATIC=1)
+# the true end's word: whisper.cpp in the game (cmake/Dependencies.cmake), its base.en model and the voice activity model
+# beside the game (the larger second opinion model stays on the PC: 190 MB, and the heat of running it on a phone)
+target_link_libraries(pt_engine PUBLIC whisper)
+set(PT_MOBILE_VOICE_MODELS "${CMAKE_BINARY_DIR}/voice/ggml-base.en-q5_1.bin" "${CMAKE_BINARY_DIR}/voice/ggml-silero-v6.2.0.bin")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # Vulkan is MoltenVK: the official release's dynamic framework (PT_MOLTENVK_IOS, MoltenVK-ios.tar:
+  # MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework), embedded in the bundle's Frameworks/ and loaded by
+  # SDL and the game (vk_context.cpp VulkanLibraryPath). Not linked statically: volk's own vkGetInstanceProcAddr would clash.
+  set(PT_MOLTENVK_IOS "" CACHE PATH "MoltenVK.framework for ios-arm64 (the dynamic xcframework's)")
+  if(NOT EXISTS "${PT_MOLTENVK_IOS}/MoltenVK")
+    message(FATAL_ERROR "Set PT_MOLTENVK_IOS to the ios-arm64 MoltenVK.framework of MoltenVK-ios.tar (docs/mobile.md)")
+  endif()
+  target_link_libraries(pt PRIVATE "-framework UIKit" "-framework Foundation")
+  # iOS has no system(): a copy of Lua's loslib.c whose os.execute reports failure (mods cannot run commands there anyway)
+  file(READ "${lua51_SOURCE_DIR}/src/loslib.c" pt_loslib)
+  string(REPLACE "system(luaL_optstring(L, 1, NULL))" "-1" pt_loslib "${pt_loslib}")
+  file(WRITE "${CMAKE_BINARY_DIR}/generated/loslib_ios.c" "${pt_loslib}")
+  set_source_files_properties("${lua51_SOURCE_DIR}/src/loslib.c" PROPERTIES HEADER_FILE_ONLY ON)
+  target_sources(pt_thirdparty PRIVATE "${CMAKE_BINARY_DIR}/generated/loslib_ios.c")
+  target_include_directories(pt_thirdparty PRIVATE "${lua51_SOURCE_DIR}/src")
+  add_custom_command(TARGET pt POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${PT_MOLTENVK_IOS}" "$<TARGET_FILE_DIR:pt>/Frameworks/MoltenVK.framework" VERBATIM)
+
+  set(PT_IOS_BUNDLE_ID "org.ignusloki.pt.mobile" CACHE STRING "iOS bundle identifier (a development team's own for signing)")
+  set_target_properties(pt PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/ios/Info.plist.in"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "${PT_IOS_BUNDLE_ID}"
+    MACOSX_BUNDLE_BUNDLE_NAME "P.T."
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PT_VERSION}")
+  # the bundle is flat on iOS: shaders/ and fonts/ go beside the executable, where ResourceDir() looks
+  add_custom_command(TARGET pt POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:pt>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/voice"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PT_MOBILE_VOICE_MODELS} "$<TARGET_FILE_DIR:pt>/voice/" VERBATIM)
+elseif(ANDROID)
+  target_link_libraries(pt PRIVATE android log)
+  # Lua 5.1 reads a string's characters past its TString header (svalue): the NDK's _FORTIFY_SOURCE takes that for an
+  # overrun and aborts in the collector (lgc.c traversetable strchr)
+  file(GLOB pt_lua_sources ${lua51_SOURCE_DIR}/src/*.c)
+  set_source_files_properties(${pt_lua_sources} TARGET_DIRECTORY pt_thirdparty PROPERTIES COMPILE_OPTIONS "-U_FORTIFY_SOURCE")
+endif()

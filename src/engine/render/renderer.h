@@ -165,6 +165,7 @@ private:
     VkSemaphore split_wait_ = VK_NULL_HANDLE;
     uint64_t split_wait_value_ = 0;
     bool swapchain_dirty_ = false;
+    void* native_window_ = nullptr;  // Android: the ANativeWindow the surface was made for
     bool imgui_ready_ = false;
     bool output_ready_ = false;
     float brightness_override_ = 0.0f;

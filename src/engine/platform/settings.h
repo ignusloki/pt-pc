@@ -11,16 +11,33 @@ struct AppSettings {
     struct Display {
         int width = 1600;
         int height = 900;
+#if PT_MOBILE
+        int fullscreen = 1;  // phones and tablets: the whole screen, no system bars
+#else
         int fullscreen = 0;
+#endif
         bool vsync = true;
         bool pause_on_focus_loss = true;
         bool mute_in_background = false;
         // frames per second at most, 0 for no limit (v-sync still applies); menus and the paused game are held to 60 either way
+#if PT_MOBILE
+        int fps_limit = 30;  // phones: half the GPU work of 60 (the iPhone ran hot at 60), P.T. is slow paced
+#else
         int fps_limit = 0;
+#endif
         bool hdr = false;
         // black bars over and under the picture in play and in the demos, not in the original: 0 off, 1 2.39:1, 2 1.85:1 (the
         // photo mode's choices)
         int letterbox = 0;
+        // the 3D view's size against the screen's pixels, 0.25 to 1 (phones: their screens have far more pixels than their GPUs
+        // can light at 60 fps); the frame is scaled up to the screen
+#if PT_MOBILE
+        // the 3D view at half the screen's size on phones: the RedMagic 11 Pro's hallway took 25% less GPU time than at 0.6
+        // (15 against 20 ms), the iPhone 17 Pro Max ran 18 fps at its full 2868 x 1320
+        float render_scale = 0.5f;
+#else
+        float render_scale = 1.0f;
+#endif
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
@@ -79,7 +96,11 @@ struct AppSettings {
         // textures upscaled from the game files by the bundled upscaler, generated once into the user data folder
         bool enhanced_textures = false;
         // Raster shadow tile: 0 off, 1 512 px, 2 1024 px, 3 original 2048 px.
+#if PT_MOBILE
+        int shadow_quality = 2;  // a 4096 px atlas: phones share 8 to 12 GB between the GPU and everything else
+#else
         int shadow_quality = 3;
+#endif
         bool ambient_occlusion = true;
         bool reflections = true;
         bool bloom = true;

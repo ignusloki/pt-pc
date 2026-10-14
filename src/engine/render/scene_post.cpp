@@ -127,8 +127,9 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
             // PT_BLOOM_SEPARATE_ADD=1 keeps the separate add pass, for A/B.
             static const bool separate_add = std::getenv("PT_BLOOM_SEPARATE_ADD") != nullptr;
             const glm::vec4 saved_f1 = push.f1;
+            const float offset_scale = static_cast<float>(bloom_[0].Extent().height) / 270.0f;  // texels of a smaller chain
             for (int i = 0; i < passes; ++i) {
-                const glm::vec4 kawase(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
+                const glm::vec4 kawase((static_cast<float>(i) + 0.5f) * offset_scale, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
                 blur(0, 1, kawase_, kawase, false);
                 if (separate_add) {
                     blur(1, 0, kawase_, kawase, false);

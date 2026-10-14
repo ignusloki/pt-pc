@@ -171,7 +171,7 @@ private:
             return true;
         }
         double d = 0.0;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)  // (Android's libc++ lacks it too)
         /* floating point std::from_chars is in Apple's libc++ from macOS 26 only, and the build runs on 14 (docs/macos.md); strtod
            reads the same numbers in the "C" locale, which the game never changes */
         const char* begin = text_.c_str() + pos_;

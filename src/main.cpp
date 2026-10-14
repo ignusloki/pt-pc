@@ -1,6 +1,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "engine/platform/update_check.h"
+#include "engine/platform/touch_controls.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -30,7 +31,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <iomanip>
 #include <span>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -863,6 +866,22 @@ std::filesystem::path FindGameDir(const Options& options) {
         }
         dir = dir.parent_path();
     }
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    /* iOS and Android (docs/mobile.md): the game files are copied into the app's own folder, Documents on iOS (the Files app) and
+       the external files folder on Android (adb push); either the CUSA01127 folder itself or its three files directly */
+    {
+#ifdef __ANDROID__
+        const char* base = SDL_GetAndroidExternalStoragePath();
+        const std::filesystem::path root = base ? std::filesystem::path(base) : std::filesystem::path();
+#else
+        const std::filesystem::path root = pt::os::PathFromUtf8(pt::os::GetEnv("HOME")) / "Documents";
+#endif
+        for (const std::filesystem::path candidate : {root / "CUSA01127", root / "game" / "CUSA01127", root}) {
+            if (LooksLikeGameDir(candidate)) return candidate;
+        }
+        return root / "CUSA01127";
+    }
+#endif
     const std::filesystem::path remembered_file = RememberedGameDirFile();
     if (!remembered_file.empty()) {
         std::ifstream in(remembered_file, std::ios::binary);
@@ -3330,6 +3349,10 @@ private:
     pt::InputDevice& input_;
 };
 
+pt::TouchControls* g_touch = nullptr;  // the on-screen controls, when shown (docs/mobile.md)
+// iOS and Android: the app is in the background, where it must not draw (iOS ends an app that uses the GPU there)
+bool g_background = false;
+
 bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
         return true;
@@ -3337,6 +3360,9 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (g_touch) {
+            g_touch->ProcessEvent(event, app.window);
+        }
         if (input) {
             input->ProcessEvent(event);
         }
@@ -3356,9 +3382,15 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             }
         } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
             app.renderer.Resize(static_cast<uint32_t>(event.window.data1), static_cast<uint32_t>(event.window.data2));
+        } else if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND || event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+            g_background = event.type == SDL_EVENT_WILL_ENTER_BACKGROUND;
+            pt::LogInfo("app: {}", g_background ? "in the background" : "back in the foreground");
+            if (g_background) {
+                vkDeviceWaitIdle(app.renderer.Context().device);
+            }
         }
     }
-    if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) {
+    if (g_background || (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED)) {
         SDL_Delay(16);
         return false;
     }
@@ -3627,6 +3659,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
     }
     pt::VirtualPads virtual_pads;
+    // touch controls on phones and tablets: a virtual pad of their own, slot 3 (the scripts use the first ones)
+    pt::TouchControls touch_controls;
+    if (app.window && pt::TouchControls::Wanted()) {
+        touch_controls.Attach(virtual_pads, 3);
+        g_touch = &touch_controls;
+    }
+    struct TouchReset {
+        ~TouchReset() { g_touch = nullptr; }
+    } touch_reset;
     pt::game::PromptTextures prompt_textures;
     prompt_textures.Init(vfs, app.textures, app.window != nullptr);
     script.SetPads(options.virtual_pads ? &virtual_pads : nullptr, &input);
@@ -4208,6 +4249,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        if (g_touch) {
+            // a drag on the right of the screen turns the view directly, as the mouse does (no stick's acceleration and
+            // coasting): about 150 degrees per screen height at the default sensitivity
+            const glm::vec2 drag = g_touch->TakeLook();
+            polled.mouse_look += drag * 2.6f * app.settings.input.mouse_sensitivity;
+        }
         // the menu's cursor hides while a controller drives the menu (issue #45); moving or clicking the mouse brings it back
         if (app.window) {
             static bool cursor_hidden = false;
@@ -4257,6 +4304,26 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 toggle_settings();
             } else if (ui_ready) {
                 ui.OpenPcSettings();
+            }
+        }
+        if (static const bool debug_touch = std::getenv("PT_DEBUG_TOUCH") != nullptr; debug_touch) {
+            static glm::vec2 last_left{}, last_right{};
+            static glm::vec3 last_feet{};
+            static uint64_t last_feet_tick = 0;
+            if (frame - last_feet_tick >= 15) {
+                const glm::vec3 feet = game.GetPlayer().Feet();
+                if (glm::length(feet - last_feet) > 0.001f) {
+                    pt::LogInfo("touch: feet {:.3f} {:.3f} {:.3f} moved {:.3f}", feet.x, feet.y, feet.z, glm::length(feet - last_feet));
+                }
+                last_feet = feet;
+                last_feet_tick = frame;
+            }
+            if (glm::length(polled.left_stick - last_left) > 0.05f || glm::length(polled.right_stick - last_right) > 0.05f ||
+                (glm::length(polled.left_stick) == 0.0f) != (glm::length(last_left) == 0.0f)) {
+                pt::LogInfo("touch: game reads left {:.2f} {:.2f} right {:.2f} {:.2f}", polled.left_stick.x, polled.left_stick.y,
+                            polled.right_stick.x, polled.right_stick.y);
+                last_left = polled.left_stick;
+                last_right = polled.right_stick;
             }
         }
         pending_input.left_stick = polled.left_stick;
@@ -4821,6 +4888,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
+            if (g_touch && !show_settings) {
+                g_touch->Draw(ImGui::GetForegroundDrawList(), ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+            }
             if (show_debug) {
                 pt::game::DrawGameDebugPanel(game);
                 if (ImGui::Begin("View")) {
@@ -4840,6 +4910,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             int width = 0;
             int height = 0;
             SDL_GetWindowSizeInPixels(app.window, &width, &height);
+            const float scale = app.settings.display.render_scale;
+            if (width > 0 && height > 0 && scale < 1.0f) {
+                width = std::max(1, static_cast<int>(std::lround(width * scale)));
+                height = std::max(1, static_cast<int>(std::lround(height * scale)));
+            }
             if (width > 0 && height > 0) base_render_extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
         } else if (!vr && app.window) {
             base_render_extent = {static_cast<uint32_t>(app.settings.display.width), static_cast<uint32_t>(app.settings.display.height)};
@@ -5203,6 +5278,18 @@ int RunGame(App& app, pt::Vfs& vfs) {
                             app.settings.upscaling.quality, app.settings.upscaling.frame_generation,
                             app.settings.display.vsync ? "on" : "off", app.settings.display.fps_limit, game.Floor().CurrentFloorName(),
                             ui_ready && ui.MenuOpen() ? ", menu open" : "");
+                if (std::getenv("PT_DEBUG_PASSES")) {
+                    const pt::RenderStats& passes = app.scene.Stats();
+                    pt::LogInfo("status: passes shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, post {:.2f} ms; "
+                                "parts forward {:.2f}, effects {:.2f}, upscale inputs {:.2f}, reflections {:.2f}, upscaler {:.2f}, bloom {:.2f} ms",
+                                passes.pass_ms[0], passes.pass_ms[1], passes.pass_ms[2], passes.pass_ms[3], passes.pass_ms[4], passes.pass_ms[5],
+                                passes.part_ms[0], passes.part_ms[1], passes.part_ms[2], passes.part_ms[3], passes.part_ms[4], passes.part_ms[5]);
+                }
+                // PT_DEBUG_SHOT=name: the frame shown, saved with each status line into the user data folder (a phone's screen
+                // can be read back that way)
+                if (const char* shot = std::getenv("PT_DEBUG_SHOT"); shot && *shot) {
+                    app.renderer.SaveScreenshot(UserDataDir() / pt::os::PathFromUtf8(shot));
+                }
                 status_start = status_now;
                 status_frames = 0;
                 status_gpu = 0.0;
@@ -5311,8 +5398,40 @@ int main(int argc, char** argv) {
         freopen_s(&stream, "CONOUT$", "w", stderr);
     }
 #endif
+#ifdef __ANDROID__
+    pt::PrepareBundledFiles();  // the shaders and fonts from the APK (docs/mobile.md)
+#endif
+#if PT_MOBILE
+    // phones have no command line: env.txt in the user data folder sets environment variables (KEY=VALUE lines), for the
+    // PT_DEBUG_* switches (docs/mobile.md)
+    if (std::ifstream env(UserDataDir() / "env.txt"); env) {
+        for (std::string line; std::getline(env, line);) {
+            if (const size_t eq = line.find('='); eq != std::string::npos && line[0] != '#') {
+                setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+            }
+        }
+    }
+#endif
     App app;
+#if PT_MOBILE
+    // PT_ARGS (env.txt): command line options for a phone's game, split at spaces, "quoted" for a path with spaces (docs/mobile.md)
+    std::vector<std::string> extra_args;
+    std::vector<char*> mobile_argv(argv, argv + argc);
+    if (const char* args = std::getenv("PT_ARGS"); args && *args) {
+        std::istringstream words(args);
+        for (std::string word; words >> std::quoted(word);) extra_args.push_back(word);
+        for (std::string& word : extra_args) mobile_argv.push_back(word.data());
+        argc = static_cast<int>(mobile_argv.size());
+        argv = mobile_argv.data();
+    }
+#endif
     app.options = ParseOptions(argc, argv);
+#if PT_MOBILE
+    // a phone's own paths change between installs (iOS), so PT_ARGS' relative paths are in the user data folder
+    for (std::filesystem::path* path : {&app.options.voice_test, &app.options.log_path, &app.options.screenshot}) {
+        if (!path->empty() && path->is_relative()) *path = UserDataDir() / *path;
+    }
+#endif
     if (!app.options.make_loop_previews.empty()) {
         SetUpLoopPreviewRun(app.options);
     }
@@ -5524,6 +5643,22 @@ int main(int argc, char** argv) {
     }
 
     // each subsystem timed on its own: a player's start waited 98 s here (1.0.2), in one of the three
+    if (pt::TouchControls::Wanted()) {
+        // touches drive the on-screen controls, not the mouse; on a desktop (PT_TOUCH=1) the mouse acts as a finger
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+        SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+        // landscape either way up (SDL would otherwise pick from the window's size, and a resizable one may turn to portrait)
+        SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        /* iOS holds back touches near the screen's edges for its own swipes, and sometimes their end until the next touch:
+           a stick thumb near the edge kept walking for seconds after it was lifted. The edges' system gestures wait for a
+           second swipe instead (and the home indicator hides) */
+        SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+#endif
+#else
+        SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");
+#endif
+    }
     const auto sdl_init_started = std::chrono::steady_clock::now();
     bool sdl_ready = SDL_Init(options.headless ? 0 : SDL_INIT_VIDEO);
     for (const auto& [flag, name] : {std::pair{SDL_INIT_GAMEPAD, "gamepad"}, std::pair{SDL_INIT_AUDIO, "audio"}}) {
