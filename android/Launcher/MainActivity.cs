@@ -16,10 +16,10 @@ namespace PT.AndroidLauncher;
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize,
     ScreenOrientation = ScreenOrientation.Portrait)]
 public sealed class MainActivity : Activity {
-    const int PickPackage = 10, MicrophoneRequest = 11;
+    const int PickPackage = 10, MicrophoneRequest = 11, SaveDiagnostics = 12;
     const long GiB = 1024L * 1024 * 1024;
     TextView status = null!;
-    Button select = null!, play = null!;
+    Button select = null!, play = null!, diagnostics = null!;
     CheckBox microphone = null!, touch = null!;
     ProgressBar progress = null!;
     bool busy;
@@ -33,11 +33,11 @@ public sealed class MainActivity : Activity {
         var layout = new LinearLayout(this) { Orientation = Orientation.Vertical };
         layout.SetPadding(28, 64, 28, 32);
         layout.SetBackgroundColor(Android.Graphics.Color.Rgb(18, 22, 20));
-        var heading = new TextView(this) { Text = "P.T. Android Prototype", TextSize = 26 };
+        var heading = new TextView(this) { Text = ApplicationInfo!.LoadLabel(PackageManager!)?.ToString(), TextSize = 26 };
         heading.SetTextColor(Android.Graphics.Color.White);
         layout.AddView(heading);
         var info = new TextView(this) {
-            Text = "Select your P.T. package to install the game files on this phone.\n\nConnect a controller, or enable the basic touch controls below. This prototype starts with reduced graphics.",
+            Text = "Select your P.T. package to install the game files on this phone.\n\nConnect a controller, or enable the basic touch controls below. This experimental build starts with reduced graphics.",
             TextSize = 16
         };
         info.SetPadding(0, 24, 0, 24);
@@ -63,6 +63,15 @@ public sealed class MainActivity : Activity {
         status = new TextView(this) { TextSize = 15 };
         status.SetPadding(0, 20, 0, 0);
         layout.AddView(status);
+        diagnostics = new Button(this) { Text = "Save diagnostic log" };
+        diagnostics.Click += (_, _) => {
+            var intent = new Intent(Intent.ActionCreateDocument);
+            intent.AddCategory(Intent.CategoryOpenable);
+            intent.SetType("text/plain");
+            intent.PutExtra(Intent.ExtraTitle, "PT-Android-diagnostics.txt");
+            StartActivityForResult(intent, SaveDiagnostics);
+        };
+        layout.AddView(diagnostics);
         var scroll = new ScrollView(this);
         scroll.AddView(layout);
         SetContentView(scroll);
@@ -80,6 +89,7 @@ public sealed class MainActivity : Activity {
     void UpdateReady() {
         play.Enabled = !busy && File.Exists(Path.Combine(Game, "chunk1.psarc")) && File.Exists(Path.Combine(Game, "texture.qar"));
         select.Enabled = !busy;
+        diagnostics.Enabled = !busy;
         microphone.Enabled = touch.Enabled = !busy;
         progress.Visibility = busy ? ViewStates.Visible : ViewStates.Gone;
         if (!busy) status.Text = play.Enabled ? "Game files are installed. Ready to play." : "No game files installed yet.";
@@ -93,6 +103,17 @@ public sealed class MainActivity : Activity {
 
     protected override async void OnActivityResult(int requestCode, Result resultCode, Intent? data) {
         base.OnActivityResult(requestCode, resultCode, data);
+        if (requestCode == SaveDiagnostics && resultCode == Result.Ok && data?.Data != null) {
+            try {
+                using var output = ContentResolver!.OpenOutputStream(data.Data) ?? throw new IOException("Cannot write the diagnostic log.");
+                using var writer = new StreamWriter(output, Encoding.UTF8);
+                writer.Write(BuildDiagnostics());
+                status.Text = "Diagnostic log saved. Review it before attaching it to a bug report.";
+            } catch (Exception e) {
+                status.Text = "Could not save diagnostic log: " + e.Message;
+            }
+            return;
+        }
         if (requestCode != PickPackage || resultCode != Result.Ok || data?.Data == null || busy) return;
         busy = true;
         UpdateReady();
@@ -111,7 +132,7 @@ public sealed class MainActivity : Activity {
                     int count;
                     while ((count = await input.ReadAsync(buffer)) > 0) {
                         copied += count;
-                        if (copied > 4 * GiB) throw new IOException("This prototype accepts packages up to 4 GB.");
+                        if (copied > 4 * GiB) throw new IOException("This Android build accepts packages up to 4 GB.");
                         await output.WriteAsync(buffer.AsMemory(0, count));
                         if (copied >= nextReport) {
                             Report($"Copying package: {copied / (1024 * 1024)} MB");
@@ -144,6 +165,25 @@ public sealed class MainActivity : Activity {
             busy = false;
             UpdateReady();
         }
+    }
+
+    string BuildDiagnostics() {
+        var text = new StringBuilder();
+        var package = PackageManager!.GetPackageInfo(PackageName!, PackageInfoFlags.MetaData);
+        text.AppendLine($"P.T. Android diagnostics — {DateTime.UtcNow:O}");
+        text.AppendLine($"App: {PackageName} {package!.VersionName}");
+        text.AppendLine($"Phone: {Build.Manufacturer} {Build.Model}; Android {Build.VERSION.Release}; API {(int)Build.VERSION.SdkInt}");
+        text.AppendLine("ABIs: " + string.Join(", ", Build.SupportedAbis ?? Array.Empty<string>()));
+        foreach (var (relative, limit) in new[] { ("launcher.log", 16 * 1024), ("profile/pt.log", 64 * 1024) }) {
+            text.AppendLine($"\n--- {relative} (last {limit / 1024} KiB) ---");
+            string path = Path.Combine(Root, relative);
+            if (!File.Exists(path)) { text.AppendLine("No log yet."); continue; }
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            file.Seek(Math.Max(0, file.Length - limit), SeekOrigin.Begin);
+            using var reader = new StreamReader(file, Encoding.UTF8);
+            text.AppendLine(reader.ReadToEnd().Replace(Root, "<app data>", StringComparison.Ordinal));
+        }
+        return text.ToString();
     }
 
     async Task StageRuntime() {

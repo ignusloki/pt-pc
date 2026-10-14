@@ -75,6 +75,8 @@ public:
     bool SpeechShown() const { return subtitles_.Active() || !queued_subtitles_.empty() || last_caption_ != 0; }
     void OpenMenu(Game& game, bool first_boot, OptionsMenu::Page page = OptionsMenu::Page::Original);
     void OpenPcSettings();
+    // A direct menu button, independent of the original screen's pad shortcuts.
+    void OpenPcSettings(Game& game) { menu_.OpenPcSettings(game); }
     void CloseMenu() { menu_.Close(); }
     void SetPcSettings(PcSettingsSource* source) { menu_.SetPcSource(source); }
     const OptionsMenu& Menu() const { return menu_; }

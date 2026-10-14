@@ -36,6 +36,8 @@ struct MenuInput {
     // L1 (the menu's H key): the street walk's "Return to the house" on the original page
     bool street_return = false;
     uint32_t held_dirs = 0;
+    // Discrete touch-menu taps do not need a held/released gamepad cycle.
+    uint32_t pressed_dirs = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     bool click = false;
@@ -62,6 +64,8 @@ public:
     State CurrentState() const { return state_; }
     bool IsOpen() const { return state_ != State::Closed; }
     bool FirstBoot() const { return first_boot_; }
+    bool InputReady() const { return state_ == State::Active && switch_frame_ < 0.0f; }
+    void OpenPcSettings(Game& game);
     bool TakeClosed() { return std::exchange(just_closed_, false); }
     bool TakeResume() { return std::exchange(resume_, false); }
     // "Return to the house" was confirmed on the original page during the street walk: the menu closes, then the walk ends

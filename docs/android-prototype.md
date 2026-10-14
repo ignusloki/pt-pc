@@ -2,7 +2,11 @@
 
 Branch: `codex/android-port-prototype`, based on stable Mac commit
 `07bc9029c3a6b6b25d7e0fb1ff45c3df107e69da` (1.0.7).
-This is an isolated test app, not an Android release or a change to the stable Mac branch.
+This is the isolated Android development branch. Its first public release is
+**1.0.7-android-beta.1**, a GitHub prerelease; it is not merged into the stable Mac
+branch. Read the [public installation guide](android-beta-installation.md),
+[devlog](devlog-android-beta-1.md) and [release notes](release-notes-android-beta-1.md).
+The prototype observations below document the work leading up to the beta.
 
 ## Install and play
 
@@ -27,11 +31,44 @@ restrictions are the same as the existing installer.
 
 ## Controls and settings
 
-The optional left stick moves; the right stick turns the camera. **Menu** pauses/
-opens the menu, **OK / Use** confirms or interacts, **Back** cancels, and **Zoom**
-holds the existing gamepad zoom input. The direction buttons and **Tab** navigate
-settings. These feed SDL's virtual gamepad and reuse the existing game mappings.
-Physical controllers continue through the ordinary SDL Android controller bridge.
+During gameplay, only **Menu**, **OK / Use**, **Zoom**, and the two sticks are shown.
+The left stick moves and the right stick turns the camera. The navigation buttons
+and **Back** are hidden until a menu opens; the sticks hide while the menu is open
+to keep its settings readable.
+
+On the original settings screen, tap **PC Settings** at the top right to reach
+graphics, sound, controls and extras. **Language ▲/▼**, **Bright −/+**, **Flip Y**
+and **Flip X** directly adjust the original options. **Back** or **Resume** returns
+to gameplay. The original game's directions adjust language/brightness rather
+than moving focus between these groups, so the touch labels state their function.
+
+Inside PC Settings, **Up/Down** selects a row, **Left/Right** changes its value,
+**Column** switches between the left/right columns, and **OK** opens or confirms
+the selected option. **Back** returns one page; **Resume** returns to gameplay.
+The old **Tab** button is now labelled **Column** and is shown only on this page;
+the original screen's shoulder-button shortcut is Quit, so it is not offered as
+touch navigation there.
+
+Gameplay controls still use SDL's virtual gamepad. Touch-menu commands are queued
+as individual taps and applied through the game's existing menu actions once its
+opening/page animation is ready. Hiding controls or backgrounding the app clears
+held inputs and queued taps. Physical controllers keep the ordinary SDL bridge
+and their existing mappings.
+
+### Menu update: 1.0.7-android.2
+
+The S22 check verified gameplay-only controls, the direct **PC Settings** button,
+**Column** moving the selector to the right side, directional taps, opening Sound,
+and Back/Resume. The controls occupy the menu's side margins instead of covering
+the settings. The discrete-tap regression in `tests/walkthrough/menu_touch.txt`
+passed **22 expectations**, including adjacent directional presses without a
+held-key release between them.
+
+The existing controller-menu script passed **33 expectations** on Mac. The older
+PC Settings script has **five failures** in both the unchanged installed Mac app
+and the Android-work checkout: its cursor/upscaler expectations need updating for
+the current settings layout. Those existing failures are recorded separately from
+this Android menu check.
 
 Initial graphics: **Low**, original textures with a 1,024 px maximum uploaded mip
 level, a 960 px wide surface preserving the phone's aspect ratio, and a 30 fps cap.
@@ -138,10 +175,33 @@ python3 tools/android/build.py \
 
 `--source-cache` is optional; it reuses dependency sources and verified voice
 models to avoid downloading them again. Native output goes to
-`build/android-prototype`; the signed debug APK and checksum go to
-`dist/android/prototype`. A production signing key and release packaging remain
-future work. Debug signing is for local testing and does not establish Play Store
-readiness or compatibility with other Android devices.
+`build/android-prototype`; a Debug build's prototype APK and checksum go to
+`dist/android/prototype`. Debug signing is for local testing.
+
+For the public beta, commit tracked source changes first, then add:
+
+```sh
+  --configuration Release --version 1.0.7-android-beta.1 --version-code 3 \
+  --out dist/android/beta-1 \
+  --keystore /private/path/pt-android-beta.p12 \
+  --key-alias pt-android-beta \
+  --password-file /private/path/keystore-password.txt
+```
+
+Release uses `org.ignusloki.pt.beta`; Debug uses `org.ignusloki.pt.prototype`.
+The builder rejects dirty tracked source, missing release signing credentials,
+incorrect package identity, a debuggable Release APK, stale native code, bundled
+original game archives, or native/ZIP alignment below 16 KiB. It writes
+`PT-1.0.7-android-beta.1-arm64.apk`, `SHA256SUMS` and public `BUILD.json` metadata.
+The engine still uses the developer target deliberately, to unlock beta loop
+navigation; the launcher is a signed, non-debuggable Release build.
+
+Keep the private signing key and its password outside the repository and retain
+them for future updates. Never upload either to GitHub. Signing uses .NET's
+[`file:` password properties](https://learn.microsoft.com/en-us/dotnet/android/building-apps/build-properties#androidsigningkeypass)
+so the password itself is not put in command arguments or build logs. The beta
+is for sideloading and does not claim Play Store readiness or compatibility with
+other Android devices.
 
 Integration follows the pinned
 [SDL Android activity/library design](https://wiki.libsdl.org/SDL3/README-android),

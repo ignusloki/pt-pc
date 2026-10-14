@@ -4590,7 +4590,38 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 vfx_scene.Update(game, step);
             }
             const auto tick_t2 = std::chrono::steady_clock::now();
+#ifdef __ANDROID__
+            if (ui_ready && !theater && ui.MenuOpen() && ui.Menu().InputReady()) {
+                pt::game::MenuInput touch;
+                switch (pt::TakeAndroidTouchMenuAction()) {
+                case pt::AndroidTouchMenuAction::Accept:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original) ui.OpenPcSettings(game);
+                    else touch.accept = true;
+                    break;
+                case pt::AndroidTouchMenuAction::Back:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original) ui.CloseMenu();
+                    else touch.back = true;
+                    break;
+                case pt::AndroidTouchMenuAction::Up: touch.subtitle_up = true; touch.pressed_dirs = pt::kRawUp; break;
+                case pt::AndroidTouchMenuAction::Down: touch.subtitle_down = true; touch.pressed_dirs = pt::kRawDown; break;
+                case pt::AndroidTouchMenuAction::Left: touch.brightness_down = true; touch.pressed_dirs = pt::kRawLeft; break;
+                case pt::AndroidTouchMenuAction::Right: touch.brightness_up = true; touch.pressed_dirs = pt::kRawRight; break;
+                case pt::AndroidTouchMenuAction::Column:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc) touch.switch_column = true;
+                    break;
+                case pt::AndroidTouchMenuAction::InvertY: touch.toggle_vertical = true; break;
+                case pt::AndroidTouchMenuAction::InvertX: touch.toggle_horizontal = true; break;
+                case pt::AndroidTouchMenuAction::Close: ui.CloseMenu(); break;
+                default: break;
+                }
+                ui.QueueMenuInput(touch);
+            }
+#endif
             ui.Update(theater ? theater->theater->Sandbox() : game, state, step);
+#ifdef __ANDROID__
+            pt::SyncAndroidTouchMenu(ui_ready && ui.MenuOpen() && !theater ?
+                (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original ? 1 : 2) : 0);
+#endif
             const auto tick_t3 = std::chrono::steady_clock::now();
             if (options.audio_offline && sound.Ready() && !device_periods) {
                 render_offline(static_cast<uint32_t>(48000.0f * step + 0.5f));

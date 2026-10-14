@@ -1,5 +1,11 @@
 # P.T. for PC
 
+**Android Beta 1 (experimental):** this branch contains the isolated ARM64 Android
+port. [Download the prerelease](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.7-android-beta.1),
+read the [installation and phone requirements](docs/android-beta-installation.md),
+and follow the [devlog](docs/devlog-android-beta-1.md). The upstream-synced
+`codex/macos-arm64-port` branch and stable macOS 1.0.7 release remain separate.
+
 ![Lisa in the hallway](docs/media/lisa.gif)
 
 If the port is worth something to you, you can buy me a coffee: [patreon.com/loreanxavier](https://www.patreon.com/loreanxavier). It keeps the testing hardware and the releases coming.

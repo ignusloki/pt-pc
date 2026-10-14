@@ -92,22 +92,26 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         if (ui && !ui->MenuOpen()) {
             ui->OpenMenu(game, false, text == "pc" ? OptionsMenu::Page::Pc : OptionsMenu::Page::Original);
         }
-    } else if (op == "menukey") {
+    } else if (op == "menukey" || op == "menutap") {
         MenuInput input;
         input.subtitle_up = text == "up";
         input.subtitle_down = text == "down";
         input.brightness_down = text == "left";
         input.brightness_up = text == "right";
         input.held_dirs = text == "up" ? kRawUp : text == "down" ? kRawDown : text == "left" ? kRawLeft : text == "right" ? kRawRight : 0u;
+        if (op == "menutap") input.pressed_dirs = std::exchange(input.held_dirs, 0u);
         input.accept = text == "accept";
         input.back = text == "back";
         input.open_pc = text == "pc";
+        input.switch_column = text == "column";
         input.toggle_vertical = text == "vertical";
         input.toggle_horizontal = text == "horizontal";
         input.zoom_pressed = text == "zoom";
         input.zoom_released = text == "unzoom";
         input.close = text == "close";
         if (ui) {
+            if (op == "menutap" && text == "pc") { ui->OpenPcSettings(game); input.open_pc = false; }
+            if (op == "menutap" && text == "resume") ui->CloseMenu();
             ui->QueueMenuInput(input);
         }
     } else if (op == "streetlight") {
@@ -222,6 +226,7 @@ void GameUi::QueueMenuInput(const MenuInput& input) {
     q.switch_column |= input.switch_column;
     q.street_return |= input.street_return;
     q.held_dirs |= input.held_dirs;
+    q.pressed_dirs |= input.pressed_dirs;
     q.click |= input.click;
     q.right_click |= input.right_click;
     if (input.pointer_valid) {

@@ -549,6 +549,13 @@ void OptionsMenu::CancelPhotoZoom() {
     zoom_released_ = false;
 }
 
+void OptionsMenu::OpenPcSettings(Game& game) {
+    if (!InputReady() || page_ != Page::Original || !pc_source_) return;
+    quit_confirming_ = quit_focused_ = street_confirming_ = false;
+    Commit(game);
+    SwitchPage(game, Page::Pc);
+}
+
 void OptionsMenu::Close() {
     if (state_ == State::SetIn || state_ == State::Active) {
         // the original's close (state 3) leaves zoom_in playing under the setout; a pending release is dropped, as the next open clears it

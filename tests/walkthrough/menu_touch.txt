@@ -1,0 +1,62 @@
+# Discrete touch-menu commands, including adjacent presses without a held-key release.
+# Run headless with saving disabled; this does not use hardware input or change a player's profile.
+20 sstep 15
+20 sui menu
+20 swait 90
+20 sexpect menu 1
+20 sexpect page 0
+20 sui menutap pc
+20 swait 40
+20 sexpect page 1
+20 sexpect pcrow pc_display_mode
+20 sui menutap down
+20 swait 2
+20 sexpect pcrow pc_resolution
+20 sui menutap down
+20 swait 2
+20 sexpect pcrow pc_vsync
+20 sexpect pcvalue pc_vsync 1
+20 sui menutap right
+20 swait 2
+20 sexpect pcvalue pc_vsync 0
+20 sui menutap right
+20 swait 2
+20 sexpect pcvalue pc_vsync 1
+20 sui menutap left
+20 swait 2
+20 sexpect pcvalue pc_vsync 0
+20 sui menutap left
+20 swait 2
+20 sexpect pcvalue pc_vsync 1
+20 sui menutap up
+20 swait 2
+20 sexpect pcrow pc_resolution
+20 sui menutap up
+20 swait 2
+20 sexpect pcrow pc_display_mode
+20 sui menutap column
+20 swait 2
+20 sexpect pcrow pc_volume
+20 sui menutap down
+20 swait 2
+20 sexpect pcrow pc_section_sound
+20 sui menutap accept
+20 swait 2
+20 sexpect pcrow pc_volume
+20 sui menutap down
+20 swait 2
+20 sexpect pcrow pc_surround
+20 sui menutap down
+20 swait 2
+20 sexpect pcrow pc_controller_speaker
+20 sui menutap back
+20 swait 2
+20 sexpect page 1
+20 sui menutap back
+20 swait 40
+20 sexpect page 0
+20 sui menutap resume
+20 swait 50
+20 sexpect menu 0
+20 sexpect paused 0
+20 sexit

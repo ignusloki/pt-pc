@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <deque>
 #include <mutex>
 #include "engine/core/memory_status.h"
 #include "engine/core/log.h"
@@ -25,6 +26,9 @@ std::atomic<Uint64> button_until[SDL_GAMEPAD_BUTTON_COUNT]{};
 std::atomic<int> permission{0};
 SDL_Joystick* touch_joystick = nullptr;
 SDL_JoystickID touch_id = 0;
+std::atomic<int> touch_menu_mode{0};
+std::mutex menu_mutex;
+std::deque<pt::AndroidTouchMenuAction> menu_actions;
 
 void SDLCALL UpdateTouch(void*) {
     if (!touch_joystick) return;
@@ -97,6 +101,15 @@ extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_r
     for (auto& axis : axes) axis = 0;
     for (auto& deadline : button_until) deadline = 0;
     buttons = 0;
+    std::lock_guard lock(menu_mutex);
+    menu_actions.clear();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_menuAction(JNIEnv*, jclass, jint action) {
+    if (!touch_enabled || touch_menu_mode == 0 || action < 0 || action > static_cast<int>(pt::AndroidTouchMenuAction::Close)) return;
+    std::lock_guard lock(menu_mutex);
+    // Retain individual taps until the menu can accept them, including during its opening animation.
+    if (menu_actions.size() < 64) menu_actions.push_back(static_cast<pt::AndroidTouchMenuAction>(action));
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_captureForeground(JNIEnv*, jclass, jboolean foreground) {
@@ -109,6 +122,28 @@ extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_c
 }
 
 namespace pt {
+AndroidTouchMenuAction TakeAndroidTouchMenuAction() {
+    std::lock_guard lock(menu_mutex);
+    if (menu_actions.empty()) return AndroidTouchMenuAction::None;
+    const auto action = menu_actions.front();
+    menu_actions.pop_front();
+    return action;
+}
+
+void SyncAndroidTouchMenu(int mode) {
+    if (!touch_enabled || touch_menu_mode.exchange(mode) == mode) return;
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return;
+    const jclass cls = env->GetObjectClass(activity);
+    const jmethodID method = env->GetMethodID(cls, "setTouchMenuMode", "(I)V");
+    if (method) env->CallVoidMethod(activity, method, mode);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+    LogInfo("android: touch overlay {}", mode == 0 ? "gameplay" : mode == 1 ? "original settings" : "PC settings");
+}
+
 void InitAndroidTouchController() {
     if (!touch_enabled || touch_id) return;
     SDL_VirtualJoystickDesc desc;

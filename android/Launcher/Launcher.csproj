@@ -4,8 +4,8 @@
     <OutputType>Exe</OutputType>
     <ApplicationId>org.ignusloki.pt.prototype</ApplicationId>
     <ApplicationTitle>P.T. Android Prototype</ApplicationTitle>
-    <ApplicationDisplayVersion>1.0.7-android.1</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.7-android-beta.1</ApplicationDisplayVersion>
+    <ApplicationVersion>3</ApplicationVersion>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
     <RuntimeIdentifier>android-arm64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -15,11 +15,22 @@
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
     <RunAOTCompilation>false</RunAOTCompilation>
     <AndroidLinkMode>None</AndroidLinkMode>
+    <PublishTrimmed>false</PublishTrimmed>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
     <AndroidIgnoreAllJniPreload>true</AndroidIgnoreAllJniPreload>
     <AndroidManifest>AndroidManifest.xml</AndroidManifest>
     <PtAndroidStage Condition="'$(PtAndroidStage)' == ''">../../build/android-prototype/stage</PtAndroidStage>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <ApplicationId>org.ignusloki.pt.beta</ApplicationId>
+    <ApplicationTitle>P.T. Android Beta</ApplicationTitle>
+    <AndroidKeyStore>true</AndroidKeyStore>
+    <AndroidUseApkSigner>true</AndroidUseApkSigner>
+  </PropertyGroup>
+  <Target Name="RequireReleaseSigning" BeforeTargets="PrepareForBuild" Condition="'$(Configuration)' == 'Release'">
+    <Error Condition="'$(AndroidSigningKeyStore)' == '' or '$(AndroidSigningKeyAlias)' == '' or '$(AndroidSigningKeyPass)' == '' or '$(AndroidSigningStorePass)' == ''"
+           Text="Android beta Release builds require an explicit signing key. Use tools/android/build.py with --keystore, --key-alias and --password-file." />
+  </Target>
   <ItemGroup>
     <AndroidResource Include="$(PtAndroidStage)/resources/drawable/pt_icon.png" Link="Resources/drawable/pt_icon.png" />
     <Compile Include="../../installer/Extractor/Program.cs" Link="Extraction.cs" />
