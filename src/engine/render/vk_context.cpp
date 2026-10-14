@@ -266,6 +266,18 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             }
         }
 #endif
+#ifdef __ANDROID__
+        /* the activity's surface can be gone while the game starts (the screen turning to landscape, or off or locked): SDL then
+           has no window to make a Vulkan surface for, and says so. Until it has one, wait (the events stay queued for the game) */
+        for (int tries = 0; !created && tries < 1200; ++tries) {
+            created = SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface);
+            if (!created) {
+                if (tries == 0) LogInfo("vulkan: waiting for the window's surface ({})", SDL_GetError());
+                SDL_PumpEvents();
+                SDL_Delay(25);
+            }
+        }
+#endif
         if (!created && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
             LogError("SDL_Vulkan_CreateSurface: {}", SDL_GetError());
             return false;
