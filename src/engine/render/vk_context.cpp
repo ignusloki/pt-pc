@@ -681,6 +681,13 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
             present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "fifo",
             vsync ? "on" : "off");
     VkExtent2D extent = caps.currentExtent;
+#ifdef __ANDROID__
+    /* landscape on a phone reports a 90 degree transform, and (by driver) either the panel's portrait size or the window's:
+       the frame stays upright in the window's own size and the compositor turns it (preTransform identity below) */
+    if (width > 0 && height > 0 && extent.width != 0xFFFFFFFFu && (extent.width > extent.height) != (width > height)) {
+        std::swap(extent.width, extent.height);
+    }
+#endif
     if (extent.width == 0xFFFFFFFFu) {
         extent.width = std::clamp(width, caps.minImageExtent.width, caps.maxImageExtent.width);
         extent.height = std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
@@ -702,7 +709,11 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+#ifdef __ANDROID__
+    info.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
+#else
     info.preTransform = caps.currentTransform;
+#endif
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     info.presentMode = present_mode;
     info.clipped = VK_TRUE;
@@ -755,6 +766,22 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
         swapchain.render_finished.push_back(semaphore);
     }
     return true;
+}
+
+bool Context::RecreateSurface() {
+    // Android: the window's surface is new after the app returns from the background (the old one went with it)
+    vkDeviceWaitIdle(device);
+    DestroySwapchain();
+    if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
+    surface = VK_NULL_HANDLE;
+    if (!SDL_Vulkan_CreateSurface(window_, instance, nullptr, &surface)) {
+        LogError("SDL_Vulkan_CreateSurface: {}", SDL_GetError());
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family, surface, &present);
+    LogInfo("vulkan: window surface recreated{}", present ? "" : " (the queue cannot present to it)");
+    return present == VK_TRUE;
 }
 
 void Context::DestroySwapchain() {

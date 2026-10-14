@@ -3348,6 +3348,8 @@ private:
 };
 
 pt::TouchControls* g_touch = nullptr;  // the on-screen controls, when shown (docs/mobile.md)
+// iOS and Android: the app is in the background, where it must not draw (iOS ends an app that uses the GPU there)
+bool g_background = false;
 
 bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
@@ -3378,9 +3380,15 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             }
         } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
             app.renderer.Resize(static_cast<uint32_t>(event.window.data1), static_cast<uint32_t>(event.window.data2));
+        } else if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND || event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+            g_background = event.type == SDL_EVENT_WILL_ENTER_BACKGROUND;
+            pt::LogInfo("app: {}", g_background ? "in the background" : "back in the foreground");
+            if (g_background) {
+                vkDeviceWaitIdle(app.renderer.Context().device);
+            }
         }
     }
-    if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) {
+    if (g_background || (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED)) {
         SDL_Delay(16);
         return false;
     }
@@ -5570,6 +5578,8 @@ int main(int argc, char** argv) {
         // touches drive the on-screen controls, not the mouse; on a desktop (PT_TOUCH=1) the mouse acts as a finger
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
         SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+        // landscape either way up (SDL would otherwise pick from the window's size, and a resizable one may turn to portrait)
+        SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 #else
         SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");
 #endif

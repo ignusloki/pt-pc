@@ -30,18 +30,6 @@ constexpr ButtonDef kButtons[] = {
 };
 constexpr int kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 
-bool ControllerInUse() {
-    // a real controller connected (the virtual pad is one of the gamepads too)
-    int count = 0;
-    SDL_JoystickID* ids = SDL_GetGamepads(&count);
-    bool real = false;
-    for (int i = 0; ids && i < count; ++i) {
-        if (!SDL_IsJoystickVirtual(ids[i])) real = true;
-    }
-    SDL_free(ids);
-    return real;
-}
-
 }  // namespace
 
 bool TouchControls::Wanted() {
@@ -65,8 +53,9 @@ void TouchControls::Attach(VirtualPads& pads, int slot) {
 }
 
 bool TouchControls::Visible() const {
-    // a real controller hides the overlay until the screen is touched again
-    return pads_ && (!ControllerInUse() || last_touch_ != 0);
+    // a real controller's buttons hide the overlay until the screen is touched again (only use counts: phones list keyboards
+    // and remotes as gamepads)
+    return pads_ && !pad_in_use_;
 }
 
 void TouchControls::ButtonCentre(int index, float& x, float& y, float& r) const {
@@ -86,7 +75,16 @@ void TouchControls::ProcessEvent(const SDL_Event& event, SDL_Window* window) {
         height_ = static_cast<float>(h);
     }
     switch (event.type) {
-        case SDL_EVENT_FINGER_DOWN: Begin(event.tfinger.fingerID, event.tfinger.x * width_, event.tfinger.y * height_); break;
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            if (!SDL_IsJoystickVirtual(event.gbutton.which)) pad_in_use_ = true;
+            break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+            if (!SDL_IsJoystickVirtual(event.gaxis.which) && std::abs(static_cast<int>(event.gaxis.value)) > 16000) pad_in_use_ = true;
+            break;
+        case SDL_EVENT_FINGER_DOWN:
+            pad_in_use_ = false;
+            Begin(event.tfinger.fingerID, event.tfinger.x * width_, event.tfinger.y * height_);
+            break;
         case SDL_EVENT_FINGER_MOTION: Move(event.tfinger.fingerID, event.tfinger.x * width_, event.tfinger.y * height_); break;
         case SDL_EVENT_FINGER_UP:
         case SDL_EVENT_FINGER_CANCELED: End(event.tfinger.fingerID); break;

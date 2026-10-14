@@ -189,6 +189,9 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.width = std::clamp(out.display.width, 320, 16384);
     out.display.height = std::clamp(out.display.height, 240, 16384);
     out.display.fullscreen = std::clamp(out.display.fullscreen, 0, 2);
+#if PT_MOBILE
+    out.display.fullscreen = 1;  // a phone has no windows nor display modes to choose
+#endif
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
     out.display.render_scale = std::clamp(out.display.render_scale, 0.25f, 1.0f);

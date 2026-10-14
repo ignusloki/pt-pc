@@ -211,8 +211,9 @@ file(GLOB PT_SHADERS CONFIGURE_DEPENDS shaders/*.vert shaders/*.frag shaders/*.c
 set(PT_SPIRV_DIR ${CMAKE_BINARY_DIR}/shaders)
 set(PT_SPIRV_OUTPUTS)
 set(PT_GLSLC_DEFINES)
-if(APPLE)
-  # MoltenVK: no comparison sampler on the images[] array (shaders/lighting.glsl ShadowTap, docs/macos.md)
+if(APPLE OR ANDROID)
+  # MoltenVK: no comparison sampler on the images[] array (shaders/lighting.glsl ShadowTap, docs/macos.md); Android the same,
+  # so the emulator (MoltenVK underneath on a Mac) shows what a phone does
   list(APPEND PT_GLSLC_DEFINES -DPT_SHADOW_GATHER)
 endif()
 foreach(shader ${PT_SHADERS})

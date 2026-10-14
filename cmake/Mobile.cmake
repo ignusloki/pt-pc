@@ -34,4 +34,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:pt>/shaders" VERBATIM)
 elseif(ANDROID)
   target_link_libraries(pt PRIVATE android log)
+  # Lua 5.1 reads a string's characters past its TString header (svalue): the NDK's _FORTIFY_SOURCE takes that for an
+  # overrun and aborts in the collector (lgc.c traversetable strchr)
+  file(GLOB pt_lua_sources ${lua51_SOURCE_DIR}/src/*.c)
+  set_source_files_properties(${pt_lua_sources} TARGET_DIRECTORY pt_thirdparty PROPERTIES COMPILE_OPTIONS "-U_FORTIFY_SOURCE")
 endif()

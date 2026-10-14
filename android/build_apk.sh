@@ -12,7 +12,7 @@ SDL=$B/_deps/sdl3-src
 [ -d "$SDL" ] || SDL=$(grep -o 'FETCHCONTENT_SOURCE_DIR_SDL3:[A-Z]*=.*' $B/CMakeCache.txt | cut -d= -f2)
 rm -rf $B/apk $B/java $B/assets && mkdir -p $B/apk/lib/arm64-v8a $B/java $B/assets/shaders $B/assets/fonts
 # assets: shaders, fonts and the manifest the game copies them out by (resource_path.cpp PrepareBundledFiles)
-cp $B/shaders/*.spv $B/assets/shaders/
+cp ${PT_APK_SHADERS:-$B/shaders}/*.spv $B/assets/shaders/  # PT_APK_SHADERS: another build's (a test)
 cp assets/fonts/* $B/assets/fonts/
 (cd $B/assets && find shaders fonts -type f | sort | while read -r f; do echo "$(stat -f %z "$f") $f"; done > manifest.txt)
 # Java -> dex

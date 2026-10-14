@@ -43,6 +43,7 @@ private:
     float width_ = 1, height_ = 1;
     std::map<SDL_FingerID, Finger> fingers_;
     Uint64 last_touch_ = 0;
+    bool pad_in_use_ = false;
 };
 
 }

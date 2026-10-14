@@ -11,7 +11,11 @@ struct AppSettings {
     struct Display {
         int width = 1600;
         int height = 900;
+#if PT_MOBILE
+        int fullscreen = 1;  // phones and tablets: the whole screen, no system bars
+#else
         int fullscreen = 0;
+#endif
         bool vsync = true;
         bool pause_on_focus_loss = true;
         bool mute_in_background = false;
@@ -87,7 +91,11 @@ struct AppSettings {
         // textures upscaled from the game files by the bundled upscaler, generated once into the user data folder
         bool enhanced_textures = false;
         // Raster shadow tile: 0 off, 1 512 px, 2 1024 px, 3 original 2048 px.
+#if PT_MOBILE
+        int shadow_quality = 2;  // a 4096 px atlas: phones share 8 to 12 GB between the GPU and everything else
+#else
         int shadow_quality = 3;
+#endif
         bool ambient_occlusion = true;
         bool reflections = true;
         bool bloom = true;
