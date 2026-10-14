@@ -15,7 +15,7 @@ rm -rf $B/apk $B/java $B/assets && mkdir -p $B/apk/lib/arm64-v8a $B/java $B/asse
 cp ${PT_APK_SHADERS:-$B/shaders}/*.spv $B/assets/shaders/  # PT_APK_SHADERS: another build's (a test)
 cp assets/fonts/* $B/assets/fonts/
 cp $B/voice/ggml-base.en-q5_1.bin $B/voice/ggml-silero-v6.2.0.bin $B/assets/voice/
-(cd $B/assets && find shaders fonts voice -type f | sort | while read -r f; do echo "$(stat -f %z "$f") $f"; done > manifest.txt)
+(cd $B/assets && find shaders fonts voice -type f | sort | while read -r f; do echo "$(wc -c < "$f" | tr -d " ") $f"; done > manifest.txt)
 # Java -> dex
 javac -nowarn --release 11 -classpath $PLATFORM/android.jar -d $B/java $(find "$SDL/android-project/app/src/main/java" android/java -name '*.java') 2>&1 | grep -v "^Note:" || true
 $BT/d8 --release --min-api 30 --lib $PLATFORM/android.jar --output $B/apk $(find $B/java -name '*.class')

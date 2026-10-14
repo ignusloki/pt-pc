@@ -137,6 +137,10 @@ VR mode are left out there too, and MoltenVK has no ray queries. The macOS build
 with macOS 26 or newer it can also interpolate one frame between rendered frames (experimental). `-DPT_METALFX=OFF` leaves
 both out. More in docs/macos.md.
 
+iPhone, iPad and Android (built on a Mac): the iOS build is an app bundle with MoltenVK, the Android build an APK made
+without Gradle by `android/build_apk.sh`; both have touch controls and hear the word at the end through the phone's
+microphone. The tools, the game files from a PKG, signing and installing are in docs/mobile.md.
+
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the
 scripted routes in `tests/walkthrough/` and checks the log; it is how I make sure a change did not break a loop.
