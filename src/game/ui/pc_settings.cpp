@@ -232,7 +232,7 @@ constexpr Entry kTexts[] = {
     {"pc_mic_disabled", {"Microphone input is Off. Enable it in Sound settings to use the microphone or its test."}},
 #ifdef __ANDROID__
     {"pc_mic_permission_pending", {"Waiting for microphone permission. Choose an option in Android's permission prompt."}},
-    {"pc_mic_permission_denied", {"Microphone access is blocked. Allow it in Android Settings > Apps > P.T. Android Prototype > Permissions > Microphone."}},
+    {"pc_mic_permission_denied", {"Microphone access is blocked. Allow this P.T. app in Android Settings > Apps > Permissions > Microphone."}},
 #else
     {"pc_mic_permission_pending", {"Waiting for microphone permission. Choose Allow or Don't Allow in the macOS prompt."}},
     {"pc_mic_permission_denied", {"Microphone access is blocked. Enable P.T. in System Settings > Privacy & Security > Microphone, or use the optional trigger."}},

@@ -200,9 +200,11 @@ macOS release workflow skips `-android-` tags so it cannot attach desktop packag
 to this APK prerelease. These changes also remain on the Android branch.
 
 Keep the private signing key and its password outside the repository and retain
-them for future updates. Never upload either to GitHub. Signing uses .NET's
-[`file:` password properties](https://learn.microsoft.com/en-us/dotnet/android/building-apps/build-properties#androidsigningkeypass)
-so the password itself is not put in command arguments or build logs. The beta
+them for future updates. Never upload either to GitHub. The builder reads the
+private password file into its signing subprocess's environment and uses .NET's
+[`env:` password properties](https://learn.microsoft.com/en-us/dotnet/android/building-apps/build-properties#androidsigningkeypass)
+so the password itself is not put in command arguments or build logs. It also
+checks that tracked source did not change during the build. The beta
 is for sideloading and does not claim Play Store readiness or compatibility with
 other Android devices.
 

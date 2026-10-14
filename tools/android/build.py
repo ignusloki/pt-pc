@@ -18,9 +18,9 @@ NDK_VERSION = "28.2.13676358"
 VERSION = "1.0.7-android-beta.1"
 
 
-def run(*args):
+def run(*args, env=None):
     print("+", " ".join(map(str, args)), flush=True)
-    subprocess.run(list(map(str, args)), cwd=REPO, check=True)
+    subprocess.run(list(map(str, args)), cwd=REPO, env=env, check=True)
 
 
 def prepare_extractor(original, destination):
@@ -159,15 +159,19 @@ def main():
     extractor = prepare_extractor(args.liborbis.resolve(), build / "liborbis")
     stage = stage_runtime(build, ndk, sdl_source)
     signing = []
+    signing_env = os.environ.copy()
     if release:
+        # apksigner consumes successive lines when both passwords use the same file.
+        # An environment reference safely reuses one password, including paths with spaces.
+        signing_env["PT_ANDROID_SIGNING_PASSWORD"] = args.password_file.read_text().rstrip("\r\n")
         signing = ["-p:AndroidKeyStore=true", f"-p:AndroidSigningKeyStore={args.keystore.resolve()}",
                    f"-p:AndroidSigningKeyAlias={args.key_alias}",
-                   f"-p:AndroidSigningKeyPass=file:{args.password_file.resolve()}",
-                   f"-p:AndroidSigningStorePass=file:{args.password_file.resolve()}"]
+                   "-p:AndroidSigningKeyPass=env:PT_ANDROID_SIGNING_PASSWORD",
+                   "-p:AndroidSigningStorePass=env:PT_ANDROID_SIGNING_PASSWORD"]
     run("dotnet", "build", REPO / "android/Launcher/Launcher.csproj", "-c", args.configuration,
         "-t:SignAndroidPackage", f"-p:ApplicationDisplayVersion={args.version}", f"-p:ApplicationVersion={args.version_code}",
         f"-p:AndroidSdkDirectory={sdk}", f"-p:JavaSdkDirectory={args.jdk.resolve()}",
-        f"-p:LibOrbisSource={extractor}", f"-p:PtAndroidStage={stage}", *signing)
+        f"-p:LibOrbisSource={extractor}", f"-p:PtAndroidStage={stage}", *signing, env=signing_env)
     app_id = "org.ignusloki.pt.beta" if release else "org.ignusloki.pt.prototype"
     apk = REPO / f"android/Launcher/bin/{args.configuration}/net10.0-android36.0/android-arm64/{app_id}-Signed.apk"
     if not apk.is_file():
@@ -213,6 +217,9 @@ def main():
         raise RuntimeError("Unexpected Android minimum API level")
     if release and "application-debuggable" in manifest:
         raise RuntimeError("Public Release APK must not be debuggable")
+    if release and (subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip() != source_commit
+                    or subprocess.run(["git", "diff", "HEAD", "--quiet"], cwd=REPO).returncode != 0):
+        raise RuntimeError("Tracked source changed while building; rebuild from the final committed revision")
     args.out.mkdir(parents=True, exist_ok=True)
     if release:
         source_zip = args.out / "LibOrbisPkg-Android-source.zip"
