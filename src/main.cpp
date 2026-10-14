@@ -5278,8 +5278,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                             ui_ready && ui.MenuOpen() ? ", menu open" : "");
                 if (std::getenv("PT_DEBUG_PASSES")) {
                     const pt::RenderStats& passes = app.scene.Stats();
-                    pt::LogInfo("status: passes shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, post {:.2f} ms",
-                                passes.pass_ms[0], passes.pass_ms[1], passes.pass_ms[2], passes.pass_ms[3], passes.pass_ms[4], passes.pass_ms[5]);
+                    pt::LogInfo("status: passes shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, post {:.2f} ms; "
+                                "parts forward {:.2f}, effects {:.2f}, upscale inputs {:.2f}, reflections {:.2f}, upscaler {:.2f}, bloom {:.2f} ms",
+                                passes.pass_ms[0], passes.pass_ms[1], passes.pass_ms[2], passes.pass_ms[3], passes.pass_ms[4], passes.pass_ms[5],
+                                passes.part_ms[0], passes.part_ms[1], passes.part_ms[2], passes.part_ms[3], passes.part_ms[4], passes.part_ms[5]);
                 }
                 // PT_DEBUG_SHOT=name: the frame shown, saved with each status line into the user data folder (a phone's screen
                 // can be read back that way)
