@@ -52,7 +52,7 @@ On-screen controls (a virtual DualSense the game reads like any controller):
 
 A Bluetooth controller works too; using it hides the on-screen controls until the screen is touched again.
 
-Settings for phones in `pt.ini` (in the app's data folder): `display.render_scale` (0.25 to 1, 0.6 on phones) draws the 3D
+Settings for phones in `pt.ini` (in the app's data folder): `display.render_scale` (0.25 to 1, 0.5 on phones) draws the 3D
 view at fewer pixels than the screen has; `display.fps_limit` is 30 on phones (60 ran an iPhone hot); shadows default to
 1024 px tiles.
 

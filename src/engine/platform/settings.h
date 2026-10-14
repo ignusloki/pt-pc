@@ -32,7 +32,9 @@ struct AppSettings {
         // the 3D view's size against the screen's pixels, 0.25 to 1 (phones: their screens have far more pixels than their GPUs
         // can light at 60 fps); the frame is scaled up to the screen
 #if PT_MOBILE
-        float render_scale = 0.6f;  // iPhone 17 Pro Max: 60 fps at 1721 x 792, 18 at its full 2868 x 1320
+        // the 3D view at half the screen's size on phones: the RedMagic 11 Pro's hallway took 25% less GPU time than at 0.6
+        // (15 against 20 ms), the iPhone 17 Pro Max ran 18 fps at its full 2868 x 1320
+        float render_scale = 0.5f;
 #else
         float render_scale = 1.0f;
 #endif
