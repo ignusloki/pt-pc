@@ -5,6 +5,7 @@
 #   PT_IDENTITY  the signing identity's SHA-1 or name (security find-identity -v -p codesigning)
 #   PT_GAME      the CUSA01127 folder (chunk1.psarc, texture.qar, pathid_list_ps4.bin)
 #   PT_DEVICE    the device (xcrun devicectl list devices), default: the first one connected
+#   PT_LAUNCH_ENV  environment for the game as JSON, e.g. '{"PT_DEBUG_SHOT":"shot.png"}' 
 set -eu
 cd "$(dirname "$0")/.."
 : "${PT_PROFILE:?the .mobileprovision}" "${PT_IDENTITY:?the signing identity}"
@@ -29,4 +30,6 @@ if [ -n "${PT_GAME:-}" ]; then
       --source "$PT_GAME/$f" --destination "Documents/CUSA01127/$f"
   done
 fi
-xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "$BUNDLE_ID"
+LAUNCH_ENV='{}'
+[ -n "${PT_LAUNCH_ENV:-}" ] && LAUNCH_ENV=$PT_LAUNCH_ENV
+xcrun devicectl device process launch --device "$DEVICE" --terminate-existing --environment-variables "$LAUNCH_ENV" "$BUNDLE_ID"

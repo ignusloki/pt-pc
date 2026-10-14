@@ -315,9 +315,9 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
     {
-        /* MoltenVK on an older GPU (an Intel Mac's) can lack what the renderer needs, above all the bindless image array (Metal
+        /* MoltenVK on an older GPU (an Intel Mac's) and phone GPUs can lack what the renderer needs, above all the bindless image array (Metal
            argument buffers tier 2): say which feature, not just that the device could not be created (docs/macos.md) */
         VkPhysicalDeviceVulkan13Features have13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         VkPhysicalDeviceVulkan12Features have12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};

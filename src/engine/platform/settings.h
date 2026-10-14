@@ -20,14 +20,22 @@ struct AppSettings {
         bool pause_on_focus_loss = true;
         bool mute_in_background = false;
         // frames per second at most, 0 for no limit (v-sync still applies); menus and the paused game are held to 60 either way
+#if PT_MOBILE
+        int fps_limit = 60;  // steady on a 120 Hz phone screen, and cooler
+#else
         int fps_limit = 0;
+#endif
         bool hdr = false;
         // black bars over and under the picture in play and in the demos, not in the original: 0 off, 1 2.39:1, 2 1.85:1 (the
         // photo mode's choices)
         int letterbox = 0;
         // the 3D view's size against the screen's pixels, 0.25 to 1 (phones: their screens have far more pixels than their GPUs
         // can light at 60 fps); the frame is scaled up to the screen
+#if PT_MOBILE
+        float render_scale = 0.6f;  // iPhone 17 Pro Max: 60 fps at 1721 x 792, 18 at its full 2868 x 1320
+#else
         float render_scale = 1.0f;
+#endif
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
