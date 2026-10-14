@@ -33,22 +33,28 @@ Copy the game files to the app's folder, then start it:
 
     adb install -r build/android/PT.apk
     adb push CUSA01127 /sdcard/Android/data/com.blounty.pt/files/
+    adb shell chmod -R 777 /sdcard/Android/data/com.blounty.pt/files/CUSA01127
 
-The log goes to logcat (`adb logcat -s pt`).
+(files `adb push` makes belong to the shell user; some phones, a RedMagic 11 Pro among them, do not let the app read them
+without the `chmod`)
+
+The log goes to logcat (`adb logcat -s pt`). Some phones silence every app's log (`log.tag` is `S`):
+`adb shell setprop log.tag.pt V` (and `DEBUG` for crash reports) brings it back until the phone restarts.
 
 ## Playing
 
 On-screen controls (a virtual DualSense the game reads like any controller):
 
 - left half of the screen: a stick where your thumb lands, to walk
-- right half: a stick to look around
+- right half: drag to look around (the view turns with the thumb and stops with it)
 - **X** interact, **O** back, **ZOOM** (R1), **II** pause, **PC** the port's settings page
 - **JACK**: the word the game listens for at the end; phones have no speech recognizer here, so this stands in for it
 
 A Bluetooth controller works too; using it hides the on-screen controls until the screen is touched again.
 
-Settings for phones in `pt.ini` (in the app's data folder): `display.render_scale` (0.25 to 1) draws the 3D view at fewer
-pixels than the screen has, the first thing to lower if the frame rate drops; shadows default to 1024 px tiles.
+Settings for phones in `pt.ini` (in the app's data folder): `display.render_scale` (0.25 to 1, 0.6 on phones) draws the 3D
+view at fewer pixels than the screen has; `display.fps_limit` is 30 on phones (60 ran an iPhone hot); shadows default to
+1024 px tiles.
 
 ## Notes for developers
 
