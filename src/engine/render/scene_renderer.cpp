@@ -1214,6 +1214,11 @@ void SceneRenderer::Destroy(GpuMesh& mesh) {
 }
 
 bool SceneRenderer::RayTracingSupported(std::string& reason) const {
+#ifdef __ANDROID__
+    // The beta never enables ray queries on its Vulkan device, even if the GPU advertises them.
+    reason = "ray queries are unavailable in this Android beta";
+    return false;
+#else
     const vk::Context& ctx = renderer_->Context();
     if (!ctx.ray_query_supported) {
         reason = ctx.ray_query_missing.empty() ? std::string("no Vulkan ray queries") : ctx.ray_query_missing + " missing";
@@ -1221,6 +1226,7 @@ bool SceneRenderer::RayTracingSupported(std::string& reason) const {
     }
     reason.clear();
     return true;
+#endif
 }
 
 float SceneRenderer::ExposureFor(float ev, const ExposureSettings& s) const {

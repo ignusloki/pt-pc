@@ -28,15 +28,26 @@ int main(int argc,char** argv) {
     check("ghosts by hand make High Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
     s.graphics.lens_ghosts=false;
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,true);
-    check("Ultra has every traced effect and fine detail",s.ray_tracing.shadows==2 && s.ray_tracing.reflections && s.ray_tracing.ambient_occlusion && s.ray_tracing.contact_shadows && s.graphics.enhanced_textures && s.graphics.ray_quality==2 && s.graphics.clarity==.4f);
+    check("Ultra has every traced effect and fine detail",s.ray_tracing.shadows==2 && s.ray_tracing.reflections && s.ray_tracing.ambient_occlusion && s.ray_tracing.contact_shadows && s.graphics.enhanced_textures==pt::kEnhancedTexturesSupported && s.graphics.ray_quality==2 && s.graphics.clarity==.4f);
     check("Ultra preserves the complete cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
     check("Ultra detected",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Ultra);
     s.graphics.bloom=false;
     check("manual change becomes Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,false);
-    check("unsupported RT retains enhanced fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.enhanced_textures && s.graphics.ambient_occlusion && s.graphics.reflections);
+    check("unsupported RT retains available texture fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.enhanced_textures==pt::kEnhancedTexturesSupported && s.graphics.ambient_occlusion && s.graphics.reflections);
     check("unsupported Ultra keeps cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
     check("unsupported Ultra detected",pt::DetectGraphicsPreset(s,false)==pt::GraphicsPreset::Ultra);
+    // Android cannot retain enhanced textures or enable ray queries. Both preset directions must leave Custom.
+    for (const auto preset : {pt::GraphicsPreset::Low, pt::GraphicsPreset::Original, pt::GraphicsPreset::High, pt::GraphicsPreset::Ultra}) {
+        pt::AppSettings phone;
+        phone.graphics.clarity = .9f;
+        check("manual phone settings start Custom", pt::DetectGraphicsPreset(phone, false, false) == pt::GraphicsPreset::Custom);
+        pt::ApplyGraphicsPreset(phone, preset, false, false);
+        check("phone preset stays recognized after texture fallback", !phone.graphics.enhanced_textures &&
+              phone.ray_tracing == pt::AppSettings::RayTracing{} && pt::DetectGraphicsPreset(phone, false, false) == preset);
+        pt::ApplyGraphicsPreset(phone, pt::GraphicsPreset::Low, false, false);
+        check("phone preset can return to Low", pt::DetectGraphicsPreset(phone, false, false) == pt::GraphicsPreset::Low);
+    }
     if(argc==2) {
         const auto path=std::filesystem::path(argv[1]);
         check("save graphics settings",pt::SaveAppSettings(path,s));

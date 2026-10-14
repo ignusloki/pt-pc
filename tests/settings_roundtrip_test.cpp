@@ -25,7 +25,7 @@ bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
     return x.hdr==y.hdr && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
-           x.pause_on_focus_loss == y.pause_on_focus_loss && x.mute_in_background == y.mute_in_background && x.letterbox == y.letterbox &&
+           x.pause_on_focus_loss == y.pause_on_focus_loss && x.mute_in_background == y.mute_in_background && x.letterbox == y.letterbox && Near(x.subtitle_scale, y.subtitle_scale) &&
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
            a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && Near(a.audio.volume, b.audio.volume) &&
@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
         {"display.mute_in_background", [](auto& s) { s.display.mute_in_background = true; }},
         {"display.letterbox 1", [](auto& s) { s.display.letterbox = 1; }},
         {"display.letterbox 2", [](auto& s) { s.display.letterbox = 2; }},
+        {"display.subtitle_scale", [](auto& s) { s.display.subtitle_scale = 1.5f; }},
         {"input.mouse_sensitivity", [](auto& s) { s.input.mouse_sensitivity = 0.35f; }},
         {"input.gamepad_sensitivity", [](auto& s) { s.input.gamepad_sensitivity = 1.5f; }},
         {"input.gamepad_dead_zone", [](auto& s) { s.input.gamepad_dead_zone = 0.25f; }},
@@ -133,6 +134,14 @@ int main(int argc, char** argv) {
         "shadow_quality = 9\ntexture_detail = -1\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"
         "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n");
     Check("letterbox clamped", odd.display.letterbox == 2);
+    Check("subtitle size lower bound", LoadText(ini, "[display]\nsubtitle_scale = 0\n").display.subtitle_scale == 1.0f);
+    Check("subtitle size upper bound", LoadText(ini, "[display]\nsubtitle_scale = 9\n").display.subtitle_scale == 2.0f);
+    Check("subtitle size non-finite fallback", LoadText(ini, "[display]\nsubtitle_scale = nan\n").display.subtitle_scale == 1.0f);
+    Check("desktop subtitle size unchanged for old settings", LoadText(ini, "[display]\nwidth = 960\n").display.subtitle_scale == 1.0f);
+    pt::AppSettings phone_defaults;
+    phone_defaults.display.subtitle_scale = 1.5f;
+    std::ofstream(ini) << "[display]\nwidth = 960\n";
+    Check("old Android settings keep the larger default", pt::LoadAppSettings(ini, phone_defaults) && phone_defaults.display.subtitle_scale == 1.5f);
     Check("fullscreen clamped", odd.display.fullscreen == 0);
     Check("width clamped", odd.display.width == 16384);
     Check("anisotropy rounded down to a step", odd.graphics.anisotropy == 4);

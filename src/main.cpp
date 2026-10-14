@@ -3166,7 +3166,9 @@ private:
             note=job.note=="Enhanced texture tools or model are missing."?"pc_note_texture_tools_missing":
                  job.note=="Texture generation is already running in another instance."?"pc_note_texture_busy":"pc_note_texture_failed";
         }
-        return Row(kEnhancedTextures,"pc_enhanced_textures",std::move(values),app_.settings.graphics.enhanced_textures?1:0,note);
+        auto row = Row(kEnhancedTextures,"pc_enhanced_textures",std::move(values),app_.settings.graphics.enhanced_textures?1:0,note);
+        row.enabled = pt::kEnhancedTexturesSupported;
+        return row;
     }
 
     std::vector<pt::game::PcSettingSection> GraphicsSections() const {
@@ -3668,6 +3670,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         game.SetOptionsUiAvailable(app.window != nullptr || options.first_boot_options);
         app.renderer.overlay = [&ui, &hide_game_ui, &photo_view, &app, &game](VkCommandBuffer cmd, VkImageView view, VkExtent2D extent) {
             ui.SetLetterbox(pt::game::LetterboxAspect(app.settings.display.letterbox));
+            ui.SetSubtitleScale(app.settings.display.subtitle_scale);
             if (!hide_game_ui) {
                 // The street uses the ending's strong grain; keep it off the pause menu.
                 if (game.StreetWalkActive() && ui.MenuOpen()) app.renderer.grain[0] = 0.0f;
@@ -5735,6 +5738,7 @@ int main(int argc, char** argv) {
     app.settings.display.width = 960;
     app.settings.display.height = 540;
     app.settings.display.fps_limit = 30;
+    app.settings.display.subtitle_scale = 1.5f;
     app.settings.network.check_updates = false;
     pt::InitAndroidTouchController();
 #endif
@@ -5744,11 +5748,13 @@ int main(int argc, char** argv) {
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
 #ifdef __ANDROID__
     app.settings.graphics.enhanced_textures = false;
+    app.settings.ray_tracing = {};
     app.settings.vr.enabled = false;
     app.settings.display.hdr = false;
     app.settings.display.fullscreen = 1;
     app.settings.upscaling.frame_generation = "off";
     pt::LogInfo("android: prototype uses original textures, 1024 px mip cap, low graphics defaults and private profile");
+    pt::LogInfo("android: subtitle size {}%", app.settings.display.subtitle_scale * 100.0f);
 #endif
     if (!options.headless) {
         if (!settings_loaded) {

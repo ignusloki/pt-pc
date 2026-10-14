@@ -1,6 +1,6 @@
 #include "engine/platform/graphics_presets.h"
 namespace pt {
-void ApplyGraphicsPreset(AppSettings& s, GraphicsPreset preset, bool rt) {
+void ApplyGraphicsPreset(AppSettings& s, GraphicsPreset preset, bool rt, bool enhanced_textures_supported) {
     if(preset==GraphicsPreset::Custom) return;
     s.graphics=AppSettings::Graphics{};
     s.ray_tracing=AppSettings::RayTracing{};
@@ -24,10 +24,12 @@ void ApplyGraphicsPreset(AppSettings& s, GraphicsPreset preset, bool rt) {
         break;
     default: break;
     }
+    // Match the settings the platform can retain, including on the next launch.
+    if (!enhanced_textures_supported) g.enhanced_textures = false;
 }
-GraphicsPreset DetectGraphicsPreset(const AppSettings& s, bool rt) {
+GraphicsPreset DetectGraphicsPreset(const AppSettings& s, bool rt, bool enhanced_textures_supported) {
     for(auto p:{GraphicsPreset::Low,GraphicsPreset::Original,GraphicsPreset::High,GraphicsPreset::Ultra}) {
-        AppSettings candidate;ApplyGraphicsPreset(candidate,p,rt);
+        AppSettings candidate;ApplyGraphicsPreset(candidate,p,rt,enhanced_textures_supported);
         if(candidate.graphics==s.graphics && candidate.ray_tracing==s.ray_tracing) return p;
     }
     return GraphicsPreset::Custom;

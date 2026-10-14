@@ -511,7 +511,7 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
     }
     text_style.text_space += generator.font_space;
     text_style.line_space += generator.line_space;
-    ui::NormalizeSubtitleStyle(text_style);
+    ui::NormalizeSubtitleStyle(text_style, subtitle_scale_);
     const glm::vec2 anchor = origin + generator.offset;
     const glm::vec2 lo_units = anchor + glm::vec2(box_min.x * size.x, box_min.y * size.y);
     const glm::vec2 hi_units = anchor + glm::vec2(box_max.x * size.x, box_max.y * size.y);
@@ -519,7 +519,8 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
                        UiCanvas::kHeight * 0.5f - std::max(lo_units.y, hi_units.y) * UiCanvas::kUnit);
     const glm::vec2 hi(UiCanvas::kWidth * 0.5f + std::max(lo_units.x, hi_units.x) * UiCanvas::kUnit,
                        UiCanvas::kHeight * 0.5f - std::min(lo_units.y, hi_units.y) * UiCanvas::kUnit);
-    ui::TextLayout layout = ui::LayoutText(view.text, text_style, generator.auto_line_feed ? hi.x - lo.x : 0.0f);
+    // Larger text must reflow even when the original uses only authored line breaks.
+    ui::TextLayout layout = ui::LayoutText(view.text, text_style, generator.auto_line_feed || subtitle_scale_ > 1.0f ? hi.x - lo.x : 0.0f);
     const ui::TextAlign block = generator.b_align == 3 ? Align(generator.h_align) : Align(generator.b_align);
     ui::PlaceText(layout, lo, hi, block, Align(generator.h_align), Align(generator.v_align), true);
     // under the PC letterbox the lines move up into the picture: their bottom (the glyph boxes, in the canvas' 1280x720) at least

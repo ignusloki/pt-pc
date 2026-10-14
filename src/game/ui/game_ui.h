@@ -89,6 +89,7 @@ public:
     void ShowCaptionKey(uint32_t key, float offset_seconds) { subtitles_.PlayKey(key, offset_seconds); }
     // the frame's aspect ratio between the PC letterbox's bars (LetterboxAspect), 0 for none
     void SetLetterbox(float aspect) { letterbox_ = aspect; }
+    void SetSubtitleScale(float scale) { subtitle_scale_ = scale; }
     // VR's HUD (docs/vr.md): Record draws on the transparent HUD image, so the full screen fade (VR puts it on the eye images) and
     // the letterbox's bars stay out, and the UI's coverage goes in alpha
     void SetVrHud(bool enabled) { vr_hud_ = enabled; }
@@ -189,6 +190,7 @@ private:
     bool canvas_ready_ = false;
     bool pc_request_ = false;
     float letterbox_ = 0.0f;
+    float subtitle_scale_ = 1.0f;
     bool vr_hud_ = false;
     bool coverage_layer_ = false;
     std::string save_dialog_text_;

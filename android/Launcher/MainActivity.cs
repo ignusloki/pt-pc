@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Globalization;
 using Android;
 using Android.App;
 using Android.Content;
@@ -13,14 +14,15 @@ using PT.PkgExtract;
 namespace PT.AndroidLauncher;
 
 [Activity(Name = "org.ignusloki.pt.prototype.LauncherActivity", MainLauncher = true, Exported = true,
-    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize,
-    ScreenOrientation = ScreenOrientation.Portrait)]
+    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize)]
 public sealed class MainActivity : Activity {
     const int PickPackage = 10, MicrophoneRequest = 11, SaveDiagnostics = 12;
     const long GiB = 1024L * 1024 * 1024;
     TextView status = null!;
     Button select = null!, play = null!, diagnostics = null!;
     CheckBox microphone = null!, touch = null!;
+    Spinner subtitleSize = null!;
+    static readonly string[] SubtitleScales = { "1", "1.25", "1.5", "1.75", "2" };
     ProgressBar progress = null!;
     bool busy;
     TaskCompletionSource<bool>? microphoneAnswer;
@@ -52,9 +54,22 @@ public sealed class MainActivity : Activity {
         };
         layout.AddView(select);
         microphone = new CheckBox(this) { Text = "Enable phone microphone", Checked = ReadSetting("voice", "microphone_enabled", "1") != "0" };
+        microphone.CheckedChange += (_, e) => WriteSetting("voice", "microphone_enabled", e.IsChecked ? "1" : "0");
         layout.AddView(microphone);
-        touch = new CheckBox(this) { Text = "Basic touch controls", Checked = true };
+        var preferences = GetPreferences(FileCreationMode.Private)!;
+        touch = new CheckBox(this) { Text = "Basic touch controls", Checked = preferences.GetBoolean("touch_controls", true) };
+        touch.CheckedChange += (_, e) => preferences.Edit()!.PutBoolean("touch_controls", e.IsChecked)!.Apply();
         layout.AddView(touch);
+        layout.AddView(new TextView(this) { Text = "Subtitle size", TextSize = 16 });
+        subtitleSize = new Spinner(this) {
+            Adapter = new ArrayAdapter<string>(this, Android.Resource.Layout.SimpleSpinnerDropDownItem,
+                new[] { "100% (original)", "125%", "150%", "175%", "200%" })
+        };
+        subtitleSize.SetSelection(ReadSubtitleSize());
+        subtitleSize.ItemSelected += (_, e) => {
+            if (e.Position != ReadSubtitleSize()) WriteSetting("display", "subtitle_scale", SubtitleScales[e.Position]);
+        };
+        layout.AddView(subtitleSize);
         play = new Button(this) { Text = "Play P.T." };
         play.Click += async (_, _) => await LaunchGame();
         layout.AddView(play);
@@ -82,6 +97,7 @@ public sealed class MainActivity : Activity {
         base.OnResume();
         if (status != null && !busy) {
             microphone.Checked = ReadSetting("voice", "microphone_enabled", "1") != "0";
+            subtitleSize.SetSelection(ReadSubtitleSize());
             UpdateReady();
         }
     }
@@ -93,6 +109,7 @@ public sealed class MainActivity : Activity {
         select.Enabled = !busy;
         diagnostics.Enabled = !busy;
         microphone.Enabled = touch.Enabled = !busy;
+        subtitleSize.Enabled = !busy;
         progress.Visibility = busy ? ViewStates.Visible : ViewStates.Gone;
         if (!busy) status.Text = play.Enabled ? "Game files are installed. Ready to play." : "No game files installed yet.";
     }
@@ -176,6 +193,8 @@ public sealed class MainActivity : Activity {
         text.AppendLine($"App: {PackageName} {package!.VersionName}");
         text.AppendLine($"Phone: {Build.Manufacturer} {Build.Model}; Android {Build.VERSION.Release}; API {(int)Build.VERSION.SdkInt}");
         text.AppendLine("ABIs: " + string.Join(", ", Build.SupportedAbis ?? Array.Empty<string>()));
+        text.AppendLine("Touch controls: " + GetPreferences(FileCreationMode.Private)!.GetBoolean("touch_controls", true));
+        text.AppendLine("Subtitle size: " + SubtitleScales[ReadSubtitleSize()]);
         foreach (var (relative, limit) in new[] { ("launcher.log", 16 * 1024), ("profile/pt.log", 64 * 1024) }) {
             text.AppendLine($"\n--- {relative} (last {limit / 1024} KiB) ---");
             string path = Path.Combine(Root, relative);
@@ -228,6 +247,7 @@ public sealed class MainActivity : Activity {
         try {
             await StageRuntime();
             WriteSetting("voice", "microphone_enabled", microphone.Checked ? "1" : "0");
+            WriteSetting("display", "subtitle_scale", SubtitleScales[subtitleSize.SelectedItemPosition]);
             if (microphone.Checked && CheckSelfPermission(Manifest.Permission.RecordAudio) != Permission.Granted) {
                 Report("Requesting microphone access before starting the game…");
                 microphoneAnswer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -251,6 +271,12 @@ public sealed class MainActivity : Activity {
     public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] results) {
         base.OnRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == MicrophoneRequest) microphoneAnswer?.TrySetResult(results.Length > 0 && results[0] == Permission.Granted);
+    }
+
+    int ReadSubtitleSize() {
+        if (!float.TryParse(ReadSetting("display", "subtitle_scale", "1.5"), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out float scale) || !float.IsFinite(scale)) scale = 1.5f;
+        return (int)Math.Round((Math.Clamp(scale, 1.0f, 2.0f) - 1.0f) * 4.0f);
     }
 
     string ReadSetting(string section, string key, string fallback) {

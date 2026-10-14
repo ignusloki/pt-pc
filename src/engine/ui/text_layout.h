@@ -47,7 +47,7 @@ struct TextLayout {
 
 enum class TextAlign { Start, Center, End };
 
-void NormalizeSubtitleStyle(TextStyle& style);
+void NormalizeSubtitleStyle(TextStyle& style, float scale = 1.0f);
 
 TextLayout LayoutText(std::string_view utf8, const TextStyle& style, float max_width);
 

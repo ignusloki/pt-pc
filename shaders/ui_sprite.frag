@@ -77,6 +77,14 @@ vec4 ShadeBorder(UiDraw d) {
     float n1 = Sample(d.textures.x, in_uv + clamp(-1.2 * dx, lo, hi)).r;
     float n2 = Sample(d.textures.x, in_uv + clamp(1.2 * dx, lo, hi)).r;
     float n3 = Sample(d.textures.x, in_uv + clamp(1.2 * dy, lo, hi)).r;
+    if (d.extra.w > 0.5) {
+        // Android: composite the white glyph over its black rim using the atlas's continuous coverage.
+        // UiBlend::Alpha expects straight colour, so divide the premultiplied fill by the combined alpha.
+        float outline = max(max(n0, n1), max(n2, n3));
+        float alpha = center + outline * (1.0 - center);
+        vec3 rgb = alpha > 0.0 ? in_color.rgb * center / alpha : vec3(0.0);
+        return vec4(rgb, alpha * in_color.a);
+    }
     float sum = n0 + n1 + n2 + n3;
     float covered = float(n0 > 0.0) + float(n1 > 0.0) + float(n2 > 0.0) + float(n3 > 0.0);
     float any_ink = center + sum >= 0.0001 ? 1.0 : 0.0;

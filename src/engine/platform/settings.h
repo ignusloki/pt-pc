@@ -21,6 +21,8 @@ struct AppSettings {
         // black bars over and under the picture in play and in the demos, not in the original: 0 off, 1 2.39:1, 2 1.85:1 (the
         // photo mode's choices)
         int letterbox = 0;
+        // Subtitle size relative to the original; Android starts at 1.5, desktop at 1.
+        float subtitle_scale = 1.0f;
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
