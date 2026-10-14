@@ -18,9 +18,10 @@ permissions:
 jobs:
   app:
     # Preserve the exact audited files on fork releases published with both Mac packages already attached.
-    # Upstream releases and manual builds still compile on both native architectures.
+    # Android prereleases only publish APKs; upstream Mac releases and manual builds still compile on both architectures.
     if: >-
       (github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'macos-arm64-preview-')) &&
+      (github.event_name != 'release' || !contains(github.event.release.tag_name, '-android-')) &&
       (github.event_name != 'release' || github.repository != 'ignusloki/pt-pc' ||
        !contains(github.event.release.assets.*.name, 'P.T.PC.Port.Setup-macOS-arm64.zip') ||
        !contains(github.event.release.assets.*.name, 'P.T.PC.Port.Setup-macOS-x64.zip') ||
@@ -90,7 +91,7 @@ jobs:
             dist/P.T.PC.Port-macOS-${{ matrix.arch }}.dmg
 
   release:
-    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'macos-arm64-preview-')
+    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'macos-arm64-preview-') && !contains(github.event.release.tag_name, '-android-')
     needs: app
     runs-on: ubuntu-latest
     permissions:

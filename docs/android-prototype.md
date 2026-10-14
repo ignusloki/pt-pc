@@ -195,6 +195,9 @@ original game archives, or native/ZIP alignment below 16 KiB. It writes
 `PT-1.0.7-android-beta.1-arm64.apk`, `SHA256SUMS` and public `BUILD.json` metadata.
 The engine still uses the developer target deliberately, to unlock beta loop
 navigation; the launcher is a signed, non-debuggable Release build.
+The version-header generator accepts hyphens in prerelease identifiers, and the
+macOS release workflow skips `-android-` tags so it cannot attach desktop packages
+to this APK prerelease. These changes also remain on the Android branch.
 
 Keep the private signing key and its password outside the repository and retain
 them for future updates. Never upload either to GitHub. Signing uses .NET's
