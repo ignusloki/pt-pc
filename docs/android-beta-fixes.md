@@ -73,3 +73,43 @@ capture and diagnostic export. Fresh import and first-boot checks must use a
 separate test profile, never clear either existing app's storage.
 
 Other phones, portrait gameplay and sustained performance remain unverified.
+
+## S22 verification — 2026-10-14
+
+The final Release APK was installed over the public beta without uninstalling or
+clearing storage, and its launcher and native game ran on the SM-S901B / Android 16.
+The installed APK's SHA256 matches the local signed artifact byte for byte.
+Its certificate matches the public beta; microphone permission remains granted.
+The APK was built from `a832f7a5ec09c7f72356a6507addde722bfd2595`.
+Later documentation-only commits do not change that tested binary.
+
+| Check | Result and evidence in `build/android-validation/` |
+| --- | --- |
+| Presets after reopening | Low remains recognized (`final-preset-persisted.png`). |
+| Custom recovery | Changing Shadows to Medium produces Custom; Left then selects Ultra, High, Original and Low correctly. Traced effects remain unavailable (`final-preset-custom.png`, `final-preset-ultra.png`, `final-preset-high.png`, `final-preset-original.png`). |
+| Presets in the other direction | Right selects Original, High and Ultra; returning Left restores Low (`final-preset-right-*.png`, `final-preset-low-restored.png`). |
+| Resolution | PC Settings shows 960×443; trying to change that disabled row leaves it unchanged. SurfaceFlinger reports 960×443 game buffers (`final-resolution-verified.png`, `final-surfaceflinger.txt`). |
+| Frame cap | PC Settings shows 30. The exported native log reports a 30 fps limit and 960×443, with samples mostly at 30 fps and some at 29. This is a settings check, not a sustained performance benchmark. |
+| Launcher preferences | Touch controls Off survives force-stop/reopen; microphone On and subtitle size 150% remain selected (`final-touch-off.xml`, `final-touch-off-reopened.xml`). Touch controls were restored to On afterward (`final-launcher-restored.xml`). |
+| Orientation and insets | The final launcher renders in portrait and landscape; landscape content clears the navigation bar and cutout (`final-launcher-portrait.png`, `launcher-landscape-verified.png`). |
+| Package picker | Select P.T. .PKG opens Android's document picker; cancelling returns to the ready launcher without importing or replacing files (`final-pkg-picker.xml`). |
+| Diagnostic export | Save diagnostic log creates a new file, `Download/PT-Android-fixes-final-20261014.txt`. The copied `final-diagnostic.txt` identifies fix.2, touch On and subtitle scale 1.5, and contains no warnings/errors in the exported native tail. |
+| Signed package | Version code 5, beta application ID, original signing certificate and matching installed/local APK hashes (`final-installed-package.json`, `dist/android/beta-fixes/BUILD.json`). |
+
+Graphics-preset and settings round-trip tests pass both on the host and as native
+Android executables on this S22. The Android Lua startup/collection regression
+test also passes. Earlier checks of this fix branch exercised PC Settings column,
+direction, OK/Back navigation, gameplay/menu touch layouts and built-in microphone
+capture with a live input meter. The user confirmed that the subtitles work.
+
+Both beta and prototype remain installed, with their separate game data and
+profiles preserved. The tested configuration was left at Low, volume 100%, touch
+and microphone On, subtitle size 150%, and the phone's original automatic rotation
+settings were restored. The original host PKG and `game/CUSA01127` remain present;
+the main checkout still has only its pre-existing untracked `logs/`.
+
+Fresh import/first boot, a new spoken “Jack” recognition run, the broader
+multilingual subtitle regression, full-game progression and desktop release builds
+were not rerun. Other devices, portrait gameplay and sustained performance remain
+unverified. The changes are local to `codex/android-beta-fixes`; nothing was merged,
+pushed or published.
