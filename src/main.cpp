@@ -4874,6 +4874,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             int width = 0;
             int height = 0;
             SDL_GetWindowSizeInPixels(app.window, &width, &height);
+            const float scale = app.settings.display.render_scale;
+            if (width > 0 && height > 0 && scale < 1.0f) {
+                width = std::max(1, static_cast<int>(std::lround(width * scale)));
+                height = std::max(1, static_cast<int>(std::lround(height * scale)));
+            }
             if (width > 0 && height > 0) base_render_extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
         } else if (!vr && app.window) {
             base_render_extent = {static_cast<uint32_t>(app.settings.display.width), static_cast<uint32_t>(app.settings.display.height)};

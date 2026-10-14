@@ -21,6 +21,9 @@ struct AppSettings {
         // black bars over and under the picture in play and in the demos, not in the original: 0 off, 1 2.39:1, 2 1.85:1 (the
         // photo mode's choices)
         int letterbox = 0;
+        // the 3D view's size against the screen's pixels, 0.25 to 1 (phones: their screens have far more pixels than their GPUs
+        // can light at 60 fps); the frame is scaled up to the screen
+        float render_scale = 1.0f;
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;

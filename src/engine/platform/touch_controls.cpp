@@ -26,6 +26,7 @@ constexpr ButtonDef kButtons[] = {
     {"X", 1.9f, 2.0f, 0.95f, 3, "cross"},     {"O", 3.9f, 1.3f, 0.7f, 3, "circle"},
     {"ZOOM", 1.6f, 4.3f, 0.75f, 3, "r1"},     {"II", 1.2f, 1.0f, 0.55f, 0, "options"},
     {"JACK", 4.0f, 3.4f, 0.65f, 3, nullptr},
+    {"PC", 2.6f, 1.0f, 0.5f, 0, "share"},  // the port's settings page (Share / View on a controller)
 };
 constexpr int kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 

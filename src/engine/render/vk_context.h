@@ -109,6 +109,8 @@ public:
     // Ray queries (the ray traced shadows PC option): set want_ray_query before Init to create the device with
     // VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations and buffer device addresses
     // when the GPU has them. ray_query_supported says whether it has them, requested or not; ray_query whether they are on.
+    // BC compressed textures (the game's): without them (phone GPUs) the texture manager decodes them to plain formats
+    bool bc_textures = true;
     bool want_ray_query = false;
     bool ray_query_supported = false;
     bool ray_query = false;

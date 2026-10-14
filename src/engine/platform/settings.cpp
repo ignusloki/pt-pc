@@ -101,6 +101,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.fps_limit", out.display.fps_limit);
     Read(v, "display.hdr", out.display.hdr);
     Read(v, "display.letterbox", out.display.letterbox);
+    Read(v, "display.render_scale", out.display.render_scale);
     Read(v, "input.mouse_sensitivity", out.input.mouse_sensitivity);
     Read(v, "input.gamepad_sensitivity", out.input.gamepad_sensitivity);
     Read(v, "input.gamepad_dead_zone", out.input.gamepad_dead_zone);
@@ -190,6 +191,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.fullscreen = std::clamp(out.display.fullscreen, 0, 2);
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
+    out.display.render_scale = std::clamp(out.display.render_scale, 0.25f, 1.0f);
     out.input.mouse_sensitivity = std::clamp(out.input.mouse_sensitivity, 0.05f, 20.0f);
     out.input.gamepad_sensitivity = std::isfinite(out.input.gamepad_sensitivity) ? std::clamp(out.input.gamepad_sensitivity, 0.25f, 4.0f) : 1.0f;
     out.input.gamepad_dead_zone = std::clamp(out.input.gamepad_dead_zone, 0.0f, 0.9f);
@@ -231,7 +233,9 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "fps_limit = " << s.display.fps_limit << "\n"
          << "hdr = " << (s.display.hdr ? 1 : 0) << "\n"
          << "; black bars over and under the picture in play and in the cutscenes, not in the original: 0 off, 1 2.39:1, 2 1.85:1\n"
-         << "letterbox = " << s.display.letterbox << "\n\n"
+         << "letterbox = " << s.display.letterbox << "\n"
+         << "; the 3D view's size against the screen's pixels, 0.25 to 1 (below 1 for phones and slower GPUs)\n"
+         << "render_scale = " << s.display.render_scale << "\n\n"
          << "[input]\n"
          << "mouse_sensitivity = " << s.input.mouse_sensitivity << "\n"
          << "; gamepad turn speed after the original stick response, 1 keeps the original\n"

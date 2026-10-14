@@ -337,7 +337,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             {"descriptorBindingUpdateUnusedWhilePending", have12.descriptorBindingUpdateUnusedWhilePending},
             {"descriptorBindingStorageBufferUpdateAfterBind", have12.descriptorBindingStorageBufferUpdateAfterBind},
             {"scalarBlockLayout", have12.scalarBlockLayout}, {"samplerAnisotropy", have2.features.samplerAnisotropy},
-            {"textureCompressionBC", have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+            {"fillModeNonSolid", have2.features.fillModeNonSolid},
             {"shaderInt16", have2.features.shaderInt16}, {"shaderClipDistance", have2.features.shaderClipDistance},
         };
         bool complete = true;
@@ -369,12 +369,15 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.pNext = &features12;
     features.features.samplerAnisotropy = VK_TRUE;
-    features.features.textureCompressionBC = VK_TRUE;
     features.features.fillModeNonSolid = VK_TRUE;
     features.features.shaderInt16 = VK_TRUE;
     features.features.shaderClipDistance = VK_TRUE;
     VkPhysicalDeviceFeatures supported{};
     vkGetPhysicalDeviceFeatures(physical, &supported);
+    // BC textures are optional: phone GPUs (Mali, some Adreno and Apple drivers) lack them and get decoded textures instead
+    bc_textures = supported.textureCompressionBC && !std::getenv("PT_NO_BC");
+    features.features.textureCompressionBC = bc_textures ? VK_TRUE : VK_FALSE;
+    if (!bc_textures) LogInfo("vulkan: no BC texture compression, textures are decoded when loaded");
     features.features.independentBlend = supported.independentBlend;
 
     const float priority = 1.0f;
