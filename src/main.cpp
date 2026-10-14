@@ -1,6 +1,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "engine/platform/update_check.h"
+#include "engine/platform/touch_controls.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -863,6 +864,22 @@ std::filesystem::path FindGameDir(const Options& options) {
         }
         dir = dir.parent_path();
     }
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    /* iOS and Android (docs/mobile.md): the game files are copied into the app's own folder, Documents on iOS (the Files app) and
+       the external files folder on Android (adb push); either the CUSA01127 folder itself or its three files directly */
+    {
+#ifdef __ANDROID__
+        const char* base = SDL_GetAndroidExternalStoragePath();
+        const std::filesystem::path root = base ? std::filesystem::path(base) : std::filesystem::path();
+#else
+        const std::filesystem::path root = pt::os::PathFromUtf8(pt::os::GetEnv("HOME")) / "Documents";
+#endif
+        for (const std::filesystem::path candidate : {root / "CUSA01127", root / "game" / "CUSA01127", root}) {
+            if (LooksLikeGameDir(candidate)) return candidate;
+        }
+        return root / "CUSA01127";
+    }
+#endif
     const std::filesystem::path remembered_file = RememberedGameDirFile();
     if (!remembered_file.empty()) {
         std::ifstream in(remembered_file, std::ios::binary);
@@ -3330,6 +3347,8 @@ private:
     pt::InputDevice& input_;
 };
 
+pt::TouchControls* g_touch = nullptr;  // the on-screen controls, when shown (docs/mobile.md)
+
 bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
         return true;
@@ -3337,6 +3356,9 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (g_touch) {
+            g_touch->ProcessEvent(event, app.window);
+        }
         if (input) {
             input->ProcessEvent(event);
         }
@@ -3627,6 +3649,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
     }
     pt::VirtualPads virtual_pads;
+    // touch controls on phones and tablets: a virtual pad of their own, slot 3 (the scripts use the first ones)
+    pt::TouchControls touch_controls;
+    if (app.window && pt::TouchControls::Wanted()) {
+        touch_controls.Attach(virtual_pads, 3);
+        g_touch = &touch_controls;
+    }
+    struct TouchReset {
+        ~TouchReset() { g_touch = nullptr; }
+    } touch_reset;
     pt::game::PromptTextures prompt_textures;
     prompt_textures.Init(vfs, app.textures, app.window != nullptr);
     script.SetPads(options.virtual_pads ? &virtual_pads : nullptr, &input);
@@ -4821,6 +4852,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
+            if (g_touch && !show_settings) {
+                g_touch->Draw(ImGui::GetForegroundDrawList(), ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+            }
             if (show_debug) {
                 pt::game::DrawGameDebugPanel(game);
                 if (ImGui::Begin("View")) {
@@ -5311,6 +5345,9 @@ int main(int argc, char** argv) {
         freopen_s(&stream, "CONOUT$", "w", stderr);
     }
 #endif
+#ifdef __ANDROID__
+    pt::PrepareBundledFiles();  // the shaders and fonts from the APK (docs/mobile.md)
+#endif
     App app;
     app.options = ParseOptions(argc, argv);
     if (!app.options.make_loop_previews.empty()) {
@@ -5524,6 +5561,14 @@ int main(int argc, char** argv) {
     }
 
     // each subsystem timed on its own: a player's start waited 98 s here (1.0.2), in one of the three
+    if (pt::TouchControls::Wanted()) {
+        // touches drive the on-screen controls, not the mouse; on a desktop (PT_TOUCH=1) the mouse acts as a finger
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+        SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+#else
+        SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");
+#endif
+    }
     const auto sdl_init_started = std::chrono::steady_clock::now();
     bool sdl_ready = SDL_Init(options.headless ? 0 : SDL_INIT_VIDEO);
     for (const auto& [flag, name] : {std::pair{SDL_INIT_GAMEPAD, "gamepad"}, std::pair{SDL_INIT_AUDIO, "audio"}}) {

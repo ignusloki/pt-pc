@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <thread>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -108,6 +111,11 @@ uint32_t ProcessId() { return static_cast<uint32_t>(getpid()); }
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
     ProcessResult result;
+#if (defined(__APPLE__) && TARGET_OS_IPHONE) || defined(__ANDROID__)
+    // iOS and Android start no other programs (the texture upscaler and the preview generator are desktop tools, docs/mobile.md)
+    (void)program, (void)args, (void)working_dir, (void)log, (void)cancel, (void)timeout;
+    return result;
+#else
     const int log_fd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (log_fd < 0) return result;
     posix_spawn_file_actions_t actions;
@@ -144,6 +152,7 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     }
     result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     return result;
+#endif
 }
 
 FileLock::FileLock(const std::filesystem::path& path) {

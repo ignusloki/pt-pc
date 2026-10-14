@@ -148,7 +148,8 @@ std::string VulkanLibraryPath() {
         const std::filesystem::path base = ExecutableDir();
         std::error_code ec;
         for (const std::filesystem::path& candidate :
-             {base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
+             {base / "Frameworks" / "MoltenVK.framework" / "MoltenVK",  // iOS: the app bundle embeds it (docs/mobile.md)
+              base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
               std::filesystem::path("/usr/local/lib/libMoltenVK.dylib"), std::filesystem::path("/usr/local/lib/libvulkan.1.dylib")}) {
             if (std::filesystem::is_regular_file(candidate, ec)) return std::filesystem::weakly_canonical(candidate, ec).string();
         }

@@ -50,10 +50,11 @@ if(APPLE)
   set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 endif()
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+add_custom_target(pt_voice_runtime)
+if(NOT PT_MOBILE)  # mobile: no plug-in libraries (docs/mobile.md); the headers are still used
 set(BUILD_SHARED_LIBS ON)
 add_subdirectory(${whisper_SOURCE_DIR} ${whisper_BINARY_DIR} EXCLUDE_FROM_ALL)
 unset(BUILD_SHARED_LIBS)
-add_custom_target(pt_voice_runtime)
 add_dependencies(pt_voice_runtime whisper)
 # whisper.cpp names its own output folder (bin); the DLLs go to voice/ next to the models
 foreach(lib whisper ggml ggml-base)
@@ -110,6 +111,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
     endif()
   endforeach()
 endif()
+endif()  # NOT PT_MOBILE
 set(PT_WHISPER_INCLUDE_DIRS ${whisper_SOURCE_DIR}/include ${whisper_SOURCE_DIR}/ggml/include)
 
 # The models next to pt.exe in voice/: Whisper base.en (OpenAI, MIT) quantized to q5_1 by the whisper.cpp project, the

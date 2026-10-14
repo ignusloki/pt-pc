@@ -49,7 +49,12 @@ struct AppSettings {
     // voice recognition is always on (an older pt.ini's voice.enabled is ignored)
     struct Voice {
         std::string device;
+#if PT_MOBILE
+        // phones and tablets have no speech recognizer yet: the touch controls' JACK button (L2 + R2) stands in (docs/mobile.md)
+        std::string key = "J";
+#else
         std::string key;
+#endif
     } voice;
     struct Upscaling {
         std::string upscaler = "off";
