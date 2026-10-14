@@ -18,7 +18,8 @@ namespace {
 constexpr const char* kPhoneCapture = "pt.android.phone.capture";
 std::mutex capture_mutex;
 AAudioStream* phone_capture = nullptr;
-bool app_foreground = true;
+std::atomic<bool> app_foreground{true};
+std::atomic<uint64_t> surface_generation{0};
 std::atomic<bool> touch_enabled{false};
 std::atomic<float> axes[4]{};
 std::atomic<uint32_t> buttons{0};
@@ -37,6 +38,32 @@ void SDLCALL UpdateTouch(void*) {
     const Uint64 now = SDL_GetTicks();
     for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT; ++button)
         SDL_SetJoystickVirtualButton(touch_joystick, button, (buttons.load() & (1u << button)) != 0 || now < button_until[button].load());
+}
+
+bool PhoneRumbleSupported() {
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return false;
+    const jclass cls = env->GetObjectClass(activity);
+    const jmethodID method = env->GetMethodID(cls, "phoneRumbleSupported", "()Z");
+    bool supported = method && env->CallBooleanMethod(activity, method);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); supported = false; }
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+    return supported;
+}
+
+bool SDLCALL RumbleTouch(void*, Uint16 low, Uint16 high) {
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !activity) return false;
+    const jclass cls = env->GetObjectClass(activity);
+    const jmethodID method = env->GetMethodID(cls, "rumblePhone", "(II)Z");
+    bool played = method && env->CallBooleanMethod(activity, method, static_cast<jint>(low), static_cast<jint>(high));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); played = false; }
+    env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(activity);
+    return played;
 }
 
 bool PermissionGranted() {
@@ -114,7 +141,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_m
 
 extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_captureForeground(JNIEnv*, jclass, jboolean foreground) {
     std::lock_guard lock(capture_mutex);
-    app_foreground = foreground;
+    if (app_foreground.exchange(foreground) && !foreground) ++surface_generation;
     if (phone_capture) {
         if (foreground) AAudioStream_requestStart(phone_capture);
         else AAudioStream_requestStop(phone_capture);
@@ -122,6 +149,9 @@ extern "C" JNIEXPORT void JNICALL Java_org_ignusloki_pt_prototype_GameActivity_c
 }
 
 namespace pt {
+bool AndroidAppForeground() { return app_foreground.load(); }
+uint64_t AndroidSurfaceGeneration() { return surface_generation.load(); }
+
 AndroidTouchMenuAction TakeAndroidTouchMenuAction() {
     std::lock_guard lock(menu_mutex);
     if (menu_actions.empty()) return AndroidTouchMenuAction::None;
@@ -155,12 +185,15 @@ void InitAndroidTouchController() {
     desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
     desc.name = "P.T. Android touch controller";
     desc.Update = UpdateTouch;
+    const bool phone_rumble = PhoneRumbleSupported();
+    if (phone_rumble) desc.Rumble = RumbleTouch;
     touch_id = SDL_AttachVirtualJoystick(&desc);
     if (touch_id) touch_joystick = SDL_OpenJoystick(touch_id);
     if (touch_joystick) {
         SDL_SetJoystickVirtualAxis(touch_joystick, 4, SDL_JOYSTICK_AXIS_MIN);
         SDL_SetJoystickVirtualAxis(touch_joystick, 5, SDL_JOYSTICK_AXIS_MIN);
         LogInfo("android: optional touch controller attached through SDL's existing gamepad mapping");
+        LogInfo("android: phone vibration {} via touch controller", phone_rumble ? "available" : "unavailable");
     } else LogError("android: touch controller unavailable: {}", SDL_GetError());
 }
 

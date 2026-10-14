@@ -134,6 +134,11 @@ private:
     };
 
     bool CreateTargets(uint32_t width, uint32_t height);
+#ifdef __ANDROID__
+    bool RestoreAndroidSurface();
+    uint64_t android_surface_generation_ = 0;
+    void* android_native_window_ = nullptr;
+#endif
     void DestroyTargets();
     // the generated frame's composite, submit and present (Apple MetalFX frame interpolation); source nullptr repeats the
     // rendered frame

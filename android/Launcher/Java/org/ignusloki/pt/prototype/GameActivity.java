@@ -9,6 +9,11 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.os.Bundle;
 import android.os.Process;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
+import android.os.SystemClock;
+import android.media.AudioAttributes;
 import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import android.view.View;
@@ -32,6 +37,63 @@ public final class GameActivity extends SDLActivity {
     private final java.util.ArrayList<TouchControl> controls = new java.util.ArrayList<>();
     private final java.util.ArrayList<Stick> sticks = new java.util.ArrayList<>();
     private int menuMode; // 0: gameplay, 1: original settings, 2: PC settings
+    private Vibrator phoneVibrator;
+    private boolean phoneRumbleForeground;
+    private int phoneRumbleAmplitude;
+    private long phoneRumbleStarted;
+
+    private synchronized Vibrator getPhoneVibrator() {
+        if (phoneVibrator == null) {
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager = (VibratorManager)getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                if (manager != null) phoneVibrator = manager.getDefaultVibrator();
+            } else {
+                phoneVibrator = (Vibrator)getSystemService(Context.VIBRATOR_SERVICE);
+            }
+        }
+        return phoneVibrator;
+    }
+
+    public synchronized boolean phoneRumbleSupported() {
+        Vibrator vibrator = getPhoneVibrator();
+        return checkSelfPermission(Manifest.permission.VIBRATE) == PackageManager.PERMISSION_GRANTED
+                && vibrator != null && vibrator.hasVibrator();
+    }
+
+    public synchronized boolean rumblePhone(int low, int high) {
+        if (!phoneRumbleSupported()) return false;
+        int level = Math.max(0, Math.min(65535, Math.max(low, high)));
+        if (!phoneRumbleForeground || level == 0) {
+            if (phoneRumbleAmplitude != 0) phoneVibrator.cancel();
+            phoneRumbleAmplitude = 0;
+            return true;
+        }
+        // Adapt the two original controller motors to the phone's actuator. Keep SDL's bounded
+        // one-second rumble duration; its refresh and stop calls follow the authored motion voices.
+        int amplitude = phoneVibrator.hasAmplitudeControl() ? Math.max(1, (level + 128) / 257)
+                : VibrationEffect.DEFAULT_AMPLITUDE;
+        long now = SystemClock.uptimeMillis();
+        if (amplitude == phoneRumbleAmplitude && now - phoneRumbleStarted < 400) return true;
+        try {
+            AudioAttributes attributes = new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build();
+            phoneVibrator.vibrate(VibrationEffect.createOneShot(1000, amplitude), attributes);
+            phoneRumbleAmplitude = amplitude;
+            phoneRumbleStarted = now;
+            return true;
+        } catch (SecurityException unavailable) {
+            android.util.Log.w("PT", "Phone vibration unavailable", unavailable);
+            return false;
+        }
+    }
+
+    private synchronized void setPhoneRumbleForeground(boolean foreground) {
+        phoneRumbleForeground = foreground;
+        if (!foreground && phoneVibrator != null) {
+            phoneVibrator.cancel();
+            phoneRumbleAmplitude = 0;
+        }
+    }
 
     @Override protected String[] getLibraries() { return new String[] { "c++_shared", "SDL3", "main" }; }
 
@@ -202,6 +264,7 @@ public final class GameActivity extends SDLActivity {
     }
 
     @Override protected void onPause() {
+        setPhoneRumbleForeground(false);
         if (!mBrokenLibraries) {
             resetTouch();
             for (Stick stick : sticks) stick.reset();
@@ -212,10 +275,12 @@ public final class GameActivity extends SDLActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        setPhoneRumbleForeground(true);
         if (!mBrokenLibraries) captureForeground(true);
     }
 
     @Override protected void onDestroy() {
+        setPhoneRumbleForeground(false);
         super.onDestroy();
         // Each launch gets clean native engine state; this activity runs in the dedicated :game process.
         Process.killProcess(Process.myPid());

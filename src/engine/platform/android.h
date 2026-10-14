@@ -1,8 +1,11 @@
 #pragma once
 
 #ifdef __ANDROID__
+#include <cstdint>
 struct SDL_AudioStream;
 namespace pt {
+bool AndroidAppForeground();
+uint64_t AndroidSurfaceGeneration();
 enum class AndroidMicrophoneAccess { Pending, Granted, Denied };
 void RequestAndroidMicrophoneAccess(bool allow_prompt = true);
 AndroidMicrophoneAccess GetAndroidMicrophoneAccess();

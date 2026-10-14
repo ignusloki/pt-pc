@@ -3453,6 +3453,12 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
         SDL_Delay(16);
         return false;
     }
+#ifdef __ANDROID__
+    if (!pt::AndroidAppForeground()) {
+        SDL_Delay(16);
+        return false;
+    }
+#endif
     return true;
 }
 

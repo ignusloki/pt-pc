@@ -73,6 +73,10 @@ public:
 
     bool CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr = false);
     void DestroySwapchain();
+#ifdef __ANDROID__
+    bool RecreateAndroidSurface(SDL_Window* window);
+    bool android_surface_lost = false;
+#endif
     VkResult AcquireNextImage(VkSemaphore semaphore, uint32_t* index);
     VkResult QueuePresent(const VkPresentInfoKHR& info);
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }

@@ -648,16 +648,47 @@ void Context::Shutdown() {
     instance = VK_NULL_HANDLE;
 }
 
+#ifdef __ANDROID__
+bool Context::RecreateAndroidSurface(SDL_Window* window) {
+    const VkResult idle = vkDeviceWaitIdle(device);
+    CheckDeviceLost(idle, "Android surface recreation wait");
+    if (!Check(idle, "Android surface recreation wait")) return false;
+    // An old swapchain cannot be supplied when creating one for a different VkSurfaceKHR.
+    DestroySwapchain();
+    if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
+    surface = VK_NULL_HANDLE;
+    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
+        LogWarn("android: waiting for a usable Vulkan surface: {}", SDL_GetError());
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    if (!Check(vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family, surface, &present), "Android surface presentation support") || !present) {
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        surface = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+#endif
+
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
-    vkDeviceWaitIdle(device);
+    const VkResult idle = vkDeviceWaitIdle(device);
+    CheckDeviceLost(idle, "swapchain recreation wait");
+    if (!Check(idle, "swapchain recreation wait")) return false;
+    const auto surface_ok = [&](VkResult result, const char* operation) {
+#ifdef __ANDROID__
+        if (result == VK_ERROR_SURFACE_LOST_KHR) android_surface_lost = true;
+#endif
+        return Check(result, operation);
+    };
     swapchain_refused = false;
     vsync = force_vsync ? true : (vsync && !force_vsync_off);
-    VkSurfaceCapabilitiesKHR caps;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
+    VkSurfaceCapabilitiesKHR caps{};
+    if (!surface_ok(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps), "surface capabilities")) return false;
     uint32_t format_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, nullptr);
+    if (!surface_ok(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, nullptr), "surface format count")) return false;
     std::vector<VkSurfaceFormatKHR> formats(format_count);
-    if (format_count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
+    if (format_count > 0 && !surface_ok(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data()), "surface formats")) return false;
     VkSurfaceFormatKHR chosen{};
     bool hdr_selected = false;
     // HDR is left out only while a frame generation swapchain is active (its proxy presents SDR). The context hooks (the
@@ -696,9 +727,9 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     LogInfo("vulkan: swapchain format {} color space {}{}", static_cast<int>(chosen.format), static_cast<int>(chosen.colorSpace),
             hdr_selected ? " (HDR)" : " (SDR)");
     uint32_t mode_count = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr);
+    if (!surface_ok(vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr), "surface present mode count")) return false;
     std::vector<VkPresentModeKHR> modes(mode_count);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data());
+    if (!surface_ok(vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data()), "surface present modes")) return false;
     // v-sync off is IMMEDIATE (frames shown as they finish: no cap from the display, tearing possible), MAILBOX where the
     // surface has no IMMEDIATE. MAILBOX had been preferred, and a window then held at the display's refresh rate (259 fps at
     // 260 Hz with a 2.3 ms GPU frame), which read as v-sync still on.
@@ -758,13 +789,13 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
         info.oldSwapchain = VK_NULL_HANDLE;
         const VkResult result =
             swapchain_hooks ? swapchain_hooks->CreateSwapchain(info, handle) : vkCreateSwapchainKHR(device, &info, nullptr, &handle);
-        if (!Check(result, "vkCreateSwapchainKHR")) {
+        if (!surface_ok(result, "vkCreateSwapchainKHR")) {
             swapchain_refused = true;
             return false;
         }
         swapchain_owner_ = swapchain_hooks;
     } else {
-        if (!Check(vkCreateSwapchainKHR(device, &info, nullptr, &handle), "vkCreateSwapchainKHR")) {
+        if (!surface_ok(vkCreateSwapchainKHR(device, &info, nullptr, &handle), "vkCreateSwapchainKHR")) {
             swapchain_refused = true;
             return false;
         }
