@@ -2,8 +2,8 @@
 
 // On-screen touch controls for phones and tablets (docs/mobile.md): a virtual DualSense the game reads like any controller.
 // Left half: a floating stick that walks; right half: drags that turn the view (as a mouse does); buttons for Cross, Circle, R1 (zoom),
-// Options and "JACK" (L2 + R2: the word the game listens for, with the voice key setting on). Hidden while a real controller
-// is in use; a touch brings them back. PT_TOUCH=1 turns them on elsewhere (the mouse acts as a finger), PT_TOUCH=0 off.
+// Options and PC (the port's settings, Share); the word at the end is heard through the phone's microphone. Hidden once a real
+// controller is used; a touch brings them back. PT_TOUCH=1 turns them on elsewhere (the mouse acts as a finger), PT_TOUCH=0 off.
 
 #include <SDL3/SDL.h>
 

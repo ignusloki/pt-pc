@@ -51,8 +51,6 @@ On-screen controls (a virtual DualSense the game reads like any controller):
 - left half of the screen: a stick where your thumb lands, to walk
 - right half: drag to look around (the view turns with the thumb and stops with it)
 - **X** interact, **O** back, **ZOOM** (R1), **II** pause, **PC** the port's settings page
-- **JACK**: stands in for saying the word the game listens for at the end (for a quiet room)
-
 The end listens to the phone's microphone as the PC does: whisper.cpp is built into the game, with the base.en model and the
 voice activity model in the app (the PC's larger second opinion model is left out). The phone asks for the microphone the
 first time the game listens.
