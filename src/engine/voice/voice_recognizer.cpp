@@ -158,6 +158,20 @@ std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) +
 
 bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& failure) {
     std::lock_guard lock(g_api_mutex);
+#ifdef PT_WHISPER_STATIC
+    // phones (cmake/Mobile.cmake): whisper and ggml are part of the game, with ggml's CPU code built in
+    (void)dir;
+    (void)failure;
+    if (!g_api.ready) {
+#define PT_WHISPER_DIRECT(name) g_api.name = &::name;
+        PT_WHISPER_FUNCTIONS(PT_WHISPER_DIRECT)
+#undef PT_WHISPER_DIRECT
+        g_api.cpu = "built in";
+        g_api.ready = true;
+        LogInfo("voice: whisper.cpp built into the game");
+    }
+    return true;
+#endif
     if (g_api.ready) return true;
     failure = VoiceRecognizer::Failure::Runtime;
     const Library base = LoadNear(dir / LibraryName("ggml-base"));
@@ -441,7 +455,11 @@ bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::st
     ApplyTune(settings);
     if (const char* prompt = std::getenv("PT_VOICE_PROMPT")) settings.prompt = prompt;
     if (const char* model = std::getenv("PT_VOICE_RESCUE_MODEL")) settings.rescue_model = model;
+#ifdef PT_WHISPER_STATIC
+    for (const std::string& name : {WhisperModelName(), std::string(kVadModel)}) {
+#else
     for (const std::string& name : {WhisperModelName(), std::string(kVadModel), LibraryName("whisper")}) {
+#endif
         if (!std::filesystem::is_regular_file(model_dir / name)) {
             LogError("voice: {} is missing from {}", name, os::PathToUtf8(model_dir));
             failure_ = Failure::Files;

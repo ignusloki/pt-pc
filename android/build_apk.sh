@@ -10,11 +10,12 @@ PLATFORM=$SDK/platforms/$(ls $SDK/platforms | sort -V | tail -1)
 B=build/android
 SDL=$B/_deps/sdl3-src
 [ -d "$SDL" ] || SDL=$(grep -o 'FETCHCONTENT_SOURCE_DIR_SDL3:[A-Z]*=.*' $B/CMakeCache.txt | cut -d= -f2)
-rm -rf $B/apk $B/java $B/assets && mkdir -p $B/apk/lib/arm64-v8a $B/java $B/assets/shaders $B/assets/fonts
-# assets: shaders, fonts and the manifest the game copies them out by (resource_path.cpp PrepareBundledFiles)
+rm -rf $B/apk $B/java $B/assets && mkdir -p $B/apk/lib/arm64-v8a $B/java $B/assets/shaders $B/assets/fonts $B/assets/voice
+# assets: shaders, fonts, the voice models (cmake/Mobile.cmake) and the manifest the game copies them out by (resource_path.cpp PrepareBundledFiles)
 cp ${PT_APK_SHADERS:-$B/shaders}/*.spv $B/assets/shaders/  # PT_APK_SHADERS: another build's (a test)
 cp assets/fonts/* $B/assets/fonts/
-(cd $B/assets && find shaders fonts -type f | sort | while read -r f; do echo "$(stat -f %z "$f") $f"; done > manifest.txt)
+cp $B/voice/ggml-base.en-q5_1.bin $B/voice/ggml-silero-v6.2.0.bin $B/assets/voice/
+(cd $B/assets && find shaders fonts voice -type f | sort | while read -r f; do echo "$(stat -f %z "$f") $f"; done > manifest.txt)
 # Java -> dex
 javac -nowarn --release 11 -classpath $PLATFORM/android.jar -d $B/java $(find "$SDL/android-project/app/src/main/java" android/java -name '*.java') 2>&1 | grep -v "^Note:" || true
 $BT/d8 --release --min-api 30 --lib $PLATFORM/android.jar --output $B/apk $(find $B/java -name '*.class')

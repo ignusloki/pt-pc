@@ -1,7 +1,11 @@
 # iOS and Android (docs/mobile.md). The game target is an iOS app bundle or Android's libmain.so (CMakeLists.txt); here the
 # platform's libraries and the files the game reads beside its executable (shaders/, fonts/).
 
-target_compile_definitions(pt_engine PUBLIC PT_MOBILE=1)
+target_compile_definitions(pt_engine PUBLIC PT_MOBILE=1 PT_WHISPER_STATIC=1)
+# the true end's word: whisper.cpp in the game (cmake/Dependencies.cmake), its base.en model and the voice activity model
+# beside the game (the larger second opinion model stays on the PC: 190 MB, and the heat of running it on a phone)
+target_link_libraries(pt_engine PUBLIC whisper)
+set(PT_MOBILE_VOICE_MODELS "${CMAKE_BINARY_DIR}/voice/ggml-base.en-q5_1.bin" "${CMAKE_BINARY_DIR}/voice/ggml-silero-v6.2.0.bin")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   # Vulkan is MoltenVK: the official release's dynamic framework (PT_MOLTENVK_IOS, MoltenVK-ios.tar:
@@ -31,7 +35,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     MACOSX_BUNDLE_BUNDLE_VERSION "${PT_VERSION}")
   # the bundle is flat on iOS: shaders/ and fonts/ go beside the executable, where ResourceDir() looks
   add_custom_command(TARGET pt POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:pt>/shaders" VERBATIM)
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:pt>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/voice"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PT_MOBILE_VOICE_MODELS} "$<TARGET_FILE_DIR:pt>/voice/" VERBATIM)
 elseif(ANDROID)
   target_link_libraries(pt PRIVATE android log)
   # Lua 5.1 reads a string's characters past its TString header (svalue): the NDK's _FORTIFY_SOURCE takes that for an

@@ -48,7 +48,11 @@ On-screen controls (a virtual DualSense the game reads like any controller):
 - left half of the screen: a stick where your thumb lands, to walk
 - right half: drag to look around (the view turns with the thumb and stops with it)
 - **X** interact, **O** back, **ZOOM** (R1), **II** pause, **PC** the port's settings page
-- **JACK**: the word the game listens for at the end; phones have no speech recognizer here, so this stands in for it
+- **JACK**: stands in for saying the word the game listens for at the end (for a quiet room)
+
+The end listens to the phone's microphone as the PC does: whisper.cpp is built into the game, with the base.en model and the
+voice activity model in the app (the PC's larger second opinion model is left out). The phone asks for the microphone the
+first time the game listens.
 
 A Bluetooth controller works too; using it hides the on-screen controls until the screen is touched again.
 
@@ -57,6 +61,11 @@ view at fewer pixels than the screen has; `display.fps_limit` is 30 on phones (6
 1024 px tiles.
 
 ## Notes for developers
+
+- Phones have no command line: `env.txt` in the user data folder sets environment variables (KEY=VALUE lines), and its
+  `PT_ARGS` gives command line options (relative paths are in the user data folder), for example
+  `PT_ARGS=--log voice.log --voice-listen 60` to try the microphone, or `--voice-test jack.wav`. `PT_DEBUG_PASSES=1` adds the
+  passes' GPU times to the status line, `PT_DEBUG_SHOT=shot.png` saves the screen with it, `PT_DEBUG_TOUCH=1` logs touches.
 
 - Android's shaders use the gather shadow tap like Apple's (`PT_SHADOW_GATHER`), so the emulator, which runs MoltenVK on a
   Mac host, shows what a phone does. The emulator turns MoltenVK's Metal argument buffers off, which the bindless image

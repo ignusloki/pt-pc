@@ -36,8 +36,17 @@ FetchContent_Declare(whisper URL https://github.com/ggml-org/whisper.cpp/archive
 FetchContent_Populate(whisper)
 set(PT_VOICE_DIR ${CMAKE_BINARY_DIR}/voice)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
-set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+if(PT_MOBILE)
+  # phones: whisper and ggml linked into the game (iOS takes no loose plug-in libraries, Android would need them
+  # extracted), with ggml's CPU code for the one ARM64 target built in (VoiceRecognizer PT_WHISPER_STATIC)
+  set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+  set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+  # every phone that runs the game (Vulkan 1.3) has ARMv8.2 with the dot product and half floats ggml's quants use
+  set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+else()
+  set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+  set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+endif()
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -111,6 +120,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
     endif()
   endforeach()
 endif()
+else()
+add_subdirectory(${whisper_SOURCE_DIR} ${whisper_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()  # NOT PT_MOBILE
 set(PT_WHISPER_INCLUDE_DIRS ${whisper_SOURCE_DIR}/include ${whisper_SOURCE_DIR}/ggml/include)
 

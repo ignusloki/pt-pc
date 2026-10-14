@@ -31,7 +31,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <iomanip>
 #include <span>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -5411,7 +5413,25 @@ int main(int argc, char** argv) {
     }
 #endif
     App app;
+#if PT_MOBILE
+    // PT_ARGS (env.txt): command line options for a phone's game, split at spaces, "quoted" for a path with spaces (docs/mobile.md)
+    std::vector<std::string> extra_args;
+    std::vector<char*> mobile_argv(argv, argv + argc);
+    if (const char* args = std::getenv("PT_ARGS"); args && *args) {
+        std::istringstream words(args);
+        for (std::string word; words >> std::quoted(word);) extra_args.push_back(word);
+        for (std::string& word : extra_args) mobile_argv.push_back(word.data());
+        argc = static_cast<int>(mobile_argv.size());
+        argv = mobile_argv.data();
+    }
+#endif
     app.options = ParseOptions(argc, argv);
+#if PT_MOBILE
+    // a phone's own paths change between installs (iOS), so PT_ARGS' relative paths are in the user data folder
+    for (std::filesystem::path* path : {&app.options.voice_test, &app.options.log_path, &app.options.screenshot}) {
+        if (!path->empty() && path->is_relative()) *path = UserDataDir() / *path;
+    }
+#endif
     if (!app.options.make_loop_previews.empty()) {
         SetUpLoopPreviewRun(app.options);
     }
