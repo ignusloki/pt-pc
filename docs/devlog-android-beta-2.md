@@ -60,6 +60,8 @@ interval. Confirm the same game process survives, gameplay and menus draw again,
 and resolution remains 960×443 with the 30 fps cap. Export a fresh diagnostic log
 and retain the local test evidence in `build/android-validation/`.
 
-Vulkan 1.1 compatibility is deferred. Beta 2 still requires the current Vulkan
-1.3 features and resource limits. Other phones, OS memory eviction, physical
+Vulkan 1.1 compatibility is deferred; the
+[compatibility assessment](android-vulkan-1.1-assessment.md) records the current
+evidence and possible implementation paths. Beta 2 still requires the current
+Vulkan 1.3 features and resource limits. Other phones, OS memory eviction, physical
 controllers, fresh import/first boot and sustained performance need wider testing.
