@@ -215,7 +215,8 @@ public sealed class MainActivity : Activity {
         text.AppendLine("ABIs: " + string.Join(", ", Build.SupportedAbis ?? Array.Empty<string>()));
         text.AppendLine("Touch controls: " + GetPreferences(FileCreationMode.Private)!.GetBoolean("touch_controls", true));
         text.AppendLine("Subtitle size: " + SubtitleScales[ReadSubtitleSize()]);
-        foreach (var (relative, limit) in new[] { ("launcher.log", 16 * 1024), ("profile/pt.log", 64 * 1024) }) {
+        foreach (var (relative, limit) in new[] { ("launcher.log", 16 * 1024), ("profile/pt.log", 64 * 1024),
+                                                ("profile/vulkan-capabilities.txt", 128 * 1024) }) {
             text.AppendLine($"\n--- {relative} (last {limit / 1024} KiB) ---");
             string path = Path.Combine(Root, relative);
             if (!File.Exists(path)) { text.AppendLine("No log yet."); continue; }

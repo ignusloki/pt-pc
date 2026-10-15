@@ -5555,6 +5555,9 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     const std::string driver_advice = "Install the latest graphics driver from NVIDIA, AMD or Intel (a clean reinstall fixed this for other "
                                       "players), and close overlays such as RivaTuner or MSI Afterburner. P.T. needs a GPU with Vulkan 1.3.";
+#elif defined(__ANDROID__)
+    const std::string driver_advice = "The Android renderer currently requires Vulkan 1.3 and additional GPU features. "
+                                      "Return to the launcher and tap Save diagnostic log to export the GPU capability report and startup log.";
 #else
     const std::string driver_advice = "Make sure your graphics driver provides Vulkan 1.3 (Mesa 23 or newer, or the NVIDIA driver) and that "
                                       "P.T. runs inside your desktop session.";

@@ -28,6 +28,7 @@
 #include "engine/core/log.h"
 #include "engine/platform/os.h"
 #include "engine/render/hdr_output.h"
+#include "engine/render/android_vulkan_diagnostics.h"
 #include "engine/render/pipeline_cache_store.h"
 
 namespace pt {
@@ -165,6 +166,9 @@ std::string VulkanLibraryPath() {
 
 bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     window_ = window;
+#ifdef __ANDROID__
+    CaptureAndroidVulkanCapabilities(window);
+#endif
 #ifdef __APPLE__
     if (!loader) {
         loader = LoadVulkanLibrary(window);
@@ -304,7 +308,14 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     for (VkPhysicalDevice candidate : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(candidate, &props);
+#ifdef __ANDROID__
+        LogInfo("vulkan: Android candidate {} API {}.{}.{} driver {}", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+                VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion), props.driverVersion);
+#endif
         if (props.apiVersion < VK_API_VERSION_1_3) {
+#ifdef __ANDROID__
+            LogWarn("vulkan: candidate rejected by renderer's Vulkan 1.3 version requirement; GPU capability report captured separately");
+#endif
             continue;
         }
         uint32_t family_count = 0;
@@ -314,7 +325,14 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         for (uint32_t i = 0; i < family_count; ++i) {
             VkBool32 present = VK_TRUE;
             if (surface) {
+#ifdef __ANDROID__
+                present = VK_FALSE;
+                const VkResult support = vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &present);
+                LogInfo("vulkan: Android queue {} flags {} present {} query result {}", i, families[i].queueFlags, present, static_cast<int>(support));
+                if (support != VK_SUCCESS) present = VK_FALSE;
+#else
                 vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &present);
+#endif
             }
             if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
                 const int score = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;

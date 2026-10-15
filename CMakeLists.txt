@@ -85,6 +85,10 @@ if(ANDROID)
   add_executable(pt_android_lua_test EXCLUDE_FROM_ALL tests/android_lua_test.c ${LUA51_SOURCES})
   target_include_directories(pt_android_lua_test PRIVATE "${lua51_SOURCE_DIR}/src")
   target_link_libraries(pt_android_lua_test PRIVATE m dl)
+  add_executable(pt_android_vulkan_diagnostics_test EXCLUDE_FROM_ALL tests/android_vulkan_diagnostics_test.cpp
+    src/engine/render/android_vulkan_diagnostics.cpp)
+  target_compile_definitions(pt_android_vulkan_diagnostics_test PRIVATE VK_NO_PROTOTYPES PT_VULKAN_DIAGNOSTICS_TEST=1)
+  target_include_directories(pt_android_vulkan_diagnostics_test PRIVATE src "${Vulkan_INCLUDE_DIR}")
 endif()
 if(WIN32)
   # dbghelp: the crash report (src/engine/core/crash_report.cpp) writes minidumps from pt_engine, so every test links it

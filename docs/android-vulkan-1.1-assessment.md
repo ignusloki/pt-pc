@@ -51,6 +51,13 @@ and [beta 2 devlog](devlog-android-beta-2.md) for current test scope.
 
 ## What the current source assumes
 
+Follow-up on 2026-10-15: a separate Huawei ADY-LX9 / Android 12 beta 2 export
+confirms failure during GPU selection after successful import, but does not
+contain the actual API version or GPU capabilities. The
+[diagnostic build guide](android-vulkan-diagnostics.md) describes the new
+capability collector and the report requested from Vulkan 1.1/1.2 testers.
+This does not change the published game's compatibility requirements.
+
 The following are confirmed source requirements at the reviewed commit:
 
 | Area | Current behavior | Consequence for an older API path |
