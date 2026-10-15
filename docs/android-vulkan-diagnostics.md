@@ -116,3 +116,25 @@ clang++ -std=c++20 -fsanitize=address,undefined \
 The Android CMake target is `pt_android_vulkan_diagnostics_test` (excluded from
 normal builds). Actual older-device results must come from testers. Verify the
 signed APK's startup and exported report on the reference S22 before sharing it.
+
+## Verification on 2026-10-15
+
+The signed Release APK built from `6330228ef940209ae11b15ab5393d0b234ea3a41`
+was installed over beta 2 on the S22. Its installed APK hash matched the artifact:
+`84f87b169a3426a505b86938d153083067ae9df4f78adf5db2f30b79b5563fed`.
+The beta certificate matches the existing public beta certificate. Existing game
+files, microphone/touch preferences and the 150% subtitle choice remained usable.
+
+Gameplay and the original settings menu rendered at 960×443 with the 30 fps cap,
+and normal menu Quit returned to the launcher. **Save diagnostic log** produced
+an 88,794-byte export containing the complete capability report. It records a
+1.1.0 diagnostic instance, loader API 1.4.0, physical GPU API 1.3.279, Samsung
+Xclipse 920, Samsung proprietary driver 24.0.545, and the feature/limit/format/
+presentation results. Native startup and normal exit completed without engine
+warnings or errors in the exported session log. All nine simulated-driver tests
+passed on the host with sanitizers and as an Android executable on the S22.
+
+This verifies collection/export and current-device startup. Real Vulkan 1.1/1.2
+devices remain untested until their owners return reports. Version code 7 is now
+used by this diagnostic update; subsequent public updates need a higher version
+code so testers can install them over it normally.
