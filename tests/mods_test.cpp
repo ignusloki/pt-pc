@@ -1,4 +1,3 @@
-// The mod override index, its priority rules, mod.json and the mod script sandbox (docs/modding.md). Needs no game files.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -102,7 +101,6 @@ void TestPriority() {
     Check(sorted[0].folder == "off" && sorted[1].folder == "a_high" && sorted[2].folder == "z_tie" && sorted[3].folder == "c_tie" &&
               sorted[4].folder == "b_low",
           "priority: load order");
-    // the same result whatever order Build sees the mods in
     std::vector<pt::mods::Mod> reversed(mods.rbegin(), mods.rend());
     pt::mods::OverrideIndex again;
     again.Build(reversed);
@@ -114,7 +112,6 @@ void TestPriority() {
     Check(empty.Empty() && !empty.Find("/Assets/sh/a.lua"), "index: empty");
 }
 
-// a Fox package of one plain entry, the layout FoxPackage::Load reads (48-byte header, 48-byte entries, then the strings)
 std::vector<uint8_t> OnePackage(const std::string& entry_path, const std::string& content) {
     std::vector<uint8_t> data(96, 0);
     std::memcpy(data.data(), "foxfpk", 6);

@@ -11,7 +11,7 @@
 namespace pt::vk {
 
 inline bool ChooseSwapchainSurfaceFormat(std::span<const VkSurfaceFormatKHR> formats, bool want_hdr, bool allow_hdr,
-                                         VkSurfaceFormatKHR& chosen, bool& hdr_selected) {
+                                         VkSurfaceFormatKHR& chosen, bool& hdr_selected, bool allow_scrgb = true) {
     hdr_selected = false;
     if (formats.empty()) return false;
     const bool unrestricted = formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED;
@@ -29,7 +29,7 @@ inline bool ChooseSwapchainSurfaceFormat(std::span<const VkSurfaceFormatKHR> for
         return false;
     };
     if (want_hdr && allow_hdr) {
-        hdr_selected = find(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) ||
+        hdr_selected = (allow_scrgb && find(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT)) ||
                        find(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT);
     }
     if (hdr_selected) return true;
@@ -84,6 +84,33 @@ inline float PqDecodeNits(float code) {
     const float numerator = std::max(p - c1, 0.0f);
     const float denominator = std::max(c2 - c3 * p, 1.0e-6f);
     return std::pow(numerator / denominator, 1.0f / m1) * 10000.0f;
+}
+
+constexpr int kHdrPaperWhiteDefault = 200;
+constexpr int kHdrPaperWhiteMin = 80;
+constexpr int kHdrPaperWhiteMax = 500;
+constexpr int kHdrPeakFallback = 1000;
+constexpr int kHdrPeakMin = 400;
+constexpr int kHdrPeakMax = 4000;
+
+inline float ClampHdrPaperWhite(float nits) {
+    return std::isfinite(nits) ? std::clamp(nits, float(kHdrPaperWhiteMin), float(kHdrPaperWhiteMax)) : float(kHdrPaperWhiteDefault);
+}
+
+inline float ResolveHdrPeak(float setting, float display) {
+    const float chosen = setting > 0.0f ? setting : display > 0.0f ? display : float(kHdrPeakFallback);
+    return std::isfinite(chosen) ? std::clamp(chosen, float(kHdrPeakMin), float(kHdrPeakMax)) : float(kHdrPeakFallback);
+}
+
+constexpr float kHdrSourceWhite = 3.0f;
+inline float HdrShoulder(float m, float ratio) {
+    if (m <= 1.0f || ratio <= 1.001f) return std::min(m, 1.0f);
+    const float width = std::min(kHdrSourceWhite - 1.0f, 2.97f * (ratio - 1.0f));
+    if (m >= 1.0f + width) return ratio;
+    const float t = (m - 1.0f) / width;
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return (1.0f - 3.0f * t2 + 2.0f * t3) + (t - 2.0f * t2 + t3) * width + (3.0f * t2 - 2.0f * t3) * ratio;
 }
 
 inline uint8_t LinearToSrgb8(float linear) {

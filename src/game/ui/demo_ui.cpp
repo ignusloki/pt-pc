@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "engine/core/log.h"
 #include "engine/core/strcode.h"
 #include "engine/fs/vfs.h"
+#include "game/archive.h"
 #include "game/demo_system.h"
 #include "game/game.h"
 
@@ -14,18 +16,15 @@ namespace {
 
 constexpr uint64_t kTextFunctor = 0xECEC4D259E21;
 constexpr uint64_t kRandomBugText = 0x90BA012E9D3E;
-// the cases of 0x77BDB0's switch, each an event of bug_expression.uigb that shows one picture of UI_sys_bug.uif and hides the
-// others. sh_bug_3 (the yellow "Release the game for free" page) has a mesh but no event, so the original never shows it; the
-// port adds it as case 6 (a PC addition the user asked for), built from case 0's event with that mesh shown and the others hidden
 constexpr int kBugCases = 7;
 constexpr uint64_t kBugTexts[6] = {0x119CABD7B66A, 0x69D97AC6AF45, 0xC19FC491E18F, 0xF89D156E5DA1, 0xED7A96A7C6B6, 0xA957904C892D};
 constexpr uint64_t kBug3Mesh = 0x8F1B33D1D824;
-// gc_p02_080 sends it at 5876: the setout of the bug picture
 constexpr uint64_t kBugSetoutText = 0xE77E6C72FA82;
 constexpr const char* kBugPictures[kBugCases] = {"sh_bug_1, grey, mirrored lines", "sh_bug_2, black, Fix this damn bug",
                                                  "sh_bug_4, white, Knowing you ... -J", "sh_bug_5, red, I'm heading there now",
                                                  "sh_bug_6, yellow, I'll call later", "sh_bug_7, black, This game is purely fictitious",
                                                  "sh_bug_3, yellow, Release the game for free (port addition)"};
+constexpr std::string_view kBugTextures[kBugCases] = {"sh_bug_1", "sh_bug_2", "sh_bug_4", "sh_bug_5", "sh_bug_6", "sh_bug_7", "sh_bug_3"};
 
 std::string_view Stem(std::string_view path) {
     const size_t slash = path.find_last_of('/');
@@ -155,17 +154,15 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
     if ((text & kStrCode64Mask) == kRandomBugText) {
         bug_graph_ = graph;
         bug_shown_ = 0.0f;
-        // 0x77BDB0 picks when the text comes: sceKernelReadTsc's low 32 bits (0x42C9C0), one xorshift32 step (13, 7, 5), modulo 6,
-        // so every fake crash can show another page; the port takes modulo 7 for its seventh page
         uint32_t x = ReadTsc();
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 5;
         const uint32_t pick = bug_screen >= 0 && bug_screen < kBugCases ? static_cast<uint32_t>(bug_screen) : x % kBugCases;
         bug_pick_ = pick;
+        bug_unnoted_ = static_cast<int>(pick);
         LogInfo("ui: bug screen {} of {} ({}){}", pick, kBugCases, kBugPictures[pick], bug_screen >= 0 ? ", forced" : "");
         if (pick == 6) {
-            // case 0's actions (the setin and the seven meshes' visibility) with sh_bug_3's mesh the one shown
             if (const ui::UigbEvent* model = instance->data->FindEvent(kBugTexts[0])) {
                 added = model->actions;
                 for (ui::UigbAction& action : added) {
@@ -190,17 +187,19 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
     return true;
 }
 
+std::string_view DemoUi::BugPictureTexture(uint32_t pick) {
+    return pick < static_cast<uint32_t>(kBugCases) ? kBugTextures[pick] : std::string_view();
+}
+
 glm::vec4 DemoUi::BugPillarColor() const {
-    // the pictures' backgrounds as drawn (kBugPictures' order): grey, black, white, red, yellow, black, yellow
-    static constexpr glm::vec3 kColors[kBugCases] = {{105.0f, 105.0f, 106.0f}, {0.0f, 0.0f, 0.0f}, {255.0f, 255.0f, 255.0f}, {232.0f, 4.0f, 6.0f},
-                                                     {248.0f, 248.0f, 2.0f}, {0.0f, 0.0f, 0.0f}, {248.0f, 248.0f, 2.0f}};
-    if (!BugScreenStill() || bug_pick_ >= static_cast<uint32_t>(kBugCases)) return glm::vec4(0.0f);
+    static constexpr glm::vec3 kColors[kBugCases] = {{110.0f, 111.0f, 110.0f}, {0.0f, 0.0f, 0.0f}, {255.0f, 255.0f, 255.0f}, {255.0f, 0.0f, 0.0f},
+                                                     {255.0f, 255.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {255.0f, 255.0f, 0.0f}};
+    const bool shown = bug_graph_ && std::any_of(instances_.begin(), instances_.end(), [&](const auto& i) { return i->graph == bug_graph_; });
+    if (!shown || bug_pick_ >= static_cast<uint32_t>(kBugCases)) return glm::vec4(0.0f);
     return glm::vec4(kColors[bug_pick_] / 255.0f, 1.0f);
 }
 
 bool DemoUi::BugScreenStill() const {
-    // the picture is drawn for a few frames first: the capture's frame 10 after the switch (one timeline step) already shows the
-    // page complete and still
     constexpr float kSetInSeconds = 0.25f;
     if (!bug_graph_ || bug_shown_ < kSetInSeconds) {
         return false;
@@ -301,10 +300,10 @@ void DemoUi::Update(Game& game, float dt, bool paused) {
             Start(e.graph);
         } else if (functor == kTextFunctor) {
             Text(e.graph, e.text, game.Config().bug_screen);
+            if (bug_unnoted_ >= 0) game.NoteArchive(ArchiveBugScreenKey(BugPictureTexture(static_cast<uint32_t>(std::exchange(bug_unnoted_, -1)))));
         }
     }
     const size_t before = instances_.size();
-    // a demo held as scenery (the street walk) shows no texts: its earlier play's graphs close too
     std::erase_if(instances_, [&](const auto& i) {
         return !i->demo_id.empty() && (!game.Demos().IsPlaying(i->demo_id) || game.Demos().IsHeld(i->demo_id));
     });
@@ -327,9 +326,6 @@ void DemoUi::Update(Game& game, float dt, bool paused) {
 
 void DemoUi::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language) {
     for (auto& instance : instances_) {
-        // DemoUiFunctor_Create (0x77C290 -> 0x7A0D10) only builds the graph; DemoUiFunctor_Start (0x77BB40 -> 0x7A0F30 -> 0xFDD8A0)
-        // runs it, and the start node's actions hide the layouts that are not shown yet (the ending's three logos, whose pictures
-        // are opaque in their UIF, and the narration and credit pictures), so nothing of the graph is on screen before the start
         if (!instance->started) {
             continue;
         }

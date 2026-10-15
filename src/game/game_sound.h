@@ -64,7 +64,6 @@ class GameSound final : public GameAudio {
 public:
     static constexpr audio::GameObjectId kPlayerObject = 0x200;
     static constexpr audio::GameObjectId kGimmickObject = 0x300;
-    // one object per ShGimmick record for its CallSound and PostSoundEvent sounds (0x310 + record index)
     static constexpr audio::GameObjectId kRecordSoundBase = 0x310;
     static constexpr int kRecordSoundCount = 8;
     static constexpr audio::GameObjectId kOneShotBase = 0x10000;
@@ -93,6 +92,8 @@ public:
     void StopAll() override;
     void ResetSession() override;
     uint32_t PlayStream(std::vector<uint8_t> wem, const glm::vec3* position) override;
+    uint32_t PlayStreamAs(std::vector<uint8_t> wem, std::string_view donor_event, const glm::vec3& position) override;
+    uint32_t PlayMedia(std::shared_ptr<const audio::Media> media, const glm::vec3* position) override;
     void SeekPlayingId(uint32_t playing_id, float seconds) override;
     void StopPlayingId(uint32_t playing_id, float fade_seconds) override;
     void SetState(std::string_view group, std::string_view state) override;
@@ -100,11 +101,9 @@ public:
     uint32_t PostRecordEvent(int record, std::string_view name, const glm::vec3& position) override;
     uint32_t PostRecordEventId(int record, uint32_t id, const glm::vec3& position) override;
     void MoveRecordSound(int record, const glm::vec3& position) override;
+    void SetPostObserver(std::function<void(uint32_t, const std::optional<glm::vec3>&)> observer) override { system_.SetPostObserver(std::move(observer)); }
     void SetAreaSends(audio::GameObjectId object, const glm::vec3& position);
-    // Keep the native "Gimmick" object type, with an emitter owned by the speaking record for its playback lifetime. One
-    // dialogue plays at a time (the sound control's slot 0): a new post stops the playing one.
     audio::PlayingId PostGimmickDialogue(uint32_t dialogue_event, std::span<const std::string_view> arguments, GimmickType source);
-    // a dialogue event on an object of its own at a place (the Archive plays the bag's talk without the bag)
     audio::PlayingId PostDialogueAt(uint32_t dialogue_event, std::span<const std::string_view> arguments, const glm::vec3& position);
 
 private:
@@ -161,6 +160,7 @@ private:
     struct AnimObject {
         audio::GameObjectId object = 0;
         std::vector<audio::PlayingId> playing;
+        uint32_t logged_surface = 0xFFFFFFFFu;
     };
     struct DialogueObject {
         audio::GameObjectId object = 0;

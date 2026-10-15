@@ -12,9 +12,6 @@ layout(push_constant) uniform PassPush {
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
-// NearFarUpScale2x2 (lisa_balcony_f070 3881, op 1544). Each half-resolution effect layer stores its
-// sRGB-encoded premultiplied colour and transmittance. The depth range and the change in alpha between
-// full and half samples choose how the two layers are reconstructed at this full-resolution pixel.
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     if (pass.ids.x == 1u) {

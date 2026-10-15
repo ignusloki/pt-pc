@@ -1,5 +1,3 @@
-// The trap check PlayerInputDir (0x915850) reads the player service's published body rotation: the body yaw, which follows the
-// camera (UpdateBody), as published at the end of the previous original frame (double buffer 0x91E900).
 #include <cmath>
 #include <cstdio>
 
@@ -7,7 +5,6 @@
 #include "game/player.h"
 #include "game/player_animation.h"
 
-// usage: pt_player_publish_test <game folder> (the body only turns with the player's motions loaded)
 int main(int argc, char** argv) {
     using namespace pt;
     using namespace pt::game;
@@ -29,7 +26,6 @@ int main(int argc, char** argv) {
     InputState input;
     player.Warp(glm::vec3(0.0f), 0.0f);
     check("warp publishes the new yaw", std::abs(player.PublishedBodyFoxYaw()) < 1e-5f);
-    // a fast turn with the right stick for 10 original frames (20 ticks)
     input.right_stick = glm::vec2(1.0f, 0.0f);
     input.from_gamepad = true;
     float largest_lag = 0.0f;
@@ -43,19 +39,16 @@ int main(int argc, char** argv) {
         player.Update(1.0f / 60, input, world, context);
         const bool frame_end = player.FrameEnds();
         if (frame_end) {
-            // Game::Update runs the traps here: they see the body yaw of the previous frame's end
             ++frames;
             lags_one_frame = lags_one_frame && std::abs(wrap(player.PublishedBodyFoxYaw() - previous_frame_body)) < 1e-5f;
             largest_lag = std::max(largest_lag, std::abs(wrap(player.CameraFoxYaw() - player.PublishedBodyFoxYaw())));
         }
         const float before_end = player.PublishedBodyFoxYaw();
         player.EndFrame();
-        // the Ocho's sense step runs after EndFrame: in the publishing tick it still sees the frame before (0x91EB10 swaps later)
         if (frame_end) {
             after_publish_lags = after_publish_lags && std::abs(wrap(player.PublishedBodyFoxYaw() - before_end)) < 1e-6f;
             previous_frame_body = player.BodyFoxYaw();
         } else if (std::abs(wrap(player.PublishedBodyFoxYaw() - last_seen)) > 1e-6f) {
-            // it changes in the tick after a frame's end, at most once per frame
             changes_on_frames_only = changes_on_frames_only && tick > 0;
         }
         last_seen = player.PublishedBodyFoxYaw();
@@ -67,15 +60,12 @@ int main(int argc, char** argv) {
     check("the trap reads the body yaw of the previous frame", lags_one_frame);
     check("the published body yaw trails the camera in a fast turn", largest_lag > 0.1f);
     check("the body turned", std::abs(wrap(player.BodyFoxYaw())) > 0.1f);
-    // standing still, the published yaw catches up with the camera
     input = InputState{};
     for (int tick = 0; tick < 600; ++tick) {
         player.Update(1.0f / 60, input, world, context);
         player.EndFrame();
     }
     check("at rest the published body yaw meets the camera yaw", std::abs(wrap(player.CameraFoxYaw() - player.PublishedBodyFoxYaw())) < 0.01f);
-    // flags 4/5: STAND -> WALK on the first frame with the stick (0x986420), published at that frame's end, read from the
-    // next frame: Walking() turns on in the tick after the end of the frame that pushed the stick, three ticks after the push
     check("standing at rest", player.Standing());
     input.left_stick = glm::vec2(0.0f, 1.0f);
     input.left_stick_from_pad = true;
@@ -94,7 +84,6 @@ int main(int argc, char** argv) {
     }
     std::printf("Walking() from tick %d of the push\n", walk_tick);
     check("the walk flag is read a frame after the frame that set it", walk_tick >= 2 && turned_after_end);
-    // the position takes the same path: a walk moves the published feet one frame behind the controller
     glm::vec3 frame_before = player.Feet();
     bool feet_lag = true;
     int moved = 0;
@@ -110,7 +99,6 @@ int main(int argc, char** argv) {
     }
     check("a walk moved the player", moved > 10);
     check("the published feet are the previous frame's after the publish", feet_lag);
-    // the pitch (the Freezer's look-up test, 0x1253370) takes the same path
     input = InputState{};
     input.right_stick = glm::vec2(0.0f, -1.0f);
     input.from_gamepad = true;
@@ -128,9 +116,6 @@ int main(int argc, char** argv) {
         }
     }
     check("the published pitch is the previous frame's", pitch_lag && pitch_moved);
-    // Stick sensitivity follows the original per-axis dead zone and nonlinear response. At 1 the gamepad keeps the same
-    // response; at a high setting a deflection below the original dead zone still cannot turn the view, while the flashlight
-    // keeps its original stick lead.
     Player default_look;
     Player fast_look;
     Player dead_zone_look;
@@ -163,5 +148,44 @@ int main(int argc, char** argv) {
     check("sensitivity leaves the flashlight stick response unchanged", glm::length(default_look.LightStick() - fast_look.LightStick()) < 1e-5f);
     player.Warp(glm::vec3(5.0f, 0.0f, 5.0f), 1.0f);
     check("a warp is published at once", glm::length(player.PublishedFeet() - glm::vec3(5.0f, 0.0f, 5.0f)) < 1e-5f);
+    Player walker;
+    walker.Warp(glm::vec3(0.0f), 0.0f);
+    InputState push;
+    push.left_stick = glm::vec2(0.0f, 1.0f);
+    for (int tick = 0; tick < 8; ++tick) {
+        walker.Update(1.0f / 60, push, world, context);
+        walker.EndFrame();
+    }
+    check("walking into the door", walker.Walking());
+    bool held_walks = true;
+    for (int frame = 0; frame < 60; ++frame) {
+        walker.DemoWarp(glm::vec3(0.0f, 0.0f, 0.03f * static_cast<float>(frame)), 0.0f);
+        walker.DemoHeldFrame(push);
+        walker.EndFrame();
+        walker.EndFrame();
+        held_walks = held_walks && walker.Walking();
+    }
+    check("a demo holding the player keeps the walk while the stick is held", held_walks);
+    walker.DemoWarp(glm::vec3(0.0f, 0.0f, 2.0f), 0.0f);
+    check("the release keeps the walk", walker.Walking());
+    int stand_frame = -1;
+    const InputState released;
+    for (int frame = 0; frame < 6 && stand_frame < 0; ++frame) {
+        walker.DemoWarp(glm::vec3(0.0f, 0.0f, 2.0f), 0.0f);
+        walker.DemoHeldFrame(released);
+        walker.EndFrame();
+        walker.EndFrame();
+        if (walker.Standing()) {
+            stand_frame = frame;
+        }
+    }
+    std::printf("stick released under a demo: STAND on frame %d\n", stand_frame);
+    check("released under a demo, STAND after the 0.067 s debounce", stand_frame == 1);
+    walker.DemoHeldFrame(push);
+    walker.EndFrame();
+    walker.EndFrame();
+    check("pushed again under a demo, WALK", walker.Walking());
+    walker.Warp(glm::vec3(0.0f), 0.0f);
+    check("a plain warp stands the player up", walker.Standing());
     return failures ? 1 : 0;
 }

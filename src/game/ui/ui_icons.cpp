@@ -53,7 +53,6 @@ float SegmentDistance(glm::vec2 p, glm::vec2 a, glm::vec2 b) {
     return glm::length(p - (a + ab * t));
 }
 
-// 128 px cells: white disc r 26 at (64, 64), shadow outside it, symbol black at alpha 226 with 4 px strokes
 void DrawGlyph(const Image& source, Image& out, int cell, bool circle) {
     constexpr float kClear = 24.5f;
     constexpr float kHalfStroke = 2.0f;
@@ -111,19 +110,13 @@ std::vector<std::vector<uint8_t>> BuildMips(const Image& image) {
     return mips;
 }
 
-// Generated prompts are drawn in the atlas's cell units (128 per cell height) at twice its resolution, so they stay sharp where the
-// option screen is drawn larger than the atlas (a 5 unit icon is 150 pixels high at 2160p)
 constexpr int kGlyphScale = 2;
-// Edge profile: the square cell's white disc with its shadow and glow, by radius; inside kProfileFrom lies the symbol
 constexpr float kProfileFrom = 21.0f;
 constexpr float kProfileTo = 48.0f;
 constexpr float kProfileStep = 0.25f;
 constexpr glm::vec2 kCellCentre{64.0f, 64.0f};
-// The D-pad glyph's unused arms (rgb 75 and alpha 188 in the atlas's D-pad cells) mark the arrow keys a prompt does not use
 constexpr float kDimLevel = 75.0f / 255.0f;
 constexpr float kDimAlpha = 188.0f / 255.0f;
-// Symbols: the atlas's strokes are 4 pixels wide; letters stand as tall as its triangle and square, their outlines grown (bold) towards
-// the strokes' weight, and keycaps carry their names smaller
 constexpr float kHalfStroke = 2.0f;
 constexpr float kLetterCap = 22.0f;
 constexpr float kLetterBold = 0.9f;
@@ -132,7 +125,6 @@ constexpr float kKeyCapSingle = 19.0f;
 constexpr float kKeyBold = 0.5f;
 constexpr float kKeyPad = 12.0f;
 constexpr float kKeyCorner = 9.0f;
-// font glyph distance fields: padding around the glyph box and the farthest distance searched, font pixels
 constexpr int kFieldPad = 4;
 constexpr int kFieldReach = 6;
 
@@ -143,7 +135,6 @@ struct EdgeProfile {
     std::vector<float> shadow;
     std::vector<float> glow;
 
-    // by signed distance from a body's edge in cell pixels (negative inside)
     float Sample(const std::vector<float>& table, float distance, float inside) const {
         const float r = radius + distance;
         if (r < kProfileFrom || table.empty()) {
@@ -162,9 +153,6 @@ struct EdgeProfile {
     }
 };
 
-// The square cell (a white disc of radius ~26 around the cell centre, a black shadow around it, the symbol inside) and the glow
-// under it, averaged over rings: the disc's coverage c (its colour is white over the black shadow: a = c + (1 - c) s and rgb = c / a),
-// the shadow's alpha s and the glow; the symbol's alpha is the ink of generated symbols
 EdgeProfile MeasureEdge(const Image& atlas, const Image& glow) {
     EdgeProfile edge;
     const size_t bins = static_cast<size_t>((kProfileTo - kProfileFrom) / kProfileStep);
@@ -222,7 +210,6 @@ struct GlyphField {
     int height = 0;
     std::vector<float> distance;
 
-    // x, y in font pixels from the glyph box's top left
     float Sample(float x, float y) const {
         const float gx = x + static_cast<float>(kFieldPad) - 0.5f;
         const float gy = y + static_cast<float>(kFieldPad) - 0.5f;
@@ -240,8 +227,6 @@ struct GlyphField {
     }
 };
 
-// Signed distance from each pixel centre of a glyph's bit plane to the nearest pixel of the other state, minus half a pixel (the edge
-// between them), negative inside: sampled between pixels it gives the font's 53 pixel em outlines smooth edges at any size
 GlyphField BuildField(const ui::FfntFont& font, const ui::FfntGlyph& glyph) {
     GlyphField field;
     field.width = glyph.width + 2 * kFieldPad;
@@ -276,7 +261,6 @@ float Cross2(glm::vec2 a, glm::vec2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-// signed distance to a triangle, negative inside
 float TriangleDistance(glm::vec2 p, glm::vec2 a, glm::vec2 b, glm::vec2 c) {
     const glm::vec2 e0 = b - a, e1 = c - b, e2 = a - c;
     const glm::vec2 v0 = p - a, v1 = p - b, v2 = p - c;
@@ -289,7 +273,6 @@ float TriangleDistance(glm::vec2 p, glm::vec2 a, glm::vec2 b, glm::vec2 c) {
     return -std::sqrt(d.x) * (d.y > 0.0f ? 1.0f : -1.0f);
 }
 
-// coverage of a line of the symbols' width, and of a filled shape, from their distances in cell pixels
 float StrokeInk(float distance) {
     return std::clamp(kHalfStroke + 0.5f - distance, 0.0f, 1.0f);
 }
@@ -298,8 +281,6 @@ float FillInk(float distance) {
     return std::clamp(0.5f - distance, 0.0f, 1.0f);
 }
 
-// What a generated glyph shows at a point (cell pixels from its top left): the distance to its bodies (the disc, keys or mouse; their
-// edge, shadow and glow follow the atlas's disc), the body's grey level and alpha there, and the black symbol's coverage
 struct Paint {
     float body = 1e9f;
     float level = 1.0f;
@@ -307,8 +288,6 @@ struct Paint {
     float ink = 0.0f;
 };
 
-// Text in the game's system font, black: its glyphs' distance fields placed so that the ink is centred on a point, horizontally by
-// its extent and vertically by the capital height (the H), `cap` cell pixels high
 class TextInk {
 public:
     TextInk(const ui::FfntFont& font, std::map<uint32_t, GlyphField>& fields, std::string_view text, float cap, float bold) : bold_(bold) {
@@ -377,8 +356,6 @@ private:
     float bold_ = 0.0f;
 };
 
-// Draws a glyph cell `width` cell pixels wide (128 high) at kGlyphScale: the picture as the atlas's cells are (the body white or grey
-// over its shadow, the ink black at the symbols' alpha) and its glow as the glow texture's cells are (grey levels, opaque)
 void Rasterize(const EdgeProfile& edge, float width, const std::function<Paint(glm::vec2)>& paint, Image& icon, Image& glow) {
     const int w = static_cast<int>(std::lround(width)) * kGlyphScale;
     const int h = kCell * kGlyphScale;
@@ -433,7 +410,7 @@ uint32_t UiAssets::UploadImage(const std::string& name, int width, int height, b
         w = std::max(1, w / 2);
         h = std::max(1, h / 2);
     }
-    const uint32_t index = textures_->Create(name, srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, mips);
+    const uint32_t index = textures_->Create(name, srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
     texture_cache_[name] = index;
     texture_address_[index] = ui::kUiClampU | ui::kUiClampV;
     return index;
@@ -475,9 +452,6 @@ bool UiAssets::BuildPcIcons() {
     return true;
 }
 
-// Generated glyphs by id: "letter:A" (a letter on the disc), "menu" (the Xbox menu button's three lines on the disc), "plus", "key:Esc"
-// (a keycap with a key's name), "arrows:<mask>" (the arrow keys, those of the mask (1 up, 2 down, 4 left, 8 right) lit and the others
-// dim as the D-pad glyph's unused arms), "mouse:<button>" (a mouse with that button (1 left, 2 middle, 3 right) filled)
 const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
     PromptArt& art = *prompt_art_;
     if (auto it = art.glyphs.find(id); it != art.glyphs.end()) {
@@ -503,6 +477,21 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
             }
             return Paint{disc(p), 1.0f, 1.0f, ink};
         };
+    } else if (id == "minus") {
+        paint = [&](glm::vec2 p) {
+            const float d = SegmentDistance(p, kCellCentre - glm::vec2(10.0f, 0.0f), kCellCentre + glm::vec2(10.0f, 0.0f));
+            return Paint{disc(p), 1.0f, 1.0f, StrokeInk(d)};
+        };
+    } else if (id == "view") {
+        paint = [&](glm::vec2 p) {
+            auto frame = [&](glm::vec2 centre) {
+                const glm::vec2 half(6.0f, 4.5f);
+                const glm::vec2 q = glm::abs(p - centre) - half;
+                return std::abs(glm::length(glm::max(q, 0.0f)) + std::min(std::max(q.x, q.y), 0.0f));
+            };
+            const float d = std::min(frame(kCellCentre + glm::vec2(-3.0f, -3.0f)), frame(kCellCentre + glm::vec2(3.0f, 3.0f)));
+            return Paint{disc(p), 1.0f, 1.0f, StrokeInk(d)};
+        };
     } else if (id == "plus") {
         paint = [&](glm::vec2 p) {
             const float d = std::min(SegmentDistance(p, kCellCentre - glm::vec2(10.0f, 0.0f), kCellCentre + glm::vec2(10.0f, 0.0f)),
@@ -522,8 +511,6 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
         const std::string_view name = std::string_view(id).substr(11);
         text.emplace(font->font, art.fields, name, kLetterCap, kLetterBold);
         text->Centre(kCellCentre);
-        // the Steam Deck's and the Steam Controller's face buttons are round: a rounded square read as a keyboard key, and the
-        // prompts looked like a mix of keys and buttons (Discord report and GitHub, 11 October)
         paint = [&](glm::vec2 p) { return Paint{disc(p), 1.0f, 1.0f, text->Ink(p)}; };
     } else if (id == "steam:menu") {
         const glm::vec2 half(r * 0.9f, r * 0.72f);
@@ -537,7 +524,6 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
             return Paint{BoxDistance(p, kCellCentre, half, 0.2f * r), 1.0f, 1.0f, ink};
         };
     } else if ((id.starts_with("bumper:") || id.starts_with("steam:bumper:")) && font) {
-        // a shoulder button: a flat pill with its name, wider than a face button's disc
         const size_t prefix = id.starts_with("steam:bumper:") ? 13 : 7;
         const std::string_view name = std::string_view(id).substr(prefix);
         text.emplace(font->font, art.fields, name, kKeyCap, kKeyBold);
@@ -597,7 +583,6 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
             if (button == 2) {
                 ink = std::max(ink, FillInk(BoxDistance(p, {kCellCentre.x, top + 8.0f}, {2.5f, 5.0f}, 2.5f)));
             } else {
-                // the pressed button: the shell's inside above the split, on its side of the middle line
                 const float side = button == 1 ? p.x - (kCellCentre.x - 1.0f) : (kCellCentre.x + 1.0f) - p.x;
                 ink = std::max(ink, FillInk(std::max({shell + 1.0f, p.y - split_y + 1.0f, side})));
             }
@@ -638,6 +623,7 @@ std::string SteamPromptGlyphName(const Prompt& prompt, const PromptStyle& style)
             return std::format("steam:face:{}", letter);
         }
         case PromptButton::Options: return "steam:menu";
+        case PromptButton::Select: return "view";
         case PromptButton::L1: return "steam:bumper:L1";
         case PromptButton::R1: return "steam:bumper:R1";
         default: return {};
@@ -647,8 +633,6 @@ std::string SteamPromptGlyphName(const Prompt& prompt, const PromptStyle& style)
 PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& style) {
     const PromptDevice device = style.device;
     const bool built = BuildPcIcons();
-    // the option screen's own pictures: cells of cmn_btn_icon_a_ps4_alp (triangle, square, the two D-pads, OPTIONS) and the cross and
-    // circle drawn from its square
     auto atlas = [](glm::vec2 uv, float body_w, float body_h) {
         PromptGlyph g;
         g.icon = std::string(kAtlasPath) + ".ftex";
@@ -680,9 +664,12 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         case PromptButton::Options: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
         case PromptButton::DpadUpDown: original = atlas({0.5f, 0.5f}, 0.45f, 0.45f); break;
         case PromptButton::DpadLeftRight: original = atlas({0.5f, 0.25f}, 0.45f, 0.45f); break;
-        // the screen's atlas has no shoulder buttons: the OPTIONS cell stands in only when the generated pictures cannot be built
         case PromptButton::L1:
-        case PromptButton::R1: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
+        case PromptButton::R1:
+        case PromptButton::Select: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
+    }
+    if (built && prompt.button == PromptButton::Select && device != PromptDevice::Keyboard && device != PromptDevice::Steam) {
+        return GeneratedGlyph(device == PromptDevice::PlayStation ? "bumper:TOUCHPAD" : device == PromptDevice::Nintendo ? "minus" : "view");
     }
     const bool shoulder = prompt.button == PromptButton::L1 || prompt.button == PromptButton::R1;
     if (built && device == PromptDevice::Steam) {
@@ -692,7 +679,6 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         }
     }
     if (built && shoulder && device != PromptDevice::Keyboard) {
-        // the shoulder button by the pad's own name: L1 and R1 on PlayStation pads, LB and RB on Xbox pads, L and R on Nintendo pads
         const bool left = prompt.button == PromptButton::L1;
         const char* name = device == PromptDevice::PlayStation ? (left ? "L1" : "R1") : device == PromptDevice::Nintendo ? (left ? "L" : "R")
                                                                                                                       : (left ? "LB" : "RB");
@@ -706,8 +692,6 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         if (dpad) {
             return original;
         }
-        // by position, with the letter SDL gives that position on the pad (south: A on Xbox pads, B on Nintendo pads; the Xbox letters
-        // where SDL has none), and the start button as the Xbox menu button or the Nintendo plus
         const int face = prompt.button == PromptButton::Cross ? 0 : prompt.button == PromptButton::Circle ? 1 : prompt.button == PromptButton::Square ? 2
                          : prompt.button == PromptButton::Triangle ? 3 : -1;
         if (face < 0) {
@@ -717,7 +701,6 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         const char letter = style.faces[static_cast<size_t>(face)] ? style.faces[static_cast<size_t>(face)] : kXbox[face];
         return GeneratedGlyph(std::string("letter:") + letter);
     }
-    // keyboard and mouse: the keys the action is bound to, from the bindings the input reads
     if (dpad) {
         const KeyBinding* a = FirstBinding(prompt.key, true);
         const KeyBinding* b = FirstBinding(prompt.key2, true);

@@ -15,7 +15,7 @@ body:
     attributes:
       label: Port version
       description: Shown at the bottom of the PC settings page and in the first lines of pt.log.
-      placeholder: "1.0.2"
+      placeholder: "1.0.4"
     validations:
       required: true
   - type: textarea
@@ -30,6 +30,30 @@ body:
     attributes:
       label: How to make it happen
       description: The loop, where you stand, what you do. "Every time" or "once" matters.
+    validations:
+      required: true
+  - type: dropdown
+    id: api
+    attributes:
+      label: Rendering API
+      description: The Rendering API row on the Graphics page, also in the first lines of pt.log. Linux and macOS always use Vulkan, and so does every version before 1.0.4.
+      options:
+        - Vulkan
+        - DirectX 12
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: f9
+    attributes:
+      label: Did you press F9 where it happens?
+      description: |
+        If the problem shows up at a specific spot, stand there, look at it and press F9 before you quit. The game writes your
+        exact position and view into pt.log, so the bug can be checked at the same spot. Press it once per spot if there are several.
+      options:
+        - "Yes, at every spot"
+        - "No"
+        - "Not tied to a spot"
     validations:
       required: true
   - type: textarea

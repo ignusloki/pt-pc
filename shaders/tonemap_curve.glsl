@@ -1,4 +1,3 @@
-// Tonemap ps: r rsqrt(max(1/512, r)). Input is the encoded scene plus screen layers.
 vec3 ScreenTonemap(vec3 x, vec3 bloom) {
     vec3 x2 = x * x;
     vec3 r = clamp(x2 + bloom - x2 * bloom, 0.0, 1.0);

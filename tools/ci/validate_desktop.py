@@ -54,6 +54,7 @@ def main():
         run(test, build / (test + suffix), *arguments.get(test, []))
     run("native-installer", build / (setup + suffix), "--self-test", logs / "native-installer.txt")
     run("python-packaging", sys.executable, REPO / "tools/macos/test_packaging.py")
+    run("payload-index", sys.executable, REPO / "tests/payload_index_test.py")
     original = build / "liborbis-upstream"
     run("liborbis-clone", "git", "clone", "--no-checkout", "https://github.com/maxton/LibOrbisPkg.git", original)
     run("liborbis-revision", "git", "-C", original, "checkout", "--detach", LIBORBIS_REVISION)

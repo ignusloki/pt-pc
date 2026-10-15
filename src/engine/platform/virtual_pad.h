@@ -35,6 +35,8 @@ public:
     bool SetButton(int slot, std::string_view name, bool down);
     bool SetAxis(int slot, std::string_view name, float value);
     bool SetTouch(int slot, bool down, float x, float y);
+    bool SetGyro(int slot, float x, float y, float z);
+    void PumpSensors(float dt);
     bool Attached(int slot) const;
     uint32_t Id(int slot) const;
     VirtualRumble TakeRumble(int slot);
@@ -45,6 +47,9 @@ private:
         SDL_Joystick* joystick = nullptr;
         std::string kind;
         std::unique_ptr<VirtualRumble> rumble;
+        bool gyro_streaming = false;
+        float gyro[3] = {0.0f, 0.0f, 0.0f};
+        uint64_t sensor_time = 0;
     };
 
     Slot* Get(int slot);

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <optional>
 
 #include "engine/audio/dsp.h"
 #include "engine/core/log.h"
@@ -22,24 +23,15 @@ namespace {
 constexpr float kPi = 3.14159265358979f;
 constexpr float kFilmHalfHeight = 6.75f;
 constexpr double kGameFrame = 1.0 / 30.0;
-// 0xB134B0 and 0xB13610 poll the streams once a frame, so a demo starts 2 game frames after Play at the earliest; the rest is I/O.
-// The start room doors (no save) start 2 frames after the trap frame in 15 captures, 3 in 17, 4 in 5, 1 and 6 once each; the port
-// takes the median. A save being written holds the stream one more frame: the hallway exits that save (f010, 4 of 5 captures at 4,
-// one at 5) and the preface after the first-boot option screen, whose options save starts when its setout ends (2 of 2 at 4).
 /* Median of the captures: a trap's demo starts 2 to 4 frames after the trap frame, its stream still buffering (0xB16700 waits for bit 0x1000000). */
 constexpr double kStartupFrames = 3.0;
 constexpr double kSaveIoWindow = 6.0 / 30.0;
 constexpr double kFinishFrames = 2.0;
-// The audio clock (SoundSystem::RenderedFrames) moves in the output's periods (10 ms and more), not per tick: the demo clock
-// runs on game time and takes the audio's lead or lag back slowly. The error against the audio, smoothed over about 20
-// periods, is left alone within 1.5 demo frames (the periods' steps), beyond that taken back at up to 5 % of the speed; an
-// error over 6 frames (a stall of 0.1 s, the game loop drops time beyond its catch-up) moves the clock to the audio at once
 constexpr double kAudioErrorSmoothing = 0.05;
 constexpr double kAudioWindowFrames = 1.5;
 constexpr double kAudioCatchUp = 0.05;
 constexpr double kAudioResyncFrames = 6.0;
 
-// a held scenery demo's run to its frame, demo frames a tick
 constexpr double kSceneryFramesPerTick = 240.0;
 constexpr uint64_t kFunctorTakePlayer = 0x9FE662692727;
 constexpr uint64_t kFunctorReleasePlayer = 0x7CBF30BCCFC2;
@@ -85,8 +77,6 @@ constexpr uint32_t kKeyOffsetTranslation = 0x0CC3A0CD;
 constexpr uint32_t kKeyOffsetRotation = 0x3AA64CF2;
 constexpr uint32_t kKeyMeshName = 0x5366B1F9;
 constexpr uint32_t kKeyMeshOn = 0x517DBD2A;
-// 0x7708B0 (registrar 0x771C60): the simulation units of the demo model `demoObjectName` leave the world at the section start
-// (0xFAC690) and rejoin at its end (0xFAC5F0), restarting from the pose
 constexpr uint64_t kFunctorSimulation = 0x116E2D91CDAE;
 constexpr uint32_t kKeyDemoObjectName = 0x0C8D2F3D;
 constexpr const char* kPlayerParts = "/Assets/sh/parts/chara/plr/plr0_main0_def_v00.parts";
@@ -433,7 +423,6 @@ std::shared_ptr<const anim::HelpBones> DemoSystem::LoadHelpBones(const std::stri
     return help;
 }
 
-// The parts file of a demo model: its DemoData parts, else the player's own parts for the player's model.
 std::string DemoSystem::PartsPath(const PlayingDemo& demo, const std::string& model) const {
     const DemoInfo& info = *demo.info;
     if (auto it = info.model_parts.find(model); it != info.model_parts.end()) {
@@ -445,8 +434,6 @@ std::string DemoSystem::PartsPath(const PlayingDemo& demo, const std::string& mo
     return model == demo.player_model ? std::string(kPlayerParts) : std::string();
 }
 
-// The DemoStreamAnimation's helpBoneFiles, else the helpBoneFile of the model's parts (the ending's player parts and the
-// player's own model, plr0_main0_def_v00.parts).
 std::string DemoSystem::HelpBonePath(const PlayingDemo& demo, const std::string& model) const {
     const DemoInfo& info = *demo.info;
     if (auto it = info.help_bone_files.find(model); it != info.help_bone_files.end()) {
@@ -466,9 +453,6 @@ std::string DemoSystem::HelpBonePath(const PlayingDemo& demo, const std::string&
     return {};
 }
 
-// The bone simulation of a model: a .sim its parts name (any string of the file; the parts' simulation entry is not decoded),
-// else Fox_Files/<model>_s00.sim beside the model's Scenes folder, where plr0, bab0 and pab0 keep theirs (the player's
-// /Assets/sh/chara/plr/Fox_Files/plr0_main0_def_s00.sim is in ending.fpkd and plparts_normal.fpkd). Null with PT_SIM=0.
 std::shared_ptr<const anim::SimRig> DemoSystem::LoadSimRig(const std::string& parts_path, const std::string& fmdl) {
     if (!anim::SimPhysicsEnabled() || fmdl.empty()) {
         return nullptr;
@@ -514,13 +498,6 @@ std::shared_ptr<const anim::SimRig> DemoSystem::LoadSimRig(const std::string& pa
     return rig;
 }
 
-// First-person demos animate the player's own body (plr0 from plr0_main0_def_v00.parts), one model the original keeps
-// for the whole game. Its mesh groups start hidden as the parts' invisibleMeshNames list them (MESH_arm, the headless
-// first-person jacket and arms); the mesh functor 0xBFA41F9E6521 and VisibleMesh events show or hide groups, and a group is
-// drawn only when neither it nor a parent group is hidden (SetPlayerMeshVisible). The body is drawn only in demos whose
-// mesh functor made the model visible: gc_p00_020 and gc_p00_030 show MESH_arm and hide MESH_ROOT, the parent of the head,
-// hair and third-person body. The captures show no part of the head or hair in the other first-person demos (gc_p00_022 in
-// explore_boot_rb 2920 to 3150, gc_p00_010 in floor_f060 1140 to 1220).
 void DemoSystem::LoadPlayerParts() {
     if (player_parts_loaded_) {
         return;
@@ -570,10 +547,6 @@ std::shared_ptr<const anim::SimRig> DemoSystem::PlayerSimRig() {
     return LoadSimRig(kPlayerParts, player_model_file_);
 }
 
-// Show (0xCD1930 from the functor, 0xCD1600 from VisibleMesh) clears a group's own hidden bit, hide (0xCD1FD0, 0xCD1C50) sets
-// it; their tail ORs every group's flags with its parent's, so a hidden group hides its children (HiddenMeshes). Only the
-// functor's handler 0x945620 also clears the model's hide bits; VisibleMesh (0x786EE0) changes the group lists alone, so
-// gc_p07_030's VisibleMesh of MESH_head_a (the hair, under MESH_head and MESH_ROOT) draws nothing.
 void DemoSystem::SetPlayerMeshVisible(PlayingDemo& demo, uint64_t mesh, bool visible, bool functor) {
     LoadPlayerParts();
     mesh &= kStrCode64Mask;
@@ -600,7 +573,6 @@ bool DemoSystem::Play(std::string_view demo_id) {
         LogWarn("demo: {} has no DemoData", demo_id);
         return false;
     }
-    // the Archive's cutscenes (archive.h): a demo played opens its entry
     game_.NoteArchive("demo:" + std::string(demo_id));
     PlayingDemo demo;
     demo.demo_id = std::string(demo_id);
@@ -622,7 +594,6 @@ bool DemoSystem::Play(std::string_view demo_id) {
             demo.player_model = c.model;
         }
     }
-    // 0x798D40: the demo camera copies the game camera (the lens the renderer last used, exposure from the floor lighting row of 0x912F40)
     DemoCameraParams& cam = demo.camera_params;
     cam.focus_distance = game_focus_distance_;
     cam.aperture = game_aperture_;
@@ -730,6 +701,43 @@ void DemoSystem::Skip(std::string_view demo_id) {
     }
 }
 
+bool DemoSystem::SkipToEnd(std::string_view demo_id, float fade_seconds) {
+    for (PlayingDemo& demo : playing_) {
+        if (demo.demo_id != demo_id || demo.finished || demo.skip_requested) continue;
+        std::optional<glm::vec4> color;
+        uint64_t fade = 0;
+        if (demo.stream) {
+            const auto& events = demo.stream->events;
+            for (size_t i = demo.next_event; i < events.size(); ++i) {
+                const anim::StreamEvent& e = *events[i];
+                if (e.type != anim::kEventExecCommand) continue;
+                if (e.functor == kFunctorFadeColor) {
+                    color = glm::clamp(ParamVector(e, kKeyColor, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), 1.0f), 0.0f, 1.0f) * 255.0f;
+                } else if (e.functor == kFunctorFadeIn || e.functor == kFunctorFadeOut) {
+                    fade = e.functor;
+                }
+            }
+        }
+        if (color) {
+            game_.Effects().SetFadeColor(static_cast<int>(color->r + 0.5f), static_cast<int>(color->g + 0.5f), static_cast<int>(color->b + 0.5f),
+                                         static_cast<int>(color->a + 0.5f));
+        }
+        if (fade == kFunctorFadeOut) {
+            game_.Effects().CallFadeOut(fade_seconds);
+        } else if (fade == kFunctorFadeIn) {
+            game_.Effects().CallFadeIn(fade_seconds);
+        }
+        if (demo.demo_id == "gc_p06_010_final" && game_.Effects().caption_id == kEndingCaption) {
+            game_.Effects().caption_time = static_cast<float>(static_cast<double>(demo.length_frames) / kDemoFramesPerSecond);
+        }
+        LogInfo("demo: {} skipped to its end at frame {:.1f} of {} (fade {}{})", demo.demo_id, demo.frame, demo.length_frames,
+                fade == kFunctorFadeOut ? "out" : fade == kFunctorFadeIn ? "in" : "kept", color ? ", colour of its end" : "");
+        Skip(demo_id);
+        return true;
+    }
+    return false;
+}
+
 bool DemoSystem::IsPlaying(std::string_view demo_id) const {
     for (const PlayingDemo& demo : playing_) {
         if (demo.demo_id == demo_id && !demo.finished) {
@@ -773,8 +781,6 @@ void DemoSystem::Start(PlayingDemo& demo) {
     if (demo.stream && !demo.stream->sound_wem.empty() && game_.Audio() && !demo.Held()) {
         demo.sound_id = game_.Audio()->PlayStream(demo.stream->sound_wem, nullptr);
         demo.sound_started = true;
-        // 0xB171F0 hands a demo on another's clock its time (the parent's minus the event frame) for the sound object too (+0x68 bit
-        // 0x20, +0x70), so its audio plays at the parent's time, not from its start
         double synced = 0.0;
         if (!demo.sync_parent.empty()) {
             const auto parent = std::find_if(playing_.begin(), playing_.end(), [&](const PlayingDemo& p) { return p.demo_id == demo.sync_parent; });
@@ -853,7 +859,6 @@ void DemoSystem::Update(float dt) {
             }
         }
         if (demo.end_reached) {
-            // 0x108A4F0, 0xB12F70: the streams end a game frame after the clock, state 3 (0xB13DD0) finishes in the next
             demo.finish_wait += step;
             if (demo.finish_wait + 1e-4 < kFinishFrames * kGameFrame) {
                 continue;
@@ -862,8 +867,6 @@ void DemoSystem::Update(float dt) {
             continue;
         }
         if (!demo.started) {
-            // 0xB134B0, 0xB13610: states 0 and 1 wait for the streams, the start comes three game frames after the request, four when
-            // a save was requested in the 6 frames before the third
             demo.startup += step;
             if (demo.startup + 1e-4 < demo.startup_frames * kGameFrame) {
                 continue;
@@ -878,13 +881,11 @@ void DemoSystem::Update(float dt) {
             }
             Start(demo);
         } else if (demo.Held()) {
-            // scenery: fast to the held frame (its events run as in play), then the clock stops there
             if (demo.frame + 1e-6 >= demo.hold_frame) {
                 continue;
             }
             demo.frame = std::min(demo.hold_frame, demo.frame + kSceneryFramesPerTick);
         } else if (demo.advance_wait + 1e-4 < kGameFrame) {
-            // 0xB13B80: state 2 advances the clock from the game frame after the start
             demo.advance_wait += step;
             if (demo.advance_wait + 1e-4 < kGameFrame) {
                 continue;
@@ -916,8 +917,6 @@ void DemoSystem::Update(float dt) {
             }
         }
         if (!demo.sync_parent.empty()) {
-            // 0xB171F0: the synced player takes its time from the parent's player minus the offset whenever that is positive, and
-            // does not run its own clock (0xB16550 registers none while +0x288 is set), audio included
             const auto parent = std::find_if(playing_.begin(), playing_.end(), [&](const PlayingDemo& p) { return p.demo_id == demo.sync_parent; });
             if (parent != playing_.end() && !parent->finished && parent->frame - demo.sync_offset > 0.0) {
                 demo.frame = parent->frame - demo.sync_offset;
@@ -959,7 +958,6 @@ void DemoSystem::Update(float dt) {
 }
 
 const DemoCameraParams* DemoSystem::DofLens() const {
-    // the newest sample at least one original frame old (two port ticks)
     for (const LensSample& s : lens_history_) {
         if (s.age + 1.0e-4 >= kGameFrame) {
             return s.valid ? &s.params : nullptr;
@@ -982,7 +980,6 @@ void DemoSystem::RunEvents(PlayingDemo& demo) {
         ++demo.next_event;
         due.push_back(&e);
     }
-    // functor priorities of the registrars: effect kill 0x775CD0 400, effect create 0x775F30 300, the rest 0
     static const uint64_t kEffectCreate = Code("FxEffectCreateEventFunctor");
     auto priority = [&](const anim::StreamEvent* e) {
         if (e->type != anim::kEventExecCommand) {
@@ -1060,10 +1057,6 @@ std::string DemoSystem::ModelPath(const PlayingDemo& demo, const std::string& mo
     return event_path;
 }
 
-// DemoData fileParams belong to their demo: gc_p04_290 (f100) maps fxsd_sh_ene_fs01_f070.vfx to fxsd_sh_man_fs_f100.vfx while
-// gc_p04_280 (f070) keeps it, so through the shared names gc_p04_280 played a man's footsteps from f100 (Play_man_fs_f100_01,
-// 11.9 s) behind the player where floor_f070 has Lisa's (Play_ene_fs_f070_01, 8.9 s, at 2307 on the rear channels while she
-// still stands at the railing in gc_p04_120); gc_p01_010 and gc_p01_020 map fxsd_sh_dooropn01.vfx to door_open01 and 02
 std::string DemoSystem::FilePath(const PlayingDemo& demo, uint64_t code) const {
     if (demo.info) {
         for (const auto& [key, path] : demo.info->file_params) {
@@ -1102,9 +1095,6 @@ DemoSystem::ModelSource DemoSystem::ResolveModel(const PlayingDemo& demo, const 
     source.fmdl = ModelPath(demo, name, event_path);
     source.drawn = owned && !source.fmdl.empty();
     if (skinned && name == demo.player_model) {
-        // 0x786A70: a CreateModel whose name is a DemoControlCharacterDesc binds that character's own model (0x7920E0) and
-        // does not load modelFiles, which gc_p00_022 fills with plr0_main0_def.fmdl and the other first-person demos leave
-        // empty. 0x945620 acts on the same model, which exists before the demo: gc_p00_020 shows MESH_arm before its model event
         LoadPlayerParts();
         source.player_own = !player_model_file_.empty();
         source.fmdl = player_model_file_;
@@ -1113,10 +1103,6 @@ DemoSystem::ModelSource DemoSystem::ResolveModel(const PlayingDemo& demo, const 
     return source;
 }
 
-// States 0 and 1 (0xB134B0, 0xB13610) hold a demo until its streams are ready, the models of a resident demo are in memory with
-// its package and the player's own model exists before any demo. The port builds a model at its first use, so the models of the
-// stream's CreateModel events are built here, before the start: building plr0 at gc_p00_022's frame 0 stalled the first boot for
-// 0.68 s while its frame 0 fade in ran.
 void DemoSystem::PreloadModels(PlayingDemo& demo) {
     if (!demo.stream) {
         return;
@@ -1206,7 +1192,6 @@ void DemoSystem::CreateModel(PlayingDemo& demo, const anim::StreamEvent& e) {
 void DemoSystem::RunEvent(PlayingDemo& demo, const anim::StreamEvent& e) {
     switch (e.type) {
     case anim::kEventExecCommand: {
-        // 0xB20960: footer flag 2 marks a skip event, run only when the demo is skipped before its frame (0xB212A0, 0xB21570)
         if (e.footer_flags & 2) {
             demo.skip_events.push_back(&e);
             break;
@@ -1224,8 +1209,6 @@ void DemoSystem::RunEvent(PlayingDemo& demo, const anim::StreamEvent& e) {
     case anim::kEventDeleteCamera:
         UpdateCamera(demo);
         demo.camera_created = false;
-        // 0x79A910 (from 0x793AB0) disables a deleted camera at once only when its body is not the current one; the current body's
-        // camera gets +0xb1 instead, and the camera selector (0x7DF8B0) draws it in this frame and disables it after that
         demo.camera_linger = demo.camera_valid ? kGameFrame : 0.0;
         if (!demo.player_taken) {
             HandCameraBack(demo);
@@ -1287,7 +1270,6 @@ void DemoSystem::RunEvent(PlayingDemo& demo, const anim::StreamEvent& e) {
 void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float t, bool first) {
     const uint64_t f = e.functor;
     if (demo.Held()) {
-        // scenery: no messages, player, sounds, fades, texts, captions or handy light (PlayingDemo::hold_frame)
         static const uint64_t ui_create = Code("DemoUiFunctor_Create");
         static const uint64_t ui_start = Code("DemoUiFunctor_Start");
         if (f == kFunctorMessage || f == kFunctorTakePlayer || f == kFunctorReleasePlayer || f == kFunctorPostSound ||
@@ -1302,7 +1284,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
     auto camera_value = [&](uint32_t key, float& target, uint32_t bit) {
         const anim::ExecParam* p = e.Param(key);
         if ((e.footer_flags & 8) && p && p->interpolated) {
-            // 0xB2CD90, 0xB36270: footer flag 8 starts the blend at the camera's value (start getters of 0x78D610), not the stored start
             auto [it, inserted] = demo.start_values.try_emplace({&e, key}, target);
             if (first) {
                 it->second = target;
@@ -1322,8 +1303,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             return;
         }
         if (name == "FinishMotion") {
-            // one FinishMotion a play: the data's stands for the runtime one (demo.md Playback), which ran every FinishMotion script
-            // a second time 3.5 frames later, so gc_p05_010 rang a second bell sequence 115 ms behind the first on f160
             demo.finish_motion_sent = true;
         }
         Notify(demo, name);
@@ -1332,7 +1311,14 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
     if (f == kFunctorTakePlayer) {
         if (first && !demo.player_model.empty() && !demo.player_taken && !demo.player_released) {
             demo.player_taken = true;
-            LogInfo("demo: {} takes the player ({}) at frame {:.1f}", demo.demo_id, demo.player_model, demo.frame);
+            const Player& player = game_.GetPlayer();
+            const glm::vec3 local = glm::inverse(demo.rotation) * (player.Feet() - demo.translation);
+            glm::vec3 root(0.0f);
+            glm::quat root_rotation(1.0f, 0.0f, 0.0f, 0.0f);
+            const bool has_root = PlayerRootWorld(demo, root, root_rotation);
+            LogInfo("demo: {} takes the player ({}) at frame {:.1f}: feet in demo space ({:.4f} {:.4f} {:.4f}) fox yaw {:.2f}, jump to the root {:.4f} m",
+                    demo.demo_id, demo.player_model, demo.frame, local.x, local.y, local.z,
+                    glm::degrees(std::remainder(player.BodyFoxYaw() - FoxYawOf(demo.rotation), 2.0f * glm::pi<float>())), has_root ? glm::length(root - player.Feet()) : -1.0f);
         }
         return;
     }
@@ -1407,11 +1393,9 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
     } else if (f == kFunctorBlurRate) {
         game_.Effects().blur_blend_rate = Param(e, kKeyBlendRate, game_.Effects().blur_blend_rate, t);
     } else if (f == kFunctorFilmGrain) {
-        // 0x931480: film grain strength, FilmGrain *(0x1C91C38) +0x38 clamped to [0, 1]
         ScreenEffects& fx = game_.Effects();
         fx.film_grain_strength = std::clamp(Param(e, kKeyFilmGrain, fx.film_grain_strength, t), 0.0f, 1.0f);
     } else if (f == kFunctorBandingCancellerOn || f == kFunctorBandingCancellerOff) {
-        // 0x9312C0: ShColourBandingCanceller *(0x1C913A8) +0x78
         if (first) {
             game_.Effects().colour_banding_canceller = f == kFunctorBandingCancellerOn;
             LogInfo("demo: {} colour banding canceller {} at frame {}", demo.demo_id, f == kFunctorBandingCancellerOn ? "on" : "off", e.Start());
@@ -1452,7 +1436,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
                 const uint64_t locator = e.String(kKeyLocatorName);
                 auto it = string_names_.find(locator);
                 light->locator = it != string_names_.end() ? it->second : std::string();
-                // 0xB285A0: the end of a CreateLight section removes the light (0xB244C0, 0xB122A0)
                 light->end_frame = e.End() > e.Start() ? e.End() : -1;
             } else if (f == lf.color) {
                 light->color = ParamVector(e, kKeyColor, light->color, t);
@@ -1499,7 +1482,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
         static const uint64_t kUiCreate = Code("DemoUiFunctor_Create");
         static const uint64_t kUiStart = Code("DemoUiFunctor_Start");
         if (f == kFunctorSimulation) {
-            // applied by SimulateModel over the event's section
             if (first) {
                 LogInfo("demo: {} physics of {:#x} off from frame {} to {}", demo.demo_id, e.String(kKeyDemoObjectName) & kStrCode64Mask, e.Start(), e.End());
             }
@@ -1511,8 +1493,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             }
             return;
         }
-        // 0x9459B0: the player's handy light (player command 0x3B841BD55DF5) vf+0x10 SetEnable, vf+0x20 SetLumen, as the
-        // Lua command SetHandyLight; gc_p00_030 turns the flashlight on at frame 228 when the player picks it up
         if (f == kFunctorHandyLightOn || f == kFunctorHandyLightOff || f == kFunctorHandyLightLumen) {
             if (!first) {
                 return;
@@ -1529,7 +1509,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             LogInfo("demo: {} handy light {} (lumen {}) at frame {}", demo.demo_id, light.enable ? "on" : "off", light.lumen, e.Start());
             return;
         }
-        // 0x797650: starts another demo by name (gc_p02_080, the f120 bug screen, runs gc_p02_060, gc_p02_070 and gc_p02_100)
         if (f == kFunctorPlayDemo) {
             if (!first) {
                 return;
@@ -1544,8 +1523,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             }
             return;
         }
-        // 0x857C20: subtitle message msgId on the track of key (empty: the default track), white unless enableTextColorChange;
-        // the preface texts and the ending's teaser note
         if (f == kFunctorSubtitle) {
             if (first) {
                 const uint32_t message = static_cast<uint32_t>(e.String(kKeyMessageId));
@@ -1591,14 +1568,11 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             effect->file = e.String(kKeyEffectFile);
             effect->file_path = FilePath(demo, effect->file);
             if (demo.Held() && effect->file_path.find("/filter/") != std::string::npos) {
-                // the screen filters (the white fades of fx_sh_filfad*) are not scenery
                 demo.effects.pop_back();
                 return;
             }
             effect->position = glm::vec3(e.Vector(kKeyPosition, glm::vec4(effect->position, 0.0f)));
             effect->rotation = glm::vec3(e.Vector(kKeyEffectRotation, glm::vec4(effect->rotation, 0.0f)));
-            // any effect with an FxSoundCallProgramEffectNode posts its event when the instance starts, not only the fxsd files:
-            // fx_sh_viwdis01_s1 (gc_p02_060, the f120 screen glitch) loops Play_sfx_bug_loop_01 until gc_p02_060 kills it
             std::string sound;
             if (!effect->file_path.empty()) {
                 if (auto bytes = game_.GetVfs().ReadFile(effect->file_path)) {
@@ -1625,7 +1599,6 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             }
             return;
         }
-        // 0x7858A0: offset of an effect connected to a null, translation then rotation in degrees (0xB10360 flags 8 and 0x10)
         if (f == kFunctorEffectOffset) {
             if (DemoEffect* effect = first ? FindEffect(demo, e.String(kKeyInstanceName)) : nullptr) {
                 const glm::vec3 r = glm::radians(glm::vec3(e.Vector(kKeyOffsetRotation)));
@@ -1828,10 +1801,6 @@ void DemoSystem::UpdateActors(PlayingDemo& demo) {
     }
 }
 
-// The model's bone simulation in world space, stepped by the demo time that passed (the stream does not animate the simulated
-// bones: the ending's plr0 stream has 91 of its 191 bones). The physics functor's sections take the units out of the world: the
-// bones follow the animation (rigid on their parents) and the simulation restarts from the pose at the section end, as after
-// a jump of the clock (a loop or a skip back).
 void DemoSystem::SimulateModel(PlayingDemo& demo, DemoModel& m) {
     if (!m.sim_rig || !m.skeleton) {
         return;
@@ -1868,11 +1837,8 @@ void DemoSystem::UpdateCamera(PlayingDemo& demo) {
     }
     const DemoStreamData& stream = *demo.stream;
     if (demo.frame <= 0.0 && !demo.camera_seen) {
-        // the demo camera takes over after the demo clock's first advance, as in the original: the key at frame 0 can be the authoring
-        // pose (gc_p00_022: (0, 1, 7) with a 48 mm lens, the shot starts at frame 1), which put the camera and the listener in the
-        // passage for one tick at the first boot; explore_boot_rb goes from the player camera straight to the frame 1 pose
         demo.camera_valid = false;
-        demo.blend_from = game_.GetPlayer().MakeCamera();
+        demo.blend_from = game_.PlayerViewCamera();
         demo.blend_from_set = true;
         return;
     }
@@ -1890,7 +1856,7 @@ void DemoSystem::UpdateCamera(PlayingDemo& demo) {
     const glm::quat world_rotation = glm::normalize(demo.rotation * rotation);
     const glm::vec3 world_position = demo.translation + demo.rotation * translation;
     if (!demo.camera_valid && demo.info->camera_interp_type != 0 && demo.info->camera_interp_frames > 0) {
-        const Camera game_camera = !demo.camera_seen && demo.blend_from_set ? demo.blend_from : game_.GetPlayer().MakeCamera();
+        const Camera game_camera = !demo.camera_seen && demo.blend_from_set ? demo.blend_from : game_.PlayerViewCamera();
         demo.blend_active = true;
         demo.blend_start = static_cast<int32_t>(demo.frame);
         demo.blend_frames = demo.info->camera_interp_frames;
@@ -1957,11 +1923,10 @@ void DemoSystem::UpdatePlayer(PlayingDemo& demo) {
     glm::vec3 position;
     glm::quat rotation;
     if (PlayerRootWorld(demo, position, rotation)) {
-        game_.GetPlayer().Warp(position, FoxYawOf(rotation));
+        game_.GetPlayer().DemoWarp(position, FoxYawOf(rotation));
     }
 }
 
-// 0x914800: the demo model's transform at the functor frame
 void DemoSystem::ReleasePlayer(PlayingDemo& demo, const char* reason, double functor_frame) {
     if (!demo.player_taken || demo.player_released) {
         return;
@@ -1981,7 +1946,7 @@ void DemoSystem::ReleasePlayer(PlayingDemo& demo, const char* reason, double fun
         placed = PlayerRootWorld(demo, position, rotation);
     }
     if (placed) {
-        game_.GetPlayer().Warp(position, FoxYawOf(rotation));
+        game_.GetPlayer().DemoWarp(position, FoxYawOf(rotation));
         LogInfo("demo: {} releases the player ({}) at frame {:.1f}: ({:.3f} {:.3f} {:.3f}) fox yaw {:.1f}", demo.demo_id, reason, demo.frame,
                 position.x, position.y, position.z, glm::degrees(FoxYawOf(rotation)));
     } else {
@@ -2042,9 +2007,6 @@ const PlayingDemo* DemoSystem::ActiveCamera() const {
     return nullptr;
 }
 
-// The camera selector (0x7DF8B0) renders the first enabled camera and, with none enabled, leaves the view's camera as it was. While a
-// demo holds the player, his camera is not the one on screen: explore_boot_rb keeps gc_p00_022's last camera, rolled 72 degrees, until
-// gc_p00_020's (3148-3166), and floor_f060 keeps gc_p00_030's last camera until the player is released two frames after it (2777-2778).
 void DemoSystem::UpdateShownCamera() {
     if (const PlayingDemo* active = ActiveCamera()) {
         shown_camera_.valid = true;
@@ -2096,7 +2058,6 @@ bool DemoSystem::CameraOverride(Camera& camera) const {
     YawPitch(rotation, camera.yaw, camera.pitch);
     camera.fov_y = fov_y;
     camera.near_plane = 0.05f;
-    // a demo camera copies the game camera's clip distances at creation (0x798D40) unless its farClip functor ran
     if (const DemoCameraParams* params = CameraParams(); params && (params->set_mask & (1u << 9))) {
         camera.far_plane = params->far_clip;
     }
@@ -2151,9 +2112,6 @@ void DemoSystem::StartEffectSound(DemoEffect& effect) {
             effect.null_locator.empty() ? "" : " following " + effect.null_locator);
 }
 
-// 0xB6E0F0, the sound node's instance release when its effect instance goes (the kill functor 0x62B47A5B81EC removes it at once
-// through the kill queue of 0xB5B4D0 and 0xB5B7F0): a sound still playing is stopped with the node's fade and curve when flag bit 2 is
-// set (0x37CD447C), else soundStop is posted on the node's object when set, else it plays out
 void DemoSystem::EndEffectSound(DemoEffect& effect) {
     effect.sound_pending = false;
     if (!effect.sound_object) {

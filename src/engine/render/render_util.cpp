@@ -3,112 +3,56 @@
 #include "engine/render/pipeline_cache_store.h"
 
 #include <cstddef>
+#include <cstring>
+#include <iterator>
 
 #include "engine/core/log.h"
 #include "engine/render/mesh.h"
+#include "engine/render/vk/vk_command_list.h"
 
 namespace pt {
 
 bool g_checkpoints = false;
 
-namespace {
-
-bool ReadOnlyLayout(VkImageLayout layout) {
-    return layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL ||
-           layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL || layout == VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
-}
-
-}
-
 void UseTargets(VkCommandBuffer cmd, std::initializer_list<TargetUse> uses) {
-    VkImageMemoryBarrier2 barriers[16];
-    uint32_t count = 0;
+    gpu::TargetUse fixed[32];
+    std::vector<gpu::TargetUse> more;
+    gpu::TargetUse* converted = fixed;
+    if (uses.size() > std::size(fixed)) {
+        more.resize(uses.size());
+        converted = more.data();
+    }
+    size_t count = 0;
     for (const TargetUse& use : uses) {
-        if (!use.target || !use.target->Valid() || count == std::size(barriers)) {
-            continue;
-        }
-        // Read to read needs no barrier: the transition into this layout already made the image's last write visible to later commands.
-        if (use.target->layout == use.layout && ReadOnlyLayout(use.layout)) {
-            continue;
-        }
-        VkImageMemoryBarrier2& b = barriers[count++];
-        b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-        b.oldLayout = use.target->layout;
-        b.newLayout = use.layout;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = use.target->image.image;
-        b.subresourceRange = {use.target->aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
-        use.target->layout = use.layout;
+        converted[count++] = {use.target, gpu::vk::FromNative(use.layout)};
     }
-    if (count == 0) {
-        return;
-    }
-    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.imageMemoryBarrierCount = count;
-    dependency.pImageMemoryBarriers = barriers;
-    vkCmdPipelineBarrier2(cmd, &dependency);
+    gpu::vk::CommandList(cmd).UseTargets(std::span<const gpu::TargetUse>(converted, count));
 }
 
 void BeginLabel(VkCommandBuffer cmd, const char* name) {
-    // the labels are string literals, so the pointer lasts: a lost device reports the last ones the GPU reached
-    if (g_checkpoints && vkCmdSetCheckpointNV) {
-        vkCmdSetCheckpointNV(cmd, name);
-    }
-    if (vkCmdBeginDebugUtilsLabelEXT) {
-        VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
-        label.pLabelName = name;
-        vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
-    }
+    gpu::vk::CommandList(cmd).BeginLabel(name);
 }
 
 void EndLabel(VkCommandBuffer cmd) {
-    if (vkCmdEndDebugUtilsLabelEXT) {
-        vkCmdEndDebugUtilsLabelEXT(cmd);
-    }
+    gpu::vk::CommandList(cmd).EndLabel();
 }
 
 void SetViewport(VkCommandBuffer cmd, VkRect2D area) {
-    VkViewport viewport{static_cast<float>(area.offset.x), static_cast<float>(area.offset.y), static_cast<float>(area.extent.width),
-                        static_cast<float>(area.extent.height), 0.0f, 1.0f};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &area);
+    gpu::vk::CommandList(cmd).SetViewport({{area.offset.x, area.offset.y}, {area.extent.width, area.extent.height}});
 }
 
 void BeginPass(VkCommandBuffer cmd, VkRect2D area, std::span<const ColorOutput> colors, RenderTarget* depth, bool depth_read_only, bool clear_depth) {
-    VkRenderingAttachmentInfo attachments[8];
-    uint32_t count = 0;
+    gpu::ColorOutput converted[8];
+    size_t count = 0;
     for (const ColorOutput& c : colors) {
-        VkRenderingAttachmentInfo& a = attachments[count++];
-        a = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        a.imageView = c.target->image.view;
-        a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        a.loadOp = c.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : c.discard ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
-        a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        a.clearValue.color = c.clear_value;
+        gpu::ColorOutput& out = converted[count++];
+        out.target = c.target;
+        out.clear = c.clear;
+        static_assert(sizeof(out.clear_value) == sizeof(c.clear_value));
+        std::memcpy(&out.clear_value, &c.clear_value, sizeof(c.clear_value));
     }
-    VkRenderingAttachmentInfo depth_info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    if (depth) {
-        depth_info.imageView = depth->image.view;
-        depth_info.imageLayout = depth_read_only ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth_info.loadOp = clear_depth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        depth_info.storeOp = depth_read_only ? VK_ATTACHMENT_STORE_OP_NONE : VK_ATTACHMENT_STORE_OP_STORE;
-        depth_info.clearValue.depthStencil = {0.0f, 0};
-    }
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea = area;
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = count;
-    rendering.pColorAttachments = attachments;
-    rendering.pDepthAttachment = depth ? &depth_info : nullptr;
-    vkCmdBeginRendering(cmd, &rendering);
-    SetViewport(cmd, area);
-    vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
-    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    gpu::vk::CommandList(cmd).BeginPass({{area.offset.x, area.offset.y}, {area.extent.width, area.extent.height}},
+                                        std::span<const gpu::ColorOutput>(converted, count), depth, depth_read_only, clear_depth);
 }
 
 void BeginPass(VkCommandBuffer cmd, VkExtent2D extent, std::initializer_list<ColorOutput> colors, RenderTarget* depth, bool depth_read_only,
@@ -125,6 +69,15 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
         }
         return VK_NULL_HANDLE;
     }
+    const VkPipeline pipeline = CreateGraphicsPipeline(device, desc, vert, frag);
+    vkDestroyShaderModule(device, vert, nullptr);
+    if (frag) {
+        vkDestroyShaderModule(device, frag, nullptr);
+    }
+    return pipeline;
+}
+
+VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc, VkShaderModule vert, VkShaderModule frag) {
     VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
                                                  {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -152,6 +105,13 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
         vertex_input.vertexAttributeDescriptionCount = static_cast<uint32_t>(std::size(attributes));
         vertex_input.pVertexAttributeDescriptions = attributes;
     }
+    const VkVertexInputBindingDescription custom_binding{0, desc.vertex_stride, VK_VERTEX_INPUT_RATE_VERTEX};
+    if (!desc.mesh_input && !desc.vertex_attributes.empty()) {
+        vertex_input.vertexBindingDescriptionCount = 1;
+        vertex_input.pVertexBindingDescriptions = &custom_binding;
+        vertex_input.vertexAttributeDescriptionCount = static_cast<uint32_t>(desc.vertex_attributes.size());
+        vertex_input.pVertexAttributeDescriptions = desc.vertex_attributes.data();
+    }
     VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -169,6 +129,9 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     depth.depthTestEnable = desc.depth_test ? VK_TRUE : VK_FALSE;
     depth.depthWriteEnable = desc.depth_write ? VK_TRUE : VK_FALSE;
     depth.depthCompareOp = desc.depth_compare;
+    depth.depthBoundsTestEnable = desc.depth_bounds ? VK_TRUE : VK_FALSE;
+    depth.minDepthBounds = 0.0f;
+    depth.maxDepthBounds = 1.0f;
     std::vector<VkPipelineColorBlendAttachmentState> blends(desc.colors.size());
     for (size_t i = 0; i < blends.size(); ++i) {
         VkPipelineColorBlendAttachmentState& b = blends[i];
@@ -206,8 +169,21 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
             b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
             b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             break;
+        case BlendMode::AdditiveAlpha:
+            b.blendEnable = VK_TRUE;
+            b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            break;
+        case BlendMode::Multiply:
+            b.blendEnable = VK_TRUE;
+            b.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+            b.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            break;
         case BlendMode::ProbeAccumulate:
-            // SSLighting2_SH_MultiBlend's state: colour src + dst src.a, alpha dst.a src.a (the remaining transmittance)
             b.blendEnable = VK_TRUE;
             b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
             b.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -219,10 +195,12 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     blend.attachmentCount = static_cast<uint32_t>(blends.size());
     blend.pAttachments = blends.data();
-    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_FRONT_FACE,
-                                       VK_DYNAMIC_STATE_DEPTH_BIAS};
+    VkDynamicState dynamic_states[6] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_FRONT_FACE};
+    uint32_t dynamic_count = 4;
+    if (desc.depth_bias) dynamic_states[dynamic_count++] = VK_DYNAMIC_STATE_DEPTH_BIAS;
+    if (desc.depth_bounds) dynamic_states[dynamic_count++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS;
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = desc.depth_bias ? 5u : 4u;
+    dynamic.dynamicStateCount = dynamic_count;
     dynamic.pDynamicStates = dynamic_states;
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering.colorAttachmentCount = static_cast<uint32_t>(desc.colors.size());
@@ -242,12 +220,8 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
     info.pDynamicState = &dynamic;
     info.layout = desc.layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vk::CreateGraphicsPipelinesCached(device, 1, &info, nullptr, &pipeline), desc.fragment ? desc.fragment : desc.vertex)) {
+    if (!vk::Check(vk::CreateGraphicsPipelinesCached(device, 1, &info, nullptr, &pipeline, desc.fragment ? desc.fragment : desc.vertex), desc.fragment ? desc.fragment : desc.vertex)) {
         pipeline = VK_NULL_HANDLE;
-    }
-    vkDestroyShaderModule(device, vert, nullptr);
-    if (frag) {
-        vkDestroyShaderModule(device, frag, nullptr);
     }
     return pipeline;
 }
@@ -264,7 +238,7 @@ VkPipeline CreateComputePipeline(VkDevice device, VkPipelineLayout layout, const
     info.stage.pName = "main";
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vk::CreateComputePipelinesCached(device, 1, &info, nullptr, &pipeline), shader)) {
+    if (!vk::Check(vk::CreateComputePipelinesCached(device, 1, &info, nullptr, &pipeline, shader), shader)) {
         pipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(device, module, nullptr);

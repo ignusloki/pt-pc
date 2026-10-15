@@ -1,0 +1,13 @@
+# the top banner's queue (tools/walkthrough.py notices): the start's enhanced textures screen is skipped (Return asks, Return says yes), then
+# the update notice (--fake-update), the generation's "being prepared" line, the Game+ tier asked for twice (queued once) and the "ready"
+# line of the made up generation come one after the other, each for its whole time; the log's notice lines give the order and the times
+sktap Return
+swait 6
+sktap Return
+sui subs 1 0
+sstep 15
+swait 20
+sui notice pc_gameplus_notice 2
+swait 5
+sui notice pc_gameplus_notice 2
+swait 5000

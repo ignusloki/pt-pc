@@ -64,10 +64,63 @@ std::vector<QuadSignature> RenderSmokeSeeds(const std::vector<uint8_t>& bytes,
     return Signatures(list);
 }
 
-} // namespace
+}
 
-// The extracted original fx_sh_lgthnd01_s5.vfx is supplied by the caller, never bundled with the test.
 int main(int argc, char** argv) {
+    if (argc == 3 && (std::string(argv[1]) == "--dust" || std::string(argv[1]) == "--world-dust" ||
+                      std::string(argv[1]) == "--camera-layer")) {
+        const bool wrapped = std::string(argv[1]) == "--dust";
+        const bool camera_layer = std::string(argv[1]) == "--camera-layer";
+        std::ifstream input(argv[2], std::ios::binary);
+        if (!input) return 2;
+        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+        pt::vfx::System dust;
+        dust.SetReader([&](const std::string&) -> std::optional<std::vector<uint8_t>> { return bytes; });
+        if (!dust.Spawn({1, 1}, "dust.vfx", glm::mat4(1.0f), 1)) return 2;
+        pt::vfx::ViewInfo view;
+        for (int tick = 0; tick < (camera_layer ? 2 : 120); ++tick) dust.Update(1.0f / 60.0f, view);
+        pt::vfx::RenderList before, after;
+        std::vector<pt::vfx::LightOut> lights;
+        const auto texture = [](const std::string&) { return 55u; };
+        dust.Build(view, texture, {}, {}, before, lights);
+        const auto initial_view = view;
+        view.position.x += 0.2f;
+        view.forward = glm::normalize(glm::vec3(0.15f, 0.1f, -1.0f));
+        view.right = glm::normalize(glm::cross(view.forward, glm::vec3(0, 1, 0)));
+        view.up = glm::cross(view.right, view.forward);
+        dust.Build(view, texture, {}, {}, after, lights);
+        const auto centres = [](const pt::vfx::RenderList& list) {
+            std::vector<glm::vec3> result;
+            for (const auto& q : list.quads) result.push_back(glm::vec3((q.corner[0] + q.corner[1] + q.corner[2] + q.corner[3]) * 0.25f));
+            return result;
+        };
+        auto a = centres(before), b = centres(after);
+        if (camera_layer) {
+            const auto camera_coordinates = [](const glm::vec3& p, const pt::vfx::ViewInfo& v) {
+                const glm::vec3 d = p - v.position;
+                return glm::vec3(glm::dot(d, v.right), glm::dot(d, v.up), glm::dot(d, v.forward));
+            };
+            for (auto& p : a) p = camera_coordinates(p, initial_view);
+            for (auto& p : b) p = camera_coordinates(p, view);
+        }
+        int failures = a.empty() || a.size() != b.size();
+        float worst = 0;
+        for (const auto& p : a) {
+            float closest = 1e9f;
+            for (const auto& q : b) {
+                glm::vec3 delta = q - p;
+                if (wrapped) {
+                    delta /= glm::vec3(2.0f, 2.4f, 2.0f);
+                    delta -= glm::round(delta);
+                }
+                closest = std::min(closest, glm::length(delta));
+            }
+            worst = std::max(worst, closest);
+            if (closest > 1e-4f) ++failures;
+        }
+        std::printf("dust camera movement: %zu particles, max modulo drift %.6f, %d failures\n", a.size(), worst, failures);
+        return failures ? 1 : 0;
+    }
     if (argc != 2 && argc != 3) {
         std::fprintf(stderr, "usage: pt_vfx_test <fx_sh_lgthnd01_s5.vfx> [fx_sh_smkgnd03_s5.vfx]\n");
         return 2;
@@ -101,8 +154,6 @@ int main(int argc, char** argv) {
             continue;
         }
         ++rain;
-        // Original B71F40/B72510/B72840: two screen-space layers, scale (2,2),
-        // offset starts at zero and subtracts 0.1 per second, wrapping into [0,1), here after two ticks.
         if ((q.info.y & (1u << 10)) == 0 || q.info.z != 52 ||
             std::abs(q.luminance.x - 2.0f) > 1e-5f || std::abs(q.luminance.y - 2.0f) > 1e-5f ||
             std::abs(q.luminance.z - 0.99666667f) > 1e-5f || std::abs(q.luminance.w - 0.99666667f) > 1e-5f) {
@@ -115,7 +166,6 @@ int main(int argc, char** argv) {
             std::abs(glm::dot(glm::vec2(q.rain_rotation.z, q.rain_rotation.w), glm::vec2(q.rain_rotation.z, q.rain_rotation.w)) - 1.0f) > 1e-5f) {
             ++failures;
         }
-        // B72840 pairs the fields as angle/swing, angle/swing. This asset starts at +20 and -20 degrees.
         if (q.rain_rotation.x < 0.3f || q.rain_rotation.z > -0.3f) {
             ++failures;
         }
@@ -169,7 +219,6 @@ int main(int argc, char** argv) {
                 const glm::vec3 base(ambient.quads[i].color);
                 if (glm::length(base) > 1e-5f) {
                     ++checked;
-                    // The original smoke asset has ambientRate=1 and directionalLightRate=0.25.
                     if (glm::length(glm::vec3(directional.quads[i].color) - 2.0f * base) > 1e-5f) {
                         ++smoke_failures;
                     }

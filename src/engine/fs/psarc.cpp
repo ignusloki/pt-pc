@@ -2,10 +2,12 @@
 
 #include <zlib.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
 #include "engine/core/log.h"
+#include "engine/fs/io_stats.h"
 #include "engine/platform/os.h"
 
 namespace pt {
@@ -116,7 +118,6 @@ std::optional<std::vector<uint8_t>> Psarc::Read(std::string_view name) const {
 
 std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     const Entry& entry = entries_[index];
-    // the archive's sizes are 40 bits; no P.T. file is near 1 GB, so a larger one is a damaged table, refused with a reason
     /* TOC sizes are 40-bit and nothing in P.T. comes near 1 GB, so anything larger is a corrupt table. */
     if (entry.size > (uint64_t(1) << 30)) {
         LogError("psarc: entry {} size {} out of range, bad TOC", index, entry.size);
@@ -125,10 +126,13 @@ std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     std::vector<uint8_t> out;
     out.reserve(entry.size);
     std::vector<uint8_t> block;
+    const auto wait_start = std::chrono::steady_clock::now();
     std::lock_guard lock(mutex_);
+    const auto read_start = std::chrono::steady_clock::now();
     if (os::SeekFile(file_, static_cast<long long>(entry.offset), SEEK_SET) != 0) {
         return std::nullopt;
     }
+    IoSimulatedLatency();
     uint32_t block_index = entry.first_block;
     while (out.size() < entry.size) {
         const uint32_t stored = block_sizes_[block_index] ? block_sizes_[block_index] : block_size_;
@@ -151,6 +155,9 @@ std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
         ++block_index;
     }
     out.resize(entry.size);
+    const auto end = std::chrono::steady_clock::now();
+    IoRecord(out.size(), std::chrono::duration<double, std::milli>(end - read_start).count(),
+             std::chrono::duration<double, std::milli>(read_start - wait_start).count());
     return out;
 }
 

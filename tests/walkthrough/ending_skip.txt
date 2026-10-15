@@ -1,0 +1,19 @@
+# the ending's hold to skip (a port addition; the original has no skip button): a short press of Esc does nothing, a hold of 1.5 s
+# ends gc_p06_010_final as its end does, the finish counts (Game+, the loop browser) and the port's credits page follows
+srate 1
+swait 600
+sktap escape 30
+swait 120
+skey escape 1
+swait 60
+sshot {shots}/ending_skip_hold.png
+swait 60
+skey escape 0
+swait 60
+sshot {shots}/ending_skip_after.png
+sstep 33
+swait 30
+sexpect menu 0
+sshot {shots}/ending_skip_credits.png
+slog
+squit

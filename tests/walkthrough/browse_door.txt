@@ -1,0 +1,15 @@
+# loop browser: 01 First hallway (start room on f000) skips the opening, whose gc_p01_100 leaves the start room door ajar
+# (open_20 shown, the closed door hidden); gc_p00_160 opens it from there and hides only open_20, so the closed door must
+# not be standing when the player walks into the door's demo (it stood, and the demo walked him through it)
+sstep 15
+sloop 1
+swait 10
+sstep 15
+swait 30
+sexpect body shsb_hous001_door001_open_20 1
+sexpect body shsb_hous001_door001_close 0
+goto 0 0 12.5
+swait 10
+sexpect body shsb_hous001_door001_open_20 0
+sexpect body shsb_hous001_door001_close 0
+swait 200

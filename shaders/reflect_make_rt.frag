@@ -1,23 +1,20 @@
 #version 460
 #extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#endif
 #include "common.glsl"
 #include "rt_shadow.glsl"
 #include "reflection_mix.glsl"
 #include "reflection_depth.glsl"
 
-// Ray traced local reflections (rendering.md 12.21), the PC option over ReflectMapMake (12.16): the original march for the same
-// floor texels, and the same reflected ray traced against the TLAS (mask bit 2: the camera view's G-buffer and forward surfaces);
-// the traced hit replaces the march's hit only (see main). A hit on screen keeps the original's form (an offset to its pixel);
-// a hit off screen is shaded here (albedo, probe ambient, diffuse light with traced shadows) into the second target.
-
 layout(push_constant) uniform PassPush {
-    uvec4 ids;   // view, light count, probe count, debug (1: shaded hits red, screen hits green)
-    vec4 f0;     // world up in view space, far limit
-    vec4 f1;     // the march's virtual view size (1080 lines)
-    vec4 f2;     // 1 / map size
-    mat4 m;      // bit i: light i is hidden in the camera view
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
 } pass;
 
 layout(location = 0) in vec2 in_uv;
@@ -53,26 +50,22 @@ vec3 EvaluateSh(Probe p, vec3 n) {
     return e;
 }
 
-// The hit's colour as the composite would show it, without specular: albedo times (probe ambient as probe.frag blends it,
-// plus each light's diffuse term as lighting.glsl computes it, shadowed lights through a traced ray against the camera
-// view's casters); an emissive forward surface its colour as forward.frag draws it over black; glass and the mirror nothing
-// (w = 0: the floor keeps its own colour there)
 vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit, vec3 ray) {
     RtRecord r = rt_records[record];
-    RtIndexData ib = RtIndexData(r.indices);
-    RtVertexData vb = RtVertexData(r.vertices);
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
     uint base = r.first_index + 3u * primitive;
-    uint a = (ib.i[base] + uint(r.vertex_offset)) * 22u;
-    uint b = (ib.i[base + 1u] + uint(r.vertex_offset)) * 22u;
-    uint c = (ib.i[base + 2u] + uint(r.vertex_offset)) * 22u;
+    uint a = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u;
+    uint b = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u;
+    uint c = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u;
     vec3 w = vec3(1.0 - bary.x - bary.y, bary.x, bary.y);
-    vec2 uv = vec2(vb.v[a + 10u], vb.v[a + 11u]) * w.x + vec2(vb.v[b + 10u], vb.v[b + 11u]) * w.y + vec2(vb.v[c + 10u], vb.v[c + 11u]) * w.z;
-    vec3 n_object = vec3(vb.v[a + 3u], vb.v[a + 4u], vb.v[a + 5u]) * w.x + vec3(vb.v[b + 3u], vb.v[b + 4u], vb.v[b + 5u]) * w.y +
-                    vec3(vb.v[c + 3u], vb.v[c + 4u], vb.v[c + 5u]) * w.z;
+    vec2 uv = vec2(RT_VERTEX(vb, a + 10u), RT_VERTEX(vb, a + 11u)) * w.x + vec2(RT_VERTEX(vb, b + 10u), RT_VERTEX(vb, b + 11u)) * w.y + vec2(RT_VERTEX(vb, c + 10u), RT_VERTEX(vb, c + 11u)) * w.z;
+    vec3 n_object = vec3(RT_VERTEX(vb, a + 3u), RT_VERTEX(vb, a + 4u), RT_VERTEX(vb, a + 5u)) * w.x + vec3(RT_VERTEX(vb, b + 3u), RT_VERTEX(vb, b + 4u), RT_VERTEX(vb, b + 5u)) * w.y +
+                    vec3(RT_VERTEX(vb, c + 3u), RT_VERTEX(vb, c + 4u), RT_VERTEX(vb, c + 5u)) * w.z;
     vec3 n = normalize(mat3(to_world) * n_object);
-    vec4 tangent_object = vec4(vb.v[a + 6u], vb.v[a + 7u], vb.v[a + 8u], vb.v[a + 9u]) * w.x +
-                          vec4(vb.v[b + 6u], vb.v[b + 7u], vb.v[b + 8u], vb.v[b + 9u]) * w.y +
-                          vec4(vb.v[c + 6u], vb.v[c + 7u], vb.v[c + 8u], vb.v[c + 9u]) * w.z;
+    vec4 tangent_object = vec4(RT_VERTEX(vb, a + 6u), RT_VERTEX(vb, a + 7u), RT_VERTEX(vb, a + 8u), RT_VERTEX(vb, a + 9u)) * w.x +
+                          vec4(RT_VERTEX(vb, b + 6u), RT_VERTEX(vb, b + 7u), RT_VERTEX(vb, b + 8u), RT_VERTEX(vb, b + 9u)) * w.y +
+                          vec4(RT_VERTEX(vb, c + 6u), RT_VERTEX(vb, c + 7u), RT_VERTEX(vb, c + 8u), RT_VERTEX(vb, c + 9u)) * w.z;
     vec3 tangent = mat3(to_world) * tangent_object.xyz;
     tangent = dot(tangent, tangent) > 1.0e-12 ? normalize(tangent) : vec3(1.0, 0.0, 0.0);
     vec3 bitangent = tangent_object.w * normalize(cross(n, tangent) + vec3(0.0, 0.0, 1.0e-9));
@@ -80,27 +73,30 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
         n = -n;
     }
     Material m = materials[r.material];
+    if (pass.ids.w == 7u) {
+        return vec4(float(m.kind == 0u), float(m.kind == 2u), float(m.kind == 1u || m.kind == 3u || m.kind == 4u), 1.0);
+    }
     if (m.kind == KIND_CONSTANT || m.kind == KIND_SKY) {
-        vec4 t = textureLod(textures[nonuniformEXT(m.albedo)], uv, 2.0);
+        vec4 t = textureLod(PT_TEX2D(m.albedo), uv, 2.0);
         return vec4(min(vec3(32.0), m.albedo_factor.rgb * t.rgb * m.params.y * v.exposure.x) * Saturate(m.albedo_factor.a * t.a), 1.0);
     }
     if (m.kind != KIND_DEFERRED) {
         return vec4(0.0);
     }
     if ((m.flags & MAT_NORMAL_MAP) != 0u) {
-        vec4 nt = textureLod(textures[nonuniformEXT(m.normal)], uv, 2.0);
+        vec4 nt = textureLod(PT_TEX2D(m.normal), uv, 2.0);
         vec2 nxy = vec2(nt.w, nt.y) * 2.0 - 1.0;
         float nz = sqrt(Saturate(1.0 - dot(nxy, nxy)) + 1.00016594e-4);
         vec3 tangent_normal = vec3(nxy, nz);
         if ((m.flags & MAT_SUB_NORMAL) != 0u) {
-            vec4 mask = textureLod(textures[nonuniformEXT(m.aux2)], uv, 2.0);
-            vec4 detail = textureLod(textures[nonuniformEXT(m.aux1)], uv * m.extra.yz, 2.0);
+            vec4 mask = textureLod(PT_TEX2D(m.aux2), uv, 2.0);
+            vec4 detail = textureLod(PT_TEX2D(m.aux1), uv * m.extra.yz, 2.0);
             float k = m.extra.x * mask.x;
             tangent_normal = normalize(vec3(nxy.x + k * (2.0 * detail.w - 1.0), nxy.y + k * (2.0 * detail.y - 1.0), nz));
         }
         n = RtMappedNormal(n, tangent, bitangent, tangent_normal);
     }
-    vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(textures[nonuniformEXT(m.albedo)], uv, 2.0).rgb;
+    vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, 2.0).rgb;
 
     vec3 ambient = vec3(0.0);
     vec3 probe_n = vec3(-n.x, -n.z, n.y);
@@ -163,7 +159,7 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
                 continue;
             }
             vec2 muv = vec2(0.5 * mc.x / mc.w + 0.5, 1.0 - (0.5 * mc.y / mc.w + 0.5));
-            mask = l.info.w > 0 ? textureLod(textures[nonuniformEXT(uint(l.info.w - 1))], muv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, muv, 0.0).rgb;
+            mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), muv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, muv, 0.0).rgb;
         }
         float vis = 1.0;
         if (l.info.x >= 0 && RtOccluded(l, hit, l.position.xyz, spot, 1u | (0x10u << 8u))) {
@@ -172,12 +168,59 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
         }
         direct += radiance * l.scales.y * ndl * vis * mask;
     }
+    if (pass.ids.w >= 3u) {
+        vec3 d = pass.ids.w == 3u ? albedo : pass.ids.w == 4u ? ambient : pass.ids.w == 5u ? direct : pass.ids.w == 6u ? n * 0.5 + 0.5
+               : vec3(float(m.kind) / 8.0, float(m.flags & 0xFFu) / 255.0, float((m.flags >> 8u) & 0xFFu) / 255.0);
+        return vec4(d, 1.0);
+    }
     return vec4(albedo * (ambient + direct), 1.0);
 }
 
+vec2 HitUv(uint record, uint primitive, vec2 bary) {
+    RtRecord r = rt_records[record];
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
+    uint base = r.first_index + 3u * primitive;
+    uint a = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u + 10u;
+    uint b = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u + 10u;
+    uint c = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u + 10u;
+    return vec2(RT_VERTEX(vb, a), RT_VERTEX(vb, a + 1u)) * (1.0 - bary.x - bary.y) + vec2(RT_VERTEX(vb, b), RT_VERTEX(vb, b + 1u)) * bary.x +
+           vec2(RT_VERTEX(vb, c), RT_VERTEX(vb, c + 1u)) * bary.y;
+}
 
-// The original march (reflect_make.frag, ReflectMapMake), unchanged: the map texel it writes, (offset to the hit's pixel,
-// confidence, 1) or 0 where it finds nothing. start, stride, scale and inv_z, inv_z_step are the march's screen line.
+vec4 TracedLayers(vec3 origin, vec3 ray, float t_end) {
+    vec3 sum = vec3(0.0);
+    float seen = 1.0;
+    float t_start = 0.0;
+    for (int k = 0; k < 4 && seen > 0.004; ++k) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, 64u, origin, t_start, ray, t_end);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) {
+            break;
+        }
+        uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        Material m = materials[rt_records[record].material];
+        if (m.kind == KIND_CONSTANT) {
+            vec2 uv = HitUv(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
+            vec4 t = textureLod(PT_TEX2D(m.albedo), uv, 2.0);
+            vec3 c = min(vec3(32.0), m.albedo_factor.rgb * t.rgb * m.params.y * v.exposure.x);
+            float a = Saturate(m.albedo_factor.a * t.a);
+            sum += seen * c * a;
+            seen *= 1.0 - a;
+        }
+        t_start = rayQueryGetIntersectionTEXT(rq, true) + 1.0e-3;
+        if (!(t_start < t_end)) {
+            break;
+        }
+    }
+    return vec4(sum, seen);
+}
+
 vec4 ScreenMarch(vec2 uv, vec3 P, vec3 R, vec2 start, vec2 stride, float scale, float inv_z, float inv_z_step, float far_limit) {
     float offset = 0.0;
     if (pass.f2.z > 0.5) {
@@ -237,10 +280,6 @@ vec4 ScreenMarch(vec2 uv, vec3 P, vec3 R, vec2 start, vec2 stride, float scale, 
     return vec4(clamp(0.5 * (best_uv - uv) + 0.5, 0.0, 1.0), confidence, 1.0);
 }
 
-// The original's confidence (ScreenMarch's fades) for an exact hit at the view space point X on the reflected ray: the march's
-// step s is where X lies on its screen line and its "travel" the line's parameter there (s * scale, 1 at P + R), so a traced
-// hit fades where and as the march's hit at that point would; no depth error term (the hit is exact). A point at or behind
-// the camera plane is out of the march's reach.
 float MarchConfidence(vec3 P, vec3 X, vec2 start, vec2 stride, float scale) {
     if (!(X.z > v.projection_param.z)) {
         return 0.0;
@@ -254,17 +293,14 @@ float MarchConfidence(vec3 P, vec3 X, vec2 start, vec2 stride, float scale) {
     return min(path_fade, min(screen_fade, ray_fade));
 }
 
-// The traced hit only replaces the march's hit. The map keeps the original's form, and everything after it (ReflectMapBlend's
-// tilt, strength, facing and edge terms, the temporal accumulation) is the original's:
-// - no hit within reach, or a surface that reflects nothing traced (glass, the mirror): the march's own texel, as without RT;
-// - a hit on screen (or the first pixel in front of it, by the march's occlusion rule): the offset to its pixel, with the
-//   march's confidence at that point (MarchConfidence);
-// - a hit off screen: shaded here, weighted by that same confidence, the march's texel keeping the rest of the weight, so the
-//   shaded colour reaches only as far as the march's hits do and fades out as they do.
-// The first version replaced the map: on screen hits without the screen length fade, off screen ones at full weight up to
-// 50 m. The floor then mirrored the lobby's lamp and window sharply in hard regions bounded by where the hits left the screen,
-// and below them, where the rays went up to the ceiling behind the camera, the floor was mixed toward that dark ceiling at full
-// strength (black, more of it the further down the view tilted) where the original keeps the floor or its own march's hit.
+bool FullFade() {
+    return pass.m[3][3] > 0.5;
+}
+
+float DistanceFade(float travel) {
+    return 1.0 - smoothstep(12.0, 30.0, travel);
+}
+
 void main() {
     v = frame.views[pass.ids.x];
     g_reflection_depth_legacy = pass.f1.z > 0.5;
@@ -273,7 +309,6 @@ void main() {
     vec2 uv = (gl_FragCoord.xy - 0.00390625) * pass.f2.xy;
     out_color = vec4(0.0);
     vec3 N = DecodeNormal(ImgLod(IMG_NORMAL, SMP_POINT_CLAMP, uv, 0.0).xyz);
-    // off the floors the original writes (1, 1, 1, 0); x and y 0 here so the blend's average offset (xy / w) takes the hits only
     if (!(abs(dot(plane, N)) >= 0.9)) {
         out_map = vec4(0.0, 0.0, 1.0, 0.0);
         return;
@@ -318,14 +353,10 @@ void main() {
     float travel = rayQueryGetIntersectionTEXT(rq, true);
     vec3 hit = origin + ray * travel;
     vec3 H = (v.view * vec4(hit, 1.0)).xyz;
-    if (H.z > v.projection_param.z && pass.ids.w != 2u) {
+    if (H.z > v.projection_param.z && pass.ids.w < 2u) {
         vec2 hit_uv = 0.5 * Project(H) + 0.5;
         vec3 X = H;
         bool unresolved = false;
-        // The screen march's occlusion rule: the reflection is the first pixel where the ray passes behind the depth buffer.
-        // When something nearer covers the traced hit on screen (the f010 corridor's hanging lamp in front of the ceiling a ray
-        // reaches beside it), the ray is walked in screen space from the floor to the hit and the first crossing is taken, as the
-        // march would. A covered hit whose walk leaves the frame first is shaded here, as an off screen one.
         if (!Outside(hit_uv) && SceneZ(hit_uv) < H.z * 0.98 - 0.02) {
             const int kSteps = 48;
             float lo = 0.0;
@@ -360,7 +391,7 @@ void main() {
             }
         }
         if (!unresolved && !Outside(hit_uv)) {
-            float confidence = MarchConfidence(P, X, start, stride, scale);
+            float confidence = FullFade() ? DistanceFade(travel) : MarchConfidence(P, X, start, stride, scale);
             out_map = vec4(clamp(0.5 * (hit_uv - uv) + 0.5, 0.0, 1.0), confidence, 1.0);
             if (pass.ids.w == 1u) {
                 out_map = march;
@@ -369,14 +400,20 @@ void main() {
             return;
         }
     }
-    // off screen: shaded here, premultiplied by its weight (the blend's bilinear lookup stays right); debug 2 shades every hit
-    // at full weight, to compare the shading with the screen
-    float weight = pass.ids.w == 2u ? 1.0 : MarchConfidence(P, H, start, stride, scale);
+    float weight = pass.ids.w >= 2u ? 1.0 : FullFade() ? DistanceFade(travel) : MarchConfidence(P, H, start, stride, scale);
     if (!(weight > 0.0)) {
         return;
     }
     vec4 color = ShadeHit(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true), rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
                           rayQueryGetIntersectionBarycentricsEXT(rq, true), rayQueryGetIntersectionObjectToWorldEXT(rq, true), hit, ray);
+    if (pass.ids.w < 3u) {
+        vec4 layers = TracedLayers(origin, ray, travel);
+        if (color.w > 0.0) {
+            color = vec4(layers.rgb + layers.a * color.rgb, 1.0);
+        } else if (layers.a < 1.0) {
+            color = vec4(layers.rgb / (1.0 - layers.a), 1.0 - layers.a);
+        }
+    }
     weight *= color.w;
     out_color = vec4(color.rgb * weight, weight);
     out_map = vec4(march.xy, march.z * (1.0 - weight), march.w);

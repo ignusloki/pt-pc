@@ -20,7 +20,8 @@ layout(push_constant) uniform UiPush {
     uint draw;
 } push;
 
-layout(set = 0, binding = 0) uniform sampler2D textures[];
+#include "bindless.glsl"
+layout(set = 0, binding = 0) uniform PT_TEXTURE2D_ARRAY textures[];
 layout(std430, set = 1, binding = 0) readonly buffer UiDraws {
     UiDraw draws[];
 };
@@ -28,10 +29,10 @@ layout(set = 1, binding = 1) uniform sampler2D scene_color;
 
 vec4 Sample(uint packed, vec2 uv) {
     uint index = packed & 0x3FFFFFFFu;
-    vec2 size = vec2(textureSize(textures[nonuniformEXT(index)], 0));
+    vec2 size = vec2(textureSize(PT_TEX2D(index), 0));
     float lod = log2(max(max(length(dFdx(uv) * size), length(dFdy(uv) * size)), 1e-6));
     if ((packed & 0xC0000000u) != 0u) {
-        vec2 half_texel = 0.5 / vec2(textureSize(textures[nonuniformEXT(index)], 0));
+        vec2 half_texel = 0.5 / vec2(textureSize(PT_TEX2D(index), 0));
         if ((packed & 0x80000000u) != 0u) {
             uv.x = clamp(uv.x, half_texel.x, 1.0 - half_texel.x);
         }
@@ -39,7 +40,7 @@ vec4 Sample(uint packed, vec2 uv) {
             uv.y = clamp(uv.y, half_texel.y, 1.0 - half_texel.y);
         }
     }
-    return textureLod(textures[nonuniformEXT(index)], uv, lod);
+    return textureLod(PT_TEX2D(index), uv, lod);
 }
 
 vec4 ShadeMaterial(UiDraw d) {
@@ -63,10 +64,6 @@ vec4 ShadeText(UiDraw d) {
     return vec4(in_color.rgb, coverage * in_color.a);
 }
 
-// Draw2D_Border, the subtitles' technique: the glyph cache at the pixel and 1.2 pixels to either side across and down (the UV's screen
-// derivatives, scaled by d.extra.z so the taps stay 1.2 pixels of the original's 1080p, each offset clamped to +-d.extra.xy, 4 texels).
-// A pixel the glyph covers at all is opaque, grey by its coverage; a pixel beside one is black with alpha (the mean of its covered
-// neighbours)^0.4. COLOR0 is not read, so the text is white.
 vec4 ShadeBorder(UiDraw d) {
     vec2 dx = dFdxFine(in_uv) * d.extra.z;
     vec2 dy = dFdyFine(in_uv) * d.extra.z;
@@ -91,7 +88,6 @@ vec3 SceneDisplay(vec2 uv, UiDraw d) {
 
 vec4 ShadeNoise(UiDraw d) {
     float phase = d.extra.x;
-    // the noise textures span the original's 16:9 frame: d.extra2.z is the window's width in such frames (0 taken as 1)
     float across = d.extra2.z > 0.0 ? d.extra2.z : 1.0;
     vec2 noise_uv = vec2((in_uv.x - 0.5) * across + 0.5, in_uv.y);
     vec4 normal = Sample(d.textures.y, vec2(phase + noise_uv.x, d.extra.y + noise_uv.y));
@@ -107,8 +103,6 @@ vec4 ShadeNoise(UiDraw d) {
 
 vec4 ShadeString(UiDraw d) {
     vec4 t = Sample(d.textures.x, d.extra.xy + in_uv);
-    // Draw2D_ShSubliminalString writes 0.1 x colour into the original's sRGB target (img f43), which stores it encoded: 0.35, a
-    // light grey hand. The UI target here holds encoded values, so the 0.1 is encoded first (it wrote 0.1 raw: near black)
     vec3 c = clamp(0.1 * in_color.rgb, 0.0, 1.0);
     vec3 encoded = mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, 12.92 * c, lessThanEqual(c, vec3(0.0031308)));
     return vec4(encoded, clamp(d.extra.w * t.a * in_color.a, 0.0, 1.0));

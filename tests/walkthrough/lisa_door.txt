@@ -1,0 +1,6 @@
+# Start room on f060: walk through the start room door into f050 loop 1 holding the stick forward the whole time. The door demo
+# gc_p00_010 drives the player but leaves his walk state alone, so Lisa (Chase, LogicControl 2 at the floor change) steps behind
+# him during the demo, as in the original (floor_f050a: her Play_ene_fs_chase_01 on the rear channels at frame 1205, before the
+# release at about 1216; her breath only 75 frames after the player stopped)
+goto 0 0 14.5
+swait 120

@@ -3,6 +3,7 @@
 #include "engine/render/pipeline_cache_store.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 #include "engine/core/log.h"
@@ -47,192 +48,135 @@ UiDrawParams UiDrawParams::FromMaterial(const std::array<uint32_t, 4>& textures,
 bool UiBatch::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
     textures_ = &textures;
-    device_ = renderer.Context().device;
-    VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (!vk::Check(vkCreateSampler(device_, &sampler_info, nullptr, &clamp_sampler_), "ui sampler")) {
+    gpu_ = &renderer.Gpu();
+    gpu::SamplerDesc sampler_info;
+    sampler_info.mag = gpu::Filter::Linear;
+    sampler_info.min = gpu::Filter::Linear;
+    sampler_info.mipmap = gpu::MipmapMode::Nearest;
+    sampler_info.address_u = gpu::AddressMode::ClampToEdge;
+    sampler_info.address_v = gpu::AddressMode::ClampToEdge;
+    sampler_info.address_w = gpu::AddressMode::ClampToEdge;
+    sampler_info.max_anisotropy = 0.0f;
+    sampler_info.max_lod = 0.0f;
+    clamp_sampler_ = gpu_->CreateSampler(sampler_info);
+    if (!clamp_sampler_) {
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[2] = {
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-    };
-    VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    set_info.bindingCount = 2;
-    set_info.pBindings = bindings;
-    if (!vk::Check(vkCreateDescriptorSetLayout(device_, &set_info, nullptr, &set_layout_), "ui set layout")) {
+    gpu::BindingLayoutDesc set_info;
+    set_info.bindings = {{0, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::Fragment},
+                         {1, gpu::BindingType::CombinedImageSampler, 1, gpu::ShaderStage::Fragment}};
+    set_layout_ = gpu_->CreateBindingLayout(set_info);
+    if (!set_layout_) {
+        LogError("ui: set layout failed");
         return false;
     }
     const uint32_t frame_count = Renderer::kFramesInFlight;
-    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame_count}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frame_count}};
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = frame_count;
-    pool_info.poolSizeCount = 2;
-    pool_info.pPoolSizes = sizes;
-    if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "ui pool")) {
+    gpu::BindingPoolDesc pool_info;
+    pool_info.sizes = {{gpu::BindingType::StorageBuffer, frame_count}, {gpu::BindingType::CombinedImageSampler, frame_count}};
+    pool_info.max_sets = frame_count;
+    pool_ = gpu_->CreateBindingPool(pool_info);
+    if (!pool_) {
+        LogError("ui: pool failed");
         return false;
     }
     frames_.resize(frame_count);
     for (FrameData& frame : frames_) {
-        if (!renderer.Context().CreateBuffer(frame.vertices, sizeof(UiVertex) * kMaxVertices, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true) ||
-            !renderer.Context().CreateBuffer(frame.draws, sizeof(UiDrawParams) * kMaxDraws, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
+        if (!gpu_->CreateBuffer({sizeof(UiVertex) * kMaxVertices, gpu::BufferUsage::VertexBuffer, true}, frame.vertices) ||
+            !gpu_->CreateBuffer({sizeof(UiDrawParams) * kMaxDraws, gpu::BufferUsage::StorageBuffer, true}, frame.draws)) {
             return false;
         }
-        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        alloc.descriptorPool = pool_;
-        alloc.descriptorSetCount = 1;
-        alloc.pSetLayouts = &set_layout_;
-        if (!vk::Check(vkAllocateDescriptorSets(device_, &alloc, &frame.set), "ui set")) {
+        frame.set = gpu_->AllocateBindingSet(pool_, set_layout_);
+        if (!frame.set) {
+            LogError("ui: set failed");
             return false;
         }
-        VkDescriptorBufferInfo buffer_info{frame.draws.buffer, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = frame.set;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &buffer_info;
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        const gpu::BufferBinding buffer_info{frame.draws.buffer};
+        const gpu::BindingWrite write{frame.set, 0, 0, gpu::BindingType::StorageBuffer, {}, {&buffer_info, 1}};
+        gpu_->WriteBindings({&write, 1});
     }
-    VkDescriptorSetLayout layouts[2] = {textures.SetLayout(), set_layout_};
-    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push)};
-    VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_info.setLayoutCount = 2;
-    layout_info.pSetLayouts = layouts;
-    layout_info.pushConstantRangeCount = 1;
-    layout_info.pPushConstantRanges = &push;
-    if (!vk::Check(vkCreatePipelineLayout(device_, &layout_info, nullptr, &layout_), "ui pipeline layout")) {
+    gpu::PipelineLayoutDesc layout_info;
+    layout_info.sets = {textures.BindingLayout(), set_layout_};
+    layout_info.push_bytes = sizeof(Push);
+    layout_info.push_stages = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
+    layout_ = gpu_->CreatePipelineLayout(layout_info);
+    if (!layout_) {
+        LogError("ui: pipeline layout failed");
         return false;
     }
     return CreatePipelines(TargetFormat());
 }
 
-VkFormat UiBatch::TargetFormat() const {
-    // the UI draws into the renderer's final image (Renderer::EndFrame's overlay)
+gpu::Format UiBatch::TargetFormat() const {
     return renderer_->FinalFormat();
 }
 
-bool UiBatch::CreatePipelines(VkFormat format) {
+bool UiBatch::CreatePipelines(gpu::Format format) {
     DestroyPipelines();
-    VkShaderModule vert = vk::LoadShaderModule(device_, "ui_sprite.vert");
-    VkShaderModule frag = vk::LoadShaderModule(device_, "ui_sprite.frag");
-    if (!vert || !frag) {
-        if (vert) {
-            vkDestroyShaderModule(device_, vert, nullptr);
-        }
-        if (frag) {
-            vkDestroyShaderModule(device_, frag, nullptr);
-        }
-        return false;
-    }
-    VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}, {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vert;
-    stages[0].pName = "main";
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = frag;
-    stages[1].pName = "main";
-    VkVertexInputBindingDescription binding{0, sizeof(UiVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attributes[] = {
-        {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(UiVertex, position)},
-        {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(UiVertex, uv)},
-        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(UiVertex, color)},
-    };
-    VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vertex_input.vertexBindingDescriptionCount = 1;
-    vertex_input.pVertexBindingDescriptions = &binding;
-    vertex_input.vertexAttributeDescriptionCount = 3;
-    vertex_input.pVertexAttributeDescriptions = attributes;
-    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    viewport.viewportCount = 1;
-    viewport.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
-    raster.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamic_states;
-    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &format;
-    bool ok = true;
+    gpu::GraphicsPipelineDesc descs[4];
     for (int i = 0; i < 4; ++i) {
         const bool additive = (i & 1) != 0;
         const bool coverage = i >= 2;
-        VkPipelineColorBlendAttachmentState blend_attachment{};
-        blend_attachment.blendEnable = VK_TRUE;
-        blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blend_attachment.dstColorBlendFactor = !additive ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
-        blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-        // the coverage variants (VR's HUD): alpha draws add their coverage, additive draws add light without covering
-        blend_attachment.srcAlphaBlendFactor = coverage && !additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
-        blend_attachment.dstAlphaBlendFactor = coverage && !additive ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
-        blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-        blend_attachment.colorWriteMask = 0xF;
-        VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        blend.attachmentCount = 1;
-        blend.pAttachments = &blend_attachment;
-        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        info.pNext = &rendering;
-        info.stageCount = 2;
-        info.pStages = stages;
-        info.pVertexInputState = &vertex_input;
-        info.pInputAssemblyState = &assembly;
-        info.pViewportState = &viewport;
-        info.pRasterizationState = &raster;
-        info.pMultisampleState = &multisample;
-        info.pColorBlendState = &blend;
-        info.pDynamicState = &dynamic;
-        info.layout = layout_;
-        ok = ok && vk::Check(vk::CreateGraphicsPipelinesCached(device_, 1, &info, nullptr, &pipelines_[i]), "ui pipeline");
+        gpu::GraphicsPipelineDesc& d = descs[i];
+        d.vertex = "ui_sprite.vert";
+        d.fragment = "ui_sprite.frag";
+        d.layout = layout_;
+        d.colors = {format};
+        d.vertex_attributes = {{gpu::Format::R32G32Sfloat, static_cast<uint32_t>(offsetof(UiVertex, position))},
+                               {gpu::Format::R32G32Sfloat, static_cast<uint32_t>(offsetof(UiVertex, uv))},
+                               {gpu::Format::R32G32B32A32Sfloat, static_cast<uint32_t>(offsetof(UiVertex, color))}};
+        d.vertex_stride = sizeof(UiVertex);
+        d.fixed_state = true;
+        d.depth_state = false;
+        d.cull = gpu::CullMode::None;
+        gpu::BlendState b;
+        b.enable = true;
+        b.src_color = gpu::BlendFactor::SrcAlpha;
+        b.dst_color = !additive ? gpu::BlendFactor::OneMinusSrcAlpha : gpu::BlendFactor::One;
+        b.color_op = gpu::BlendOp::Add;
+        b.src_alpha = coverage && !additive ? gpu::BlendFactor::One : gpu::BlendFactor::Zero;
+        b.dst_alpha = coverage && !additive ? gpu::BlendFactor::OneMinusSrcAlpha : gpu::BlendFactor::One;
+        b.alpha_op = gpu::BlendOp::Add;
+        b.write_mask = gpu::kColorMaskAll;
+        d.blend_states = {b};
     }
-    vkDestroyShaderModule(device_, vert, nullptr);
-    vkDestroyShaderModule(device_, frag, nullptr);
+    const bool ok = gpu_->CreateGraphicsPipelines(descs, pipelines_);
     pipeline_format_ = format;
     return ok;
 }
 
 void UiBatch::DestroyPipelines() {
-    for (VkPipeline& pipeline : pipelines_) {
+    for (gpu::PipelineHandle& pipeline : pipelines_) {
         if (pipeline) {
-            vkDestroyPipeline(device_, pipeline, nullptr);
-            pipeline = VK_NULL_HANDLE;
+            gpu_->DestroyPipeline(pipeline);
+            pipeline = {};
         }
     }
 }
 
 void UiBatch::Shutdown() {
-    if (!device_) {
+    if (!gpu_) {
         return;
     }
     DestroyPipelines();
     for (FrameData& frame : frames_) {
-        renderer_->Context().DestroyBuffer(frame.vertices);
-        renderer_->Context().DestroyBuffer(frame.draws);
+        gpu_->DestroyBuffer(frame.vertices);
+        gpu_->DestroyBuffer(frame.draws);
     }
     frames_.clear();
-    vkDestroyPipelineLayout(device_, layout_, nullptr);
-    vkDestroyDescriptorPool(device_, pool_, nullptr);
-    vkDestroyDescriptorSetLayout(device_, set_layout_, nullptr);
-    vkDestroySampler(device_, clamp_sampler_, nullptr);
-    device_ = VK_NULL_HANDLE;
+    gpu_->DestroyPipelineLayout(layout_);
+    gpu_->DestroyBindingPool(pool_);
+    gpu_->DestroyBindingLayout(set_layout_);
+    gpu_->DestroySampler(clamp_sampler_);
+    gpu_ = nullptr;
 }
 
-void UiBatch::Begin(VkExtent2D extent) {
+void UiBatch::Begin(gpu::Extent2D extent) {
     extent_ = extent;
     vertices_.clear();
     draws_.clear();
     commands_.clear();
+    top_first_ = UINT32_MAX;
+    uploaded_ = false;
 }
 
 void UiBatch::Draw(std::span<const UiVertex> triangles, const UiDrawParams& params, UiShade shade, UiBlend blend) {
@@ -261,52 +205,59 @@ void UiBatch::Quad(glm::vec2 min, glm::vec2 max, glm::vec2 uv_min, glm::vec2 uv_
     Draw(quad, params, shade, blend);
 }
 
-void UiBatch::Record(VkCommandBuffer cmd, VkExtent2D extent) {
-    if (commands_.empty() || !device_) {
+void UiBatch::Record(gpu::CommandList& cmd, gpu::Extent2D extent) {
+    RecordRange(cmd, extent, 0, static_cast<uint32_t>(commands_.size()), coverage_);
+}
+
+void UiBatch::RecordBelow(gpu::CommandList& cmd, gpu::Extent2D extent) {
+    RecordRange(cmd, extent, 0, std::min(top_first_, static_cast<uint32_t>(commands_.size())), coverage_);
+}
+
+void UiBatch::RecordTop(gpu::CommandList& cmd, gpu::Extent2D extent) {
+    RecordRange(cmd, extent, top_first_, static_cast<uint32_t>(commands_.size()), true);
+}
+
+void UiBatch::RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t first, uint32_t last, bool coverage) {
+    if (commands_.empty() || !gpu_ || first >= last) {
         return;
     }
-    const VkFormat format = TargetFormat();
+    const gpu::Format format = TargetFormat();
     if (format != pipeline_format_) {
-        vkDeviceWaitIdle(device_);
+        gpu_->WaitIdle();
         if (!CreatePipelines(format)) {
             return;
         }
     }
     FrameData& frame = frames_[renderer_->FrameIndex() % frames_.size()];
-    std::memcpy(frame.vertices.mapped, vertices_.data(), vertices_.size() * sizeof(UiVertex));
-    std::memcpy(frame.draws.mapped, draws_.data(), draws_.size() * sizeof(UiDrawParams));
-    vmaFlushAllocation(renderer_->Context().allocator, frame.vertices.allocation, 0, VK_WHOLE_SIZE);
-    vmaFlushAllocation(renderer_->Context().allocator, frame.draws.allocation, 0, VK_WHOLE_SIZE);
-    const VkImageView scene = renderer_->SceneColor().view;
+    if (!uploaded_) {
+        std::memcpy(frame.vertices.mapped, vertices_.data(), vertices_.size() * sizeof(UiVertex));
+        std::memcpy(frame.draws.mapped, draws_.data(), draws_.size() * sizeof(UiDrawParams));
+        gpu_->FlushMapped(frame.vertices, 0, ~0ull);
+        gpu_->FlushMapped(frame.draws, 0, ~0ull);
+        uploaded_ = true;
+    }
+    const gpu::ImageViewHandle scene = renderer_->SceneColor().view;
     if (scene != frame.scene_view) {
-        VkDescriptorImageInfo image_info{clamp_sampler_, scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = frame.set;
-        write.dstBinding = 1;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &image_info;
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        const gpu::ImageBinding image_info{scene, gpu::Layout::ShaderReadOnly, clamp_sampler_};
+        const gpu::BindingWrite write{frame.set, 1, 0, gpu::BindingType::CombinedImageSampler, {&image_info, 1}};
+        gpu_->WriteBindings({&write, 1});
         frame.scene_view = scene;
     }
-    VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-    VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-    VkDescriptorSet sets[2] = {textures_->Set(), frame.set};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &frame.vertices.buffer, &offset);
+    cmd.SetViewport({{0, 0}, extent});
+    const gpu::BindingSetHandle sets[2] = {textures_->BindingSet(), frame.set};
+    cmd.BindSets(gpu::BindPoint::Graphics, layout_, 0, sets);
+    cmd.BindVertexBuffer(frame.vertices.buffer, 0);
     int bound = -1;
-    for (const Command& command : commands_) {
-        const int pipeline = (command.blend == UiBlend::Alpha ? 0 : 1) + (coverage_ ? 2 : 0);
+    for (uint32_t i = first; i < last; ++i) {
+        const Command& command = commands_[i];
+        const int pipeline = (command.blend == UiBlend::Alpha ? 0 : 1) + (coverage ? 2 : 0);
         if (pipeline != bound) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_[pipeline]);
+            cmd.BindPipeline(gpu::BindPoint::Graphics, pipelines_[pipeline]);
             bound = pipeline;
         }
         const Push push{glm::vec2(1.0f / std::max(1u, extent.width), 1.0f / std::max(1u, extent.height)), command.draw};
-        vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-        vkCmdDraw(cmd, command.count, 1, command.first, 0);
+        cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(push), &push);
+        cmd.Draw(command.count, 1, command.first, 0);
     }
 }
 

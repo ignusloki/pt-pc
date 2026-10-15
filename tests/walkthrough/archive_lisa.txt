@@ -1,0 +1,36 @@
+# Lisa's free camera entries (the Museum's models hall, release locks, a finished profile that saw gc_p01_090 and gc_p07_030 in play,
+# pt.ini [progress] archive): the walk to the bathroom door and the catch open, the backward walk locked; each plays to its end
+# through the free camera, which starts on her and moves with the keys (W), and confirm (Enter) does not stop it
+sexpect archive lisa_bathroom_walk 1
+sexpect archive lisa_backwards 0
+sexpect archive lisa_catch 1
+sarchive lisa_bathroom_walk
+sarchiveshown 3600
+swait 600
+sshot {shots}/lisa_bathroom_walk.png
+swait 2
+skey W 1
+swait 40
+skey W 0
+sarchived 3000
+swait 10
+sexpect viewer 0
+sarchive lisa_backwards
+sarchiveshown 3600
+swait 900
+sshot {shots}/lisa_backwards.png
+swait 2
+sarchived 3000
+swait 10
+sarchive lisa_catch
+sarchiveshown 3600
+swait 200
+sshot {shots}/lisa_catch.png
+swait 2
+sktap Return
+swait 30
+sexpect viewer 1
+sarchived 3000
+swait 10
+sexpect viewer 0
+squit

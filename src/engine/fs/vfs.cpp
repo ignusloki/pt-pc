@@ -1,10 +1,12 @@
 #include "engine/fs/vfs.h"
 
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
 
 #include "engine/core/log.h"
+#include "engine/fs/io_stats.h"
 #include "engine/platform/os.h"
 #include "engine/fs/mods.h"
 
@@ -29,9 +31,6 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     return true;
 }
 
-// The installer accepts every release of P.T. (docs/installer.md) and writes what it was made from to source.txt. Data that
-// another release may lack is named here once at start, and the game keeps running: a missing package is reported again
-// where it is loaded, and subtitles fall back to English (SubtitleTable::Load).
 namespace {
 constexpr const char* kCoreArchive[] = {
     "as/sh/level/common/resident.fpk",
@@ -109,7 +108,6 @@ std::shared_ptr<FoxPackage> Vfs::LoadPackage(std::string_view path) {
             return it->second;
         }
     }
-    // a mod's copy of the package replaces it whole (docs/modding.md); without mods ReadOverride is a null check
     auto data = mods::ReadOverride(archive_path);
     if (data) {
         LogInfo("vfs: {} from a mod", archive_path);
@@ -145,6 +143,16 @@ void Vfs::UnloadPackage(std::string_view path) {
 }
 
 std::optional<std::vector<uint8_t>> Vfs::ReadFile(std::string_view path) const {
+    if (IoTraceOn()) {
+        const auto start = std::chrono::steady_clock::now();
+        auto data = ReadFileUntraced(path);
+        IoTrace("read", path, data ? data->size() : 0, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        return data;
+    }
+    return ReadFileUntraced(path);
+}
+
+std::optional<std::vector<uint8_t>> Vfs::ReadFileUntraced(std::string_view path) const {
     if (auto data = mods::ReadOverride(path)) {
         return data;
     }
@@ -161,11 +169,14 @@ std::optional<std::vector<uint8_t>> Vfs::ReadFile(std::string_view path) const {
     }
     const auto loose = game_dir_ / std::filesystem::path(ToArchivePath(path));
     if (std::filesystem::is_regular_file(loose)) {
+        const auto read_start = std::chrono::steady_clock::now();
         FILE* f = os::OpenFile(loose, "rb");
         if (f) {
+            IoSimulatedLatency();
             std::vector<uint8_t> data(static_cast<size_t>(std::filesystem::file_size(loose)));
             const size_t read = std::fread(data.data(), 1, data.size(), f);
             std::fclose(f);
+            IoRecord(read, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - read_start).count(), 0.0);
             if (read == data.size()) {
                 return data;
             }

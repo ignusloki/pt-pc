@@ -24,72 +24,77 @@ struct Push {
 };
 
 constexpr uint32_t kInitialQuads = 4096;
-// Uploads no longer wait on the GPU, so a few decoded textures per frame cost only their copy into staging memory.
-constexpr uint32_t kDecodedUploadsPerFrame = 4;
+
+uint32_t InitialQuads() {
+    static const uint32_t quads = [] {
+        const char* value = std::getenv("PT_VFX_INITIAL_QUADS");
+        const int n = value ? std::atoi(value) : 0;
+        return n > 0 ? static_cast<uint32_t>(n) : kInitialQuads;
+    }();
+    return quads;
+}
 
 struct FogBlock {
     glm::vec4 fog[8]{};
     glm::uvec4 mode{0u};
 };
 
-constexpr VkDeviceSize kFogStride = 256;
+constexpr uint64_t kFogStride = 256;
+constexpr const char* kShaders[2] = {"vfx_particle.vert", "vfx_particle.frag"};
 
-// offscreen: the effect buffer keeps the transmittance in alpha, which alpha blending multiplies by (1 - a) and the additive and
-// subtractive modes leave alone (CB_BLEND 0x65000501 of the Prim_* draws: alpha ZERO and ONE_MINUS_SRC_ALPHA)
-// scene: a draw on the HDR scene target (the forward pass's world layer, depth tested), not the effect buffer or the post chain
-VkPipelineColorBlendAttachmentState BlendState(vfx::BlendMode mode, bool offscreen, bool scene) {
-    VkPipelineColorBlendAttachmentState s{};
-    s.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | (offscreen ? VK_COLOR_COMPONENT_A_BIT : 0u);
-    s.blendEnable = VK_TRUE;
-    s.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-    s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    s.alphaBlendOp = VK_BLEND_OP_ADD;
-    s.colorBlendOp = VK_BLEND_OP_ADD;
+gpu::BlendState BlendState(vfx::BlendMode mode, bool offscreen, bool scene) {
+    using gpu::BlendFactor;
+    using gpu::BlendOp;
+    gpu::BlendState s;
+    s.write_mask = gpu::ColorComponent::R | gpu::ColorComponent::G | gpu::ColorComponent::B;
+    if (offscreen) {
+        s.write_mask |= gpu::ColorComponent::A;
+    }
+    s.enable = true;
+    s.src_alpha = BlendFactor::Zero;
+    s.dst_alpha = BlendFactor::One;
+    s.alpha_op = BlendOp::Add;
+    s.color_op = BlendOp::Add;
+    s.src_color = BlendFactor::Zero;
+    s.dst_color = BlendFactor::Zero;
     switch (mode) {
     case vfx::BlendMode::Alpha:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        s.src_color = BlendFactor::One;
+        s.dst_color = BlendFactor::OneMinusSrcAlpha;
         if (offscreen) {
-            s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            s.dst_alpha = BlendFactor::OneMinusSrcAlpha;
         } else if (scene) {
-            // on the scene target only the alpha tested liquids blend this way (VfxPass::DrawLayer); they and the opaque draws
-            // leave alpha 1 where they replace the pixel, which the handy light demodulation of a temporal upscaler
-            // (upscale_demod.frag) leaves alone: the colour there is not the G-buffer surface's (the Freezer's view blood)
-            s.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
-            s.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            s.write_mask |= gpu::ColorComponent::A;
+            s.src_alpha = BlendFactor::One;
+            s.dst_alpha = BlendFactor::OneMinusSrcAlpha;
         }
         break;
     case vfx::BlendMode::Add:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        s.src_color = BlendFactor::One;
+        s.dst_color = BlendFactor::One;
         break;
     case vfx::BlendMode::Sub:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+        s.src_color = BlendFactor::One;
+        s.dst_color = BlendFactor::One;
+        s.color_op = BlendOp::ReverseSubtract;
         break;
     case vfx::BlendMode::Mul:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        s.src_color = BlendFactor::DstColor;
+        s.dst_color = BlendFactor::Zero;
         break;
     case vfx::BlendMode::Min:
-        s.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        s.colorBlendOp = VK_BLEND_OP_MIN;
+        s.src_color = BlendFactor::One;
+        s.dst_color = BlendFactor::One;
+        s.color_op = BlendOp::Min;
         break;
     case vfx::BlendMode::Opaque:
-        s.blendEnable = VK_FALSE;
+        s.enable = false;
         if (scene) {
-            s.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
+            s.write_mask |= gpu::ColorComponent::A;
         }
         break;
     }
     return s;
-}
-
-bool Wanted(vfx::Layer layer, uint32_t layers) {
-    return (layer == vfx::Layer::Flare && (layers & 1u) != 0u) || (layer == vfx::Layer::Screen && (layers & 2u) != 0u);
 }
 
 }
@@ -98,112 +103,109 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
     renderer_ = &renderer;
     textures_ = &textures;
     vfs_ = &vfs;
-    device_ = renderer.Context().device;
-    VkDescriptorSetLayoutBinding bindings[4]{};
-    bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-    bindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    bindings[2] = {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    bindings[3] = {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 4;
-    layout_info.pBindings = bindings;
-    if (!vk::Check(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &set_layout_), "vfx set layout")) {
+    gpu_ = &renderer.Gpu();
+    gpu::BindingLayoutDesc layout;
+    layout.bindings = {{0, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::Vertex},
+                       {1, gpu::BindingType::CombinedImageSampler, 1, gpu::ShaderStage::Fragment},
+                       {2, gpu::BindingType::CombinedImageSampler, 1, gpu::ShaderStage::Fragment},
+                       {3, gpu::BindingType::UniformBuffer, 1, gpu::ShaderStage::Fragment}};
+    set_layout_ = gpu_->CreateBindingLayout(layout);
+    if (!set_layout_) {
+        LogError("vfx: set layout failed");
         return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 * Renderer::kFramesInFlight}};
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 4 * Renderer::kFramesInFlight;
-    pool_info.poolSizeCount = 3;
-    pool_info.pPoolSizes = sizes;
-    if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "vfx descriptor pool")) {
+    gpu::BindingPoolDesc pool;
+    pool.sizes = {{gpu::BindingType::StorageBuffer, 4 * Renderer::kFramesInFlight},
+                  {gpu::BindingType::CombinedImageSampler, 8 * Renderer::kFramesInFlight},
+                  {gpu::BindingType::UniformBuffer, 4 * Renderer::kFramesInFlight}};
+    pool.max_sets = 4 * Renderer::kFramesInFlight;
+    pool_ = gpu_->CreateBindingPool(pool);
+    if (!pool_) {
+        LogError("vfx: descriptor pool failed");
         return false;
     }
-    VkDescriptorSetLayout set_layouts[2] = {textures.SetLayout(), set_layout_};
-    VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push)};
-    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pl.setLayoutCount = 2;
-    pl.pSetLayouts = set_layouts;
-    pl.pushConstantRangeCount = 1;
-    pl.pPushConstantRanges = &range;
-    if (!vk::Check(vkCreatePipelineLayout(device_, &pl, nullptr, &layout_), "vfx pipeline layout")) {
+    gpu::PipelineLayoutDesc pl;
+    pl.sets = {textures.BindingLayout(), set_layout_};
+    pl.push_bytes = sizeof(Push);
+    pl.push_stages = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
+    layout_ = gpu_->CreatePipelineLayout(pl);
+    if (!layout_) {
+        LogError("vfx: pipeline layout failed");
         return false;
     }
-    VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler_info.magFilter = VK_FILTER_NEAREST;
-    sampler_info.minFilter = VK_FILTER_NEAREST;
-    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.maxLod = 0.0f;
-    if (!vk::Check(vkCreateSampler(device_, &sampler_info, nullptr, &sampler_), "vfx sampler")) {
+    gpu::SamplerDesc sampler_info;
+    sampler_info.mag = gpu::Filter::Nearest;
+    sampler_info.min = gpu::Filter::Nearest;
+    sampler_info.mipmap = gpu::MipmapMode::Nearest;
+    sampler_info.address_u = gpu::AddressMode::ClampToEdge;
+    sampler_info.address_v = gpu::AddressMode::ClampToEdge;
+    sampler_info.address_w = gpu::AddressMode::ClampToEdge;
+    sampler_info.max_anisotropy = 0.0f;
+    sampler_info.max_lod = 0.0f;
+    sampler_ = gpu_->CreateSampler(sampler_info);
+    if (!sampler_) {
         return false;
     }
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    if (!vk::Check(vkCreateSampler(device_, &sampler_info, nullptr, &scene_sampler_), "vfx scene sampler")) {
+    sampler_info.mag = gpu::Filter::Linear;
+    sampler_info.min = gpu::Filter::Linear;
+    sampler_info.address_u = gpu::AddressMode::Repeat;
+    sampler_info.address_v = gpu::AddressMode::Repeat;
+    sampler_info.address_w = gpu::AddressMode::Repeat;
+    scene_sampler_ = gpu_->CreateSampler(sampler_info);
+    if (!scene_sampler_) {
         return false;
     }
-    vertex_ = vk::LoadShaderModule(device_, "vfx_particle.vert");
-    fragment_ = vk::LoadShaderModule(device_, "vfx_particle.frag");
-    if (!vertex_ || !fragment_) {
+    shaders_ = gpu_->PreloadShaders(kShaders);
+    if (!shaders_) {
+        gpu_->ReleaseShaders(kShaders);
         return false;
     }
     for (FrameSlot& slot : slots_) {
-        VkDescriptorSetLayout layouts[4] = {set_layout_, set_layout_, set_layout_, set_layout_};
-        VkDescriptorSet sets[4] = {};
-        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        alloc.descriptorPool = pool_;
-        alloc.descriptorSetCount = 4;
-        alloc.pSetLayouts = layouts;
-        if (!vk::Check(vkAllocateDescriptorSets(device_, &alloc, sets), "vfx descriptor sets")) {
+        const gpu::BindingLayoutHandle layouts[4] = {set_layout_, set_layout_, set_layout_, set_layout_};
+        gpu::BindingSetHandle sets[4] = {};
+        if (!gpu_->AllocateBindingSets(pool_, layouts, sets)) {
+            LogError("vfx: descriptor sets failed");
             return false;
         }
         slot.forward = sets[0];
         slot.filter = sets[1];
         slot.effects = sets[2];
         slot.depth_only = sets[3];
-        if (!renderer.Context().CreateBuffer(slot.quads, sizeof(vfx::Quad) * kInitialQuads, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
+        if (!gpu_->CreateBuffer({sizeof(vfx::Quad) * InitialQuads(), gpu::BufferUsage::StorageBuffer, true}, slot.quads)) {
             return false;
         }
-        if (!renderer.Context().CreateBuffer(slot.fog, 3 * kFogStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) {
+        if (!gpu_->CreateBuffer({3 * kFogStride, gpu::BufferUsage::UniformBuffer, true}, slot.fog)) {
             return false;
         }
         std::memset(slot.fog.mapped, 0, 3 * kFogStride);
-        vmaFlushAllocation(renderer.Context().allocator, slot.fog.allocation, 0, 3 * kFogStride);
+        gpu_->FlushMapped(slot.fog, 0, 3 * kFogStride);
     }
     return true;
 }
 
 void VfxPass::Shutdown() {
-    if (!device_) {
+    if (!gpu_) {
         return;
     }
+    std::lock_guard lock(pipelines_mutex_);
     for (auto& [key, pipeline] : pipelines_) {
-        vkDestroyPipeline(device_, pipeline, nullptr);
+        gpu_->DestroyPipeline(pipeline);
     }
     pipelines_.clear();
     for (FrameSlot& slot : slots_) {
-        renderer_->Context().DestroyBuffer(slot.quads);
-        renderer_->Context().DestroyBuffer(slot.fog);
+        gpu_->DestroyBuffer(slot.quads);
+        gpu_->DestroyBuffer(slot.fog);
     }
-    if (vertex_) {
-        vkDestroyShaderModule(device_, vertex_, nullptr);
+    if (shaders_) {
+        gpu_->ReleaseShaders(kShaders);
+        shaders_ = false;
     }
-    if (fragment_) {
-        vkDestroyShaderModule(device_, fragment_, nullptr);
-    }
-    vkDestroySampler(device_, sampler_, nullptr);
-    vkDestroySampler(device_, scene_sampler_, nullptr);
-    vkDestroyPipelineLayout(device_, layout_, nullptr);
-    vkDestroyDescriptorPool(device_, pool_, nullptr);
-    vkDestroyDescriptorSetLayout(device_, set_layout_, nullptr);
-    device_ = VK_NULL_HANDLE;
+    gpu_->DestroySampler(sampler_);
+    gpu_->DestroySampler(scene_sampler_);
+    gpu_->DestroyPipelineLayout(layout_);
+    gpu_->DestroyBindingPool(pool_);
+    gpu_->DestroyBindingLayout(set_layout_);
+    gpu_ = nullptr;
 }
 
 uint32_t VfxPass::Texture(const std::string& path) {
@@ -213,9 +215,8 @@ uint32_t VfxPass::Texture(const std::string& path) {
     if (auto it = texture_cache_.find(path); it != texture_cache_.end()) {
         return it->second;
     }
-    // Not cached, so a later frame picks up the real texture; fully transparent leaves blended targets untouched and vfx::System skips the rest.
-    static_assert(vfx::kPendingTexture == TextureManager::kClear);
     if (textures_->StillDecoding(path)) {
+        static_assert(vfx::kPendingTexture == TextureManager::kClear);
         return TextureManager::kClear;
     }
     bool ok = false;
@@ -244,9 +245,6 @@ void VfxPass::DecodeAhead(const std::vector<std::string>& paths) {
     textures_->DecodeAhead(vfs_->Textures(), pending);
 }
 
-// The liquid's reflection cube (TppLiquidMaterial2Node 0x23E90E5F, gr_cub01 by default) is bound as the effect loader leaves it,
-// without its FTEX sRGB flag: liquid_trace_f010 op 578, the first Primitive_Liquid2Final draw of frame 1490, binds gr_cub01 as a
-// 64x64 BC1 UNORM image whose first layer is the file's face 0 byte for byte, and the shader squares the texel
 uint32_t VfxPass::Cube(const std::string& path) {
     if (path.empty() || !textures_ || !vfs_) {
         return vfx::kNoTexture;
@@ -266,10 +264,8 @@ uint32_t VfxPass::Cube(const std::string& path) {
 }
 
 void VfxPass::Submit(vfx::RenderList& list) {
-    // one finished ahead decode uploaded a frame (DecodeAhead), so the next stage's effect textures do not all upload in the
-    // frame that first draws them
     if (textures_ && vfs_) {
-        textures_->PumpDecoded(vfs_->Textures(), kDecodedUploadsPerFrame);
+        textures_->PumpDecoded(vfs_->Textures(), 4);
     }
     std::swap(list_, list);
     list.Clear();
@@ -289,129 +285,119 @@ void VfxPass::Submit(vfx::RenderList& list) {
     ++generation_;
 }
 
-VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
-    for (const auto& [k, p] : pipelines_) {
-        if (k == key) {
-            return p;
+gpu::PipelineHandle VfxPass::Pipeline(const PipelineKey& key) {
+    {
+        std::lock_guard lock(pipelines_mutex_);
+        for (const auto& [k, p] : pipelines_) {
+            if (k == key) {
+                return p;
+            }
         }
     }
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex_, "main", nullptr};
-    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragment_, "main", nullptr};
-    VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    viewport.viewportCount = 1;
-    viewport.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = key.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    raster.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth.depthTestEnable = key.depth_test ? VK_TRUE : VK_FALSE;
-    depth.depthWriteEnable = key.depth_write ? VK_TRUE : VK_FALSE;
-    depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
-    const VkPipelineColorBlendAttachmentState attachment = BlendState(static_cast<vfx::BlendMode>(key.blend), key.offscreen,
-                                                                       key.depth_test && !key.offscreen);
-    const VkPipelineColorBlendAttachmentState attachments[2] = {attachment, attachment};
-    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    const uint32_t color_count = key.color == VK_FORMAT_UNDEFINED ? 0u : key.offscreen ? 2u : 1u;
-    blend.attachmentCount = color_count;
-    blend.pAttachments = attachments;
-    const VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamic_states;
-    const VkFormat color_formats[2] = {key.color, key.color};
-    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = color_count;
-    rendering.pColorAttachmentFormats = color_formats;
-    rendering.depthAttachmentFormat = key.depth;
-    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    info.pNext = &rendering;
-    info.stageCount = 2;
-    info.pStages = stages;
-    info.pVertexInputState = &vertex_input;
-    info.pInputAssemblyState = &assembly;
-    info.pViewportState = &viewport;
-    info.pRasterizationState = &raster;
-    info.pMultisampleState = &multisample;
-    info.pDepthStencilState = &depth;
-    info.pColorBlendState = &blend;
-    info.pDynamicState = &dynamic;
-    info.layout = layout_;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vk::CreateGraphicsPipelinesCached(device_, 1, &info, nullptr, &pipeline), "vfx pipeline")) {
-        pipeline = VK_NULL_HANDLE;
+    gpu::GraphicsPipelineDesc desc;
+    desc.vertex = kShaders[0];
+    desc.fragment = kShaders[1];
+    desc.layout = layout_;
+    desc.fixed_state = true;
+    desc.cull = key.cull ? gpu::CullMode::Back : gpu::CullMode::None;
+    desc.depth_test = key.depth_test;
+    desc.depth_write = key.depth_write;
+    desc.depth_compare = gpu::CompareOp::GreaterOrEqual;
+    const gpu::BlendState attachment = BlendState(static_cast<vfx::BlendMode>(key.blend), key.offscreen, key.depth_test && !key.offscreen);
+    const uint32_t color_count = key.color == gpu::Format::Undefined ? 0u : key.offscreen ? 2u : 1u;
+    desc.colors.assign(color_count, key.color);
+    desc.blend_states.assign(color_count, attachment);
+    desc.depth = key.depth;
+    gpu::PipelineHandle pipeline = gpu_->CreateGraphicsPipeline(desc);
+    std::lock_guard lock(pipelines_mutex_);
+    for (const auto& [k, p] : pipelines_) {
+        if (k == key) {
+            if (pipeline) gpu_->DestroyPipeline(pipeline);
+            return p;
+        }
     }
     pipelines_.emplace_back(key, pipeline);
     return pipeline;
 }
 
-void VfxPass::WriteSet(FrameSlot& slot, VkDescriptorSet set, VkImageView view, VkImageLayout depth_layout, VkImageView scene,
-                       VkDeviceSize fog_offset) {
-    VkDescriptorBufferInfo buffer{slot.quads.buffer, 0, VK_WHOLE_SIZE};
-    VkDescriptorImageInfo image{sampler_, view, depth_layout};
-    VkDescriptorImageInfo scene_image{scene_sampler_, scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo fog{slot.fog.buffer, fog_offset, sizeof(FogBlock)};
-    VkWriteDescriptorSet writes[4]{};
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffer, nullptr};
-    writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &image, nullptr, nullptr};
-    writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &scene_image, nullptr,
-                 nullptr};
-    writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &fog, nullptr};
-    vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
+void VfxPass::AddPipelineWarmup(vk::PipelineWarmup& warmup, gpu::Format color, gpu::Format depth, gpu::Format filter_color) {
+    if (!gpu_ || !shaders_) {
+        return;
+    }
+    std::vector<PipelineKey> keys;
+    for (uint8_t blend = 0; blend <= static_cast<uint8_t>(vfx::BlendMode::Opaque); ++blend) {
+        for (const bool cull : {false, true}) {
+            keys.push_back({color, depth, blend, true, cull, false});
+            const auto mode = static_cast<vfx::BlendMode>(blend);
+            if (mode == vfx::BlendMode::Alpha || mode == vfx::BlendMode::Add || mode == vfx::BlendMode::Sub) {
+                keys.push_back({color, depth, blend, true, cull, true});
+            }
+            keys.push_back({gpu::Format::Undefined, depth, blend, true, cull, false, true});
+            keys.push_back({filter_color, gpu::Format::Undefined, blend, false, cull, false});
+        }
+    }
+    for (const PipelineKey& key : keys) {
+        warmup.Add([this, key]() -> uint32_t { return Pipeline(key) ? 1u : 0u; });
+    }
+}
+
+void VfxPass::WriteSet(FrameSlot& slot, gpu::BindingSetHandle set, gpu::ImageViewHandle view, gpu::Layout depth_layout,
+                       gpu::ImageViewHandle scene, uint64_t fog_offset) {
+    const gpu::BufferBinding buffer{slot.quads.buffer};
+    const gpu::ImageBinding image{view, depth_layout, sampler_};
+    const gpu::ImageBinding scene_image{scene, gpu::Layout::ShaderReadOnly, scene_sampler_};
+    const gpu::BufferBinding fog{slot.fog.buffer, fog_offset, sizeof(FogBlock)};
+    const gpu::BindingWrite writes[4] = {{set, 0, 0, gpu::BindingType::StorageBuffer, {}, {&buffer, 1}},
+                                         {set, 1, 0, gpu::BindingType::CombinedImageSampler, {&image, 1}},
+                                         {set, 2, 0, gpu::BindingType::CombinedImageSampler, {&scene_image, 1}},
+                                         {set, 3, 0, gpu::BindingType::UniformBuffer, {}, {&fog, 1}}};
+    gpu_->WriteBindings(writes);
 }
 
 bool VfxPass::Upload(uint32_t frame_index) {
+    const vk::AllocTag tag("effects");
     FrameSlot& slot = slots_[frame_index % Renderer::kFramesInFlight];
     if (slot.uploaded == generation_) {
         return true;
     }
-    const VkDeviceSize bytes = sizeof(vfx::Quad) * list_.quads.size();
+    const uint64_t bytes = sizeof(vfx::Quad) * list_.quads.size();
     if (bytes > slot.quads.size) {
-        renderer_->Context().DestroyBuffer(slot.quads);
-        const VkDeviceSize size = std::max<VkDeviceSize>(bytes + bytes / 2, sizeof(vfx::Quad) * kInitialQuads);
-        if (!renderer_->Context().CreateBuffer(slot.quads, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
+        slot.forward_view = {};
+        slot.forward_scene = {};
+        slot.filter_view = {};
+        slot.filter_scene = {};
+        slot.effects_depth_view = {};
+        slot.effects_scene = {};
+        slot.depth_only_scene = {};
+        gpu_->DestroyBuffer(slot.quads);
+        const uint64_t size = std::max<uint64_t>(bytes + bytes / 2, sizeof(vfx::Quad) * InitialQuads());
+        if (!gpu_->CreateBuffer({size, gpu::BufferUsage::StorageBuffer, true}, slot.quads)) {
             return false;
         }
-        slot.forward_view = VK_NULL_HANDLE;
-        slot.filter_view = VK_NULL_HANDLE;
-        slot.effects_depth_view = VK_NULL_HANDLE;
-        slot.effects_scene = VK_NULL_HANDLE;
+        LogDebug("vfx: quad buffer of frame slot {} grown to {} quads for {}", frame_index % Renderer::kFramesInFlight,
+                 size / sizeof(vfx::Quad), list_.quads.size());
     }
     if (bytes) {
         std::memcpy(slot.quads.mapped, list_.quads.data(), bytes);
-        vmaFlushAllocation(renderer_->Context().allocator, slot.quads.allocation, 0, bytes);
+        gpu_->FlushMapped(slot.quads, 0, bytes);
     }
     slot.uploaded = generation_;
     return true;
 }
 
-uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer layer, VkFormat color, VkFormat depth, bool depth_test,
-                            uint32_t mode, const glm::mat4& view_projection, const glm::vec3& eye, float exposure, float near_plane, VkExtent2D extent,
-                            const std::function<void()>* copy_scene, uint32_t subset, uint32_t* recorded) {
+uint32_t VfxPass::DrawLayer(gpu::CommandList& cmd, gpu::BindingSetHandle set, vfx::Layer layer, gpu::Format color, gpu::Format depth,
+                            bool depth_test, uint32_t mode, const glm::mat4& view_projection, const glm::vec3& eye, float exposure,
+                            float near_plane, gpu::Extent2D extent, const std::function<void()>* copy_scene, uint32_t subset,
+                            uint32_t* recorded) {
     uint32_t copies = 0;
     bool bound = false;
     bool copy_stale = true;
-    // the original copies the scene buffer (compute 8c7e2adaa817965c into an 8-bit image) before liquid draws that follow other drawing,
-    // and runs consecutive liquid draws on one copy (f010_dumps frame 1490: one copy, then 64 Primitive_Liquid2Final draws)
     const float refraction_scale = static_cast<float>(extent.height) / 1080.0f;
     for (uint32_t index : order_) {
         const vfx::Draw& d = list_.draws[index];
         if (d.layer != layer || d.count == 0) {
             continue;
         }
-        // opaque liquids (Primitive_Liquid2Final with the alpha test, at full resolution), multiply, min and opaque draws stay on the
-        // scene target. A liquid without the alpha test goes to the effect pass in its place among the other effects, as the
-        // original's material setup sends it (formats/vfx.md 7: liquid_trace_f010 1490 draws the blood water at 960 x 540 between
-        // the smoke and dust): it covers the effects drawn before it there by its alpha, so the f120 view distortion sprites
-        // (fx_sh_viwdis01_s1, 02) take the CeilLamp's glow sprites with the image they move instead of leaving them, unmoved,
-        // over the moved lamp. PT_VFX_LIQUID_SCENE=1 draws every liquid on the scene before the effect buffer, as before.
         static const bool liquid_scene = std::getenv("PT_VFX_LIQUID_SCENE") != nullptr;
         const bool effect_liquid = d.refract && !d.opaque && !liquid_scene;
         const bool buffered = (!d.refract || effect_liquid) &&
@@ -420,7 +406,7 @@ uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer
             continue;
         }
         const bool offscreen = subset == kVfxOffscreen;
-        const VkPipeline pipeline = Pipeline({color, depth, static_cast<uint8_t>(d.blend), depth_test, d.cull, offscreen});
+        const gpu::PipelineHandle pipeline = Pipeline({color, depth, static_cast<uint8_t>(d.blend), depth_test, d.cull, offscreen});
         if (!pipeline) {
             continue;
         }
@@ -434,25 +420,21 @@ uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer
             copy_stale = true;
         }
         if (!bound) {
-            VkDescriptorSet sets[2] = {textures_->Set(), set};
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
-            VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-            VkRect2D scissor{{0, 0}, extent};
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            const gpu::BindingSetHandle sets[2] = {textures_->BindingSet(), set};
+            cmd.BindSets(gpu::BindPoint::Graphics, layout_, 0, sets);
+            cmd.SetViewport({{0, 0}, extent});
             bound = true;
         }
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        cmd.BindPipeline(gpu::BindPoint::Graphics, pipeline);
         Push push;
         push.view_projection = view_projection;
-        // w: refraction pixels per 1080p pixel when the scene copy is valid for this draw, else 0 (scalar transmission)
         push.eye = glm::vec4(eye, refract ? refraction_scale : 0.0f);
         push.frame = glm::vec4(exposure, near_plane, 1.0f / static_cast<float>(std::max(1u, extent.width)),
                                1.0f / static_cast<float>(std::max(1u, extent.height)));
         static const uint32_t debug = std::getenv("PT_VFX_DEBUG") ? 1u : 0u;
         push.ids = glm::uvec4(d.first, offscreen ? 2u : mode, static_cast<uint32_t>(d.blend), debug);
-        vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
-        vkCmdDraw(cmd, d.count * 6, 1, 0, 0);
+        cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(Push), &push);
+        cmd.Draw(d.count * 6, 1, 0, 0);
         if (recorded) {
             ++*recorded;
         }
@@ -461,7 +443,7 @@ uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer
 }
 
 void VfxPass::RecordForward(const SceneVfxContext& context) {
-    if (context.mirrored || list_.draws.empty() || !device_) {
+    if (context.mirrored || list_.draws.empty() || !gpu_) {
         return;
     }
     const uint32_t frame = context.frame_index % Renderer::kFramesInFlight;
@@ -472,24 +454,24 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
     const bool offscreen = context.subset == kVfxOffscreen;
     if (offscreen) {
         if (slot.effects_depth_view != context.near_far_depth_view || slot.effects_scene != context.scene_copy_view) {
-            WriteSet(slot, slot.effects, context.near_far_depth_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, context.scene_copy_view,
+            WriteSet(slot, slot.effects, context.near_far_depth_view, gpu::Layout::ShaderReadOnly, context.scene_copy_view,
                      2 * kFogStride);
             slot.effects_depth_view = context.near_far_depth_view;
             slot.effects_scene = context.scene_copy_view;
         }
     } else if (slot.forward_view != context.depth_view || slot.forward_scene != context.scene_copy_view) {
-        WriteSet(slot, slot.forward, context.depth_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, context.scene_copy_view, 0);
+        WriteSet(slot, slot.forward, context.depth_view, gpu::Layout::DepthReadOnly, context.scene_copy_view, 0);
         slot.forward_view = context.depth_view;
         slot.forward_scene = context.scene_copy_view;
     }
     FogBlock fog;
     std::copy(std::begin(context.fog), std::end(context.fog), std::begin(fog.fog));
     fog.mode = glm::uvec4(context.fog_mode, 0u, 0u, 0u);
-    const VkDeviceSize fog_offset = offscreen ? 2 * kFogStride : 0;
+    const uint64_t fog_offset = offscreen ? 2 * kFogStride : 0;
     std::memcpy(static_cast<uint8_t*>(slot.fog.mapped) + fog_offset, &fog, sizeof(fog));
-    vmaFlushAllocation(renderer_->Context().allocator, slot.fog.allocation, fog_offset, sizeof(fog));
+    gpu_->FlushMapped(slot.fog, fog_offset, sizeof(fog));
     const float near_plane = context.projection[3][2];
-    const uint32_t copies = DrawLayer(context.cmd, offscreen ? slot.effects : slot.forward, vfx::Layer::World, context.color_format,
+    const uint32_t copies = DrawLayer(*context.cmd, offscreen ? slot.effects : slot.forward, vfx::Layer::World, context.color_format,
                                       context.depth_format, true, 0, context.view_projection, context.eye, context.exposure, near_plane,
                                       context.extent, context.scene_copy_view && context.copy_scene ? &context.copy_scene : nullptr,
                                       context.subset, context.recorded);
@@ -506,7 +488,7 @@ bool VfxPass::HasOpaqueLiquids() const {
 }
 
 void VfxPass::RecordLiquidDepth(const SceneVfxContext& context) {
-    if (context.mirrored || !device_ || !HasOpaqueLiquids() || !context.scene_copy_view) {
+    if (context.mirrored || !gpu_ || !HasOpaqueLiquids() || !context.scene_copy_view) {
         return;
     }
     const uint32_t frame = context.frame_index % Renderer::kFramesInFlight;
@@ -514,46 +496,51 @@ void VfxPass::RecordLiquidDepth(const SceneVfxContext& context) {
         return;
     }
     FrameSlot& slot = slots_[frame];
-    // the depth binding holds the scene copy instead: the depth image is the attachment written here, and the alpha tested
-    // liquid reads no depth (it has no soft blend)
     if (slot.depth_only_scene != context.scene_copy_view) {
-        WriteSet(slot, slot.depth_only, context.scene_copy_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, context.scene_copy_view, 0);
+        WriteSet(slot, slot.depth_only, context.scene_copy_view, gpu::Layout::ShaderReadOnly, context.scene_copy_view, 0);
         slot.depth_only_scene = context.scene_copy_view;
     }
-    VkDescriptorSet sets[2] = {textures_->Set(), slot.depth_only};
-    vkCmdBindDescriptorSets(context.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
-    VkViewport viewport{0.0f, 0.0f, static_cast<float>(context.extent.width), static_cast<float>(context.extent.height), 0.0f, 1.0f};
-    VkRect2D scissor{{0, 0}, context.extent};
-    vkCmdSetViewport(context.cmd, 0, 1, &viewport);
-    vkCmdSetScissor(context.cmd, 0, 1, &scissor);
+    gpu::CommandList& cmd = *context.cmd;
+    const gpu::BindingSetHandle sets[2] = {textures_->BindingSet(), slot.depth_only};
+    cmd.BindSets(gpu::BindPoint::Graphics, layout_, 0, sets);
+    cmd.SetViewport({{0, 0}, context.extent});
     const float near_plane = context.projection[3][2];
     for (uint32_t index : order_) {
         const vfx::Draw& d = list_.draws[index];
         if (d.layer != vfx::Layer::World || !d.refract || !d.opaque || d.count == 0) {
             continue;
         }
-        const VkPipeline pipeline = Pipeline({VK_FORMAT_UNDEFINED, context.depth_format, static_cast<uint8_t>(d.blend), true, d.cull, false, true});
+        const gpu::PipelineHandle pipeline = Pipeline({gpu::Format::Undefined, context.depth_format, static_cast<uint8_t>(d.blend), true, d.cull, false, true});
         if (!pipeline) {
             continue;
         }
-        vkCmdBindPipeline(context.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        cmd.BindPipeline(gpu::BindPoint::Graphics, pipeline);
         Push push;
         push.view_projection = context.view_projection;
         push.eye = glm::vec4(context.eye, 0.0f);
         push.frame = glm::vec4(context.exposure, near_plane, 1.0f / static_cast<float>(std::max(1u, context.extent.width)),
                                1.0f / static_cast<float>(std::max(1u, context.extent.height)));
         push.ids = glm::uvec4(d.first, 0u, static_cast<uint32_t>(d.blend), 0u);
-        vkCmdPushConstants(context.cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
-        vkCmdDraw(context.cmd, d.count * 6, 1, 0, 0);
+        cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(Push), &push);
+        cmd.Draw(d.count * 6, 1, 0, 0);
     }
 }
 
 bool VfxPass::HasFilter(uint32_t layers) const {
-    return std::any_of(list_.draws.begin(), list_.draws.end(), [&](const vfx::Draw& d) { return Wanted(d.layer, layers); });
+    return std::any_of(list_.draws.begin(), list_.draws.end(), [layers](const vfx::Draw& d) {
+        return (d.layer == vfx::Layer::Flare && (layers & 1u)) || (d.layer == vfx::Layer::Screen && (layers & 2u));
+    });
 }
 
 void VfxPass::RecordFilter(const SceneFilterContext& context) {
-    if (list_.draws.empty() || !device_ || !context.depth_view || !HasFilter(context.layers)) {
+    if (list_.draws.empty() || !gpu_ || !context.depth_view) {
+        return;
+    }
+    auto wanted = [&](vfx::Layer layer) {
+        return (layer == vfx::Layer::Flare && (context.layers & 1u) != 0u) || (layer == vfx::Layer::Screen && (context.layers & 2u) != 0u);
+    };
+    const bool any = std::any_of(list_.draws.begin(), list_.draws.end(), [&](const vfx::Draw& d) { return wanted(d.layer); });
+    if (!any) {
         return;
     }
     const uint32_t frame = context.frame_index % Renderer::kFramesInFlight;
@@ -562,15 +549,15 @@ void VfxPass::RecordFilter(const SceneFilterContext& context) {
     }
     FrameSlot& slot = slots_[frame];
     if (slot.filter_view != context.depth_view || slot.filter_scene != context.source) {
-        WriteSet(slot, slot.filter, context.depth_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, context.source, kFogStride);
+        WriteSet(slot, slot.filter, context.depth_view, gpu::Layout::DepthReadOnly, context.source, kFogStride);
         slot.filter_view = context.depth_view;
         slot.filter_scene = context.source;
     }
     for (const vfx::Layer layer : {vfx::Layer::Flare, vfx::Layer::Screen}) {
-        if (!Wanted(layer, context.layers)) {
+        if (!wanted(layer)) {
             continue;
         }
-        DrawLayer(context.cmd, slot.filter, layer, context.color_format, VK_FORMAT_UNDEFINED, false, 1, glm::mat4(1.0f), glm::vec3(0.0f),
+        DrawLayer(*context.cmd, slot.filter, layer, context.color_format, gpu::Format::Undefined, false, 1, glm::mat4(1.0f), glm::vec3(0.0f),
                   context.exposure, list_.near_plane, context.extent, nullptr);
     }
 }

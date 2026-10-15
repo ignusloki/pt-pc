@@ -53,6 +53,15 @@ add_custom_command(TARGET pt POST_BUILD
 if(WIN32)
   add_custom_command(TARGET pt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_texture_runtime}/vcomp140.dll" "$<TARGET_FILE_DIR:pt>/texture-tools/" VERBATIM)
+  get_filename_component(pt_sdk_bin "${CMAKE_RC_COMPILER}" DIRECTORY)
+  find_program(PT_MT_EXE mt.exe HINTS "${pt_sdk_bin}" NO_DEFAULT_PATH)
+  if(PT_MT_EXE)
+    add_custom_command(TARGET pt POST_BUILD
+      COMMAND "${PT_MT_EXE}" -nologo -manifest "${CMAKE_SOURCE_DIR}/assets/realesrgan.manifest"
+              "-outputresource:$<TARGET_FILE_DIR:pt>/texture-tools/${pt_texture_exe}$<SEMICOLON>#1" VERBATIM)
+  else()
+    message(WARNING "mt.exe not found next to ${CMAKE_RC_COMPILER}: the texture upscaler keeps its own manifest and fails in folders outside the ANSI code page")
+  endif()
 endif()
 
 if(APPLE)

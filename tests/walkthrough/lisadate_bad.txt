@@ -1,0 +1,30 @@
+# Coffee with Lisa: the date by its cold answers (BAD, ended early after part 2)
+slisadate
+swait 420
+slisachoice 2
+slisachoice 3
+slisachoice 3
+slisachoice 3
+slisachoice 2
+slisachoice 3
+slisachoice 3
+slisachoice 2
+swait 60
+sshot {shots}/bad_01_angry.png
+swait 2
+slisaline bad_03
+swait 100
+sshot {shots}/bad_02_dark.png
+swait 2
+slisaadvance
+swait 30
+sshot {shots}/bad_03_scare.png
+swait 2
+slisaadvance
+swait 120
+sshot {shots}/bad_04_ending.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+sshot {shots}/bad_05_back.png

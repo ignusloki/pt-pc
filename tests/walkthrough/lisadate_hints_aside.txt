@@ -1,0 +1,10 @@
+# Coffee with Lisa's hints with the game's own f160 light colour (--f160-light): the tint steps aside, the light is the game's
+sanchor
+gfile 0 -1.4 -4.0
+ffile 0 -0.6 3.0
+swait 90
+slisarushes 2
+swait 200
+sshot {shots}/hint_aside.png
+swait 2
+slog

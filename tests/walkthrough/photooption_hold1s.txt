@@ -1,0 +1,13 @@
+# The option screen's photo part with R3 held for 1 s (shadPS4 capture photops4_hold30): the press starts zoom_in (119 frames at
+# 60 fps), the release in the middle of it is kept (0x1285F80, +0x1BC) and PhotoOption is sent with zoom_out when zoom_in has ended,
+# 2 s after the press, as for a one-frame tap; there is no early zoom_out at the release
+pattach 0 ps5
+stap 0 options
+smenu 1
+swait 60
+stap 0 r3 60
+swait 150
+sexpect menu 1
+stap 0 options
+smenu 0
+slog

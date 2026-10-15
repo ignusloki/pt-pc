@@ -1,0 +1,9 @@
+# Coffee with Lisa's hints: the next f160 loop after leaving the lit one by its exit door, the light faded back to white
+sanchor
+gfile 0 -1.4 -4.0
+ffile 0 -0.6 3.0
+swait 300
+sshot {shots}/hint_after_exit.png
+swait 2
+sexpect lisarushes 3
+slog

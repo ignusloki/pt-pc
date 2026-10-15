@@ -52,8 +52,9 @@ struct Material {
     vec4 extra;
 };
 
-layout(set = 0, binding = 0) uniform sampler2D textures[];
-layout(set = 0, binding = 2) uniform samplerCube cube_textures[];
+#include "bindless.glsl"
+layout(set = 0, binding = 0) uniform PT_TEXTURE2D_ARRAY textures[];
+layout(set = 0, binding = 2) uniform PT_TEXTURECUBE_ARRAY cube_textures[];
 layout(std430, set = 0, binding = 1) readonly buffer Materials {
     Material materials[];
 };
@@ -71,7 +72,11 @@ layout(std430, set = 1, binding = 1) readonly buffer SkinData {
 };
 
 layout(set = 1, binding = 2) uniform texture2D images[62];
+#ifdef PT_D3D12
+layout(set = 1, binding = 3) uniform sampler samplers[4];
+#else
 layout(set = 1, binding = 3) uniform sampler samplers[5];
+#endif
 layout(set = 1, binding = 4) uniform texture3D lut2_image;
 
 #define IMG_ALBEDO 0
@@ -95,6 +100,8 @@ layout(set = 1, binding = 4) uniform texture3D lut2_image;
 #define IMG_BLOOM_SUM 18
 #define IMG_REFMAP 19
 #define IMG_HDR_COPY 20
+#define IMG_NEURAL_IN 62
+#define IMG_NEURAL_OUT 63
 #define IMG_PARTICLES 46
 #define IMG_PROBE_ACC 54
 #define IMG_FLARE 47
@@ -147,10 +154,6 @@ layout(set = 1, binding = 4) uniform texture3D lut2_image;
 #define KIND_SKY 4u
 #define KIND_SHADOW_ONLY 5u
 
-// fox3ddf_normal_wave_diralp's vertex shader (vs e1e54e68265bf34b): the world position moves by
-// (WindAmplitude WindOffset + normalize(WindDir) sin(WindAnimTime + WindOffset.x) WindAmplitude WindRandAmplitude) (the
-// vector model_cache.cpp precomputes into albedo_factor.xyz) times saturate(WeightOffset + saturate(1 - v)^WeightDiffusion)
-// with v the first UV's; P.T.'s materials hold those parameters fixed, so the offset is a fixed bend of the leaves
 vec3 WaveOffset(uint material, vec2 uv0) {
     Material m = materials[material];
     if ((m.flags & MAT_NORMAL_WAVE) == 0u) {
@@ -176,11 +179,6 @@ vec2 ImgSize(uint index) {
     return vec2(textureSize(sampler2D(images[index], samplers[SMP_POINT_CLAMP]), 0));
 }
 
-// The 8x8 g_tex_mesh texel at the pixel (RES_DITHER, built as 0xD43430 builds the original's): x the fade reference
-// (4 bayer + 2) / 255, y the dithered alpha reference (2 bayer + 1) / 255 of alpha mode 4, z the constant 64 / 255.
-// With a temporal upscaler (temporal.w) the pixel's Bayer rank moves by temporal.x a frame (mod 64): the fixed pattern
-// stays in the upscaled frame as a stable texture (the dotted hair cards of the photo mode), while a moving rank gives each
-// pixel all 64 references in turn, which the upscaler's history averages into the coverage the dither stands for.
 /* The Bayer rank rotates by temporal.x a frame so a temporal upscaler averages all 64 references; a fixed pattern survives upscaling as a visible texture. */
 vec4 MeshDither(vec2 frag, vec4 temporal) {
     vec4 d = ImgFetch(RES_DITHER, ivec2(frag) & 7);
@@ -196,9 +194,6 @@ float AlphaReference(uint flags, vec4 dither) {
 }
 
 float ShadowAlphaCutoff(uint flags) {
-    // Lisa's real hair cards use the mean of the visible mask's 64 Bayer
-    // references (1..127)/255. A stable cutoff retains that coverage in both
-    // shadow paths without introducing a second animated dither pattern.
     /* 64/255 is the mean of the 64 dithered references (1..127)/255, so the shadow keeps the hair's coverage without a second animated pattern. */
     return (flags & MAT_LISA_HAIR_SHADOW) != 0u ? 64.0 / 255.0 : 0.5;
 }

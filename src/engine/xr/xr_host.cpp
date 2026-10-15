@@ -1,8 +1,11 @@
 #include "engine/xr/xr_host.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include "engine/core/log.h"
 
@@ -14,6 +17,10 @@
 #endif
 #define XR_NO_PROTOTYPES
 #define XR_USE_GRAPHICS_API_VULKAN
+#ifdef _WIN32
+#include <d3d12.h>
+#define XR_USE_GRAPHICS_API_D3D12
+#endif
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -28,7 +35,7 @@ bool Available() { return false; }
 struct Host::Impl {};
 Host::Host() = default;
 Host::~Host() = default;
-bool Host::Init(const std::string&) {
+bool Host::Init(const std::string&, bool) {
     error_ = "this build has no OpenXR support";
     return false;
 }
@@ -39,6 +46,9 @@ VkResult Host::CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo&
     return vkCreateDevice(physical, &info, nullptr, &device);
 }
 bool Host::StartSession(vk::Context&, float) { return false; }
+bool Host::StartSessionD3D12(void*, void*, float) { return false; }
+bool Host::D3D12() const { return false; }
+void Host::D3D12Adapter(uint8_t (&)[8], int& min_feature_level) const { min_feature_level = 0; }
 void Host::Shutdown() {}
 void Host::PollEvents() {}
 bool Host::SessionRunning() const { return false; }
@@ -61,7 +71,6 @@ bool Available() { return true; }
 
 namespace {
 
-// every OpenXR function the host calls, loaded through xrGetInstanceProcAddr
 #define PT_XR_FUNCTIONS(X)                    \
     X(xrDestroyInstance)                      \
     X(xrGetInstanceProperties)                \
@@ -77,6 +86,7 @@ namespace {
     X(xrEndSession)                           \
     X(xrRequestExitSession)                   \
     X(xrCreateReferenceSpace)                 \
+    X(xrEnumerateReferenceSpaces)             \
     X(xrCreateActionSpace)                    \
     X(xrLocateSpace)                          \
     X(xrDestroySpace)                         \
@@ -99,22 +109,30 @@ namespace {
     X(xrSuggestInteractionProfileBindings)    \
     X(xrAttachSessionActionSets)              \
     X(xrGetCurrentInteractionProfile)         \
+    X(xrEnumerateBoundSourcesForAction)       \
     X(xrSyncActions)                          \
     X(xrGetActionStateBoolean)                \
     X(xrGetActionStateVector2f)               \
     X(xrGetActionStatePose)                   \
-    X(xrApplyHapticFeedback)                  \
+    X(xrApplyHapticFeedback)
+
+#define PT_XR_VULKAN_FUNCTIONS(X)             \
     X(xrGetVulkanGraphicsRequirements2KHR)    \
     X(xrCreateVulkanInstanceKHR)              \
     X(xrCreateVulkanDeviceKHR)                \
     X(xrGetVulkanGraphicsDevice2KHR)
+#ifdef _WIN32
+#define PT_XR_D3D12_FUNCTIONS(X) X(xrGetD3D12GraphicsRequirementsKHR)
+#else
+#define PT_XR_D3D12_FUNCTIONS(X)
+#endif
 
 glm::quat ToGlm(const XrQuaternionf& q) { return glm::quat(q.w, q.x, q.y, q.z); }
 glm::vec3 ToGlm(const XrVector3f& v) { return glm::vec3(v.x, v.y, v.z); }
 XrQuaternionf ToXr(const glm::quat& q) { return {q.x, q.y, q.z, q.w}; }
 XrVector3f ToXr(const glm::vec3& v) { return {v.x, v.y, v.z}; }
 
-}  // namespace
+}
 
 struct Host::Impl {
 #ifdef _WIN32
@@ -126,7 +144,12 @@ struct Host::Impl {
     PFN_xrCreateInstance xrCreateInstance = nullptr;
 #define PT_XR_MEMBER(name) PFN_##name name = nullptr;
     PT_XR_FUNCTIONS(PT_XR_MEMBER)
+    PT_XR_VULKAN_FUNCTIONS(PT_XR_MEMBER)
+    PT_XR_D3D12_FUNCTIONS(PT_XR_MEMBER)
 #undef PT_XR_MEMBER
+    bool d3d12 = false;
+    uint8_t adapter_luid[8] = {};
+    int min_feature_level = 0;
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
     XrSession session = XR_NULL_HANDLE;
@@ -136,6 +159,7 @@ struct Host::Impl {
     bool ever_focused = false;
     XrSpace local = XR_NULL_HANDLE;
     XrSpace view = XR_NULL_HANDLE;
+    XrSpace stage = XR_NULL_HANDLE;
     XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
     XrActionSet action_set = XR_NULL_HANDLE;
     XrAction move = XR_NULL_HANDLE, turn = XR_NULL_HANDLE, interact = XR_NULL_HANDLE, back = XR_NULL_HANDLE, menu = XR_NULL_HANDLE,
@@ -145,22 +169,31 @@ struct Host::Impl {
     XrSpace aim_spaces[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
     vk::Context* ctx = nullptr;
     VkInstance vk_instance = VK_NULL_HANDLE;
+    uint32_t action_errors_logged = 0;
+    uint32_t action_trace_seen = 0;
+    uint32_t action_trace_lines = 0;
+    uint32_t source_trace_lines = 0;
+    XrDuration logged_display_period = 0;
+    uint64_t pacing_trace_frames = 0;
+    uint32_t pacing_trace_lines = 0;
 
     bool Ok(XrResult result, const char* what, std::string* error = nullptr) {
         if (XR_SUCCEEDED(result)) {
             return true;
         }
-        char name[128] = {};  // XR_MAX_RESULT_STRING_SIZE is 64; the named fallbacks below are longer
+        char name[128] = {};
         if (instance && xrResultToString) {
             xrResultToString(instance, result, name);
         } else {
-            // before an instance exists the loader cannot name the result; the ones a start without a runtime gives
             const char* known = nullptr;
             switch (result) {
             case XR_ERROR_RUNTIME_UNAVAILABLE: known = "XR_ERROR_RUNTIME_UNAVAILABLE (no OpenXR runtime is installed or active)"; break;
             case XR_ERROR_RUNTIME_FAILURE: known = "XR_ERROR_RUNTIME_FAILURE (the OpenXR runtime failed)"; break;
             case XR_ERROR_API_VERSION_UNSUPPORTED: known = "XR_ERROR_API_VERSION_UNSUPPORTED"; break;
-            case XR_ERROR_EXTENSION_NOT_PRESENT: known = "XR_ERROR_EXTENSION_NOT_PRESENT (the runtime has no XR_KHR_vulkan_enable2)"; break;
+            case XR_ERROR_EXTENSION_NOT_PRESENT:
+                known = d3d12 ? "XR_ERROR_EXTENSION_NOT_PRESENT (the runtime has no XR_KHR_D3D12_enable)"
+                              : "XR_ERROR_EXTENSION_NOT_PRESENT (the runtime has no XR_KHR_vulkan_enable2)";
+                break;
             case XR_ERROR_FORM_FACTOR_UNAVAILABLE: known = "XR_ERROR_FORM_FACTOR_UNAVAILABLE (no headset is connected)"; break;
             case XR_ERROR_FORM_FACTOR_UNSUPPORTED: known = "XR_ERROR_FORM_FACTOR_UNSUPPORTED (the runtime has no headset)"; break;
             case XR_ERROR_INITIALIZATION_FAILED: known = "XR_ERROR_INITIALIZATION_FAILED"; break;
@@ -184,6 +217,29 @@ struct Host::Impl {
         Ok(xrStringToPath(instance, text, &path), text);
         return path;
     }
+
+    void LogBoundSources(XrAction action, const char* name) {
+        if (source_trace_lines >= 128) return;
+        XrBoundSourcesForActionEnumerateInfo info{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
+        info.action = action;
+        uint32_t count = 0;
+        if (!Ok(xrEnumerateBoundSourcesForAction(session, &info, 0, &count, nullptr), "xrEnumerateBoundSourcesForAction")) return;
+        if (count == 0) {
+            LogInfo("vr: action {}: no bound sources", name);
+            ++source_trace_lines;
+            return;
+        }
+        std::vector<XrPath> sources(count);
+        if (!Ok(xrEnumerateBoundSourcesForAction(session, &info, count, &count, sources.data()), "xrEnumerateBoundSourcesForAction")) return;
+        for (uint32_t i = 0; i < count && source_trace_lines < 128; ++i) {
+            char source[XR_MAX_PATH_LENGTH] = {};
+            uint32_t length = 0;
+            if (XR_SUCCEEDED(xrPathToString(instance, sources[i], sizeof(source), &length, source))) {
+                LogInfo("vr: action {}: {}", name, source);
+                ++source_trace_lines;
+            }
+        }
+    }
 };
 
 Host::Host() : impl_(std::make_unique<Impl>()) {}
@@ -192,8 +248,20 @@ Host::~Host() { Shutdown(); }
 
 bool Host::Ready() const { return impl_->instance != XR_NULL_HANDLE && impl_->system != XR_NULL_SYSTEM_ID; }
 
-bool Host::Init(const std::string& application) {
+bool Host::D3D12() const { return impl_->d3d12; }
+
+void Host::D3D12Adapter(uint8_t (&luid)[8], int& min_feature_level) const {
+    std::memcpy(luid, impl_->adapter_luid, sizeof(luid));
+    min_feature_level = impl_->min_feature_level;
+}
+
+bool Host::Init(const std::string& application, bool d3d12) {
     Impl& x = *impl_;
+#ifdef _WIN32
+    x.d3d12 = d3d12;
+#else
+    (void)d3d12;
+#endif
 #ifdef _WIN32
     const std::filesystem::path path = ExecutableDir() / "openxr_loader.dll";
     x.library = LoadLibraryW(path.wstring().c_str());
@@ -223,7 +291,11 @@ bool Host::Init(const std::string& application) {
         LogError("vr: {}", error_);
         return false;
     }
+#ifdef _WIN32
+    const char* extensions[] = {x.d3d12 ? XR_KHR_D3D12_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+#else
     const char* extensions[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+#endif
     XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
     std::snprintf(info.applicationInfo.applicationName, sizeof(info.applicationInfo.applicationName), "%s", application.c_str());
     info.applicationInfo.applicationVersion = 1;
@@ -238,6 +310,8 @@ bool Host::Init(const std::string& application) {
     }
 #define PT_XR_LOAD(name) x.xrGetInstanceProcAddr(x.instance, #name, reinterpret_cast<PFN_xrVoidFunction*>(&x.name));
     PT_XR_FUNCTIONS(PT_XR_LOAD)
+    PT_XR_VULKAN_FUNCTIONS(PT_XR_LOAD)
+    PT_XR_D3D12_FUNCTIONS(PT_XR_LOAD)
 #undef PT_XR_LOAD
 #define PT_XR_CHECK(name) \
     if (!x.name) {        \
@@ -246,6 +320,11 @@ bool Host::Init(const std::string& application) {
         return false;     \
     }
     PT_XR_FUNCTIONS(PT_XR_CHECK)
+    if (x.d3d12) {
+        PT_XR_D3D12_FUNCTIONS(PT_XR_CHECK)
+    } else {
+        PT_XR_VULKAN_FUNCTIONS(PT_XR_CHECK)
+    }
 #undef PT_XR_CHECK
     XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
     if (x.Ok(x.xrGetInstanceProperties(x.instance, &properties), "xrGetInstanceProperties")) {
@@ -275,14 +354,28 @@ bool Host::Init(const std::string& application) {
         LogError("vr: {}", error_);
         return false;
     }
-    XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
-    if (!x.Ok(x.xrGetVulkanGraphicsRequirements2KHR(x.instance, x.system, &requirements), "xrGetVulkanGraphicsRequirements2KHR", &error_)) {
-        return false;
+#ifdef _WIN32
+    if (x.d3d12) {
+        XrGraphicsRequirementsD3D12KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR};
+        if (!x.Ok(x.xrGetD3D12GraphicsRequirementsKHR(x.instance, x.system, &requirements), "xrGetD3D12GraphicsRequirementsKHR", &error_)) {
+            return false;
+        }
+        std::memcpy(x.adapter_luid, &requirements.adapterLuid, sizeof(x.adapter_luid));
+        x.min_feature_level = static_cast<int>(requirements.minFeatureLevel);
+        LogInfo("vr: DirectX 12, the runtime renders on adapter {:08x}:{:08x}, feature level {:#x} or higher",
+                static_cast<uint32_t>(requirements.adapterLuid.HighPart), requirements.adapterLuid.LowPart, x.min_feature_level);
     }
-    const XrVersion wanted = XR_MAKE_VERSION(1, 3, 0);
-    if (XR_MAKE_VERSION(XR_VERSION_MAJOR(requirements.maxApiVersionSupported), XR_VERSION_MINOR(requirements.maxApiVersionSupported), 0) < wanted) {
-        LogWarn("vr: runtime max Vulkan {}.{}, port needs 1.3", XR_VERSION_MAJOR(requirements.maxApiVersionSupported),
-                XR_VERSION_MINOR(requirements.maxApiVersionSupported));
+#endif
+    if (!x.d3d12) {
+        XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
+        if (!x.Ok(x.xrGetVulkanGraphicsRequirements2KHR(x.instance, x.system, &requirements), "xrGetVulkanGraphicsRequirements2KHR", &error_)) {
+            return false;
+        }
+        const XrVersion wanted = XR_MAKE_VERSION(1, 3, 0);
+        if (XR_MAKE_VERSION(XR_VERSION_MAJOR(requirements.maxApiVersionSupported), XR_VERSION_MINOR(requirements.maxApiVersionSupported), 0) < wanted) {
+            LogWarn("vr: runtime max Vulkan {}.{}, port needs 1.3", XR_VERSION_MAJOR(requirements.maxApiVersionSupported),
+                    XR_VERSION_MINOR(requirements.maxApiVersionSupported));
+        }
     }
     LogInfo("vr: runtime {}, system '{}' (vendor {:#x}), views {}x{} (max {}x{}), tracking orientation {} position {}", runtime_name_,
             system_properties.systemName, system_properties.vendorId, x.views[0].recommendedImageRectWidth, x.views[0].recommendedImageRectHeight,
@@ -331,16 +424,35 @@ VkResult Host::CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo&
 
 namespace {
 
-bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>& formats, uint32_t width, uint32_t height, Swapchain& out,
+#ifdef _WIN32
+int64_t DxgiFormat(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_R8G8B8A8_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    case VK_FORMAT_B8G8R8A8_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    default: return 0;
+    }
+}
+#endif
+
+bool CreateSwapchain(Host::Impl& x, vk::Context* ctx, const std::vector<int64_t>& formats, uint32_t width, uint32_t height, Swapchain& out,
                      const char* name) {
-    // 8-bit sRGB first: the eye and screen images are sRGB-encoded at heart, and an sRGB swapchain keeps their 8 bits exact
     /* sRGB 8-bit first: the eye images are sRGB encoded, and a UNORM swapchain would re-encode them and lose bits. */
     static constexpr VkFormat kPreferred[] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT,
                                               VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
     VkFormat format = VK_FORMAT_UNDEFINED;
+    int64_t xr_format = 0;
     for (VkFormat f : kPreferred) {
-        if (std::find(formats.begin(), formats.end(), static_cast<int64_t>(f)) != formats.end()) {
+#ifdef _WIN32
+        const int64_t wanted = x.d3d12 ? DxgiFormat(f) : static_cast<int64_t>(f);
+#else
+        const int64_t wanted = static_cast<int64_t>(f);
+#endif
+        if (std::find(formats.begin(), formats.end(), wanted) != formats.end()) {
             format = f;
+            xr_format = wanted;
             break;
         }
     }
@@ -350,7 +462,7 @@ bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>
     }
     XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
     info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    info.format = format;
+    info.format = xr_format;
     info.sampleCount = 1;
     info.width = width;
     info.height = height;
@@ -363,6 +475,24 @@ bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>
     }
     uint32_t count = 0;
     x.xrEnumerateSwapchainImages(handle, 0, &count, nullptr);
+#ifdef _WIN32
+    if (x.d3d12) {
+        std::vector<XrSwapchainImageD3D12KHR> d3d_images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+        if (!x.Ok(x.xrEnumerateSwapchainImages(handle, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(d3d_images.data())),
+                  "xrEnumerateSwapchainImages")) {
+            x.xrDestroySwapchain(handle);
+            return false;
+        }
+        out.handle = reinterpret_cast<uint64_t>(handle);
+        out.format = format;
+        out.extent = {width, height};
+        for (const XrSwapchainImageD3D12KHR& image : d3d_images) {
+            out.d3d12_images.push_back(image.texture);
+        }
+        LogInfo("vr: {} swapchain {}x{}, DXGI format {}, {} images", name, width, height, static_cast<int>(xr_format), count);
+        return true;
+    }
+#endif
     std::vector<XrSwapchainImageVulkan2KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
     if (!x.Ok(x.xrEnumerateSwapchainImages(handle, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),
               "xrEnumerateSwapchainImages")) {
@@ -379,7 +509,7 @@ bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>
         view_info.format = format;
         view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VkImageView view = VK_NULL_HANDLE;
-        vkCreateImageView(ctx.device, &view_info, nullptr, &view);
+        vkCreateImageView(ctx->device, &view_info, nullptr, &view);
         out.images.push_back(image.image);
         out.views.push_back(view);
     }
@@ -387,7 +517,7 @@ bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>
     return true;
 }
 
-}  // namespace
+}
 
 bool Host::StartSession(vk::Context& ctx, float scale) {
     Impl& x = *impl_;
@@ -398,8 +528,28 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
     binding.device = ctx.device;
     binding.queueFamilyIndex = ctx.queue_family;
     binding.queueIndex = 0;
+    return Start(&binding, scale);
+}
+
+bool Host::StartSessionD3D12(void* device, void* queue, float scale) {
+#ifdef _WIN32
+    XrGraphicsBindingD3D12KHR binding{XR_TYPE_GRAPHICS_BINDING_D3D12_KHR};
+    binding.device = static_cast<ID3D12Device*>(device);
+    binding.queue = static_cast<ID3D12CommandQueue*>(queue);
+    return Start(&binding, scale);
+#else
+    (void)device;
+    (void)queue;
+    (void)scale;
+    error_ = "DirectX 12 exists on Windows only";
+    return false;
+#endif
+}
+
+bool Host::Start(const void* binding, float scale) {
+    Impl& x = *impl_;
     XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO};
-    info.next = &binding;
+    info.next = binding;
     info.systemId = x.system;
     if (!x.Ok(x.xrCreateSession(x.instance, &info, &x.session), "xrCreateSession", &error_)) {
         x.session = XR_NULL_HANDLE;
@@ -415,8 +565,23 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
     if (!x.Ok(x.xrCreateReferenceSpace(x.session, &space, &x.view), "xrCreateReferenceSpace VIEW", &error_)) {
         return false;
     }
+    {
+        uint32_t count = 0;
+        std::vector<XrReferenceSpaceType> types;
+        if (XR_SUCCEEDED(x.xrEnumerateReferenceSpaces(x.session, 0, &count, nullptr)) && count > 0) {
+            types.resize(count);
+            x.xrEnumerateReferenceSpaces(x.session, count, &count, types.data());
+            types.resize(count);
+        }
+        if (std::find(types.begin(), types.end(), XR_REFERENCE_SPACE_TYPE_STAGE) != types.end()) {
+            space.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+            if (!x.Ok(x.xrCreateReferenceSpace(x.session, &space, &x.stage), "xrCreateReferenceSpace STAGE")) {
+                x.stage = XR_NULL_HANDLE;
+            }
+        }
+        LogInfo("vr: {}", x.stage ? "STAGE space for the floor" : "no STAGE space: the world stays at real size");
+    }
 
-    // actions: one set, bound for the common controllers
     XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
     std::snprintf(set_info.actionSetName, sizeof(set_info.actionSetName), "gameplay");
     std::snprintf(set_info.localizedActionSetName, sizeof(set_info.localizedActionSetName), "Gameplay");
@@ -462,20 +627,20 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
         suggested.interactionProfile = x.Path(profile);
         suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
         suggested.suggestedBindings = bindings.data();
-        // a runtime that does not know a profile may refuse it; the others still apply
         x.Ok(x.xrSuggestInteractionProfileBindings(x.instance, &suggested), profile);
     };
     suggest("/interaction_profiles/khr/simple_controller",
-            {{&x.interact, "/user/hand/right/input/select/click"}, {&x.menu, "/user/hand/left/input/menu/click"},
-             {&x.back, "/user/hand/left/input/select/click"}, {&x.aim, "/user/hand/left/input/aim/pose"},
-             {&x.aim, "/user/hand/right/input/aim/pose"}, {&x.haptic, "/user/hand/left/output/haptic"},
-             {&x.haptic, "/user/hand/right/output/haptic"}});
+            {{&x.zoom, "/user/hand/right/input/select/click"}, {&x.interact, "/user/hand/left/input/select/click"},
+             {&x.menu, "/user/hand/left/input/menu/click"}, {&x.back, "/user/hand/right/input/menu/click"},
+             {&x.aim, "/user/hand/left/input/aim/pose"}, {&x.aim, "/user/hand/right/input/aim/pose"},
+             {&x.haptic, "/user/hand/left/output/haptic"}, {&x.haptic, "/user/hand/right/output/haptic"}});
     suggest("/interaction_profiles/oculus/touch_controller",
             {{&x.move, "/user/hand/left/input/thumbstick"}, {&x.turn, "/user/hand/right/input/thumbstick"},
              {&x.interact, "/user/hand/right/input/a/click"}, {&x.back, "/user/hand/right/input/b/click"},
              {&x.gouge, "/user/hand/left/input/x/click"}, {&x.triangle, "/user/hand/left/input/y/click"},
              {&x.menu, "/user/hand/left/input/menu/click"}, {&x.zoom, "/user/hand/right/input/trigger/value"},
-             {&x.settings, "/user/hand/left/input/squeeze/value"},
+             {&x.zoom, "/user/hand/left/input/trigger/value"}, {&x.zoom, "/user/hand/right/input/squeeze/value"},
+             {&x.zoom, "/user/hand/left/input/squeeze/value"},
              {&x.aim, "/user/hand/left/input/aim/pose"}, {&x.aim, "/user/hand/right/input/aim/pose"},
              {&x.haptic, "/user/hand/left/output/haptic"}, {&x.haptic, "/user/hand/right/output/haptic"}});
     suggest("/interaction_profiles/valve/index_controller",
@@ -483,23 +648,23 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
              {&x.interact, "/user/hand/right/input/a/click"}, {&x.back, "/user/hand/right/input/b/click"},
              {&x.gouge, "/user/hand/left/input/a/click"}, {&x.triangle, "/user/hand/left/input/b/click"},
              {&x.menu, "/user/hand/left/input/thumbstick/click"}, {&x.zoom, "/user/hand/right/input/trigger/click"},
-             {&x.settings, "/user/hand/left/input/squeeze/value"},
+             {&x.zoom, "/user/hand/left/input/trigger/click"},
              {&x.aim, "/user/hand/left/input/aim/pose"}, {&x.aim, "/user/hand/right/input/aim/pose"},
              {&x.haptic, "/user/hand/left/output/haptic"}, {&x.haptic, "/user/hand/right/output/haptic"}});
     suggest("/interaction_profiles/htc/vive_controller",
             {{&x.move, "/user/hand/left/input/trackpad"}, {&x.turn, "/user/hand/right/input/trackpad"},
-             {&x.interact, "/user/hand/right/input/trigger/click"}, {&x.back, "/user/hand/right/input/squeeze/click"},
-             {&x.gouge, "/user/hand/left/input/trigger/click"}, {&x.triangle, "/user/hand/left/input/squeeze/click"},
-             {&x.menu, "/user/hand/left/input/menu/click"}, {&x.zoom, "/user/hand/right/input/trackpad/click"},
-             {&x.settings, "/user/hand/left/input/trackpad/click"},
+             {&x.interact, "/user/hand/right/input/trackpad/click"}, {&x.back, "/user/hand/right/input/squeeze/click"},
+             {&x.gouge, "/user/hand/left/input/trackpad/click"}, {&x.triangle, "/user/hand/left/input/squeeze/click"},
+             {&x.menu, "/user/hand/left/input/menu/click"}, {&x.zoom, "/user/hand/right/input/trigger/click"},
+             {&x.zoom, "/user/hand/left/input/trigger/click"}, {&x.settings, "/user/hand/right/input/menu/click"},
              {&x.aim, "/user/hand/left/input/aim/pose"}, {&x.aim, "/user/hand/right/input/aim/pose"},
              {&x.haptic, "/user/hand/left/output/haptic"}, {&x.haptic, "/user/hand/right/output/haptic"}});
     suggest("/interaction_profiles/microsoft/motion_controller",
             {{&x.move, "/user/hand/left/input/thumbstick"}, {&x.turn, "/user/hand/right/input/thumbstick"},
-             {&x.interact, "/user/hand/right/input/trigger/value"}, {&x.back, "/user/hand/right/input/squeeze/click"},
-             {&x.gouge, "/user/hand/left/input/trigger/value"}, {&x.triangle, "/user/hand/left/input/squeeze/click"},
-             {&x.menu, "/user/hand/left/input/menu/click"}, {&x.zoom, "/user/hand/right/input/thumbstick/click"},
-             {&x.settings, "/user/hand/left/input/thumbstick/click"},
+             {&x.interact, "/user/hand/right/input/trackpad/click"}, {&x.back, "/user/hand/right/input/squeeze/click"},
+             {&x.gouge, "/user/hand/left/input/trackpad/click"}, {&x.triangle, "/user/hand/left/input/squeeze/click"},
+             {&x.menu, "/user/hand/left/input/menu/click"}, {&x.zoom, "/user/hand/right/input/trigger/value"},
+             {&x.zoom, "/user/hand/left/input/trigger/value"}, {&x.settings, "/user/hand/right/input/menu/click"},
              {&x.aim, "/user/hand/left/input/aim/pose"}, {&x.aim, "/user/hand/right/input/aim/pose"},
              {&x.haptic, "/user/hand/left/output/haptic"}, {&x.haptic, "/user/hand/right/output/haptic"}});
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
@@ -526,13 +691,13 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
                                           x.views[eye].maxImageRectWidth);
         const uint32_t height = std::clamp(static_cast<uint32_t>(std::lround(x.views[eye].recommendedImageRectHeight * scale)), 16u,
                                            x.views[eye].maxImageRectHeight);
-        if (!CreateSwapchain(x, ctx, formats, width, height, eye_swapchains_[eye], eye == 0 ? "left eye" : "right eye")) {
+        if (!CreateSwapchain(x, x.ctx, formats, width, height, eye_swapchains_[eye], eye == 0 ? "left eye" : "right eye")) {
             error_ = "cannot create the eye swapchains";
             return false;
         }
     }
-    if (!CreateSwapchain(x, ctx, formats, 1920, 1080, hud_swapchain_, "HUD") ||
-        !CreateSwapchain(x, ctx, formats, 1920, 1080, screen_swapchain_, "virtual screen")) {
+    if (!CreateSwapchain(x, x.ctx, formats, 1920, 1080, hud_swapchain_, "HUD") ||
+        !CreateSwapchain(x, x.ctx, formats, 1920, 1080, screen_swapchain_, "virtual screen")) {
         error_ = "cannot create the screen swapchains";
         return false;
     }
@@ -543,8 +708,6 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
 void Host::Shutdown() {
     Impl& x = *impl_;
     if (x.session && x.running) {
-        // the runtime takes the session to stopping after the request, which may take frames: the loop runs on without layers
-        // until it is there (PollEvents ends the session), at most about a second
         if (frame_open_) {
             EndFrame({});
         }
@@ -568,6 +731,7 @@ void Host::Shutdown() {
         }
         sc->views.clear();
         sc->images.clear();
+        sc->d3d12_images.clear();
         if (sc->handle && x.xrDestroySwapchain) x.xrDestroySwapchain(reinterpret_cast<XrSwapchain>(sc->handle));
         sc->handle = 0;
     }
@@ -575,9 +739,10 @@ void Host::Shutdown() {
         if (space) x.xrDestroySpace(space);
         space = XR_NULL_HANDLE;
     }
+    if (x.stage) x.xrDestroySpace(x.stage);
     if (x.view) x.xrDestroySpace(x.view);
     if (x.local) x.xrDestroySpace(x.local);
-    x.view = x.local = XR_NULL_HANDLE;
+    x.stage = x.view = x.local = XR_NULL_HANDLE;
     if (x.session) {
         x.xrDestroySession(x.session);
         x.session = XR_NULL_HANDLE;
@@ -592,7 +757,6 @@ void Host::Shutdown() {
     }
     /* The OpenXR loader stays loaded on purpose: the Vulkan instance it created may still be destroyed after this. */
     x.ctx = nullptr;
-    // the loader stays loaded: the Vulkan instance it made may still be destroyed after this
 }
 
 void Host::PollEvents() {
@@ -626,6 +790,7 @@ void Host::PollEvents() {
             x.exit_requested = true;
             break;
         case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED: {
+            x.action_trace_seen = 0;
             XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
             for (int hand = 0; hand < 2; ++hand) {
                 if (XR_SUCCEEDED(x.xrGetCurrentInteractionProfile(x.session, x.hands[hand], &state))) {
@@ -637,10 +802,18 @@ void Host::PollEvents() {
                     LogInfo("vr: {} hand: {}", hand == 0 ? "left" : "right", name);
                 }
             }
+            if (std::getenv("PT_VR_INPUT_TRACE")) {
+                for (const auto& [action, name] : {std::pair{x.move, "move"}, {x.turn, "turn"}, {x.interact, "interact"},
+                                                  {x.back, "back"}, {x.menu, "menu"}, {x.zoom, "zoom"}, {x.gouge, "gouge"},
+                                                  {x.triangle, "triangle"}, {x.settings, "settings"}}) {
+                    x.LogBoundSources(action, name);
+                }
+            }
             break;
         }
         case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
             LogInfo("vr: reference space recentred");
+            ++recentres_;
             break;
         default:
             break;
@@ -664,12 +837,27 @@ bool Host::WaitFrame() {
     }
     XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState state{XR_TYPE_FRAME_STATE};
+    const auto wait_start = std::chrono::steady_clock::now();
     if (!x.Ok(x.xrWaitFrame(x.session, &wait, &state), "xrWaitFrame")) {
         return false;
     }
     display_time_ = state.predictedDisplayTime;
     display_period_ = std::clamp(static_cast<double>(state.predictedDisplayPeriod) * 1.0e-9, 1.0 / 240.0, 1.0 / 30.0);
     should_render_ = state.shouldRender == XR_TRUE;
+    static const bool trace = std::getenv("PT_VR_RENDER_TRACE") != nullptr;
+    if (state.predictedDisplayPeriod > 0 && x.logged_display_period == 0) {
+        x.logged_display_period = state.predictedDisplayPeriod;
+        LogInfo("vr pacing: runtime display period {:.3f} ms ({:.1f} Hz)", static_cast<double>(state.predictedDisplayPeriod) * 1.0e-6,
+                1.0e9 / static_cast<double>(state.predictedDisplayPeriod));
+    }
+    const uint64_t frame = x.pacing_trace_frames++;
+    if (trace && x.pacing_trace_lines < 256 && (frame < 4 || frame % 60 == 0 || state.predictedDisplayPeriod != x.logged_display_period)) {
+        const double waited_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_start).count();
+        LogInfo("vr pacing: frame {} period {:.3f} ms wait {:.3f} ms should render {}", frame,
+                static_cast<double>(state.predictedDisplayPeriod) * 1.0e-6, waited_ms, should_render_);
+        x.logged_display_period = state.predictedDisplayPeriod;
+        if (++x.pacing_trace_lines == 256) LogInfo("vr pacing: trace limit reached (256 waits)");
+    }
     return true;
 }
 
@@ -708,6 +896,15 @@ void Host::LocateViews() {
         eyes_[i].angles = glm::vec4(f.angleLeft, f.angleRight, f.angleUp, f.angleDown);
         eyes_[i].tangents = glm::vec4(std::tan(f.angleLeft), std::tan(f.angleRight), std::tan(f.angleUp), std::tan(f.angleDown));
     }
+    floor_eye_valid_ = false;
+    if (x.stage) {
+        XrSpaceLocation above{XR_TYPE_SPACE_LOCATION};
+        if (XR_SUCCEEDED(x.xrLocateSpace(x.view, x.stage, display_time_, &above)) && (above.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
+            (above.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) && std::isfinite(above.pose.position.y)) {
+            floor_eye_valid_ = true;
+            floor_eye_height_ = above.pose.position.y;
+        }
+    }
     XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
     if (XR_SUCCEEDED(x.xrLocateSpace(x.view, x.local, display_time_, &head)) && (head.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
         head_.orientation = glm::normalize(ToGlm(head.pose.orientation));
@@ -741,11 +938,25 @@ void Host::SyncActions() {
         }
         return glm::vec2(0.0f);
     };
-    auto boolean = [&](XrAction action) {
+    auto boolean = [&](XrAction action, const char* name, uint32_t bit) {
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = action;
         XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
-        if (XR_SUCCEEDED(x.xrGetActionStateBoolean(x.session, &get, &state)) && state.isActive) {
+        const XrResult result = x.xrGetActionStateBoolean(x.session, &get, &state);
+        if (XR_FAILED(result)) {
+            if (!(x.action_errors_logged & bit)) {
+                x.action_errors_logged |= bit;
+                x.Ok(result, name);
+            }
+            return false;
+        }
+        static const bool trace = std::getenv("PT_VR_INPUT_TRACE") != nullptr;
+        if (trace && x.action_trace_lines < 256 && (!(x.action_trace_seen & bit) || state.changedSinceLastSync)) {
+            x.action_trace_seen |= bit;
+            LogInfo("vr input: {} active {} held {}", name, state.isActive == XR_TRUE, state.currentState == XR_TRUE);
+            if (++x.action_trace_lines == 256) LogInfo("vr input: trace limit reached (256 action states)");
+        }
+        if (state.isActive) {
             controllers_.active = true;
             return state.currentState == XR_TRUE;
         }
@@ -753,13 +964,13 @@ void Host::SyncActions() {
     };
     controllers_.move = vector2(x.move);
     controllers_.turn = vector2(x.turn);
-    controllers_.interact = boolean(x.interact);
-    controllers_.back = boolean(x.back);
-    controllers_.menu = boolean(x.menu);
-    controllers_.zoom = boolean(x.zoom);
-    controllers_.gouge = boolean(x.gouge);
-    controllers_.triangle = boolean(x.triangle);
-    controllers_.settings = boolean(x.settings);
+    controllers_.interact = boolean(x.interact, "interact", 1u << 0);
+    controllers_.back = boolean(x.back, "back", 1u << 1);
+    controllers_.menu = boolean(x.menu, "menu", 1u << 2);
+    controllers_.zoom = boolean(x.zoom, "zoom", 1u << 3);
+    controllers_.gouge = boolean(x.gouge, "gouge", 1u << 4);
+    controllers_.triangle = boolean(x.triangle, "triangle", 1u << 5);
+    controllers_.settings = boolean(x.settings, "settings", 1u << 6);
     for (int hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = x.aim;

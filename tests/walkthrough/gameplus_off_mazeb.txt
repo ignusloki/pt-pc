@@ -1,0 +1,10 @@
+# Game+ off in a finished profile (the tier forced to 4 by the scenario): maze B plays as the original game, no bathtub Lisa
+sexpect gameplustier 0
+sexpect gameplus 0
+scamfile -1.0 1.6 -34.9 -1 -0.25 0 54.879
+swait 30
+sshot {shots}/gameplus_off_mazeb.png
+swait 30
+scamera off
+slog
+squit

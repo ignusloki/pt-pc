@@ -61,9 +61,6 @@ int main(int argc,char** argv) {
                 failures += mips[0][(g.atlas_y+y)*font.AtlasWidth()+g.atlas_x+x] != (font.Bit(g,x,y)?255:0);
         std::printf("Turkish font %s: %zu -> %zu glyphs\n",path,before,font.Glyphs().size());
     }
-    // The port's own texts in the game's six other languages: every key the full Chinese table has (all pc_ keys) and the added
-    // languages' names, the same {tokens}, and only characters the game's own font of that language has (font_def_jp for
-    // Japanese, font_def_ltn for the others), since those languages draw the PC pages with it
     {
         const char* names[]={"","French","German","Spanish","Japanese","Italian","Portuguese"};
         for(int lang=1;lang<=6;++lang) {

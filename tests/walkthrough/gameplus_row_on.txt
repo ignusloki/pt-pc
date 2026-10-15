@@ -1,0 +1,15 @@
+# Game+ switched back on in the middle of a loop: still off until the next floor, then the saved tier goes on
+sexpect gameplustier 0
+sui menu pc
+swait 60
+sui menukey tabprev
+swait 40
+sui pcset pc_game_plus 1
+swait 4
+sexpect pcvalue pc_game_plus 1
+sexpect gameplustier 0
+sui menukey back
+swait 60
+sui menukey close
+swait 90
+sexpect menu 0

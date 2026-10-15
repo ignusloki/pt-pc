@@ -1,0 +1,13 @@
+# the reporter's quit (issue 80): stand a moment after the clock demo's trap, then Quit in the option screen's footer (R1 focuses
+# it, CROSS asks, CROSS again quits); the menu's close saves the options only
+swait 120
+slog
+stap 0 options
+swait 70
+sexpect menu 1
+stap 0 r1
+swait 4
+stap 0 cross
+swait 4
+stap 0 cross
+swait 30

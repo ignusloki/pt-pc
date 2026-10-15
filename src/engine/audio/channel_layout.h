@@ -30,7 +30,6 @@ constexpr uint32_t AudioOutputChannelsForDevice(int actual_device_channels, bool
     return 2;
 }
 
-// SoundEngine order is FL, FR, FC, BL, BR, SL, SR, LFE; SDL uses FL, FR, FC, LFE, BL, BR, SL, SR.
 constexpr std::array<uint8_t, 8> kWwiseToSdl71 = {0, 1, 2, 7, 3, 4, 5, 6};
 constexpr float kSurroundFoldGain = 0.70710678f;
 
@@ -64,4 +63,4 @@ void ReorderSpeakers(const std::array<const float*, 8>& source, float* interleav
     }
 }
 
-}  // namespace pt::audio
+}

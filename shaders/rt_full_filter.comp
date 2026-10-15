@@ -1,0 +1,378 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+#include "rt_full_images.glsl"
+
+View v;
+
+bool PreviousSecond() {
+    return (pass.ids.w & 1u) != 0u;
+}
+
+bool HistoryValid() {
+    return (pass.ids.w & 2u) == 0u;
+}
+
+float PreviousDepth(ivec2 p) {
+    return PreviousSecond() ? imageLoad(rt_depth_history1, p).x : imageLoad(rt_depth_history0, p).x;
+}
+
+vec3 WorldAt(ivec2 pixel, float depth, out float z) {
+    z = ViewZ(v, depth);
+    vec2 ndc = (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
+    return (v.inv_view * vec4(ndc * v.projection_param.xy * z, z, 1.0)).xyz;
+}
+
+vec3 PreviousPlace(vec3 world, float scale) {
+    vec4 previous = pass.m * vec4(world, 1.0);
+    if (!(previous.w > 1.0e-4)) {
+        return vec3(0.0, 0.0, -1.0);
+    }
+    vec2 at = ((previous.xy / previous.w - pass.f1.xy) * 0.5 + 0.5) * v.viewport.xy;
+    return vec3((at - 0.5) * scale, previous.w);
+}
+
+void RatioSpatial(ivec2 pixel, ivec2 size) {
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    if (depth <= 0.0) {
+        imageStore(rt_ratio_spatial, pixel, vec4(1.0));
+        return;
+    }
+    float z = ViewZ(v, depth);
+    vec3 n = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+    vec4 lit = vec4(0.0);
+    vec4 shadowed = vec4(0.0);
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+            float dk = ImgFetch(IMG_DEPTH, p).x;
+            if (dk <= 0.0) {
+                continue;
+            }
+            float w = (x == 0 && y == 0) ? 1.0 : (x == 0 || y == 0) ? 0.5 : 0.25;
+            w *= exp(-abs(ViewZ(v, dk) - z) / (0.015 * z + 0.002));
+            w *= pow(max(dot(n, DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz)), 0.0), 16.0);
+            lit += w * imageLoad(rt_full_unshadowed, p);
+            shadowed += w * imageLoad(rt_full_shadowed, p);
+        }
+    }
+    vec3 lit_rgb = lit.rgb + lit.a;
+    vec3 shadowed_rgb = shadowed.rgb + shadowed.a;
+    vec3 ratio = vec3(1.0);
+    for (int i = 0; i < 3; ++i) {
+        ratio[i] = lit_rgb[i] > 1.0e-6 ? clamp(shadowed_rgb[i] / lit_rgb[i], 0.0, 1.0) : 1.0;
+    }
+    float lit_luma = Luma709(lit.rgb) + lit.a;
+    float specular = lit_luma > 1.0e-6 ? clamp((Luma709(shadowed.rgb) + shadowed.a) / lit_luma, 0.0, 1.0) : 1.0;
+    imageStore(rt_ratio_spatial, pixel, vec4(ratio, specular));
+}
+
+void RatioTemporal(ivec2 pixel, ivec2 size, bool ratio) {
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    bool second = !PreviousSecond();
+    if (depth <= 0.0) {
+        if (second) {
+            imageStore(rt_depth_history1, pixel, vec4(0.0));
+            if (ratio) imageStore(rt_ratio_history1, pixel, vec4(1.0));
+        } else {
+            imageStore(rt_depth_history0, pixel, vec4(0.0));
+            if (ratio) imageStore(rt_ratio_history0, pixel, vec4(1.0));
+        }
+        return;
+    }
+    float z;
+    vec3 world = WorldAt(pixel, depth, z);
+    if (second) {
+        imageStore(rt_depth_history1, pixel, vec4(z));
+    } else {
+        imageStore(rt_depth_history0, pixel, vec4(z));
+    }
+    if (!ratio) {
+        return;
+    }
+    vec4 current = imageLoad(rt_ratio_spatial, pixel);
+    vec4 lo = current;
+    vec4 hi = current;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec4 c = imageLoad(rt_ratio_spatial, clamp(pixel + ivec2(x, y), ivec2(0), size - 1));
+            lo = min(lo, c);
+            hi = max(hi, c);
+        }
+    }
+    vec4 result = current;
+    vec3 place = PreviousPlace(world, 1.0);
+    if (HistoryValid() && place.z > 0.0) {
+        ivec2 base = ivec2(floor(place.xy));
+        vec2 f = place.xy - vec2(base);
+        float weights[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        float sum = 0.0;
+        vec4 history = vec4(0.0);
+        for (int i = 0; i < 4; ++i) {
+            ivec2 p = base + offsets[i];
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) {
+                continue;
+            }
+            float previous_z = PreviousDepth(p);
+            if (!(previous_z > 0.0) || abs(previous_z - place.z) > 0.03 * place.z) {
+                continue;
+            }
+            sum += weights[i];
+            history += weights[i] * (PreviousSecond() ? imageLoad(rt_ratio_history1, p) : imageLoad(rt_ratio_history0, p));
+        }
+        if (sum > 0.05) {
+            history = clamp(history / sum, lo, hi);
+            result = mix(history, current, 0.25);
+        }
+    }
+    if (second) {
+        imageStore(rt_ratio_history1, pixel, result);
+    } else {
+        imageStore(rt_ratio_history0, pixel, result);
+    }
+}
+
+bool HalfSurface(ivec2 half_pixel, ivec2 size, out float z, out vec3 n) {
+    ivec2 pixel = min(half_pixel * 2, size - 1);
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    z = depth > 0.0 ? ViewZ(v, depth) : 0.0;
+    n = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+    return depth > 0.0;
+}
+
+vec4 LoadGi(int which, ivec2 p) {
+    return which == 0 ? imageLoad(rt_gi_history0, p) : which == 1 ? imageLoad(rt_gi_history1, p) : which == 2 ? imageLoad(rt_gi_ping, p)
+                      : imageLoad(rt_gi_pong, p);
+}
+
+void StoreGi(int which, ivec2 p, vec4 value) {
+    if (which == 0) imageStore(rt_gi_history0, p, value);
+    else if (which == 1) imageStore(rt_gi_history1, p, value);
+    else if (which == 2) imageStore(rt_gi_ping, p, value);
+    else imageStore(rt_gi_pong, p, value);
+}
+
+vec4 LoadGlossy(int which, ivec2 p) {
+    return which == 0 ? imageLoad(rt_glossy_history0, p) : which == 1 ? imageLoad(rt_glossy_history1, p) : which == 2 ? imageLoad(rt_glossy_ping, p)
+                      : imageLoad(rt_glossy_pong, p);
+}
+
+void StoreGlossy(int which, ivec2 p, vec4 value) {
+    if (which == 0) imageStore(rt_glossy_history0, p, value);
+    else if (which == 1) imageStore(rt_glossy_history1, p, value);
+    else if (which == 2) imageStore(rt_glossy_ping, p, value);
+    else imageStore(rt_glossy_pong, p, value);
+}
+
+void HalfTemporal(ivec2 half_pixel, ivec2 size, bool glossy) {
+    ivec2 half_size = (size + 1) / 2;
+    int written = PreviousSecond() ? 0 : 1;
+    int previous = 1 - written;
+    vec4 raw = glossy ? imageLoad(rt_glossy_raw, half_pixel) : imageLoad(rt_gi_raw, half_pixel);
+    float z;
+    vec3 n;
+    if (!HalfSurface(half_pixel, size, z, n)) {
+        if (glossy) StoreGlossy(written, half_pixel, vec4(0.0)); else StoreGi(written, half_pixel, vec4(0.0));
+        return;
+    }
+    bool skipped = glossy && raw.a < 0.0;
+    ivec2 pixel = min(half_pixel * 2, size - 1);
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    float zz;
+    vec3 world = WorldAt(pixel, depth, zz);
+    float max_frames = pass.f0.x;
+    vec3 lo = raw.rgb;
+    vec3 hi = raw.rgb;
+    int support = 0;
+    if (glossy && !skipped) {
+        float roughness = ImgFetch(IMG_MATERIAL, pixel).x;
+        max_frames = mix(3.0, pass.f0.y, Saturate(roughness / 0.4));
+        float around = -1.0;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                if (x == 0 && y == 0) {
+                    continue;
+                }
+                vec4 c = imageLoad(rt_glossy_raw, clamp(half_pixel + ivec2(x, y), ivec2(0), half_size - 1));
+                if (c.a >= 0.0 && Luma709(c.rgb) > around) {
+                    around = Luma709(c.rgb);
+                }
+            }
+        }
+        float center = Luma709(raw.rgb);
+        if (around >= 0.0 && center > around) {
+            raw.rgb *= around / center;
+        }
+        lo = raw.rgb;
+        hi = raw.rgb;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                vec4 c = (x == 0 && y == 0) ? raw : imageLoad(rt_glossy_raw, clamp(half_pixel + ivec2(x, y), ivec2(0), half_size - 1));
+                if (c.a >= 0.0) {
+                    lo = min(lo, c.rgb);
+                    hi = max(hi, c.rgb);
+                    support += (x == 0 && y == 0) ? 0 : 1;
+                }
+            }
+        }
+        vec3 spread = hi - lo;
+        lo = max(vec3(0.0), lo - 0.5 * spread);
+        hi = hi + 0.5 * spread;
+    }
+    vec3 history = vec3(0.0);
+    float count = 0.0;
+    float accumulated = 0.0;
+    vec3 place = PreviousPlace(world, 0.5);
+    if (HistoryValid() && place.z > 0.0) {
+        ivec2 base = ivec2(floor(place.xy));
+        vec2 f = place.xy - vec2(base);
+        float weights[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        float sum = 0.0;
+        vec3 color_sum = vec3(0.0);
+        float count_sum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 p = base + offsets[i];
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, half_size))) {
+                continue;
+            }
+            vec4 h = glossy ? LoadGlossy(previous, p) : LoadGi(previous, p);
+            float frames = abs(h.a);
+            if (frames > 0.0) {
+                accumulated = max(accumulated, Luma709(h.rgb));
+            }
+            float previous_z = PreviousDepth(min(p * 2, size - 1));
+            if (!(previous_z > 0.0) || abs(previous_z - place.z) > 0.03 * place.z) {
+                continue;
+            }
+            if (frames <= 0.0) {
+                continue;
+            }
+            sum += weights[i];
+            color_sum += weights[i] * h.rgb;
+            count_sum += weights[i] * frames;
+        }
+        if (sum > 0.05) {
+            history = color_sum / sum;
+            count = count_sum / sum;
+            if (glossy && !skipped && support >= 3) {
+                history = clamp(history, lo, hi);
+            }
+        }
+    }
+    if (skipped) {
+        StoreGlossy(written, half_pixel, count > 0.0 ? vec4(history, -count) : vec4(0.0));
+        return;
+    }
+    count = min(count + 1.0, max(max_frames, 1.0));
+    if (!glossy && pass.f0.w < 0.5) {
+        float around = accumulated;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                if (x != 0 || y != 0) {
+                    around = max(around, Luma709(imageLoad(rt_gi_raw, clamp(half_pixel + ivec2(x, y), ivec2(0), half_size - 1)).rgb));
+                }
+            }
+        }
+        float center = Luma709(raw.rgb);
+        float bound = around * count;
+        if (center > bound) {
+            raw.rgb *= bound / center;
+        }
+    }
+    vec4 result = vec4(mix(history, raw.rgb, 1.0 / count), count);
+    if (pass.f0.z > 0.5) {
+        result = vec4(place.xy - vec2(half_pixel), place.z / z, PreviousDepth(min(half_pixel * 2, size - 1)) / z);
+    }
+    if (glossy) StoreGlossy(written, half_pixel, result); else StoreGi(written, half_pixel, result);
+}
+
+void HalfAtrous(ivec2 half_pixel, ivec2 size, bool glossy, int from, int to, int step) {
+    ivec2 half_size = (size + 1) / 2;
+    float z;
+    vec3 n;
+    vec4 center = glossy ? LoadGlossy(from, half_pixel) : LoadGi(from, half_pixel);
+    if (!HalfSurface(half_pixel, size, z, n) || center.a <= 0.0) {
+        if (glossy) StoreGlossy(to, half_pixel, center); else StoreGi(to, half_pixel, center);
+        return;
+    }
+    float reach = 1.0;
+    if (glossy) {
+        float roughness = ImgFetch(IMG_MATERIAL, min(half_pixel * 2, size - 1)).x;
+        reach = Saturate((roughness - 0.08) / 0.3);
+        if (reach <= 0.0) {
+            StoreGlossy(to, half_pixel, center);
+            return;
+        }
+    }
+    const float kernel[3] = float[3](0.375, 0.25, 0.0625);
+    vec3 sum = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            ivec2 p = half_pixel + ivec2(x, y) * step;
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, half_size))) {
+                continue;
+            }
+            vec4 c = glossy ? LoadGlossy(from, p) : LoadGi(from, p);
+            float zk;
+            vec3 nk;
+            if (!HalfSurface(p, size, zk, nk) || c.a <= 0.0) {
+                continue;
+            }
+            float w = kernel[abs(x)] * kernel[abs(y)];
+            if (x != 0 || y != 0) {
+                w *= reach;
+            }
+            w *= exp(-abs(zk - z) / (0.02 * z * float(step) + 0.005));
+            w *= pow(max(dot(n, nk), 0.0), 32.0);
+            sum += w * c.rgb;
+            weight_sum += w;
+        }
+    }
+    vec4 result = vec4(weight_sum > 1.0e-6 ? sum / weight_sum : center.rgb, center.a);
+    if (glossy) StoreGlossy(to, half_pixel, result); else StoreGi(to, half_pixel, result);
+}
+
+void main() {
+    v = frame.views[pass.ids.x];
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(v.viewport.xy);
+    uint mode = pass.ids.z;
+    bool half_res = mode >= 3u;
+    ivec2 limit = half_res ? (size + 1) / 2 : size;
+    if (pixel.x >= limit.x || pixel.y >= limit.y) {
+        return;
+    }
+    int written = PreviousSecond() ? 0 : 1;
+    if (mode == 0u) {
+        RatioSpatial(pixel, size);
+    } else if (mode == 1u || mode == 2u) {
+        RatioTemporal(pixel, size, mode == 1u);
+    } else if (mode == 3u) {
+        HalfTemporal(pixel, size, false);
+    } else if (mode == 4u) {
+        HalfAtrous(pixel, size, false, written, 2, 1);
+    } else if (mode == 5u) {
+        HalfAtrous(pixel, size, false, 2, 3, 2);
+    } else if (mode == 6u) {
+        HalfAtrous(pixel, size, false, 3, 2, 4);
+    } else if (mode == 7u) {
+        HalfTemporal(pixel, size, true);
+    } else if (mode == 8u) {
+        HalfAtrous(pixel, size, true, written, 2, 1);
+    } else if (mode == 9u) {
+        HalfAtrous(pixel, size, true, 2, 3, 2);
+    }
+}

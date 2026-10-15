@@ -17,7 +17,6 @@ namespace pt {
 
 class Vfs {
 public:
-    // how many of the packages every loop needs (resident, start, hallway, ...) chunk1.psarc lacks: 0 for a P.T. dump
     int MissingCorePackages() const;
     bool Mount(const std::filesystem::path& game_dir);
 
@@ -32,6 +31,7 @@ public:
     void UnloadPackage(std::string_view path);
 
     std::optional<std::vector<uint8_t>> ReadFile(std::string_view path) const;
+    std::optional<std::vector<uint8_t>> ReadFileUntraced(std::string_view path) const;
 
 private:
     void ReportDataDifferences() const;

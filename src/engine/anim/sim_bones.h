@@ -12,11 +12,8 @@ class SimBones {
 public:
     SimBones();
 
-    // Reset simulation state
     void Reset();
 
-    // Evaluate simulation for bones 112..175 (SKL_600..SKL_663)
-    // Runs after rig and help bones, before ComputeSkin
     void Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, float dt = 1.0f / 60.0f);
 
 private:
@@ -40,7 +37,6 @@ private:
     int waist_bone_ = -1;
 };
 
-// PT_SIM_BONES_OFF=1 disables simulation bones for comparisons
 bool SimBonesEnabled();
 
 }

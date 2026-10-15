@@ -10,12 +10,13 @@
 #include <utility>
 #include <vector>
 
+#include "engine/platform/gyro.h"
+
 union SDL_Event;
 struct SDL_Gamepad;
 
 namespace pt {
 
-// raw pad bits, 0xA70BF0
 enum PadRaw : uint32_t {
     kRawSquare = 1u << 0,
     kRawCross = 1u << 1,
@@ -35,7 +36,6 @@ enum PadRaw : uint32_t {
     kRawRight = 1u << 15,
 };
 
-// player pad record, table 0x13CEAE0 (0x1277770)
 enum PadButton : uint32_t {
     kPadZoom = 1u << 0,
     kPadL1 = 1u << 1,
@@ -53,36 +53,42 @@ enum PadButton : uint32_t {
 
 uint32_t PlayerButtonsFromRaw(uint32_t raw);
 
-// Keyboard and mouse bindings (PC): the one table Poll and ProcessEvent read and the button prompts name. Walk* are the left stick,
-// Pad* the D-pad, Zoom R3, Act cross in play, Menu OPTIONS, Confirm and Cancel the menus' triangle and square rows, PcSettings the
-// PC settings page (the pad's View/Share/Create).
 enum class KeyAction : uint8_t {
     WalkForward, WalkBack, WalkLeft, WalkRight, PadUp, PadDown, PadLeft, PadRight, Zoom, Act, Menu, Confirm, Cancel, PcSettings, MenuColumn,
-    MenuQuit, MenuHouse, FastWalk
+    MenuQuit, MenuHouse, FastWalk,
+    DateAuto, DateSkip,
+    PhotoSave, PhotoHide, FreeRise, FreeSink, FreeFast,
+    MusicBack, MusicForward, MusicRestart, MusicLoop,
+    MenuTabPrev, MenuTabNext, MenuDonate
 };
+
+inline constexpr uint32_t kMenuKeyTabPrev = 1;
+inline constexpr uint32_t kMenuKeyTabNext = 2;
+inline constexpr uint32_t kMenuKeyDonate = 4;
+inline constexpr uint32_t kMenuKeyFromE = 8;
+
+inline constexpr uint32_t kMusicPressBack = 1;
+inline constexpr uint32_t kMusicPressForward = 2;
+inline constexpr uint32_t kMusicPressRestart = 4;
+inline constexpr uint32_t kMusicPressLoop = 8;
 
 struct KeyBinding {
     KeyAction action;
-    uint16_t scancode;  // SDL_Scancode, 0 for a mouse button
-    uint8_t mouse;      // SDL mouse button (1 left, 2 middle, 3 right), 0 for a key
+    uint16_t scancode;
+    uint8_t mouse;
 };
 
-// In the order a prompt names them: the first binding of an action is the one shown
 std::span<const KeyBinding> KeyBindings();
 const KeyBinding* FirstBinding(KeyAction action, bool keys_only = false);
-// What a prompt writes on a key: its name in the current keyboard layout, shortened as keycaps are (Esc, Enter, Backspace, F10, E)
 std::string KeyBindingName(const KeyBinding& binding);
+using KeyLayoutFunction = uint32_t (*)(uint16_t scancode);
+void SetKeyLayoutForTest(KeyLayoutFunction layout);
 
-// Whose buttons the prompts show: the device used last, switched at once (a key, mouse click or menu pointer move, a pad button, stick
-// or trigger, or a pad connected)
 enum class PromptDevice : uint8_t { Keyboard, PlayStation, Xbox, Nintendo, Steam };
 const char* PromptDeviceName(PromptDevice device);
 
-// SDL 3.4.16 has no Steam gamepad type yet. Recognize the Valve and HORI Steam identities directly until the SDL type is available.
 bool IsSteamGamepadId(uint16_t vendor, uint16_t product);
 
-// What the prompts show: the device family (PlayStation, Nintendo, Steam, otherwise Xbox) and for a pad the letters on its south, east,
-// west and north face buttons (from SDL, except Steam is fixed to A/B/X/Y; 0 for PlayStation's shapes)
 struct PromptStyle {
     PromptDevice device = PromptDevice::Keyboard;
     std::array<char, 4> faces{};
@@ -99,6 +105,7 @@ struct InputState {
     uint32_t raw_held = 0;
     uint32_t raw_pressed = 0;
     bool pause = false;
+    bool pause_held = false;
     bool confirm = false;
     bool cancel = false;
     bool pc_settings = false;
@@ -109,20 +116,23 @@ struct InputState {
     bool click = false;
     bool right_click = false;
     bool gouge_pressed = false;
-    // Both gamepad triggers pressed together, once per chord (Jack fallback).
     bool voice_keyword_pressed = false;
-    // H pressed on the option screen (its street walk line)
     bool house_pressed = false;
+    bool date_auto_pressed = false;
+    bool date_skip_pressed = false;
+    uint32_t music_pressed = 0;
+    uint32_t menu_keys_pressed = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     PromptStyle prompts;
-    // VR (docs/vr.md): the head's yaw and pitch (radians, the camera's convention) take the place of the look sticks and the
-    // mouse while the look is the player's (Player::UpdateLook)
     bool vr_look = false;
     glm::vec2 vr_look_angles{0.0f};
-    // applied after Player's original gamepad look dead zone and response curve
     float gamepad_sensitivity = 1.0f;
+    glm::vec2 gyro_turn{0.0f};
+    glm::vec2 gyro_light{0.0f};
 };
+
+void MergeFrameButtons(InputState& pending, const InputState& polled);
 
 struct InputSettings {
     float mouse_sensitivity = 0.0015f;
@@ -130,6 +140,9 @@ struct InputSettings {
     float stick_dead_zone = 26.0f / 255.0f;
     bool rumble = true;
     bool trigger_rumble = false;
+    int prompt_style = 0;
+    int gyro = 0;
+    float gyro_sensitivity = 1.0f;
 };
 
 struct GamepadInfo {
@@ -150,18 +163,15 @@ struct GamepadInfo {
     int touchpads = 0;
     bool rumble = false;
     bool trigger_rumble = false;
+    bool gyro = false;
 };
 
 std::vector<GamepadInfo> DescribeJoysticks();
 std::string DescribeGamepad(const GamepadInfo& info);
 void LogJoysticks(uint32_t wait_ms);
-// SDL scancode of a key name (SDL's names with '_' for spaces: W, Left_Shift, Escape, Return, F10), 0 when unknown
 uint32_t ScancodeFromName(std::string_view name);
-// SDL mouse button number of left, middle or right (1, 2, 3), 0 when unknown
 uint32_t MouseButtonFromName(std::string_view name);
 
-// What the mouse does in this frame: Look (captured in play: motion looks, the buttons are cross and R3), Menu (a pointer; the right
-// button held is R3, the option screen's zoom), None.
 enum class MouseUse { None, Look, Menu };
 
 class KeyPressLatch {
@@ -181,16 +191,15 @@ public:
     void ProcessEvent(const SDL_Event& event);
     InputState Poll(bool keyboard_free, MouseUse mouse, bool pads_free = true);
     void SetRumble(uint8_t large_motor, uint8_t small_motor);
-    // Optional trigger feedback from game events; sent only when trigger rumble is enabled and SDL reports support.
     void SetTriggerRumble(uint8_t left, uint8_t right);
     size_t GamepadCount() const { return pads_.size(); }
     uint32_t RumblePad() const { return rumble_pad_; }
     SDL_Gamepad* LastUsedGamepad() const;
-    const PromptStyle& Prompts() const { return prompts_; }
-    // Test input (input scripts): a key or mouse button press or release sent through ProcessEvent as SDL would, and held for Poll
-    // alongside the real keyboard and mouse state
+    PromptStyle Prompts() const { return ShownPrompts(); }
     void InjectKey(uint32_t scancode, bool down);
     void InjectMouseButton(uint8_t button, bool down);
+    void InjectMouseMotion(float dx, float dy, int polls);
+    const GyroTracker& Gyro() const { return gyro_; }
 
     InputSettings settings;
 
@@ -204,6 +213,9 @@ private:
         uint32_t previous_gouge = 0;
         bool previous_voice_chord = false;
         bool trigger_rumble_supported = false;
+        bool has_gyro = false;
+        bool gyro_on = false;
+        uint64_t gyro_time = 0;
     };
 
     void Open(uint32_t id);
@@ -214,8 +226,12 @@ private:
     uint32_t TouchRaw(const Pad& pad) const;
     glm::vec2 Stick(const Pad& pad, int x_axis, int y_axis) const;
     void UpdateRumble();
+    void UpdateGyroSensors();
 
     std::vector<Pad> pads_;
+    GyroTracker gyro_;
+    uint32_t gyro_pad_ = 0;
+    bool gyro_missing_logged_ = false;
     uint64_t use_counter_ = 0;
     float mouse_dx_ = 0.0f;
     float mouse_dy_ = 0.0f;
@@ -223,6 +239,11 @@ private:
     uint32_t previous_raw_ = 0;
     bool previous_gouge_key_ = false;
     bool previous_house_key_ = false;
+    uint32_t previous_menu_keys_ = 0;
+    bool pad_back_edge_ = false;
+    bool previous_date_auto_key_ = false;
+    bool previous_date_skip_key_ = false;
+    uint32_t previous_music_keys_ = 0;
     bool pause_edge_ = false;
     bool confirm_edge_ = false;
     bool cancel_edge_ = false;
@@ -233,7 +254,11 @@ private:
     bool last_from_gamepad_ = false;
     std::vector<bool> injected_keys_;
     uint32_t injected_mouse_ = 0;
+    glm::vec2 injected_motion_{0.0f};
+    int injected_motion_polls_ = 0;
+    uint32_t mouse_down_latch_ = 0;
     PromptStyle prompts_;
+    PromptStyle ShownPrompts() const;
     uint32_t prompt_pad_ = 0;
     float mouse_travel_ = 0.0f;
     bool key_pressed_since_poll_ = false;

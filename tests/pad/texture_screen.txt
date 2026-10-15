@@ -1,0 +1,14 @@
+# The start's enhanced textures screen (before the title picture): the progress line with its bar and the skip control, the question that
+# asks to skip (Return asks, then Return answers yes and Esc answers no: the buttons of the device in use, --prompts keyboard, playstation or
+# xbox), and the start going on after yes. PT_TEST_TEXTURE_SCREEN=3000 makes up a generation of 3000 maps in a headless run (a real one
+# needs the texture tools and a window).
+# PT_TEST_TEXTURE_SCREEN=3000 pt.exe --headless --render-all --virtual-pads --audio-offline --no-save --no-mods --prompts keyboard
+#   --width 1280 --height 720 --frames 400 --input-script tests/pad/texture_screen.txt
+6 sshot texture_screen_progress.png
+10 ktap Return
+16 sshot texture_screen_ask.png
+18 ktap Escape
+24 sshot texture_screen_back_to_progress.png
+26 ktap Return
+32 ktap Return
+40 sshot texture_screen_after_skip.png

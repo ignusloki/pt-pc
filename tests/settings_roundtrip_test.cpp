@@ -1,5 +1,3 @@
-// pt.ini round trip: every field of AppSettings changed from its default, saved, loaded back; out-of-range and malformed values
-// clamped or ignored on load. usage: pt_settings_roundtrip_test <temporary folder>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -24,16 +22,16 @@ bool Near(float a, float b) { return std::abs(a - b) <= 1e-5f * std::max(1.0f, s
 bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
-    return x.hdr==y.hdr && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
+    return x.hdr==y.hdr && x.hdr_paper_white==y.hdr_paper_white && x.hdr_peak==y.hdr_peak && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
            x.pause_on_focus_loss == y.pause_on_focus_loss && x.mute_in_background == y.mute_in_background && x.letterbox == y.letterbox &&
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
-           a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && Near(a.audio.volume, b.audio.volume) &&
+           a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && a.game == b.game && Near(a.audio.volume, b.audio.volume) &&
            a.voice.microphone_enabled == b.voice.microphone_enabled && a.voice.device == b.voice.device && a.voice.key == b.voice.key && a.upscaling.upscaler == b.upscaling.upscaler &&
            a.upscaling.quality == b.upscaling.quality && Near(a.upscaling.scale, b.upscaling.scale) &&
            Near(a.upscaling.sharpness, b.upscaling.sharpness) && a.upscaling.dlss_model == b.upscaling.dlss_model &&
-           a.upscaling.frame_generation == b.upscaling.frame_generation &&
-           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr && a.extras == b.extras;
+           a.upscaling.frame_generation == b.upscaling.frame_generation && a.upscaling.ray_reconstruction == b.upscaling.ray_reconstruction &&
+           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr && a.accessibility == b.accessibility && a.extras == b.extras;
 }
 
 pt::AppSettings RoundTrip(const std::filesystem::path& path, const pt::AppSettings& s) {
@@ -58,17 +56,18 @@ int main(int argc, char** argv) {
     const std::filesystem::path ini = dir / "roundtrip.ini";
 
     Check("defaults", Same(RoundTrip(ini, {}), {}));
-    // one field at a time, each to a value the PC settings page can write
     const std::vector<std::pair<std::string, std::function<void(pt::AppSettings&)>>> changes = {
         {"display.width/height", [](auto& s) { s.display.width = 2560; s.display.height = 1080; }},
         {"display.hdr", [](auto& s) { s.display.hdr = true; }},
         {"display.fps_limit", [](auto& s) { s.display.fps_limit = 144; }},
+        {"display.hdr_paper_white", [](auto& s) { s.display.hdr_paper_white = 320; }},
+        {"display.hdr_peak", [](auto& s) { s.display.hdr_peak = 1600; }},
         {"audio.controller_speaker", [](auto& s) { s.audio.controller_speaker = true; }},
         {"audio.controller_speaker_volume", [](auto& s) { s.audio.controller_speaker_volume = 0.25f; }},
         {"audio.surround", [](auto& s) { s.audio.surround = true; }},
         {"input.rumble_profile", [](auto& s) { s.input.rumble_profile = 1; }},
         {"vr.height_offset", [](auto& s) { s.vr.height_offset = -0.2f; }},
-        {"vr.world_scale", [](auto& s) { s.vr.world_scale = 1.5f; }},
+        {"vr.world_size", [](auto& s) { s.vr.world_size = 1.5f; }},
         {"display.fullscreen", [](auto& s) { s.display.fullscreen = 2; }},
         {"display.vsync", [](auto& s) { s.display.vsync = false; }},
         {"display.pause_on_focus_loss", [](auto& s) { s.display.pause_on_focus_loss = false; }},
@@ -82,6 +81,7 @@ int main(int argc, char** argv) {
         {"camera.roll", [](auto& s) { s.camera.roll = 0.0f; }},
         {"camera.third_person", [](auto& s) { s.camera.third_person = true; }},
         {"extras.fast_walk", [](auto& s) { s.extras.fast_walk = true; }},
+        {"game.game_plus", [](auto& s) { s.game.game_plus = false; }},
         {"audio.volume", [](auto& s) { s.audio.volume = 1.7f; }},
         {"voice.microphone_enabled", [](auto& s) { s.voice.microphone_enabled = false; }},
         {"voice.device", [](auto& s) { s.voice.device = "Microphone (USB Audio Device)"; }},
@@ -92,10 +92,14 @@ int main(int argc, char** argv) {
         {"upscaling.sharpness", [](auto& s) { s.upscaling.sharpness = 0.7f; }},
         {"upscaling.dlss_model", [](auto& s) { s.upscaling.dlss_model = "k"; }},
         {"upscaling.frame_generation", [](auto& s) { s.upscaling.frame_generation = "dlss"; }},
+        {"upscaling.ray_reconstruction", [](auto& s) { s.upscaling.ray_reconstruction = false; }},
         {"raytracing.shadows", [](auto& s) { s.ray_tracing.shadows = 2; }},
         {"raytracing.ambient_occlusion", [](auto& s) { s.ray_tracing.ambient_occlusion = true; }},
         {"raytracing.contact_shadows", [](auto& s) { s.ray_tracing.contact_shadows = true; }},
         {"raytracing.reflections", [](auto& s) { s.ray_tracing.reflections = true; }},
+        {"raytracing.full_shadows", [](auto& s) { s.ray_tracing.full_shadows = false; }},
+        {"raytracing.bounce_light", [](auto& s) { s.ray_tracing.bounce_light = false; }},
+        {"raytracing.glossy_reflections", [](auto& s) { s.ray_tracing.glossy_reflections = false; }},
         {"graphics.anisotropy", [](auto& s) { s.graphics.anisotropy = 8; }},
         {"graphics.enhanced_textures", [](auto& s) { s.graphics.enhanced_textures = true; }},
         {"graphics.shadow_quality", [](auto& s) { s.graphics.shadow_quality = 0; }},
@@ -106,10 +110,18 @@ int main(int argc, char** argv) {
         {"graphics.motion_blur", [](auto& s) { s.graphics.motion_blur = false; }},
         {"graphics.lens_distortion", [](auto& s) { s.graphics.lens_distortion = false; }},
         {"graphics.lens_ghosts", [](auto& s) { s.graphics.lens_ghosts = false; }},
+        {"graphics.deband", [](auto& s) { s.graphics.deband = true; }},
         {"graphics.film_grain", [](auto& s) { s.graphics.film_grain = 0.75f; }},
         {"graphics.clarity", [](auto& s) { s.graphics.clarity = 0.4f; }},
         {"graphics.texture_detail", [](auto& s) { s.graphics.texture_detail = 0; }},
-        {"graphics.ray_quality", [](auto& s) { s.graphics.ray_quality = 2; }},
+        {"graphics.ray_quality older ultra", [](auto& s) { s.graphics.ray_quality = 2; }},
+        {"graphics.ray_quality ultra", [](auto& s) { s.graphics.ray_quality = 3; }},
+        {"graphics.ray_quality path traced", [](auto& s) { s.graphics.ray_quality = 4; }},
+        {"accessibility.sound_captions", [](auto& s) { s.accessibility.sound_captions = true; }},
+        {"accessibility.gyro camera", [](auto& s) { s.accessibility.gyro = 1; }},
+        {"accessibility.gyro flashlight", [](auto& s) { s.accessibility.gyro = 2; s.accessibility.gyro_sensitivity = 2.0f; }},
+        {"accessibility.field_of_view wider", [](auto& s) { s.accessibility.fov_offset = 30; }},
+        {"accessibility.field_of_view narrower", [](auto& s) { s.accessibility.fov_offset = -10; }},
         {"mods", [](auto& s) { s.mods["a mod"] = false; s.mods["other"] = true; }},
         {"vr.enabled", [](auto& s) { s.vr.enabled = true; }},
         {"vr.flashlight", [](auto& s) { s.vr.flashlight = 1; }},
@@ -127,11 +139,11 @@ int main(int argc, char** argv) {
         Check(name + " changes the settings", !Same(s, pt::AppSettings{}));
         Check(name + " round trip", Same(loaded, s));
     }
-    // a hand-edited file: out-of-range values are clamped, malformed ones keep the default, unknown keys are ignored
     const pt::AppSettings odd = LoadText(ini,
         "[display]\nletterbox = 7\nfullscreen = -3\nwidth = 99999\n[graphics]\nanisotropy = 5\nfilm_grain = nan\nclarity = 3\n"
-        "shadow_quality = 9\ntexture_detail = -1\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"
-        "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n");
+        "shadow_quality = 9\ntexture_detail = -1\nray_quality = 7\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"
+        "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n"
+        "[accessibility]\ngyro = 7\ngyro_sensitivity = nan\nsound_captions = yes\nfield_of_view = 90\n");
     Check("letterbox clamped", odd.display.letterbox == 2);
     Check("fullscreen clamped", odd.display.fullscreen == 0);
     Check("width clamped", odd.display.width == 16384);
@@ -140,6 +152,10 @@ int main(int argc, char** argv) {
     Check("clarity clamped", odd.graphics.clarity == 1.0f);
     Check("shadow quality clamped", odd.graphics.shadow_quality == 3);
     Check("texture detail clamped", odd.graphics.texture_detail == 0);
+    Check("ray quality clamped to Path traced", odd.graphics.ray_quality == 4);
+    Check("ray quality 2 reads as Ultra", LoadText(dir / "rq2.ini", "[graphics]\nray_quality = 2\n").graphics.ray_quality == 3);
+    Check("ray quality 5 reads as the older Ultra", LoadText(dir / "rq5.ini", "[graphics]\nray_quality = 5\n").graphics.ray_quality == 2);
+    Check("ray quality 3 stays Ultra", LoadText(dir / "rq3.ini", "[graphics]\nray_quality = 3\n").graphics.ray_quality == 3);
     Check("traced shadows clamped", odd.ray_tracing.shadows == 2);
     Check("gamepad sensitivity clamped", odd.input.gamepad_sensitivity == 4.0f);
     Check("malformed volume keeps the default", odd.audio.volume == 1.0f);
@@ -157,6 +173,18 @@ int main(int argc, char** argv) {
     Check("microphone off retains optional trigger", !mic_off.voice.microphone_enabled && mic_off.voice.key == "J");
     Check("microphone off persists", !RoundTrip(ini, mic_off).voice.microphone_enabled);
     Check("microphone on persists", RoundTrip(ini, {}).voice.microphone_enabled);
+    Check("game plus on by default", pt::AppSettings{}.game.game_plus);
+    Check("game plus off reads", !LoadText(ini, "[game]\ngame_plus = 0\n").game.game_plus);
+    Check("gyro clamped", odd.accessibility.gyro == 2);
+    Check("gyro sensitivity nan is the default", odd.accessibility.gyro_sensitivity == 1.0f);
+    Check("captions read yes as on", odd.accessibility.sound_captions);
+    Check("field of view clamped", odd.accessibility.fov_offset == 40);
+    Check("field of view is the original's by default", pt::AppSettings{}.accessibility.fov_offset == 0);
+    Check("accessibility off by default", pt::AppSettings{}.accessibility == pt::AppSettings::Accessibility{} && !pt::AppSettings{}.accessibility.sound_captions &&
+                                            pt::AppSettings{}.accessibility.gyro == 0);
+    Check("vr world_scale of an older version leaves the size at 1", LoadText(ini, "[vr]\nworld_scale = 0.5\n").vr.world_size == 1.0f);
+    Check("vr world_size wins over an old world_scale", LoadText(ini, "[vr]\nworld_scale = 0.5\nworld_size = 1.25\n").vr.world_size == 1.25f);
+    Check("vr world_size clamped", LoadText(ini, "[vr]\nworld_size = 9\n").vr.world_size == 2.0f);
     std::filesystem::remove(ini);
     std::printf("%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

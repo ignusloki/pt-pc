@@ -8,24 +8,22 @@ float ShadowTap(vec2 uv, float zref) {
     return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
 }
 #else
+#ifdef PT_D3D12
+/* D3D12: the comparison sampler is not one of samplers[] (common.glsl); the host binds a SamplerComparisonState here (LESS, linear) */
+layout(set = 1, binding = 6) uniform samplerShadow shadow_sampler;
+#define PT_SHADOW_SAMPLER shadow_sampler
+#else
+#define PT_SHADOW_SAMPLER samplers[SMP_SHADOW]
+#endif
 float ShadowTap(vec2 uv, float zref) {
-    return texture(sampler2DShadow(images[IMG_SHADOW], samplers[SMP_SHADOW]), vec3(uv, zref));
+    return texture(sampler2DShadow(images[IMG_SHADOW], PT_SHADOW_SAMPLER), vec3(uv, zref));
 }
 #endif
 
-// The original's shadow taps take a frame-fixed 2x2 pattern: the four taps sit at +-0.5 +- 0.125 d around the sample, d
-// alternating between neighbouring pixels. Where a shadow map texel covers many pixels (the hand's shadow on the floor in
-// the wake-up, gc_p00_020) the shift of a quarter texel between neighbours turns the penumbra into a 2x2 checker of the
-// full penumbra contrast; FXAA softens it in the original. A temporal upscaler keeps the checker as texture and shows it
-// raw wherever the shadow moves over the floor and the history is dropped, so with an upscaler the main view takes one d
-// for all pixels, cycled over the four values frame by frame (View temporal.yz): each frame's penumbra is smooth and the
-// history averages the same 16 offsets the 2x2 pattern spreads over a block.
 vec2 Dither2x2(vec3 frag) {
     return vec2(fract(0.5 * (frag.x - 0.5)) >= 0.3 ? 1.0 : -1.0, fract(0.5 * (frag.y - 0.5)) >= 0.3 ? 1.0 : -1.0);
 }
 
-// rotate (View jitter.w, PT_SHADOW_ROTATE=1 with an upscaler): the taps turned per pixel and frame. Off by default: the turning
-// pattern only averages out while the view rests, and in motion it rippled around the handy light's circle on flat walls
 float ShadowPcf(vec2 uv, float zref, vec2 lo, vec2 hi, vec2 texel, vec3 frag, float rotate, float frame_time, vec4 temporal) {
     vec2 d = temporal.w > 0.5 && rotate <= 0.5 ? temporal.yz : Dither2x2(frag);
     mat2 rot = mat2(1.0);
@@ -49,14 +47,6 @@ float ShadowPcf(vec2 uv, float zref, vec2 lo, vec2 hi, vec2 texel, vec3 frag, fl
     return sum;
 }
 
-// The original's m_shadowProjection (0xDC07F0) is inverse(camera) * lightView * projection * texture, where the camera
-// matrix has its translation replaced by (0, 0, -viewBias) and the light view's translation z has shadowBias added: the
-// receiver moves viewBias (range.w) along the original's view z, which points forward, so the negative values in use move
-// it toward the camera, and shadowBias (direction.w) along the light's axis. Both are translations, so their order does
-// not matter. The port's View holds the Fox view (FoxView: z forward, ViewZ > 0 ahead), so inv_view[2] is the camera's
-// forward axis and the original's offset is a plus. With a minus the receiver went 5 mm away from the camera: head-on that put
-// the lobby paintings (f010 pict003, pict015) behind their frame's backing quad, 1.5 mm in front of the picture, so the
-// CeilLamp's map shadowed them black, while seen obliquely the offset ran mostly along the wall.
 float SpotShadow(Light l, View v, vec3 world, float shadow_cone, vec3 frag) {
     vec3 receiver = world + v.inv_view[2].xyz * l.range.w + normalize(l.direction.xyz) * l.direction.w;
     vec4 c = l.shadow * vec4(receiver, 1.0);
@@ -104,15 +94,18 @@ struct Surface {
     float translucency;
 };
 
+#ifdef PT_RT_FULL
+vec3 g_full_n = vec3(0.0);
+float g_full_shadow_cone = 1.0;
+bool g_full_lit = false;
+#endif
 #if defined(PT_RT_SHADOWS) || defined(PT_RT_CONTACT)
-// the reach of the contact shadow rays (RtContactDistance), 0 for none; light_main.glsl sets it from the pass
 float g_contact_reach = 0.0;
-// PT_CONTACT_LEGACY=1: the contact shadow's first form (full up to half the reach, multiplied into the light at full strength)
 bool g_contact_legacy = false;
+uint g_contact_samples = 0u;
 #endif
 
 bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3 diffuse, out vec3 specular) {
-    // the shadow taps' dither takes the frame with the pixel, so a temporal renderer can rotate its sample pattern
     const vec3 dither_frag = vec3(frag, v.exposure.w);
     diffuse = vec3(0.0);
     specular = vec3(0.0);
@@ -152,11 +145,26 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
     if (length(radiance) <= 1.0e-4) {
         return false;
     }
+#ifdef PT_LIGHT_GBUFFER_LATE
+    {
+        ivec2 pixel = ivec2(frag);
+        vec4 g_normal = ImgFetch(IMG_NORMAL, pixel);
+        vec4 g_material = ImgFetch(IMG_MATERIAL, pixel);
+        s.N = DecodeNormal(g_normal.xyz);
+        s.roughness = g_material.x;
+        s.specular = g_material.y;
+        s.material_u = g_material.z;
+        s.translucency = g_material.w;
+    }
+#endif
     float shadow = 1.0;
+#ifdef PT_RT_FULL
+    g_full_n = s.translucency > 0.0 ? vec3(0.0) : normalize(mat3(v.inv_view) * s.N);
+    g_full_shadow_cone = shadow_cone;
+    g_full_lit = dot(s.N, L) > 0.0 || s.translucency > 0.0;
+#else
     if (l.info.x >= 0 && shadows) {
 #ifdef PT_RT_SHADOWS
-        // rays only where the light can add something: a surface facing it, or a translucent one (the diffuse and specular
-        // terms below are 0 otherwise)
         if (dot(s.N, L) > 0.0 || s.translucency > 0.0) {
             vec3 n = s.translucency > 0.0 ? vec3(0.0) : normalize(mat3(v.inv_view) * s.N);
             shadow = RtShadow(l, s.world, n, spot, shadow_cone, frag, v.exposure.w);
@@ -165,23 +173,26 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
         shadow = spot ? SpotShadow(l, v, s.world, shadow_cone, dither_frag) : PointShadow(l, v, s.P, dither_frag);
 #endif
     }
+#endif
     float vis = 1.0 + l.scales.z * (shadow - 1.0);
 #if defined(PT_RT_SHADOWS) || defined(PT_RT_CONTACT)
-    // Contact shadows (12.21), a PC addition. A contact shadow is a shadow of this light, so it takes the light's own shadow
-    // strength (scales.z: shadowStrength times the LOD's fade) and the spot's shadow cone as the map does, and joins the map's
-    // shadow by the darker of the two instead of multiplying into it: a prop the map holds too (a picture frame on the wall)
-    // would otherwise be counted twice, and under a light whose authored shadow is faint (the hallway table lamp's
-    // 3SL_Rstand_down0000 casts at 0.047 at f060 1580) the ray's full shadow drew a picture frame's rim and its offset from the
-    // wall as a black rectangle the original never shows. The occlusion falls smoothly from the surface to the reach, so a frame hung off a wall shades the
-    // wall where it nears it and the long projection of a grazing light fades out instead of ending in hard parallel edges.
     if (g_contact_reach > 0.0 && l.scales.w > 0.0 && (g_contact_legacy || l.scales.z > 0.0) && (dot(s.N, L) > 0.0 || s.translucency > 0.0)) {
-        float t = RtContactDistance(l, s.world, normalize(mat3(v.inv_view) * s.N), g_contact_reach);
-        if (t >= 0.0) {
-            if (g_contact_legacy) {
-                vis *= 1.0 - Saturate(2.0 * (1.0 - t / g_contact_reach));
-            } else {
-                float contact = 1.0 - shadow_cone * (1.0 - smoothstep(0.0, g_contact_reach, t));
+        vec3 n_world = normalize(mat3(v.inv_view) * s.N);
+        if (g_contact_samples > 0u && !g_contact_legacy) {
+            float contact = RtContactSoft(l, s.world, n_world, s.translucency > 0.0, g_contact_reach, shadow_cone, g_contact_samples, frag,
+                                          v.exposure.w);
+            if (contact < 1.0) {
                 vis = 1.0 + l.scales.z * (min(shadow, contact * contact) - 1.0);
+            }
+        } else {
+            float t = RtContactDistance(l, s.world, n_world, g_contact_reach);
+            if (t >= 0.0) {
+                if (g_contact_legacy) {
+                    vis *= 1.0 - Saturate(2.0 * (1.0 - t / g_contact_reach));
+                } else {
+                    float contact = 1.0 - shadow_cone * (1.0 - smoothstep(0.0, g_contact_reach, t));
+                    vis = 1.0 + l.scales.z * (min(shadow, contact * contact) - 1.0);
+                }
             }
         }
     }
@@ -192,7 +203,7 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
         if (c.w > 0.0) {
             vec2 uv = vec2(0.5 * c.x / c.w + 0.5, 1.0 - (0.5 * c.y / c.w + 0.5));
             if (l.info.w > 0) {
-                mask = textureLod(textures[nonuniformEXT(uint(l.info.w - 1))], uv, 0.0).rgb;
+                mask = textureLod(PT_TEX2D(uint(l.info.w - 1)), uv, 0.0).rgb;
             } else {
                 mask = ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, uv, 0.0).rgb;
             }

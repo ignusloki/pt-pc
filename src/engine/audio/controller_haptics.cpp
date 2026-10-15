@@ -13,8 +13,6 @@ bool ControllerHapticFilter::Process(std::span<const float> stereo_input, std::s
     constexpr float kSampleRate = 48000.0f;
     constexpr float kHighPassHz = 20.0f;
     constexpr float kLowPassHz = 250.0f;
-    // the mix carries Lisa at game levels (often below 0.05 of full scale): the actuators get it 6 times louder through a soft
-    // limit at 0.8, so her steps and breath are felt and a close cry does not hit the actuators' end stops
     constexpr float kDrive = 6.0f;
     constexpr float kMaximumActuatorLevel = 0.8f;
     constexpr float kPi = 3.14159265358979323846f;

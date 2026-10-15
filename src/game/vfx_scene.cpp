@@ -43,7 +43,6 @@ struct GimmickLights {
     std::array<const char*, 3> names;
 };
 
-// 0x953260
 constexpr GimmickLights kGimmickLights[] = {
     {GimmickType::Freezer, true, {"FreezerBloodTop", "FreezerBloodEye", nullptr}},
     {GimmickType::CeilLamp, false, {"CeilLampGlass", "CeilLampFlareLight", "CeilLampFlareLightRed"}},
@@ -120,12 +119,6 @@ glm::vec3 PointLighting(const SceneLighting& lighting, const glm::vec3& p) {
     return best[0] + best[1] + best[2];
 }
 
-// The forward light block of an effect draw object (0xD6BB90 with 0xCC3530, 0xCC4FE0 and 0xDB6C10; rendering.md 12,
-// SceneRenderer::ForwardLights for the models): the candidate lights are those whose box meets the draw's world box (here the
-// box around the light's outer range), scored at the box centre c with r half its largest extent by
-// |colour| cone 1/d^2 - d^2/(R + r)^4, d = max(distance, innerRange); the best three enabled point and spot lights go into the
-// block, a spot's colour scaled by its cone^e at c. The hemisphere terms come from up to three probes holding c, lowest
-// priority first, weighted by their box falloff: sky = sum w max(0, E(+up)).
 vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& center, const glm::vec3& half) {
     vfx::LightBlock block;
     const float radius = std::max({half.x, half.y, half.z});
@@ -189,11 +182,8 @@ vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& cen
             block.sky += weights[k] / total * glm::max(sh[0] + sh[2] + 2.0f * sh[6], glm::vec3(0.0f));
         }
     } else {
-        // without a probe holding the centre: the global SH light (type 4) in the original; the port has the nearest probe's
         block.sky = ProbeAmbient(lighting, center);
     }
-    // m_localParam[1] is zero in every Prim_Poly_LitDP3_NS_VF draw of ending_fx_trace (976 draws over 20 frames), although the
-    // ending has the atmosphere's moon: the scene has no directional GrLight for D4D500 to write, so the term stays 0 in P.T.
     block.directional = glm::vec3(0.0f);
     return block;
 }
@@ -204,7 +194,6 @@ SceneLight ToSceneLight(const vfx::LightOut& v) {
     l.type = v.spot ? LightType::Spot : LightType::Point;
     l.position = v.position;
     l.direction = glm::length(v.direction) > 1e-5f ? glm::normalize(v.direction) : glm::vec3(0.0f, -1.0f, 0.0f);
-    // the light's own up (0xB848E0 turns the GrLight with the particle's frame), so its shadow map turns with a spinning lamp
     const glm::vec3 up = v.up - l.direction * glm::dot(v.up, l.direction);
     if (glm::dot(up, up) > 1.0e-8f) {
         l.up = glm::normalize(up);
@@ -230,7 +219,6 @@ SceneLight ToSceneLight(const vfx::LightOut& v) {
         l.shadow_inv_cone_range = InverseRange(CosHalf(v.shadow_penumbra), l.shadow_cos_outer);
         l.shadow_fov = v.shadow_umbra * kPi / 180.0f;
         l.view_bias = v.view_bias;
-        // 0xD4E040: the mask projection has the umbra as its field of view
         l.masked = v.mask >= 0;
         l.mask_texture = v.mask;
         l.mask_fov = umbra * kPi / 180.0f;
@@ -258,7 +246,6 @@ void VfxScene::Clear() {
     gimmicks_ = {};
 }
 
-// 0x824F80, 0x8253F0
 glm::vec3 VfxScene::Wind(Game& game) const {
     glm::vec3 wind(0.0f);
     for (const auto& [id, entry] : stages_) {
@@ -336,11 +323,6 @@ void VfxScene::SyncStages(Game& game) {
                 LogInfo("vfx: stage {} ({}) has {} effect locators", stage.label, stage.id, entry.locators.size());
             }
         }
-        // A block's FxLocatorData bodies create their effect instances suspended when the block is loaded (Initialize 0xB56200 ->
-        // 0xB562C0 -> 0xB54270 with 1, the instance's +0xA8 bit 0) and start them only at its activation: 0x487B80 (block state
-        // 2 -> 3) calls every body's +0x40, 0xB56230, which resumes the instance (0xB523E0 with 0) and, the first time, sets its
-        // start request when createOnInitialize is set; the deactivation (0x486FA0, 0x487100 -> +0x48, 0xB56260) suspends it again.
-        // So nothing of a loaded but inactive stage runs or draws
         for (Locator& loc : entry.locators) {
             const vfx::InstanceKey key{stage.id, reinterpret_cast<uintptr_t>(loc.entity)};
             const BodyState& body = stage.Body(loc.entity);
@@ -401,7 +383,6 @@ void VfxScene::SyncDemos(Game& game) {
                     glm::rotate(glm::mat4(1.0f), r.x, glm::vec3(1.0f, 0.0f, 0.0f)) * glm::rotate(glm::mat4(1.0f), r.z, glm::vec3(0.0f, 0.0f, 1.0f));
         }
         if (system_.IsStopped(key) && !demo_keys_.contains(key)) {
-            // a new instance under the name of one whose section has ended and whose particles still live
             system_.Remove(key);
         }
         if (!system_.Exists(key)) {
@@ -409,8 +390,6 @@ void VfxScene::SyncDemos(Game& game) {
                 seen.insert(key);
                 continue;
             }
-            // 0x7760E0 creates with an explicit seed: the event's section start (the command's +0x18, 0xB12980 from 0xB2C230), as no
-            // P.T. event sets 0xBEA6AFC8ECB6 or 0xCEE983ACA927 true; the system makes a zero 0xFFFFFF (0xB5AFB0)
             const uint32_t seed = static_cast<uint32_t>(std::max(effect.created_frame, 0));
             if (system_.Spawn(key, effect.file_path, world, seed)) {
                 LogInfo("vfx: demo {} effect {} created", effect.demo_id, effect.file_path);
@@ -423,9 +402,6 @@ void VfxScene::SyncDemos(Game& game) {
         }
         seen.insert(key);
     }
-    // 0x7760E0: an effect whose section ends while its demo plays is stopped (mode 2 through 0xB08B30) and its particles live
-    // out their lives (ending_fx_trace 3200, the ending's demo frame 3563: the ground smoke of the instances that ended at 3414,
-    // 3434 and 3502 still draws 7 to 9 particles each); an effect whose demo is gone is removed with it
     std::set<std::string_view> playing;
     for (const PlayingDemo& demo : game.Demos().Playing()) {
         playing.insert(demo.demo_id);
@@ -603,7 +579,6 @@ void VfxScene::SyncGimmicks(Game& game) {
             }
             if (want && part.on && !spawn && entry.retrigger && !part.connections.empty() &&
                 !system_.IsPlaying({kGimmickOwner | index, i * 16})) {
-                // 0x125D420: a part is on while its first instance lives, so a finished effect switches it off
                 game.Objects().SetGimmickLight(table.type, i, false);
                 EndPartSound(game, part);
                 part.on = false;
@@ -621,8 +596,6 @@ void VfxScene::SyncGimmicks(Game& game) {
     }
 }
 
-// 0xB6E0F0: when a part's effect instance goes, a sound it started that still plays stops over the node's fade and curve (flag
-// 0x37CD447C), else the node's soundStop is posted, else it plays out
 void VfxScene::EndPartSound(Game& game, PartEffect& part) {
     if (!part.sound_id || !part.sound) {
         part.sound_id = 0;
@@ -670,7 +643,6 @@ void VfxScene::UpdateSystems(Game& game, float dt) {
     if (!reader_set_) {
         Vfs* vfs = &game.GetVfs();
         system_.SetReader([vfs](const std::string& path) { return vfs->ReadFile(path); });
-        // modelFile is the StrCode64 of the model's path
         system_.SetModelReader([vfs](uint64_t code) -> std::shared_ptr<const vfx::ModelMesh> {
             for (const auto& package : vfs->LoadedPackages()) {
                 for (const FoxPackage::Entry& entry : package->Entries()) {
@@ -714,7 +686,6 @@ void VfxScene::UpdateSystems(Game& game, float dt) {
     const glm::vec3 wind = Wind(game);
     system_.SetWind(wind);
     anim::SetSimWind(wind);
-    // the drawn view (the third person camera while it is on), for what the effects turn to and sort by
     system_.Update(dt, View(game.ViewCamera(), 16.0f / 9.0f));
     if (game.Frame() >= logged_frame_ + 600) {
         logged_frame_ = game.Frame();
@@ -741,10 +712,6 @@ void VfxScene::Prepare(Game& game, const Camera& camera, float aspect, SceneLigh
     const ThreadCost cost_after = QueryThreadCost();
     prepare_seconds_ += seconds;
     if (seconds > 0.02) {
-        // the split names the part that stalled: texture and model loads of new effects (preload), the build of the quads, or the
-        // rest (light conversion, sort and hand-over in VfxPass::Submit)
-        // with the thread's cycles (millions) and the process's page faults over the call: a stall with the cycles of a normal
-        // frame was the thread waiting, not working
         LogInfo("vfx: prepare took {:.1f} ms at frame {} ({} instances; preload {:.1f}, build {:.1f}, {} quads; {:.1f} Mcycles, {} page faults)",
                 seconds * 1000.0, game.Frame(), system_.InstanceCount(), preload_ms_, build_ms_, pass.List().quads.size(),
                 static_cast<double>(cost_after.cycles - cost_before.cycles) * 1e-6, cost_after.page_faults - cost_before.page_faults);
@@ -759,7 +726,6 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
         const char* v = std::getenv("PT_VFX");
         return v && v[0] == '0';
     }();
-    // the list of the frame before last, cleared by Submit, so its vectors keep their capacity
     vfx::RenderList& list = render_list_;
     list.Clear();
     if (disabled) {
@@ -776,7 +742,6 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
             s.ambient = ProbeAmbient(*scene, p);
         } else {
             s.point = PointLighting(*scene, p);
-            // D4D500 writes directional RGB / pi to cPSObject.localParam[1]; LitDP3 scales it by directionalLightRate.
             s.directional = scene->tpp.dir_color;
         }
         return s;
@@ -796,8 +761,6 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
     if (!preload_.empty()) {
         std::sort(preload_.begin(), preload_.end());
         preload_.erase(std::unique(preload_.begin(), preload_.end()), preload_.end());
-        // the effects are read here; their textures are unpacked on a worker and uploaded when first drawn or by the pump in
-        // VfxPass::Submit, whichever comes first (the next hallway copy's effects draw only once it is activated)
         std::vector<std::string> ahead;
         const vfx::TextureResolver collect = [&ahead](const std::string& path) {
             ahead.push_back(path);
@@ -809,14 +772,17 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
         preload_.clear();
         pass.DecodeAhead(ahead);
     }
+    system_.SetLightsReady([&lighting](const std::vector<vfx::LightOut>& built) {
+        for (const vfx::LightOut& l : built) {
+            lighting.lights.push_back(ToSceneLight(l));
+        }
+    });
     const auto build_started = std::chrono::steady_clock::now();
     system_.Build(view, textures, cubes, probe, list, lights, blend);
+    system_.SetLightsReady({});
     const auto build_done = std::chrono::steady_clock::now();
     preload_ms_ = std::chrono::duration<double, std::milli>(build_started - preload_started).count();
     build_ms_ = std::chrono::duration<double, std::milli>(build_done - build_started).count();
-    for (const vfx::LightOut& l : lights) {
-        lighting.lights.push_back(ToSceneLight(l));
-    }
     const bool periodic_log = ++prepared_ % 300 == 1;
     if (trace_log || periodic_log) {
         size_t layers[3] = {0, 0, 0};
@@ -825,7 +791,6 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
         }
         LogDebug("vfx: frame quads world {} flare {} screen {}, {} lights", layers[0], layers[1], layers[2], lights.size());
         if (trace_log || std::getenv("PT_VFX_DEBUG")) {
-            // PT_VFX_DEBUG_QUADS=<n>: log the first n quads instead of 8
             static const size_t shown = std::getenv("PT_VFX_DEBUG_QUADS") ? std::strtoul(std::getenv("PT_VFX_DEBUG_QUADS"), nullptr, 10) : 8;
             for (size_t i = 0; i < std::min<size_t>(list.quads.size(), shown); ++i) {
                 const vfx::Quad& q = list.quads[i];

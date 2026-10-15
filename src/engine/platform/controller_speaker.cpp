@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "engine/core/log.h"
+#include "engine/platform/device_start.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -37,8 +38,6 @@ namespace pt {
 namespace {
 
 constexpr uint16_t kSonyVendor = 0x054C;
-constexpr uint16_t kDualShock4 = 0x05C4;
-constexpr uint16_t kDualShock4Slim = 0x09CC;
 constexpr uint16_t kDualSense = 0x0CE6;
 constexpr uint16_t kDualSenseEdge = 0x0DF2;
 constexpr int kPcmRate = 48000;
@@ -138,17 +137,18 @@ struct EndpointCandidate {
     int channels = 0;
 };
 
-bool QueryEndpointChannels(IMMDevice* endpoint, int expected_channels) {
+int QueryEndpointChannels(IMMDevice* endpoint, SonyPadAudio model) {
     ComPtr<IAudioClient> client;
     if (FAILED(endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(client.GetAddressOf())))) {
-        return false;
+        return 0;
     }
     WAVEFORMATEX* format = nullptr;
     if (FAILED(client->GetMixFormat(&format)) || !format) {
-        return false;
+        return 0;
     }
-    bool matches = format->nChannels == expected_channels && format->nSamplesPerSec == kPcmRate;
-    if (matches && expected_channels == 4) {
+    const int channels = format->nChannels;
+    bool matches = ControllerEndpointChannelsFit(model, channels) && (model != SonyPadAudio::DualSense || format->nSamplesPerSec == kPcmRate);
+    if (matches && model == SonyPadAudio::DualSense) {
         if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
             const auto* extended = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
             constexpr DWORD kQuadMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT;
@@ -158,7 +158,7 @@ bool QueryEndpointChannels(IMMDevice* endpoint, int expected_channels) {
         }
     }
     CoTaskMemFree(format);
-    return matches;
+    return matches ? channels : 0;
 }
 
 bool ReadEndpointContainer(IMMDevice* endpoint, GUID* out) {
@@ -177,7 +177,7 @@ bool ReadEndpointContainer(IMMDevice* endpoint, GUID* out) {
     return ok;
 }
 
-std::vector<EndpointCandidate> AudioEndpointsForContainer(const GUID& container, int expected_channels) {
+std::vector<EndpointCandidate> AudioEndpointsForContainer(const GUID& container, SonyPadAudio model) {
     std::vector<EndpointCandidate> out;
     ComPtr<IMMDeviceEnumerator> enumerator;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
@@ -198,8 +198,11 @@ std::vector<EndpointCandidate> AudioEndpointsForContainer(const GUID& container,
             continue;
         }
         GUID endpoint_container{};
-        if (!ReadEndpointContainer(endpoint.Get(), &endpoint_container) || !IsEqualGUID(endpoint_container, container) ||
-            !QueryEndpointChannels(endpoint.Get(), expected_channels)) {
+        if (!ReadEndpointContainer(endpoint.Get(), &endpoint_container) || !IsEqualGUID(endpoint_container, container)) {
+            continue;
+        }
+        const int channels = QueryEndpointChannels(endpoint.Get(), model);
+        if (channels == 0) {
             continue;
         }
         ComPtr<IPropertyStore> properties;
@@ -211,7 +214,7 @@ std::vector<EndpointCandidate> AudioEndpointsForContainer(const GUID& container,
         if (SUCCEEDED(properties->GetValue(PKEY_Device_FriendlyName, &name)) && name.vt == VT_LPWSTR && name.pwszVal) {
             std::string utf8 = WideToUtf8(name.pwszVal);
             if (!utf8.empty()) {
-                out.push_back({std::move(utf8), expected_channels});
+                out.push_back({std::move(utf8), channels});
             }
         }
         PropVariantClear(&name);
@@ -219,18 +222,24 @@ std::vector<EndpointCandidate> AudioEndpointsForContainer(const GUID& container,
     return out;
 }
 
-std::optional<uint32_t> ResolveSdlDevice(const GUID& container, int expected_channels) {
-    const std::vector<EndpointCandidate> native_endpoints = AudioEndpointsForContainer(container, expected_channels);
+std::optional<uint32_t> ResolveContainerDevice(const GUID& container, SonyPadAudio model,
+                                               std::span<const ControllerAudioEndpointName> sdl_devices) {
+    const std::vector<EndpointCandidate> native_endpoints = AudioEndpointsForContainer(container, model);
     std::vector<ControllerSpeakerEndpointName> endpoint_names;
     endpoint_names.reserve(native_endpoints.size());
     for (const EndpointCandidate& endpoint : native_endpoints) {
         endpoint_names.push_back({endpoint.name, endpoint.channels});
     }
+    return MatchUniqueControllerAudioEndpoint(endpoint_names, sdl_devices, model);
+}
 
+#endif
+
+std::vector<ControllerAudioEndpointName> SdlPlaybackDevices(std::vector<std::string>& names) {
     int count = 0;
     SDL_AudioDeviceID* ids = SDL_GetAudioPlaybackDevices(&count);
-    std::vector<std::string> names;
     std::vector<ControllerAudioEndpointName> sdl_devices;
+    names.clear();
     names.reserve(count > 0 ? static_cast<size_t>(count) : 0);
     sdl_devices.reserve(count > 0 ? static_cast<size_t>(count) : 0);
     for (int index = 0; ids && index < count; ++index) {
@@ -243,10 +252,21 @@ std::optional<uint32_t> ResolveSdlDevice(const GUID& container, int expected_cha
         sdl_devices.push_back({ids[index], names.back(), spec.channels});
     }
     SDL_free(ids);
-    return MatchUniqueControllerAudioEndpoint(endpoint_names, sdl_devices, expected_channels);
+    return sdl_devices;
 }
 
-#endif
+std::string DeviceList(std::span<const ControllerAudioEndpointName> devices) {
+    std::vector<std::string> entries;
+    for (const ControllerAudioEndpointName& device : devices) {
+        entries.push_back(std::format("{} ({} ch)", device.name, device.channels));
+    }
+    std::sort(entries.begin(), entries.end());
+    std::string out;
+    for (const std::string& entry : entries) {
+        out += (out.empty() ? "" : "; ") + entry;
+    }
+    return out.empty() ? std::string("none") : out;
+}
 
 }
 
@@ -266,12 +286,10 @@ struct ControllerSpeakerOutput::HidWriter {
         wake.notify_one();
         thread.join();
     }
-    // false once a write failed
     bool Push(const std::array<uint8_t, kDualSenseBtHapticsReportSize>& report) {
         if (failed.load()) return false;
         {
             std::lock_guard lock(mutex);
-            // a backlog means the link is slower than the haptics: the oldest report is dropped, the newest goes out
             if (queue.size() >= 8) queue.pop_front();
             queue.push_back(report);
         }
@@ -306,19 +324,16 @@ void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t co
     if (report.size() < kDualSenseBtHapticsReportSize) return;
     std::fill(report.begin(), report.begin() + kDualSenseBtHapticsReportSize, uint8_t{0});
     report[0] = 0x32;
-    report[1] = 0x00;  // tag 0, sequence 0
-    // packet 0x11 (sized): 7 bytes, the last one a counter
+    report[1] = 0x00;
     report[2] = 0x80 | 0x11;
     report[3] = 7;
     const uint8_t control[7] = {0xFE, 0x00, 0x00, 0x00, 0x00, 0xFF, counter};
     std::copy(std::begin(control), std::end(control), report.begin() + 4);
-    // packet 0x12 (sized): 64 bytes of 8-bit stereo actuator PCM
     report[11] = 0x80 | 0x12;
     report[12] = 64;
     for (size_t i = 0; i < 64 && i < stereo_s8.size(); ++i) {
         report[13 + i] = static_cast<uint8_t>(stereo_s8[i]);
     }
-    // the Bluetooth output CRC-32 (reflected 0xEDB88320) over the seed byte 0xA2 and the report up to the CRC
     uint32_t crc = 0xFFFFFFFFu;
     auto feed = [&](uint8_t byte) {
         crc ^= byte;
@@ -370,7 +385,6 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     const uint16_t product = SDL_GetGamepadProduct(gamepad);
     if (SDL_GetGamepadConnectionState(gamepad) == SDL_JOYSTICK_CONNECTION_WIRELESS && vendor == kSonyVendor &&
         (product == kDualSense || product == kDualSenseEdge)) {
-        // Bluetooth: no audio endpoint; the haptics go out as HID output reports on the pad's own HID path
         const char* hid_path = SDL_GetGamepadPath(gamepad);
         const bool hid_ready = hid_path && SDL_hid_init() == 0;
         hid_ = hid_ready ? SDL_hid_open_path(hid_path) : nullptr;
@@ -384,29 +398,24 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
         LogInfo("input: DualSense Bluetooth haptics opened (HID output report 0x32; the speaker needs a wired connection)");
         return true;
     }
-    if (SDL_GetGamepadConnectionState(gamepad) != SDL_JOYSTICK_CONNECTION_WIRED) {
-        SetReason(reason, "controller speaker routing requires a wired gamepad (a DualSense over Bluetooth gets haptics only)");
-        return false;
-    }
-    const int expected_channels = vendor == kSonyVendor && (product == kDualShock4 || product == kDualShock4Slim)
-                                     ? 1
-                                     : vendor == kSonyVendor && (product == kDualSense || product == kDualSenseEdge) ? 4 : 0;
-    if (expected_channels == 0) {
+    const SonyPadAudio model = SonyPadAudioModel(vendor, product);
+    if (model == SonyPadAudio::None) {
         SetReason(reason, "controller model has no verified speaker audio layout");
         return false;
     }
-#if !defined(_WIN32)
-    (void)expected_channels;
-    SetReason(reason, "exact HID-to-audio container matching is currently implemented on Windows only");
-    return false;
-#else
-    const char* path = SDL_GetGamepadPath(gamepad);
-    GUID container{};
-    if (!path || !HidContainerId(path, &container)) {
-        SetReason(reason, "could not match the SDL HID path to a Windows PnP container ID");
+    const char* override_env = SDL_getenv("PT_CONTROLLER_SPEAKER_DEVICE");
+    const std::string override_name = override_env ? override_env : "";
+    const SDL_JoystickConnectionState connection = SDL_GetGamepadConnectionState(gamepad);
+    if (connection == SDL_JOYSTICK_CONNECTION_WIRELESS || connection == SDL_JOYSTICK_CONNECTION_INVALID) {
+        SetReason(reason, "controller speaker routing requires a wired gamepad (a DualSense over Bluetooth gets haptics only)");
         return false;
     }
+    const char* path = SDL_GetGamepadPath(gamepad);
 
+    if (devices::AudioStarting()) {
+        SetReason(reason, "the audio devices are still starting");
+        return false;
+    }
     if (!SDL_WasInit(SDL_INIT_AUDIO)) {
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             SetReason(reason, std::format("SDL audio initialization failed: {}", SDL_GetError()));
@@ -414,25 +423,50 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
         }
         owns_audio_subsystem_ = true;
     }
+    std::vector<std::string> device_names;
+    const std::vector<ControllerAudioEndpointName> devices = SdlPlaybackDevices(device_names);
 
-    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool uninitialize_com = SUCCEEDED(com_result);
-    if (FAILED(com_result) && com_result != RPC_E_CHANGED_MODE) {
-        Close();
-        SetReason(reason, std::format("COM initialization failed ({:08X})", static_cast<unsigned>(com_result)));
-        return false;
+    std::optional<uint32_t> id;
+    const char* how = "";
+    if (!override_name.empty()) {
+        id = MatchControllerEndpointOverride(devices, override_name, model);
+        how = "PT_CONTROLLER_SPEAKER_DEVICE override";
+        if (!id) {
+            Close();
+            SetReason(reason, std::format("PT_CONTROLLER_SPEAKER_DEVICE '{}' matched no single playback device with a fitting channel count "
+                                          "(devices: {})", override_name, DeviceList(devices)));
+            return false;
+        }
     }
-    const std::optional<uint32_t> id = ResolveSdlDevice(container, expected_channels);
-    if (uninitialize_com) {
-        CoUninitialize();
+#if defined(_WIN32)
+    GUID container{};
+    if (!id && connection == SDL_JOYSTICK_CONNECTION_WIRED && path && HidContainerId(path, &container)) {
+        const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(com_result) || com_result == RPC_E_CHANGED_MODE) {
+            id = ResolveContainerDevice(container, model, devices);
+            how = "the pad's PnP container";
+        }
+        if (SUCCEEDED(com_result)) {
+            CoUninitialize();
+        }
+    }
+#endif
+    if (!id) {
+        id = MatchControllerEndpointByName(devices, model);
+        how = "the pad's endpoint name";
     }
     if (!id) {
         Close();
-        SetReason(reason, "no unique active SDL playback endpoint matched the controller container and channel layout");
+        SetReason(reason, std::format("no single playback endpoint of this {} found (by container or by name; devices: {})",
+                                      model == SonyPadAudio::DualSense ? "DualSense" : "DualShock 4", DeviceList(devices)));
         return false;
     }
+    int channels = model == SonyPadAudio::DualSense ? 4 : 1;
+    for (const ControllerAudioEndpointName& device : devices) {
+        if (device.id == *id) channels = device.channels;
+    }
 
-    SDL_AudioSpec spec{SDL_AUDIO_F32, expected_channels, kPcmRate};
+    SDL_AudioSpec spec{SDL_AUDIO_F32, channels, kPcmRate};
     stream_ = SDL_OpenAudioDeviceStream(*id, &spec, nullptr, nullptr);
     if (!stream_) {
         Close();
@@ -441,13 +475,13 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     }
     SDL_AudioSpec source{};
     SDL_AudioSpec output{};
-    if (!SDL_GetAudioStreamFormat(stream_, &source, &output) || source.channels != expected_channels || output.channels != expected_channels ||
-        output.freq != kPcmRate) {
+    if (!SDL_GetAudioStreamFormat(stream_, &source, &output) || source.channels != channels || output.channels != channels ||
+        (model == SonyPadAudio::DualSense && output.freq != kPcmRate)) {
         Close();
-        SetReason(reason, "opened controller endpoint changed format; expected the verified PCM channel layout at 48 kHz");
+        SetReason(reason, "opened controller endpoint changed format; expected the verified PCM channel layout");
         return false;
     }
-    if (expected_channels == 4) {
+    if (model == SonyPadAudio::DualSense) {
         int map_count = 0;
         int* map = SDL_GetAudioStreamOutputChannelMap(stream_, &map_count);
         const bool identity = !map || (map_count == 4 && map[0] == 0 && map[1] == 1 && map[2] == 2 && map[3] == 3);
@@ -460,11 +494,7 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     }
     const char* name = SDL_GetAudioDeviceName(*id);
     device_name_ = name ? name : "controller audio endpoint";
-    if (expected_channels == 4) {
-        // The DualSense sends channels 1-2 to its headphone jack until the audio path is switched to the built-in speaker: USB
-        // output report 0x02 with valid_flag0 bits 5 (speaker volume) and 7 (audio control), the speaker volume byte and the
-        // output path select (audio control bits 4-5, 3 = the speaker). Only the flagged fields change, so SDL's own rumble
-        // and light reports on the same report keep working.
+    if (model == SonyPadAudio::DualSense && path) {
         if (SDL_hid_init() == 0) {
             if (SDL_hid_device* hid = SDL_hid_open_path(path)) {
                 uint8_t report[48] = {};
@@ -479,12 +509,13 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
             SDL_hid_exit();
         }
     }
-    route_ = expected_channels == 4 ? ControllerPcmRoute::DualSenseQuad : ControllerPcmRoute::DualShock4Mono;
+    route_ = model == SonyPadAudio::DualSense ? ControllerPcmRoute::DualSenseQuad : ControllerPcmRoute::DualShock4Mono;
+    ds4_channels_ = model == SonyPadAudio::DualShock4 ? channels : 1;
     SDL_ResumeAudioStreamDevice(stream_);
     SetReason(reason, {});
-    LogInfo("input: controller PCM endpoint opened for '{}' ({} channels)", SDL_GetGamepadName(gamepad), expected_channels);
+    LogInfo("input: controller PCM endpoint '{}' opened for '{}' ({} channels at {} Hz, found by {})", device_name_, SDL_GetGamepadName(gamepad),
+            channels, output.freq, how);
     return true;
-#endif
 }
 
 void ControllerSpeakerOutput::Close() {
@@ -502,6 +533,7 @@ void ControllerSpeakerOutput::Close() {
     bt_summed_ = 0;
     bt_frame_count_ = 0;
     route_ = ControllerPcmRoute::None;
+    ds4_channels_ = 1;
     device_name_.clear();
     haptic_filter_.Reset();
     if (owns_audio_subsystem_) {
@@ -519,8 +551,16 @@ bool ControllerSpeakerOutput::WriteMono(const float* speaker_mono, uint32_t fram
     if (!stream_ || route_ != ControllerPcmRoute::DualShock4Mono || !speaker_mono || frames == 0 || frames > INT_MAX / sizeof(float)) {
         return false;
     }
-    if (SDL_GetAudioStreamQueued(stream_) > 48000 * static_cast<int>(sizeof(float)) / 10) SDL_ClearAudioStream(stream_);
-    return SDL_PutAudioStreamData(stream_, speaker_mono, static_cast<int>(frames * sizeof(float)));
+    if (frames > audio::ControllerPcmBlock::kMaxFrames) {
+        return false;
+    }
+    const size_t samples = static_cast<size_t>(frames) * static_cast<size_t>(ds4_channels_);
+    const std::span<float> out(ds4_scratch_.data(), samples);
+    if (!SpreadControllerSpeakerMono(std::span<const float>(speaker_mono, frames), out, frames, ds4_channels_)) {
+        return false;
+    }
+    if (SDL_GetAudioStreamQueued(stream_) > 48000 * ds4_channels_ * static_cast<int>(sizeof(float)) / 10) SDL_ClearAudioStream(stream_);
+    return SDL_PutAudioStreamData(stream_, out.data(), static_cast<int>(samples * sizeof(float)));
 }
 
 bool ControllerSpeakerOutput::WriteDualSense(const float* speaker_stereo, const float* actuator_stereo, uint32_t frames) {
@@ -554,18 +594,14 @@ bool ControllerSpeakerOutput::WriteCapturedBlock(const audio::ControllerPcmBlock
                             speaker_gain, haptics_gain)) {
         return false;
     }
-    // the speaker gets Lisa at game level (often below 0.05 of full scale, after her distance attenuation), which the pad's small
-    // speaker does not make audible: 8 times louder through a soft limit at 0.9, so a near cry is clear and a far one stays faint
     if (speaker_enabled) {
         constexpr float kSpeakerDrive = 8.0f;
         constexpr float kSpeakerCeiling = 0.9f;
-        // the speaker is one driver (fed from one side of the pair): Lisa goes to both channels as mono, wherever she is
         for (size_t i = 0; i + 1 < stereo_samples; i += 2) {
             const float mono = 0.5f * (speaker_buffer[i] + speaker_buffer[i + 1]);
             speaker_buffer[i] = speaker_buffer[i + 1] = kSpeakerCeiling * std::tanh(mono * kSpeakerDrive / kSpeakerCeiling);
         }
     }
-    // the actuators take the haptic mix (the speaker's events and the haptic-only ones), at the same level
     const float haptics_level = dualsense_haptics_enabled && std::isfinite(haptics_gain) ? std::clamp(haptics_gain, 0.0f, 1.0f) : 0.0f;
     for (size_t i = 0; i < stereo_samples; ++i) {
         haptics_source[i] = block.haptic[i] * haptics_level;

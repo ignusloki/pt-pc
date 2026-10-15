@@ -1,0 +1,8 @@
+# Coffee with Lisa in VR (run with --vr): the date on the virtual screen, played with the right controller's A alone (the
+# runtime's script presses it every 25 frames): lines advance and each choice takes its first option, to the good ending
+slisadate
+swait 300
+sexpect lisadate 1
+swait 9000
+slisawait
+sexpect lisadate 0

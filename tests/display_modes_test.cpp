@@ -31,7 +31,7 @@ void CheckPointerHits(pt::game::PcSettingsPage& page, glm::ivec2 window_size, Vk
     const auto viewport = pt::FitRenderViewport(render, drawable);
     assert(viewport.offset.x == expected_viewport.offset.x && viewport.offset.y == expected_viewport.offset.y);
     assert(viewport.extent.width == expected_viewport.extent.width && viewport.extent.height == expected_viewport.extent.height);
-    const auto canvas = pt::game::UiCanvas::Fit(render);
+    const auto canvas = pt::game::UiCanvas::Fit({render.width, render.height});
     const std::array<glm::vec2, 6> targets{{{-30.0f, 18.0f}, {-30.0f, 15.0f}, {-30.0f, 12.0f},
                                          {35.0f, 18.0f}, {35.0f, 15.0f}, {-57.5f, -31.0f}}};
     for (size_t i = 0; i < targets.size(); ++i) {

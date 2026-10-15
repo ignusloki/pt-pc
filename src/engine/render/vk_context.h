@@ -1,11 +1,15 @@
 #pragma once
 
-#include <deque>
-#include <filesystem>
+#include <chrono>
 #include <functional>
+#include <filesystem>
+#include <mutex>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
+#include "engine/render/pipeline_cache_store.h"
 #include "engine/render/vk.h"
 
 struct SDL_Window;
@@ -23,18 +27,12 @@ public:
     virtual void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family,
                               std::vector<VkDeviceQueueCreateInfo>& queues) = 0;
     virtual void DeviceCreated(Context& ctx) = 0;
-    // False while something the hooks loaded replaces the swapchain itself (Streamline's DLSS Frame Generation); the swapchain stays SDR then.
-    virtual bool AllowsHdr() const { return true; }
 };
 
-// Who creates the Vulkan instance and device when it is not the context itself: the VR mode's OpenXR runtime
-// (XR_KHR_vulkan_enable2, src/engine/xr/xr_host.h), which adds what it needs to both and names the GPU the headset uses.
-// Without one (the default) Init creates them as before.
 class ContextCreator {
 public:
     virtual ~ContextCreator() = default;
     virtual VkResult CreateInstance(const VkInstanceCreateInfo& info, VkInstance& instance) = 0;
-    // the one physical device to use, or VK_NULL_HANDLE for the context's own choice
     virtual VkPhysicalDevice PhysicalDevice(VkInstance instance) = 0;
     virtual VkResult CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo& info, VkDevice& device) = 0;
 };
@@ -61,9 +59,15 @@ struct Swapchain {
     uint32_t min_image_count = 2;
 };
 
-struct Submission {
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
+class AllocTag {
+public:
+    explicit AllocTag(const char* tag);
+    ~AllocTag();
+    AllocTag(const AllocTag&) = delete;
+    AllocTag& operator=(const AllocTag&) = delete;
+
+private:
+    const char* previous_;
 };
 
 class Context {
@@ -78,20 +82,26 @@ public:
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
     VkImageLayout PresentLayout() const { return swapchain_owner_ ? swapchain_owner_->PresentLayout() : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; }
 
-    // metal_export declares the image's MTLTexture as exportable (VK_EXT_metal_objects), for images the MetalFX upscaler reads or writes.
     bool CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels = 1,
-                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false, bool metal_export = false);
+                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false);
     void DestroyImage(Image& image);
+    bool CreateImage(gpu::ImageResource& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels = 1,
+                     uint32_t layers = 1, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool cube = false);
+    void DestroyImage(gpu::ImageResource& image);
     bool CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible);
     void DestroyBuffer(Buffer& buffer);
 
     void Submit(const std::function<void(VkCommandBuffer)>& record);
-    // Submit without the CPU wait: the caller polls or waits on the fence, then hands it back to Release.
-    Submission SubmitAsync(const std::function<void(VkCommandBuffer)>& record);
-    void Release(Submission& submission);
+    void SubmitDeferred(const std::function<void(VkCommandBuffer)>& record, Buffer staging);
+    void ReapDeferred(bool wait);
     bool Upload(Buffer& dst, const void* data, VkDeviceSize size);
-    // Frees the staging buffers of finished Uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
-    void ReclaimUploads(VkDeviceSize max_pending_bytes);
+
+    VkDeviceSize DeviceLocalBytes() const;
+    void DeviceLocalUsage(double& used, double& budget) const;
+    void LogMemoryReport(const char* reason);
+    bool SetAllocFailure(std::string_view spec);
+    uint64_t AllocationCount() const { return alloc_calls_; }
+    uint32_t vram_budget_mb = 0;
 
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -101,6 +111,8 @@ public:
     VkDevice device = VK_NULL_HANDLE;
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     std::filesystem::path pipeline_cache_dir;
+    bool pipeline_cache_cold = false;
+    PipelineCacheSaver pipeline_saver;
     uint32_t queue_family = 0;
     VkQueue queue = VK_NULL_HANDLE;
     VmaAllocator allocator = nullptr;
@@ -108,51 +120,65 @@ public:
     ContextHooks* hooks = nullptr;
     SwapchainHooks* swapchain_hooks = nullptr;
     ContextCreator* creator = nullptr;
-    // set before Init to load Vulkan through another vkGetInstanceProcAddr (Streamline's interposer); before_device_destroy
-    // runs after the swapchain is gone and before vkDestroyDevice (slShutdown)
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
-    // DLSS Frame Generation on Vulkan presents without v-sync (Streamline's eVSyncOffRequired): the swapchain ignores the
-    // v-sync setting while it is set. Apple MetalFX frame generation is the opposite (force_vsync): it presents two images a
-    // rendered frame and paces them on the refreshes, so the swapchain is FIFO whatever the setting.
     bool force_vsync_off = false;
     bool force_vsync = false;
-    // the last CreateSwapchain failed in Vulkan (the surface or a swapchain hook refused it), not for want of a window size
     bool swapchain_refused = false;
 
-    // Ray queries (the ray traced shadows PC option): set want_ray_query before Init to create the device with
-    // VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations and buffer device addresses
-    // when the GPU has them. ray_query_supported says whether it has them, requested or not; ray_query whether they are on.
     bool want_ray_query = false;
     bool ray_query_supported = false;
+    bool depth_bounds = false;
+    bool storage_without_format = false;
     bool ray_query = false;
     std::string ray_query_missing;
-    bool metal_objects = false;
-    // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat, enabled when the device has both.
-    bool storage_without_format = false;
     VkDeviceSize scratch_alignment = 256;
 
-    // Diagnostics, enabled when the device has them: VK_EXT_memory_budget (VMA's heap budgets are the driver's, for the status
-    // line), VK_EXT_device_fault (what the driver knows about a lost device) and VK_NV_device_diagnostic_checkpoints (the
-    // render passes' labels, BeginLabel, as checkpoints: the last ones the GPU reached when the device is lost)
     bool memory_budget = false;
     bool device_fault = false;
     bool checkpoints = false;
-    // A lost device (VK_ERROR_DEVICE_LOST from a wait, submit, acquire or present) ends the game: the log gets where it was seen,
-    // the device fault description and the last checkpoints, then a dump and a message box (crash_report.h). Any other
-    // result returns.
+    bool hdr_metadata = false;
+    int hdr_peak_setting = 0;
+    float display_peak_nits = 0.0f;
+    float hdr_paper_nits = 200.0f;
+    float hdr_min_nits = 0.0f;
+    float HdrPeakNits() const;
+    void SetHdrMetadata();
     void CheckDeviceLost(VkResult result, const char* where);
 
 private:
-    struct PendingUpload {
-        Submission submission;
-        Buffer staging;
+    bool InjectFailure(const char* what);
+    void TrackAllocation(VmaAllocation allocation);
+    void UntrackAllocation(VmaAllocation allocation);
+    void LogAllocationFailure(const char* what, VkResult result, const std::string& detail);
+
+    struct Tracked {
+        const char* tag = "other";
+        VkDeviceSize size = 0;
+        uint32_t memory_type = 0;
     };
+    mutable std::mutex alloc_mutex_;
+    std::unordered_map<VmaAllocation, Tracked> tracked_;
+    uint64_t alloc_calls_ = 0;
+    uint64_t fail_at_ = 0;
+    bool fail_after_ = false;
+    double fail_rate_ = 0.0;
+    uint64_t fail_rng_ = 0x9E3779B97F4A7C15ull;
+    std::chrono::steady_clock::time_point last_failure_report_{};
+    std::chrono::steady_clock::time_point last_failure_line_{};
+    uint64_t failures_logged_ = 0;
+    uint64_t failures_hidden_ = 0;
     bool hdr_off_logged_ = false;
     SDL_Window* window_ = nullptr;
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
-    std::deque<PendingUpload> pending_uploads_;
-    VkDeviceSize pending_upload_bytes_ = 0;
+    struct DeferredSubmit {
+        VkFence fence = VK_NULL_HANDLE;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        Buffer staging;
+    };
+    std::vector<DeferredSubmit> deferred_;
+    VkDeviceSize deferred_bytes_ = 0;
+    static constexpr VkDeviceSize kDeferredStagingLimit = 128ull << 20;
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 

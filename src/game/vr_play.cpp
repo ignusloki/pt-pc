@@ -11,24 +11,20 @@ namespace pt::game {
 
 namespace {
 
-// the HUD (subtitles, prompts, the menus): 1.4 m wide at 1.6 m (about 47 degrees), a little below the eyes, following the head's
-// yaw lazily (it stays put within 20 degrees of the view and eases back beyond)
 constexpr float kHudDistance = 1.6f;
 constexpr float kHudWidth = 1.4f;
 constexpr float kHudDrop = 0.08f;
 constexpr float kHudDeadZone = 0.349f;
-// the virtual screen: 2.8 m wide at 2.5 m (about 59 degrees), placed in front of the head when it appears
 constexpr float kScreenDistance = 2.5f;
 constexpr float kScreenWidth = 2.8f;
-// how far the tracked head may move away from the player's eye anchor (the player's body does not follow it), and how close
-// to a wall the eyes may come
 constexpr float kHeadReach = 0.5f;
 constexpr float kHeadRise = 0.4f;
 constexpr float kHeadDrop = 0.8f;
 constexpr float kWallMargin = 0.12f;
 constexpr float kNearPlane = 0.05f;
+constexpr int kScaleFrames = 45;
 
-}  // namespace
+}
 
 void VrPlay::BeginLoop(bool& running) {
     if (host_.FrameOpen()) {
@@ -55,7 +51,7 @@ bool VrPlay::ScreenMode(Game& game) {
     glm::vec3 position;
     glm::quat rotation;
     float fov = 0.0f;
-    const bool screen = game.Demos().CameraWorld(position, rotation, fov) || game.Nazo().IsPeepholeTheaterActive();
+    const bool screen = game.Demos().CameraWorld(position, rotation, fov) || game.Nazo().IsPeepholeTheaterActive() || game.LisaDateActive();
     if (screen != screen_) {
         LogInfo("vr: {}", screen ? "virtual screen (a camera the game frames)" : "stereo view");
     }
@@ -70,7 +66,6 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
     const xr::ControllerState& c = host_.Controllers();
     const xr::ViewPose& head = host_.Head();
     if (waited_ && host_.ViewsValid() && !centered_) {
-        // the view starts along the game camera's yaw
         rig_.Recenter(head.position, head.orientation, game.GetCamera().yaw);
         centered_ = true;
         LogInfo("vr: centred on the head at ({:.3f} {:.3f} {:.3f}), world yaw {:.1f}", head.position.x, head.position.y, head.position.z,
@@ -81,7 +76,6 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         glm::vec2 move = c.move;
         if (glm::length(move) > 1.0f) move = glm::normalize(move);
         if (menu_open) {
-            // the menus: the left stick is the D-pad
             if (move.y > 0.6f) raw |= kRawUp;
             if (move.y < -0.6f) raw |= kRawDown;
             if (move.x > 0.6f) raw |= kRawRight;
@@ -97,7 +91,6 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         if (c.gouge) raw |= kRawSquare;
         if (c.triangle) raw |= kRawTriangle;
         if (!menu_open && screen) {
-            // the virtual screen keeps the game's own look (the peephole): the right stick as the pad's (y down)
             const glm::vec2 look(c.turn.x, -c.turn.y);
             if (glm::length(look) > glm::length(state.right_stick)) state.right_stick = look;
         } else if (!menu_open && centered_) {
@@ -114,8 +107,6 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         if (raw != 0 || glm::length(c.move) > 0.2f || glm::length(c.turn) > 0.2f) {
             state.from_gamepad = true;
         }
-        // the prompts name the controllers' buttons while they are there: Touch, Index and the others carry A, B, X and Y as an
-        // Xbox pad does
         state.prompts = PromptStyle{PromptDevice::Xbox, {'A', 'B', 'X', 'Y'}};
     }
     const uint32_t pressed = raw & ~raw_previous_;
@@ -129,18 +120,12 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         state.pressed |= kPadGouge;
     }
     if (pressed & kRawStart) state.pause = true;
-    // the PC settings page: an edge of its own, as the pad's View button (InputDevice::Poll)
     if (c.settings && !settings_previous_) state.pc_settings = true;
     settings_previous_ = c.settings;
     if (pressed) state.any_button = true;
-    // the head looks (Player::UpdateLook), in the stereo view while the look is the player's. When something else turned the
-    // player since the last look (a demo's hand-back, a scripted turn, an input script's facing), the world turns to match once,
-    // so the game's own turns keep their meaning; while the game holds the look the head looks around without it.
     Player& player = game.GetPlayer();
     const bool look_free = !(player.locks.Mask('B') & 2) && !game.Demos().ControlsPlayer();
     if (!screen && centered_ && host_.ViewsValid() && look_free) {
-        // the turns the game gave the player since the last frame (Player::UpdateLook keeps them on top of the head's yaw)
-        // become the world's: the view turns with them once
         if (const float turn = player.TakeVrTurn(); std::abs(turn) > 1.0e-5f) {
             rig_.Turn(turn, head.position);
             if (std::abs(turn) > 0.0175f && ++game_turns_ <= 20) {
@@ -151,11 +136,10 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         state.vr_look = true;
         state.vr_look_angles = glm::vec2(a.yaw, a.pitch);
     }
-    // the flashlight in the tracked hand (pt.ini [vr] flashlight 1), from the last frame's anchor
     std::optional<std::pair<glm::vec3, glm::vec3>> light;
     const int hand = std::clamp(settings_.flashlight_hand, 0, 1);
     if (settings_.flashlight == 1 && !screen && centered_ && eye_height_ >= 0.0f && c.aim[hand].valid) {
-        const glm::vec3 position = last_anchor_ + ScaleVrTrackedOffset(rig_.Offset(c.aim[hand].position), settings_.world_scale) + last_correction_;
+        const glm::vec3 position = last_anchor_ + ScaleVrTrackedOffset(rig_.Offset(c.aim[hand].position), units_per_metre_) + last_correction_;
         const glm::vec3 direction = glm::normalize(rig_.ToWorld(c.aim[hand].orientation) * glm::vec3(0.0f, 0.0f, -1.0f));
         light = std::make_pair(position, direction);
     }
@@ -177,36 +161,30 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     for (int i = 0; i < 2; ++i) {
         frusta_[i] = xr::FrustumFor(tangents[i], render_size_, tangents);
     }
-    // the eye anchor: the drawn camera's place above the feet at the eye's height, eased (no walking bob, no lean of the head
-    // bone; the tracked head moves the eyes instead)
     const Player& player = game.GetPlayer();
     const glm::vec3 feet = player.Feet();
     const glm::vec3 eye = player.Eye();
     const float height = eye.y - feet.y;
     eye_height_ = eye_height_ < 0.0f ? height : eye_height_ + (height - eye_height_) * (1.0f - std::exp(-std::max(dt, 0.0f) / 0.6f));
     const float height_offset = ClampVrHeightOffset(settings_.height_offset);
+    UpdateScale();
     const glm::vec3 anchor = VrEyeAnchor(logic.position, feet, eye, eye_height_, height_offset);
     const xr::ViewPose& head = host_.Head();
     glm::vec3 anchor_now = anchor;
-    // Room scale (issue #63): the head's walk in the room moves the player's body with it, through the character controller's
-    // collision, and the recentre point follows; only what a wall stopped stays as an offset of the eyes. The body had stayed
-    // at the anchor while the eyes went up to half a metre away: after some walking and turning in the room the game's player
-    // (its doors, triggers and the body in the mirror) was no longer where the player stood
     {
         Player& body = game.GetPlayer();
-        const glm::vec3 walked = ScaleVrTrackedOffset(rig_.Offset(head.position), settings_.world_scale);
+        const glm::vec3 walked = ScaleVrTrackedOffset(rig_.Offset(head.position), units_per_metre_);
         const glm::vec2 flat(walked.x, walked.z);
         const bool free = !menu_open && body.spawned && !game.Demos().ControlsPlayer() && !(body.locks.Mask('B') & 1) &&
                           !game.Nazo().IsPeepholeTheaterActive();
         if (free && glm::length(flat) > 0.02f) {
             const glm::vec3 moved = body.FollowHead(game.Collision(), glm::vec3(flat.x, 0.0f, flat.y));
-            const float scale = ClampVrWorldScale(settings_.world_scale);
-            rig_.Shift(moved / scale);
+            rig_.Shift(moved / units_per_metre_);
             anchor_now += moved;
         }
     }
     const glm::vec3 head_offset = rig_.Offset(head.position);
-    const glm::vec3 offset = ScaleVrTrackedOffset(head_offset, settings_.world_scale);
+    const glm::vec3 offset = ScaleVrTrackedOffset(head_offset, units_per_metre_);
     glm::vec3 kept = offset;
     const float reach = glm::length(glm::vec2(kept.x, kept.z));
     if (reach > kHeadReach) {
@@ -229,15 +207,19 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
         const xr::ViewPose& pose = host_.Eye(i);
         out.poses[i] = pose;
         const glm::vec3 eye_relative_offset = rig_.Offset(pose.position) - head_offset;
-        const glm::vec3 eye_offset = MapVrEyeOffset(head_offset, eye_relative_offset, settings_.world_scale);
+        const glm::vec3 eye_offset = MapVrEyeOffset(head_offset, eye_relative_offset, units_per_metre_);
         out.eyes[i] = xr::EyeCamera(anchor_now + eye_offset + correction, rig_.ToWorld(pose.orientation), frusta_[i], kNearPlane);
     }
     out.render = {render_size_.x, render_size_.y};
     Place(head.position + glm::vec3(0.0f, height_offset, 0.0f), xr::AnglesOf(head.orientation).yaw, menu_open, dt);
     auto target = [&](xr::Swapchain& sc, const glm::vec4& rect, XrTarget& t) {
         if (!host_.Acquire(sc)) return false;
-        t.image = sc.images[sc.index];
-        t.view = sc.views[sc.index];
+        if (!sc.d3d12_images.empty()) {
+            t.d3d12_image = sc.d3d12_images[sc.index];
+        } else {
+            t.image = sc.images[sc.index];
+            t.view = sc.views[sc.index];
+        }
         t.format = sc.format;
         t.extent = sc.extent;
         t.rect = rect;
@@ -285,8 +267,12 @@ bool VrPlay::PrepareScreen(XrTarget& out) {
     if (!host_.Acquire(sc)) {
         return false;
     }
-    out.image = sc.images[sc.index];
-    out.view = sc.views[sc.index];
+    if (!sc.d3d12_images.empty()) {
+        out.d3d12_image = sc.d3d12_images[sc.index];
+    } else {
+        out.image = sc.images[sc.index];
+        out.view = sc.views[sc.index];
+    }
     out.format = sc.format;
     out.extent = sc.extent;
     out.rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
@@ -317,6 +303,36 @@ void VrPlay::Rumble(uint8_t large_motor, uint8_t small_motor) {
     const float amplitude = static_cast<float>(strongest) / 255.0f;
     host_.Haptic(0, amplitude, 0.05f);
     host_.Haptic(1, amplitude, 0.05f);
+}
+
+void VrPlay::UpdateScale() {
+    if (host_.Recentres() != recentres_seen_) {
+        recentres_seen_ = host_.Recentres();
+        scale_locked_ = false;
+        floor_eye_sum_ = 0.0f;
+        floor_eye_samples_ = 0;
+        scale_frames_ = 0;
+    }
+    if (!scale_locked_) {
+        if (host_.FloorEyeHeightValid()) {
+            floor_eye_sum_ += host_.FloorEyeHeight();
+            ++floor_eye_samples_;
+        }
+        floor_eye_ = floor_eye_samples_ > 0 ? floor_eye_sum_ / static_cast<float>(floor_eye_samples_) : -1.0f;
+        if (++scale_frames_ >= kScaleFrames) {
+            scale_locked_ = true;
+            const float units = VrUnitsPerMetre(floor_eye_, 1.0f);
+            if (floor_eye_ < 0.0f) {
+                LogInfo("vr: world at real size, {:.3f} units per metre (the runtime reports no floor)", units);
+            } else if (floor_eye_ < kVrStandingEyeMin) {
+                LogInfo("vr: eye {:.2f} m above the floor, seated: world at real size, {:.3f} units per metre", floor_eye_, units);
+            } else {
+                LogInfo("vr: eye {:.2f} m above the floor: the protagonist's {:.3f} m eye there, {:.3f} units per metre", floor_eye_,
+                        kPs4EyeHeight, units);
+            }
+        }
+    }
+    units_per_metre_ = VrUnitsPerMetre(floor_eye_, settings_.world_size);
 }
 
 void VrPlay::Place(const glm::vec3& head_local, float head_yaw_local, bool menu_open, float dt) {

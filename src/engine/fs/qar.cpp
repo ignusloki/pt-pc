@@ -1,9 +1,11 @@
 #include "engine/fs/qar.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
 #include "engine/core/log.h"
+#include "engine/fs/io_stats.h"
 #include "engine/platform/os.h"
 
 namespace pt {
@@ -59,11 +61,16 @@ std::optional<std::vector<uint8_t>> QarArchive::Read(uint64_t code) const {
         return std::nullopt;
     }
     std::vector<uint8_t> data(it->second.size);
+    const auto wait_start = std::chrono::steady_clock::now();
     std::lock_guard lock(mutex_);
+    const auto read_start = std::chrono::steady_clock::now();
     os::SeekFile(file_, static_cast<long long>(it->second.offset), SEEK_SET);
+    IoSimulatedLatency();
     if (std::fread(data.data(), 1, data.size(), file_) != data.size()) {
         return std::nullopt;
     }
+    IoRecord(data.size(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - read_start).count(),
+             std::chrono::duration<double, std::milli>(read_start - wait_start).count());
     return data;
 }
 

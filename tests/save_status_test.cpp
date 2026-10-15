@@ -1,5 +1,3 @@
-// The boot load's outcomes that SaveRequest_OnBootLoadDone (0x947C60) branches on, from the slot files (save_data.cpp):
-// no file, a broken one (shorter than a save), a wrong magic or newer version, an older version, and a valid one next to a bad one.
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -43,7 +41,6 @@ int main(int argc, char** argv) {
     SaveFile file;
     file.progress.floor = "f050";
     check(store.Save(file) && store.LastWrite() == SaveWriteStatus::Ok, "a save writes");
-    // the first save goes to slot 0; slot 1 broken next to it
     write("PT_Save_Data1", {1, 2, 3});
     const SaveLoadResult mixed = store.LoadDetailed();
     check(mixed.status == SaveLoadStatus::Ok && mixed.file && mixed.file->progress.floor == "f050", "a valid slot wins over a broken one");

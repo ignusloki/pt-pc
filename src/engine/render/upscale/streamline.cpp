@@ -7,11 +7,13 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_d.h>
 #include <sl_dlss_g.h>
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 #include <sl_security.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -41,21 +43,25 @@ struct Api {
     PFun_slGetFeatureFunction* feature_function = nullptr;
     PFun_slGetNewFrameToken* new_token = nullptr;
     PFun_slFreeResources* free_resources = nullptr;
+    PFun_slSetD3DDevice* set_d3d_device = nullptr;
+    PFun_slUpgradeInterface* upgrade = nullptr;
 };
 
 Api g_api;
 HMODULE g_module = nullptr;
 bool g_active = false;
+pt::streamline::Api g_kind = pt::streamline::Api::Vulkan;
 PFN_vkGetInstanceProcAddr g_instance_proc = nullptr;
 sl::FrameToken* g_token = nullptr;
 bool g_constants = false;
 bool g_dlss = false;
+bool g_rr = false;
+std::string g_rr_reason = "Streamline is not loaded";
 bool g_frame_gen = false;
 bool g_vsync_off = false;
 std::string g_frame_gen_reason = "Streamline is not loaded";
 uint32_t g_frame_limit = UINT32_MAX;
 std::wstring g_log_dir;
-// Streamline's info lines (hundreds at start) reach pt.log only with PT_SL_VERBOSE; its own log file has them all
 bool g_verbose = false;
 std::wstring g_plugin_dir;
 const wchar_t* g_plugin_paths[1] = {};
@@ -99,8 +105,6 @@ bool Load(Fn*& out, const char* name) {
 }
 
 sl::float4x4 Matrix(const glm::dmat4& m) {
-    // Streamline's matrices are row major for row vectors (v * M, sl_matrix_helpers.h): the same memory as glm's column major
-    // matrices for column vectors
     sl::float4x4 out;
     for (int r = 0; r < 4; ++r) {
         out.row[r] = sl::float4(static_cast<float>(m[r][0]), static_cast<float>(m[r][1]), static_cast<float>(m[r][2]), static_cast<float>(m[r][3]));
@@ -114,8 +118,6 @@ sl::float3 Vec(const glm::vec3& v) {
 
 }
 
-// the feature helpers of the Streamline headers (slDLSSSetOptions and the others) call this export of the interposer; the
-// port loads the interposer at run time, so the symbol is defined here and forwards to it
 extern "C" sl::Result slGetFeatureFunction(sl::Feature feature, const char* functionName, void*& function) {
     if (!g_api.feature_function) {
         return sl::Result::eErrorInitNotCalled;
@@ -125,10 +127,11 @@ extern "C" sl::Result slGetFeatureFunction(sl::Feature feature, const char* func
 
 namespace pt::streamline {
 
-bool Start(const std::filesystem::path& data_dir, std::string& reason) {
+bool Start(const std::filesystem::path& data_dir, std::string& reason, Api api) {
     if (g_active) {
         return true;
     }
+    const bool d3d12 = api == Api::D3D12;
     const std::filesystem::path dir = ExecutableDir();
     const std::filesystem::path interposer = dir / L"sl.interposer.dll";
     std::error_code ec;
@@ -136,8 +139,6 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
         reason = "sl.interposer.dll is missing next to pt.exe";
         return false;
     }
-    // Streamline's guide (ProgrammingGuide.md 2.1.1): the interposer's Windows signature and NVIDIA's own certificate are checked
-    // before it is loaded; the interposer checks every plugin it loads the same way
     /* NVIDIA's signature is checked before LoadLibrary, as the Streamline guide asks; the interposer checks each plugin the same way. */
     if (!sl::security::verifyEmbeddedSignature(interposer.wstring().c_str())) {
         reason = "sl.interposer.dll does not carry NVIDIA's signature";
@@ -155,7 +156,8 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
                     Load(g_api.set_constants, "slSetConstants") && Load(g_api.feature_function, "slGetFeatureFunction") &&
                     Load(g_api.new_token, "slGetNewFrameToken") && Load(g_api.free_resources, "slFreeResources");
     g_instance_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(g_module, "vkGetInstanceProcAddr"));
-    if (!ok || !g_instance_proc) {
+    const bool d3d12_ok = !d3d12 || (Load(g_api.set_d3d_device, "slSetD3DDevice") && Load(g_api.upgrade, "slUpgradeInterface"));
+    if (!ok || !d3d12_ok || (!d3d12 && !g_instance_proc)) {
         reason = "sl.interposer.dll has not the Streamline exports";
         g_api = {};
         return false;
@@ -164,7 +166,10 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
     g_log_dir = data_dir.wstring();
     g_plugin_dir = dir.wstring();
     g_plugin_paths[0] = g_plugin_dir.c_str();
-    static const sl::Feature features[] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
+    static sl::Feature features[5] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_RR};
+    static sl::Feature features_d3d12[3] = {sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
+    const bool rr_files = !d3d12 && std::filesystem::exists(dir / L"sl.dlss_d.dll", ec) && std::filesystem::exists(dir / L"nvngx_dlssd.dll", ec);
+    g_rr_reason = d3d12 ? "runs through NGX on DirectX 12" : rr_files ? "not checked" : "sl.dlss_d.dll or nvngx_dlssd.dll is missing next to pt.exe";
     sl::Preferences pref{};
     pref.showConsole = false;
     g_verbose = std::getenv("PT_SL_VERBOSE") != nullptr;
@@ -173,15 +178,20 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
     pref.numPathsToPlugins = 1;
     pref.pathToLogsAndData = g_log_dir.c_str();
     pref.logMessageCallback = Log;
-    // NGX's own updates (as the direct DLSS path gets), no downloaded Streamline plugins (only the signed ones next to
-    // pt.exe), frame-based tagging (slSetTagForFrame)
     pref.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eAllowOTA | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    pref.featuresToLoad = features;
-    pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(features));
+    if (d3d12) {
+        pref.flags |= sl::PreferenceFlags::eUseManualHooking;
+        pref.flags &= ~sl::PreferenceFlags::eAllowOTA;
+        pref.featuresToLoad = features_d3d12;
+        pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(features_d3d12));
+    } else {
+        pref.featuresToLoad = features;
+        pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(features)) - (rr_files ? 0u : 1u);
+    }
     pref.engine = sl::EngineType::eCustom;
     pref.engineVersion = "1.0";
     pref.projectId = "3c9e5a1b-7d24-4f68-b0e3-5a2c8d91f47e";
-    pref.renderAPI = sl::RenderAPI::eVulkan;
+    pref.renderAPI = d3d12 ? sl::RenderAPI::eD3D12 : sl::RenderAPI::eVulkan;
     const sl::Result result = g_api.init(pref, sl::kSDKVersion);
     if (result != sl::Result::eOk) {
         reason = std::format("slInit failed: {} ({})", ResultName(result), static_cast<int>(result));
@@ -189,7 +199,9 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
         return false;
     }
     g_active = true;
-    LogInfo("streamline: 2.14.1 loaded from {}, log in {}", NarrowText(g_plugin_dir.c_str()), NarrowText(g_log_dir.c_str()));
+    g_kind = api;
+    LogInfo("streamline: 2.14.1 loaded for {} from {}, log in {}", d3d12 ? "DirectX 12 (manual hooking)" : "Vulkan", NarrowText(g_plugin_dir.c_str()),
+            NarrowText(g_log_dir.c_str()));
     return true;
 }
 
@@ -197,8 +209,12 @@ bool Active() {
     return g_active;
 }
 
+bool ActiveD3D12() {
+    return g_active && g_kind == Api::D3D12;
+}
+
 PFN_vkGetInstanceProcAddr InstanceProcAddr() {
-    return g_active ? g_instance_proc : nullptr;
+    return g_active && g_kind == Api::Vulkan ? g_instance_proc : nullptr;
 }
 
 void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
@@ -212,6 +228,12 @@ void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
     const sl::Result reflex = g_api.is_supported(sl::kFeatureReflex, adapter);
     const sl::Result pcl = g_api.is_supported(sl::kFeaturePCL, adapter);
     g_dlss = dlss == sl::Result::eOk;
+    if (g_rr_reason == "not checked") {
+        const sl::Result rr = g_api.is_supported(sl::kFeatureDLSS_RR, adapter);
+        g_rr = rr == sl::Result::eOk;
+        g_rr_reason = g_rr ? "" : ResultName(rr);
+        LogInfo("streamline: DLSS Ray Reconstruction {}", ResultName(rr));
+    }
     g_frame_gen = frame_gen == sl::Result::eOk && reflex == sl::Result::eOk && pcl == sl::Result::eOk;
     g_frame_gen_reason = frame_gen != sl::Result::eOk ? ResultName(frame_gen) : reflex != sl::Result::eOk ? "Reflex is not supported" : "";
     sl::FeatureRequirements requirements{};
@@ -221,7 +243,6 @@ void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
     LogInfo("streamline: DLSS {}, DLSS Frame Generation {}, Reflex {}, PCL {}{}", ResultName(dlss), ResultName(frame_gen), ResultName(reflex),
             ResultName(pcl), g_vsync_off ? ", frame generation needs v-sync off" : "");
     if (reflex == sl::Result::eOk) {
-        // Reflex Low Latency on (NVIDIA's default for the Reflex checklist), no frame limit until SetFrameLimit
         sl::ReflexOptions options{};
         options.mode = sl::ReflexMode::eLowLatency;
         options.frameLimitUs = 0;
@@ -238,11 +259,18 @@ void Shutdown() {
     LogInfo("streamline: shut down ({})", ResultName(result));
     g_active = false;
     g_token = nullptr;
-    g_dlss = g_frame_gen = false;
+    g_dlss = g_frame_gen = g_rr = false;
 }
 
 bool DlssSupported() {
     return g_active && g_dlss;
+}
+
+bool RayReconstructionSupported(std::string* reason) {
+    if (reason) {
+        *reason = g_rr ? std::string() : g_rr_reason;
+    }
+    return g_active && g_rr;
 }
 
 bool FrameGenSupported(std::string* reason) {
@@ -284,7 +312,6 @@ void SetConstants(const FrameConstants& c) {
     if (!g_active || !g_token) {
         return;
     }
-    // camera-centred, in double precision: the translation of the view leaves the clip-to-previous-clip matrix alone
     const glm::dmat4 view_to_clip(c.view_to_clip);
     const glm::dmat4 world_to_clip(c.world_to_clip);
     const glm::dmat4 previous(c.previous_world_to_clip);
@@ -302,7 +329,6 @@ void SetConstants(const FrameConstants& c) {
     k.cameraUp = Vec(c.up);
     k.cameraRight = Vec(c.right);
     k.cameraFwd = Vec(c.forward);
-    // reverse Z to infinity: the far plane is a large finite value (FLT_MAX is Streamline's "not set")
     k.cameraNear = c.near_plane;
     k.cameraFar = 100000.0f;
     k.cameraFOV = c.fov_y;
@@ -369,10 +395,168 @@ bool DisableFrameGenFeature() {
     return result == sl::Result::eOk;
 }
 
+void DeviceCreatedD3D12(void* d3d12_device, const uint8_t (&luid)[8]) {
+    if (!ActiveD3D12()) {
+        return;
+    }
+    const sl::Result set = g_api.set_d3d_device(d3d12_device);
+    if (set != sl::Result::eOk) {
+        g_frame_gen = false;
+        g_frame_gen_reason = std::format("slSetD3DDevice failed: {}", ResultName(set));
+        LogError("streamline: {}", g_frame_gen_reason);
+        return;
+    }
+    sl::AdapterInfo adapter{};
+    uint8_t id[8];
+    std::memcpy(id, luid, sizeof(id));
+    adapter.deviceLUID = id;
+    adapter.deviceLUIDSizeInBytes = sizeof(id);
+    const sl::Result frame_gen = g_api.is_supported(sl::kFeatureDLSS_G, adapter);
+    const sl::Result reflex = g_api.is_supported(sl::kFeatureReflex, adapter);
+    const sl::Result pcl = g_api.is_supported(sl::kFeaturePCL, adapter);
+    g_dlss = false;
+    g_frame_gen = frame_gen == sl::Result::eOk && reflex == sl::Result::eOk && pcl == sl::Result::eOk;
+    g_frame_gen_reason = frame_gen != sl::Result::eOk ? ResultName(frame_gen) : reflex != sl::Result::eOk ? "Reflex is not supported" : "";
+    sl::FeatureRequirements requirements{};
+    g_vsync_off = false;
+    if (g_frame_gen && g_api.requirements(sl::kFeatureDLSS_G, requirements) == sl::Result::eOk) {
+        g_vsync_off = requirements.flags & sl::FeatureRequirementFlags::eVSyncOffRequired;
+    }
+    LogInfo("streamline: DirectX 12 device set; DLSS Frame Generation {}, Reflex {}, PCL {}{}", ResultName(frame_gen), ResultName(reflex),
+            ResultName(pcl), g_vsync_off ? ", frame generation needs v-sync off" : "");
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// DLSS Super Resolution through sl.dlss, and DLSS Frame Generation through sl.dlss_g
+void D3D12SetReflex(bool on) {
+    if (!ActiveD3D12()) {
+        return;
+    }
+    sl::ReflexOptions options{};
+    options.mode = on ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
+    options.frameLimitUs = 0;
+    const sl::Result r = slReflexSetOptions(options);
+    g_frame_limit = 0;
+    LogInfo("streamline: Reflex {} for DLSS Frame Generation on DirectX 12 ({})", on ? "low latency" : "off", ResultName(r));
+}
+
+bool UpgradeInterface(void** interface_pointer) {
+    if (!ActiveD3D12() || !interface_pointer || !*interface_pointer) {
+        return false;
+    }
+    const sl::Result r = g_api.upgrade(interface_pointer);
+    if (r != sl::Result::eOk) {
+        LogError("streamline: slUpgradeInterface failed: {}", ResultName(r));
+        return false;
+    }
+    return true;
+}
+
+bool D3D12FrameGenTag(const D3D12FrameGenTags& t) {
+    if (!ActiveD3D12() || !g_token || !t.depth || !t.motion || !t.hudless) {
+        return false;
+    }
+    sl::Resource depth(sl::ResourceType::eTex2d, t.depth, t.state);
+    sl::Resource motion(sl::ResourceType::eTex2d, t.motion, t.state);
+    sl::Resource hudless(sl::ResourceType::eTex2d, t.hudless, t.state);
+    sl::Resource ui(sl::ResourceType::eTex2d, t.ui, t.state);
+    const sl::Extent input{0, 0, t.input_width, t.input_height};
+    const sl::Extent full{0, 0, t.color_width, t.color_height};
+    sl::ResourceTag tags[] = {
+        sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &input),
+        sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &input),
+        sl::ResourceTag(&hudless, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &full),
+        sl::ResourceTag(&ui, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &full),
+    };
+    const uint32_t count = t.ui ? 4u : 3u;
+    const sl::Result r = g_api.set_tag(*g_token, sl::ViewportHandle(kViewport), tags, count, static_cast<sl::CommandBuffer*>(t.command_list));
+    static int logged = 0;
+    if (r != sl::Result::eOk && logged++ < 4) {
+        LogError("frame generation: DLSS Frame Generation (DirectX 12) input tags failed: {}", ResultName(r));
+    }
+    return r == sl::Result::eOk;
+}
+
+void D3D12FrameGenUntag() {
+    if (!ActiveD3D12() || !g_token) {
+        return;
+    }
+    const sl::ResourceTag tags[] = {
+        sl::ResourceTag(nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent),
+    };
+    g_api.set_tag(*g_token, sl::ViewportHandle(kViewport), tags, static_cast<uint32_t>(std::size(tags)), nullptr);
+}
+
+void D3D12OnError(const sl::APIError& error) {
+    static int logged = 0;
+    if (logged++ < 5) {
+        LogWarn("frame generation: DLSS Frame Generation (DirectX 12) present returned {:#010x}", static_cast<uint32_t>(error.hres));
+    }
+}
+
+bool D3D12FrameGenSetOptions(const D3D12FrameGenOptions& o, std::string* error) {
+    if (!ActiveD3D12()) {
+        if (error) *error = "Streamline is not loaded for DirectX 12";
+        return false;
+    }
+    sl::DLSSGOptions options{};
+    options.mode = o.on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+    options.numFramesToGenerate = std::max(1u, o.frames_to_generate);
+    options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+    options.numBackBuffers = o.back_buffers;
+    options.colorWidth = o.color_width;
+    options.colorHeight = o.color_height;
+    options.colorBufferFormat = o.color_format;
+    options.hudLessBufferFormat = o.hudless_format;
+    options.uiBufferFormat = o.ui_format;
+    options.mvecDepthWidth = o.mvec_depth_width;
+    options.mvecDepthHeight = o.mvec_depth_height;
+    options.mvecBufferFormat = o.mvec_format;
+    options.depthBufferFormat = o.depth_format;
+    options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
+    options.enableUserInterfaceRecomposition = o.ui_recomposition ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    options.onErrorCallback = &D3D12OnError;
+    const sl::Result r = slDLSSGSetOptions(sl::ViewportHandle(kViewport), options);
+    if (r != sl::Result::eOk && error) {
+        *error = ResultName(r);
+    }
+    return r == sl::Result::eOk;
+}
+
+bool D3D12FrameGenGetState(D3D12FrameGenState& out) {
+    out = D3D12FrameGenState{};
+    if (!ActiveD3D12()) {
+        return false;
+    }
+    sl::DLSSGState state{};
+    if (slDLSSGGetState(sl::ViewportHandle(kViewport), state, nullptr) != sl::Result::eOk) {
+        return false;
+    }
+    out.ok = state.status == sl::DLSSGStatus::eOk;
+    out.status = static_cast<uint32_t>(state.status);
+    out.presented = state.numFramesActuallyPresented;
+    out.max_frames = state.numFramesToGenerateMax;
+    out.vsync_available = state.bIsVsyncSupportAvailable == sl::Boolean::eTrue;
+    out.inputs_fence = state.inputsProcessingCompletionFence;
+    out.inputs_fence_value = state.lastPresentInputsProcessingCompletionFenceValue;
+    return true;
+}
+
+void D3D12FrameGenFree() {
+    if (ActiveD3D12()) {
+        g_api.free_resources(sl::kFeatureDLSS_G, sl::ViewportHandle(kViewport));
+    }
+}
+
+void D3D12EndFrame() {
+    if (ActiveD3D12()) {
+        g_token = nullptr;
+        g_constants = false;
+    }
+}
+
+}
 
 namespace pt {
 namespace {
@@ -419,14 +603,18 @@ public:
 
     bool Available(std::string& reason) override { return Supported(reason); }
 
+    bool RayReconstructionAvailable(std::string& reason) override { return streamline::RayReconstructionSupported(&reason); }
+
     bool Create(VkCommandBuffer, const UpscaleCreate& create) override {
         Release();
+        if (create.ray_reconstruction) {
+            return CreateRayReconstruction(create);
+        }
         options_ = sl::DLSSOptions{};
         options_.mode = SlMode(create.quality);
         options_.outputWidth = create.display.width;
         options_.outputHeight = create.display.height;
         options_.colorBuffersHDR = sl::Boolean::eTrue;
-        // the same model and exposure handling as the direct NGX path (dlss_backend.cpp)
         const auto preset = static_cast<sl::DLSSPreset>(DlssPresetHint(create.dlss_model));
         options_.dlaaPreset = options_.qualityPreset = options_.balancedPreset = options_.performancePreset = options_.ultraPerformancePreset =
             options_.ultraQualityPreset = preset;
@@ -460,6 +648,9 @@ public:
             }
             return false;
         }
+        if (rr_) {
+            return DispatchRayReconstruction(d, *token);
+        }
         const sl::ViewportHandle viewport(streamline::kViewport);
         options_.preExposure = d.pre_exposure;
         options_.exposureScale = 1.0f;
@@ -479,9 +670,6 @@ public:
             sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &render),
             sl::ResourceTag(&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eValidUntilEvaluate, &one),
         };
-        // The reactive mask (R8_UNORM) is not tagged: Streamline 2.14.1's Vulkan format table (sl.chi getFormat) has no
-        // R8_UNORM and logs "Cannot have undefined format" four times a frame for it, and the DLSS 4 models do not read the
-        // bias mask (DLSS guide 3.15): without it the frames are the direct NGX path's, bit for bit (upscaling.md)
         /* No reactive mask tag: Streamline 2.14.1's Vulkan format table lacks R8_UNORM and complains four times a frame; the DLSS 4 models ignore the mask anyway. */
         std::vector<const sl::BaseStructure*> inputs{&viewport};
         for (const sl::ResourceTag& tag : tags) {
@@ -503,25 +691,113 @@ public:
             return;
         }
         vkDeviceWaitIdle(ctx_.device);
-        options_.mode = sl::DLSSMode::eOff;
         const sl::ViewportHandle viewport(streamline::kViewport);
-        slDLSSSetOptions(viewport, options_);
-        streamline::FreeResources(sl::kFeatureDLSS);
+        if (rr_) {
+            rr_options_.mode = sl::DLSSMode::eOff;
+            slDLSSDSetOptions(viewport, rr_options_);
+            streamline::FreeResources(sl::kFeatureDLSS_RR);
+        } else {
+            options_.mode = sl::DLSSMode::eOff;
+            slDLSSSetOptions(viewport, options_);
+            streamline::FreeResources(sl::kFeatureDLSS);
+        }
         created_ = false;
+        rr_ = false;
     }
 
 private:
+    bool CreateRayReconstruction(const UpscaleCreate& create) {
+        if (!streamline::RayReconstructionSupported(nullptr)) {
+            return false;
+        }
+        rr_options_ = sl::DLSSDOptions{};
+        rr_options_.mode = SlMode(create.quality);
+        rr_options_.outputWidth = create.display.width;
+        rr_options_.outputHeight = create.display.height;
+        rr_options_.colorBuffersHDR = sl::Boolean::eTrue;
+        rr_options_.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+        const sl::ViewportHandle viewport(streamline::kViewport);
+        const sl::Result result = slDLSSDSetOptions(viewport, rr_options_);
+        if (result != sl::Result::eOk) {
+            LogError("dlss (streamline): slDLSSDSetOptions failed ({})", static_cast<int>(result));
+            return false;
+        }
+        LogInfo("dlss (streamline): ray reconstruction {}x{} -> {}x{}, mode {}", create.render.width, create.render.height, create.display.width,
+                create.display.height, static_cast<int>(rr_options_.mode));
+        created_ = true;
+        rr_ = true;
+        return true;
+    }
+
+    bool DispatchRayReconstruction(const UpscaleDispatch& d, const sl::FrameToken& token) {
+        if (!d.diffuse_albedo.Valid() || !d.specular_albedo.Valid() || !d.normal_roughness.Valid()) {
+            if (!error_logged_) {
+                LogError("dlss (streamline): ray reconstruction has no guide buffers this frame");
+                error_logged_ = true;
+            }
+            return false;
+        }
+        const sl::ViewportHandle viewport(streamline::kViewport);
+        rr_options_.preExposure = d.pre_exposure;
+        rr_options_.exposureScale = 1.0f;
+        const glm::dmat4 world_to_view(d.world_to_view);
+        rr_options_.worldToCameraView = Matrix(world_to_view);
+        rr_options_.cameraViewToWorld = Matrix(glm::inverse(world_to_view));
+        slDLSSDSetOptions(viewport, rr_options_);
+        const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        sl::Resource color = SlImage(d.color, read);
+        sl::Resource output = SlImage(d.output, VK_IMAGE_LAYOUT_GENERAL);
+        sl::Resource depth = SlImage(d.depth, read);
+        sl::Resource motion = SlImage(d.motion, read);
+        sl::Resource exposure = SlImage(d.exposure, read);
+        sl::Resource diffuse_albedo = SlImage(d.diffuse_albedo, read);
+        sl::Resource specular_albedo = SlImage(d.specular_albedo, read);
+        sl::Resource normal_roughness = SlImage(d.normal_roughness, read);
+        sl::Resource hit_distance = d.specular_hit_distance.Valid() ? SlImage(d.specular_hit_distance, read) : sl::Resource{};
+        sl::Resource before_transparency = d.color_before_transparency.Valid() ? SlImage(d.color_before_transparency, read) : sl::Resource{};
+        const sl::Extent render{0, 0, d.render.width, d.render.height};
+        const sl::Extent display{0, 0, d.display.width, d.display.height};
+        const sl::Extent one{0, 0, 1, 1};
+        const auto now = sl::ResourceLifecycle::eValidUntilEvaluate;
+        std::vector<sl::ResourceTag> tags{
+            sl::ResourceTag(&color, sl::kBufferTypeScalingInputColor, now, &render),
+            sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, now, &display),
+            sl::ResourceTag(&depth, sl::kBufferTypeDepth, now, &render),
+            sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, now, &render),
+            sl::ResourceTag(&exposure, sl::kBufferTypeExposure, now, &one),
+            sl::ResourceTag(&diffuse_albedo, sl::kBufferTypeAlbedo, now, &render),
+            sl::ResourceTag(&specular_albedo, sl::kBufferTypeSpecularAlbedo, now, &render),
+            sl::ResourceTag(&normal_roughness, sl::kBufferTypeNormalRoughness, now, &render),
+        };
+        if (d.specular_hit_distance.Valid()) {
+            tags.emplace_back(&hit_distance, sl::kBufferTypeSpecularHitDistance, now, &render);
+        }
+        if (d.color_before_transparency.Valid()) {
+            tags.emplace_back(&before_transparency, sl::kBufferTypeColorBeforeTransparency, now, &render);
+        }
+        std::vector<const sl::BaseStructure*> inputs{&viewport};
+        for (const sl::ResourceTag& tag : tags) {
+            inputs.push_back(&tag);
+        }
+        const sl::Result result = streamline::Evaluate(sl::kFeatureDLSS_RR, token, inputs.data(), static_cast<uint32_t>(inputs.size()), d.cmd);
+        if (result != sl::Result::eOk) {
+            if (!error_logged_) {
+                LogError("dlss (streamline): ray reconstruction slEvaluateFeature failed ({})", static_cast<int>(result));
+                error_logged_ = true;
+            }
+            return false;
+        }
+        return true;
+    }
+
     vk::Context& ctx_;
     sl::DLSSOptions options_{};
+    sl::DLSSDOptions rr_options_{};
+    bool rr_ = false;
     bool created_ = false;
     bool error_logged_ = false;
 };
 
-// DLSS Frame Generation (ProgrammingGuideDLSS_G.md): the swapchain Streamline's proxy creates while sl.dlss_g hooks are enabled
-// presents the rendered frame and the generated one. The depth and motion vectors of the upscaler inputs are tagged when the
-// upscaler has run (copied by Streamline: eOnlyValidNow), the HUD-less copy of the frame (one target per swapchain image,
-// drawn by the renderer as for FSR 3) before present. Off in menus and the paused game (section 6.4) with the resources
-// kept; switching the option off or on disables or enables sl.dlss_g's feature hooks around swapchain recreation (section 18.0).
 class DlssFrameGeneration final : public FrameGeneration {
 public:
     explicit DlssFrameGeneration(vk::Context& ctx) : ctx_(ctx) {}
@@ -547,7 +823,6 @@ public:
     bool Update(bool wanted) override {
         std::string reason;
         wanted = wanted && Available(reason);
-        // the first swapchain of the start that enabled Streamline's sl.dlss_g hooks was created with them active
         if (!initialised_) {
             initialised_ = true;
             if (ctx_.surface != VK_NULL_HANDLE) {
@@ -559,15 +834,11 @@ public:
         const bool vsync_off = wanted && streamline::FrameGenNeedsVsyncOff();
         const bool vsync_changed = vsync_off != ctx_.force_vsync_off;
         ctx_.force_vsync_off = vsync_off;
-        // Called in the middle of a frame (the scene's upscale setup), when the swapchain image is acquired and the command
-        // buffer is recording: only the wish is noted here, FrameStart applies it between frames
         target_ = wanted;
         generating_ = (wanted && attached_) || (preserve_active_mode_ && attached_ && mode_ == sl::DLSSGMode::eOn);
         return vsync_changed;
     }
 
-    // Apply changes at the frame boundary. Streamline's default DLSS-G queue mode blocks the presenting client queue until
-    // its workload completes; this method runs on that same thread, after the previous QueuePresent call has returned.
     FrameStartAction FrameStart(bool swapchain_recreation_pending) override {
         if (!initialised_) {
             return FrameStartAction::Continue;
@@ -587,9 +858,6 @@ public:
         }
         const bool transition_pending = target_ != attached_;
 
-        // A resize is a required transition even when the selected backend remains DLSS. The guide requires mode-off before
-        // changing the swapchain. Setting it here precedes Context::CreateSwapchain, which preserves the old native swapchain
-        // until creation succeeds. The default presenting-queue mode above provides the input-consumption boundary.
         if (attached_ && (transition_pending || swapchain_recreation_pending || (menu_open && mode_ != sl::DLSSGMode::eOff))) {
             if (!SetMode(sl::DLSSGMode::eOff)) {
                 generating_ = attached_ && mode_ == sl::DLSSGMode::eOn;
@@ -601,9 +869,6 @@ public:
             }
         }
 
-        // FSR owns its swapchain through a separate hook. Clear that owner completely before installing or removing the
-        // Streamline swapchain proxy. In particular, FSR's Update(true) can install its hook in the scene frame before this
-        // queued DLSS transition reaches the next frame boundary.
         bool fsr_owner_changed = false;
         if (transition_pending) {
             FrameGeneration* fsr = UpscaleHost::Get().FrameGen();
@@ -628,8 +893,6 @@ public:
             owner_wait_logged_ = false;
         }
 
-        // Menu edits are coalesced. A pending resize still gets the mode-off and owner cleanup safety steps above, but the
-        // feature-hook transition waits until the menu closes.
         if (menu_open && transition_pending) {
             if (swapchain_recreation_pending || fsr_owner_changed) {
                 vkDeviceWaitIdle(ctx_.device);
@@ -676,8 +939,6 @@ public:
                 "Streamline could not confirm the DLSS Frame Generation load state after swapchain teardown. Restart P.T.");
         }
         if (wanted && !attached_) {
-            // The load failed and the query confirmed that DLSS-G stayed unloaded. Recreate the ordinary swapchain so the
-            // renderer remains usable after disabling the failed option.
             return FrameStartAction::RecreateSwapchain;
         }
         if (attached_ != wanted) {
@@ -759,8 +1020,6 @@ public:
                     preserve_active_mode_ = true;
                     generate = true;
                 } else if (mode_ == sl::DLSSGMode::eOn) {
-                    // turning it off can fail for a moment when video memory runs out (a 3 GB card, issue report 10 Oct): the
-                    // frame is presented without generation and the off request is repeated every frame for 5 s before giving up
                     if (++off_failures_ <= 300) {
                         if (off_failures_ == 1) LogError("frame generation: could not be turned off, retrying every frame");
                     } else {
@@ -897,7 +1156,6 @@ private:
         return true;
     }
 
-    // Streamline's runtime status (section 14.3): anything but eOk turns frame generation off for the session
     void CheckState() {
         sl::DLSSGState state{};
         if (slDLSSGGetState(sl::ViewportHandle(streamline::kViewport), state, nullptr) != sl::Result::eOk) {
@@ -941,8 +1199,6 @@ private:
             return;
         }
         vkDeviceWaitIdle(ctx_.device);
-        // the tag holds the last target until present; clear it before the images go (between frames it is released already,
-        // and the frame token left is the last frame's)
         if (clear_tag) {
             const sl::ResourceTag tag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
             streamline::Tag(&tag, 1, VK_NULL_HANDLE);
@@ -1000,15 +1256,35 @@ std::unique_ptr<FrameGeneration> CreateDlssFrameGeneration(vk::Context& ctx) {
 
 namespace pt::streamline {
 
-bool Start(const std::filesystem::path&, std::string& reason) {
+bool Start(const std::filesystem::path&, std::string& reason, Api) {
     reason = "this build has no Streamline";
     return false;
 }
 bool Active() { return false; }
+bool ActiveD3D12() { return false; }
+void DeviceCreatedD3D12(void*, const uint8_t (&)[8]) {}
+bool UpgradeInterface(void**) { return false; }
+bool D3D12FrameGenTag(const D3D12FrameGenTags&) { return false; }
+void D3D12FrameGenUntag() {}
+bool D3D12FrameGenSetOptions(const D3D12FrameGenOptions&, std::string* error) {
+    if (error) *error = "this build has no Streamline";
+    return false;
+}
+bool D3D12FrameGenGetState(D3D12FrameGenState& state) {
+    state = D3D12FrameGenState{};
+    return false;
+}
+void D3D12FrameGenFree() {}
+void D3D12EndFrame() {}
+void D3D12SetReflex(bool) {}
 PFN_vkGetInstanceProcAddr InstanceProcAddr() { return nullptr; }
 void DeviceCreated(VkInstance, VkPhysicalDevice, VkDevice) {}
 void Shutdown() {}
 bool DlssSupported() { return false; }
+bool RayReconstructionSupported(std::string* reason) {
+    if (reason) *reason = "this build has no Streamline";
+    return false;
+}
 bool FrameGenSupported(std::string* reason) {
     if (reason) *reason = "this build has no Streamline";
     return false;

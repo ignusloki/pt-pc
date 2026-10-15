@@ -1,0 +1,146 @@
+# Coffee with Lisa's selfie: four dates by the warm answers to the photo, each through the photo mode's panel (its values
+# set by slisaselfie: her expression, her tilt, yours, your tilt; -2 .. 2), the shot and the polaroid developing
+# she smiles (+1), you frown (-1), both heads tilted toward the other
+slisadate
+swait 420
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 40
+sshot {shots}/selfie_a_1_panel_neutral.png
+swait 2
+slisaselfie 1 1 -1 1
+swait 40
+sshot {shots}/selfie_a_2_panel_set.png
+swait 2
+slisaselfie 1 1 -1 1 take
+swait 6
+sshot {shots}/selfie_a_3_flash.png
+swait 2
+swait 70
+sshot {shots}/selfie_a_4_developing.png
+swait 2
+swait 200
+sshot {shots}/selfie_a_5_developed.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+# both big grins (+2), heads together (+2)
+slisadate
+swait 420
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 40
+sshot {shots}/selfie_b_1_panel_neutral.png
+swait 2
+slisaselfie 2 2 2 2
+swait 40
+sshot {shots}/selfie_b_2_panel_set.png
+swait 2
+slisaselfie 2 2 2 2 take
+swait 6
+sshot {shots}/selfie_b_3_flash.png
+swait 2
+swait 70
+sshot {shots}/selfie_b_4_developing.png
+swait 2
+swait 200
+sshot {shots}/selfie_b_5_developed.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+# both grumpy (-2), you lean away (-1)
+slisadate
+swait 420
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 40
+sshot {shots}/selfie_c_1_panel_neutral.png
+swait 2
+slisaselfie -2 0 -2 -1
+swait 40
+sshot {shots}/selfie_c_2_panel_set.png
+swait 2
+slisaselfie -2 0 -2 -1 take
+swait 6
+sshot {shots}/selfie_c_3_flash.png
+swait 2
+swait 70
+sshot {shots}/selfie_c_4_developing.png
+swait 2
+swait 200
+sshot {shots}/selfie_c_5_developed.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+# she grumpy (-2) leaning away, you smile (+1)
+slisadate
+swait 420
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 40
+sshot {shots}/selfie_d_1_panel_neutral.png
+swait 2
+slisaselfie -2 -1 1 1
+swait 40
+sshot {shots}/selfie_d_2_panel_set.png
+swait 2
+slisaselfie -2 -1 1 1 take
+swait 6
+sshot {shots}/selfie_d_3_flash.png
+swait 2
+swait 70
+sshot {shots}/selfie_d_4_developing.png
+swait 2
+swait 200
+sshot {shots}/selfie_d_5_developed.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30

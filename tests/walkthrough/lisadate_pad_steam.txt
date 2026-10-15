@@ -1,0 +1,3 @@
+# a virtual steam pad, the prompts' device once it is pressed (Coffee with Lisa's prompt captures)
+sattach 0 steam
+swait 30

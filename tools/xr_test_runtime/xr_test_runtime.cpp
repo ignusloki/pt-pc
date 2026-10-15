@@ -1,28 +1,3 @@
-// A headless OpenXR runtime for testing the port's VR mode without a headset (docs/vr.md, "Testing without a headset").
-//
-// It is selected per process with XR_RUNTIME_JSON=<build>/xr_test_runtime/pt_xr_test_runtime.json and changes nothing on the
-// machine: no registry key, no service, no window. It implements OpenXR 1.0 with XR_KHR_vulkan_enable2 for one simulated
-// head-mounted display (two views) and one simulated Oculus Touch controller pair (khr/simple_controller as the fallback):
-// the Vulkan instance and device are the application's, created through the runtime as the extension requires; the swapchain
-// images are plain VkImages on the application's device; frames are not paced (xrWaitFrame returns at once with display times
-// one period apart), so a test runs as fast as the application renders.
-//
-// It also checks what the application does against the rules it can see (call order, handles, the frame loop, swapchain
-// acquire/wait/release, the layers of xrEndFrame, binding paths) and logs every violation as a "VIOLATION" line, and it can
-// write what the application submitted as PNG files. Settings, all optional, from the environment:
-//   PT_XRTEST_LOG=<file>         the log (default: stderr)
-//   PT_XRTEST_OUT=<dir>          where layer dumps go
-//   PT_XRTEST_VIEW=<w>x<h>       recommended view size (default 1024x1104)
-//   PT_XRTEST_IPD=<metres>       eye distance (default 0.064)
-//   PT_XRTEST_FORMATS=<list>     swapchain formats offered, in order: rgba_srgb,bgra_srgb,rgba_unorm,bgra_unorm,rgba16f
-//   PT_XRTEST_SCRIPT=<text>      or PT_XRTEST_SCRIPT_FILE=<file>: a script of entries separated by ';' or new lines, frame
-//                                numbers counting xrWaitFrame calls from 0:
-//       head F yaw pitch roll [x y z]       head pose keyframe (degrees, metres, LOCAL space), linear in between
-//       hand left|right F x y z yaw pitch roll   controller (grip and aim) pose keyframe
-//       input F1 F2 <path> v [v2]           an input's value for frames F1 to F2-1, e.g. input 10 40 /user/hand/left/input/thumbstick 0 1
-//       event F focus_lost|focus_gained|exit|stop|profile_none
-//       dump F                              write the layers of the frame waited as F (one PNG per view and quad layer)
-//       dumpevery N                         write every Nth frame's layers
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #define XR_USE_GRAPHICS_API_VULKAN
@@ -30,6 +5,10 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
+#define XR_USE_GRAPHICS_API_D3D12
 #endif
 #include <openxr/openxr.h>
 #include <openxr/openxr_loader_negotiation.h>
@@ -49,6 +28,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -64,8 +44,6 @@
 #endif
 
 namespace {
-
-// ---------------------------------------------------------------------------------------------------------------- logging
 
 std::mutex g_mutex;
 FILE* g_log = nullptr;
@@ -96,8 +74,6 @@ XrResult Violation(XrResult result, const char* format, ...) {
     Log("VIOLATION %s", text);
     return result;
 }
-
-// --------------------------------------------------------------------------------------------------------------- math
 
 struct Quat {
     float x = 0, y = 0, z = 0, w = 1;
@@ -131,7 +107,6 @@ Quat AxisAngle(float x, float y, float z, float radians) {
     const float s = std::sin(radians * 0.5f);
     return {x * s, y * s, z * s, std::cos(radians * 0.5f)};
 }
-// yaw about +Y (to the left), then pitch about +X (up), then roll about -Z (the view axis; positive tilts the top to the left)
 Quat FromYawPitchRoll(float yaw_deg, float pitch_deg, float roll_deg) {
     const float k = 3.14159265358979f / 180.0f;
     return Mul(Mul(AxisAngle(0, 1, 0, yaw_deg * k), AxisAngle(1, 0, 0, pitch_deg * k)), AxisAngle(0, 0, 1, roll_deg * k));
@@ -147,8 +122,6 @@ bool Normalized(const XrQuaternionf& q) {
     const float n = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
     return std::abs(n - 1.0f) < 1.0e-3f;
 }
-
-// ------------------------------------------------------------------------------------------------------------- script
 
 struct Keyframe {
     int frame = 0;
@@ -259,8 +232,6 @@ void Sample(const std::vector<Keyframe>& keys, int frame, float out[6]) {
     std::copy(keys.back().v, keys.back().v + 6, out);
 }
 
-// ------------------------------------------------------------------------------------------------------------- objects
-
 constexpr uint64_t kMagicInstance = 0x7074785249ull, kMagicSession = 0x7074785253ull, kMagicSpace = 0x7074785250ull,
                    kMagicSwapchain = 0x7074785357ull, kMagicActionSet = 0x7074784153ull, kMagicAction = 0x7074784143ull;
 
@@ -305,14 +276,18 @@ struct VkFunctions {
 struct SwapchainImage {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+#ifdef _WIN32
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+#endif
 };
 
 struct Swapchain : Object {
     Session* session = nullptr;
     XrSwapchainCreateInfo info{};
+    int64_t vk_format = 0;
     std::vector<SwapchainImage> images;
-    std::deque<uint32_t> acquired;  // acquired, not yet released, in order
-    bool waited = false;            // the oldest acquired image was waited for
+    std::deque<uint32_t> acquired;
+    bool waited = false;
     uint32_t next = 0;
     int last_released = -1;
     bool released_since_end = false;
@@ -340,9 +315,7 @@ struct Action : Object {
     std::string name;
     XrActionType type = XR_ACTION_TYPE_BOOLEAN_INPUT;
     std::vector<XrPath> subactions;
-    // per profile, the bound input paths
     std::map<XrPath, std::vector<XrPath>> bindings;
-    // state per subaction (index 0 = no subaction filter, 1 = left, 2 = right)
     struct State {
         float x = 0, y = 0;
         bool active = false;
@@ -366,15 +339,23 @@ struct Session : Object {
     VkFunctions vk;
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
+#ifdef _WIN32
+    bool d3d12 = false;
+    Microsoft::WRL::ComPtr<ID3D12Device> d3d_device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> d3d_queue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> d3d_allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> d3d_list;
+    Microsoft::WRL::ComPtr<ID3D12Fence> d3d_fence;
+    uint64_t d3d_fence_value = 0;
+#endif
     std::set<Swapchain*> swapchains;
     std::set<Space*> spaces;
-    // the frame loop
-    int64_t waited = 0;        // xrWaitFrame calls returned
-    int64_t begun = 0;         // xrBeginFrame calls that succeeded
-    int64_t ended = 0;         // xrEndFrame calls that succeeded
-    bool frame_begun = false;  // between xrBeginFrame and xrEndFrame
+    int64_t waited = 0;
+    int64_t begun = 0;
+    int64_t ended = 0;
+    bool frame_begun = false;
     XrTime last_predicted = 0;
-    std::set<XrTime> predicted;  // display times handed out and not yet ended
+    std::set<XrTime> predicted;
     int frames_without_layers = 0;
     std::vector<ActionSet*> attached;
     XrPath profile = XR_NULL_PATH;
@@ -393,20 +374,23 @@ struct Instance : Object {
     std::deque<std::vector<uint8_t>> events;
     std::set<Session*> sessions;
     std::set<ActionSet*> action_sets;
-    std::map<XrPath, std::set<XrPath>> suggested;  // profile -> bound paths
+    std::map<XrPath, std::set<XrPath>> suggested;
     bool system_got = false;
     bool requirements_checked = false;
+    bool d3d12 = false;
+    uint64_t adapter_luid = 0;
     VkInstance created_vk_instance = VK_NULL_HANDLE;
     PFN_vkGetInstanceProcAddr vk_gipa = nullptr;
     Script script;
     uint32_t view_w = 1024, view_h = 1104;
     float ipd = 0.064f;
+    float floor = 1.6f;
     std::vector<int64_t> formats;
     std::string out_dir;
 };
 
-constexpr XrSystemId kSystemId = 0x5054;  // "PT"
-constexpr XrDuration kPeriod = 11111111;  // 90 Hz
+constexpr XrSystemId kSystemId = 0x5054;
+constexpr XrDuration kPeriod = 11111111;
 constexpr XrTime kStartTime = 1000000000;
 
 Instance* g_instance = nullptr;
@@ -462,13 +446,11 @@ void SetState(Session* s, XrSessionState state) {
 
 int CurrentFrame(Session* s) { return static_cast<int>(std::max<int64_t>(0, s->waited - 1)); }
 
-// ---------------------------------------------------------------------------------------------- interaction profiles
-
 struct Profile {
     const char* path;
-    std::vector<const char*> both;   // component paths under /user/hand/<side>
-    std::vector<const char*> left;   // left only
-    std::vector<const char*> right;  // right only
+    std::vector<const char*> both;
+    std::vector<const char*> left;
+    std::vector<const char*> right;
 };
 
 const std::vector<Profile>& Profiles() {
@@ -522,8 +504,6 @@ bool ValidBindingPath(const Profile& profile, const std::string& binding) {
             if (component == c) return true;
         for (const char* c : side == 0 ? profile.left : profile.right)
             if (component == c) return true;
-        // a parent path whose identifier has a single obvious component is also accepted by the specification (for example
-        // .../input/trigger for .../input/trigger/value); the runtime accepts an identifier that has a /value, /click or a vector
         for (const char* c : profile.both) {
             const std::string full = c;
             if (full.rfind(component + "/", 0) == 0) return true;
@@ -536,12 +516,9 @@ bool ValidBindingPath(const Profile& profile, const std::string& binding) {
     return false;
 }
 
-// The simulated controller's value of an input path this frame (thumbsticks, buttons, triggers) from the script, with the
-// simple controller's select mapped to the trigger and menu to the menu button
 void InputValue(Instance* inst, int frame, const std::string& path, float& x, float& y) {
     x = y = 0.0f;
     std::string wanted = path;
-    // map the simple controller's paths to the simulated touch controller's
     auto replace = [&](const char* from, const char* to) {
         const size_t at = wanted.find(from);
         if (at != std::string::npos) wanted.replace(at, std::strlen(from), to);
@@ -559,7 +536,6 @@ void InputValue(Instance* inst, int frame, const std::string& path, float& x, fl
                 y = r.y;
             }
         } else if (p.size() > wanted.size() && p.rfind(wanted + "/", 0) == 0) {
-            // the script names .../trigger/value and the binding .../trigger
             x = r.x;
         }
     }
@@ -573,7 +549,6 @@ Pose HeadPose(Instance* inst, int frame) {
 
 Pose HandPose(Instance* inst, int side, int frame) {
     if (inst->script.hands[side].empty()) {
-        // default: hands at the hips, 0.2 m to the side, pointing forward
         const Pose head = HeadPose(inst, frame);
         return {Quat{}, {head.p.x + (side == 0 ? -0.2f : 0.2f), head.p.y - 0.5f, head.p.z - 0.3f}};
     }
@@ -582,13 +557,11 @@ Pose HandPose(Instance* inst, int side, int frame) {
     return {FromYawPitchRoll(v[3], v[4], v[5]), {v[0], v[1], v[2]}};
 }
 
-// The pose of a space in LOCAL space at a frame; false when it cannot be located (an inactive action)
 bool SpaceInLocal(Space* space, int frame, Pose& out) {
     Instance* inst = space->session->instance;
     Pose base;
     if (space->action) {
         if (!space->action_ptr || !space->action_ptr->set->attached) return false;
-        // the action must be bound in the current profile
         Session* s = space->session;
         if (s->profile == XR_NULL_PATH) return false;
         auto it = space->action_ptr->bindings.find(s->profile);
@@ -608,15 +581,13 @@ bool SpaceInLocal(Space* space, int frame, Pose& out) {
     } else {
         switch (space->type) {
         case XR_REFERENCE_SPACE_TYPE_VIEW: base = HeadPose(inst, frame); break;
-        case XR_REFERENCE_SPACE_TYPE_STAGE: base = {Quat{}, {0.0f, -1.6f, 0.0f}}; break;
+        case XR_REFERENCE_SPACE_TYPE_STAGE: base = {Quat{}, {0.0f, -inst->floor, 0.0f}}; break;
         default: base = {}; break;
         }
     }
     out = Compose(base, space->offset);
     return true;
 }
-
-// ----------------------------------------------------------------------------------------------------- vulkan helpers
 
 template <typename T>
 void LoadInstanceFn(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, T& fn, const char* name) {
@@ -667,8 +638,6 @@ uint32_t MemoryType(Session* s, uint32_t bits, VkMemoryPropertyFlags flags) {
     return UINT32_MAX;
 }
 
-// one command buffer on the session's queue, waited for at once (the application must not use the queue meanwhile, as the
-// extension asks of it during the calls that take it)
 template <typename F>
 bool RunCommands(Session* s, F&& record) {
     if (!s->pool) {
@@ -731,15 +700,77 @@ float HalfToFloat(uint16_t h) {
     return f;
 }
 
-// Writes one swapchain image (the last one released) as an 8-bit sRGB-encoded PNG: SRGB formats as stored, UNORM and float
-// formats (which the runtime reads as linear) encoded
+#ifdef _WIN32
+int64_t DxgiOf(int64_t vk) {
+    switch (vk) {
+    case VK_FORMAT_R8G8B8A8_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    case VK_FORMAT_B8G8R8A8_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    case VK_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_D32_SFLOAT: return DXGI_FORMAT_D32_FLOAT;
+    default: return 0;
+    }
+}
+
+int64_t VkOfDxgi(int64_t dxgi) {
+    for (int64_t vk : {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM,
+                       VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT}) {
+        if (DxgiOf(vk) == dxgi) return vk;
+    }
+    return 0;
+}
+
+bool D3dWaitIdle(Session* s) {
+    if (!s->d3d_fence && FAILED(s->d3d_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s->d3d_fence)))) return false;
+    ++s->d3d_fence_value;
+    if (FAILED(s->d3d_queue->Signal(s->d3d_fence.Get(), s->d3d_fence_value))) return false;
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!event) return false;
+    bool ok = true;
+    if (s->d3d_fence->GetCompletedValue() < s->d3d_fence_value) {
+        ok = SUCCEEDED(s->d3d_fence->SetEventOnCompletion(s->d3d_fence_value, event)) && WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
+    }
+    CloseHandle(event);
+    return ok;
+}
+
+bool D3dRun(Session* s, const std::function<void(ID3D12GraphicsCommandList*)>& record) {
+    if (!s->d3d_list) {
+        if (FAILED(s->d3d_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s->d3d_allocator))) ||
+            FAILED(s->d3d_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, s->d3d_allocator.Get(), nullptr, IID_PPV_ARGS(&s->d3d_list))) ||
+            FAILED(s->d3d_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s->d3d_fence)))) {
+            return false;
+        }
+        s->d3d_list->Close();
+    }
+    s->d3d_allocator->Reset();
+    s->d3d_list->Reset(s->d3d_allocator.Get(), nullptr);
+    record(s->d3d_list.Get());
+    s->d3d_list->Close();
+    ID3D12CommandList* lists[] = {s->d3d_list.Get()};
+    s->d3d_queue->ExecuteCommandLists(1, lists);
+    return D3dWaitIdle(s);
+}
+#endif
+
+bool WritePng(Swapchain* sc, const void* mapped, size_t pitch, const std::string& path, const XrRect2Di* rect);
+#ifdef _WIN32
+bool DumpImageD3D12(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const std::string& path, const XrRect2Di* rect);
+#endif
+
 bool DumpImage(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const std::string& path, const XrRect2Di* rect) {
     const uint32_t w = sc->info.width;
     const uint32_t h = sc->info.height;
-    const int64_t format = sc->info.format;
+    const int64_t format = sc->vk_format;
     const bool half = format == VK_FORMAT_R16G16B16A16_SFLOAT;
     const VkDeviceSize texel = half ? 8 : 4;
     if (AspectOf(format) != VK_IMAGE_ASPECT_COLOR_BIT) return false;
+#ifdef _WIN32
+    if (s->d3d12) {
+        return DumpImageD3D12(s, sc, index, layer, path, rect);
+    }
+#endif
     VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     buffer_info.size = VkDeviceSize(w) * h * texel;
     buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -780,6 +811,22 @@ bool DumpImage(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const 
     bool written = false;
     void* mapped = nullptr;
     if (ok && s->vk.MapMemory(s->vk_device, memory, 0, VK_WHOLE_SIZE, 0, &mapped) == VK_SUCCESS) {
+        written = WritePng(sc, mapped, static_cast<size_t>(w) * texel, path, rect);
+        s->vk.UnmapMemory(s->vk_device, memory);
+    }
+    s->vk.DestroyBuffer(s->vk_device, buffer, nullptr);
+    s->vk.FreeMemory(s->vk_device, memory, nullptr);
+    Log("dump %s %s", path.c_str(), written ? "written" : "FAILED");
+    return written;
+}
+
+bool WritePng(Swapchain* sc, const void* mapped, size_t pitch, const std::string& path, const XrRect2Di* rect) {
+    const uint32_t w = sc->info.width;
+    const uint32_t h = sc->info.height;
+    const int64_t format = sc->vk_format;
+    const bool half = format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    bool written = false;
+    {
         const bool bgra = format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_B8G8R8A8_UNORM;
         const bool linear = format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM || half;
         const int x0 = rect ? std::clamp(rect->offset.x, 0, static_cast<int>(w)) : 0;
@@ -793,15 +840,16 @@ bool DumpImage(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const 
             return static_cast<uint8_t>(std::lround(v * 255.0f));
         };
         for (int y = 0; y < rh; ++y) {
+            const uint8_t* row = static_cast<const uint8_t*>(mapped) + size_t(y0 + y) * pitch;
             for (int x = 0; x < rw; ++x) {
-                const size_t src = (size_t(y0 + y) * w + (x0 + x));
+                const size_t src = size_t(x0 + x);
                 uint8_t* dst = &rgba[(size_t(y) * rw + x) * 4];
                 if (half) {
-                    const uint16_t* p = static_cast<const uint16_t*>(mapped) + src * 4;
+                    const uint16_t* p = reinterpret_cast<const uint16_t*>(row) + src * 4;
                     for (int c = 0; c < 3; ++c) dst[c] = encode(HalfToFloat(p[c]));
                     dst[3] = static_cast<uint8_t>(std::lround(std::clamp(HalfToFloat(p[3]), 0.0f, 1.0f) * 255.0f));
                 } else {
-                    const uint8_t* p = static_cast<const uint8_t*>(mapped) + src * 4;
+                    const uint8_t* p = row + src * 4;
                     const uint8_t r = bgra ? p[2] : p[0];
                     const uint8_t b = bgra ? p[0] : p[2];
                     dst[0] = linear ? encode(r / 255.0f) : r;
@@ -812,13 +860,64 @@ bool DumpImage(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const 
             }
         }
         written = stbi_write_png(path.c_str(), rw, rh, 4, rgba.data(), rw * 4) != 0;
-        s->vk.UnmapMemory(s->vk_device, memory);
     }
-    s->vk.DestroyBuffer(s->vk_device, buffer, nullptr);
-    s->vk.FreeMemory(s->vk_device, memory, nullptr);
+    return written;
+}
+
+#ifdef _WIN32
+bool DumpImageD3D12(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const std::string& path, const XrRect2Di* rect) {
+    ID3D12Resource* texture = sc->images[index].texture.Get();
+    const D3D12_RESOURCE_DESC desc = texture->GetDesc();
+    const UINT subresource = layer * desc.MipLevels;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT64 total = 0;
+    s->d3d_device->GetCopyableFootprints(&desc, subresource, 1, 0, &footprint, nullptr, nullptr, &total);
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_READBACK};
+    D3D12_RESOURCE_DESC buffer_desc{};
+    buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer_desc.Width = total;
+    buffer_desc.Height = 1;
+    buffer_desc.DepthOrArraySize = 1;
+    buffer_desc.MipLevels = 1;
+    buffer_desc.SampleDesc.Count = 1;
+    buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    if (FAILED(s->d3d_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                      IID_PPV_ARGS(&buffer)))) {
+        return false;
+    }
+    const bool ok = D3dRun(s, [&](ID3D12GraphicsCommandList* list) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = texture;
+        barrier.Transition.Subresource = subresource;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        list->ResourceBarrier(1, &barrier);
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource = texture;
+        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = subresource;
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource = buffer.Get();
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = footprint;
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+        list->ResourceBarrier(1, &barrier);
+    });
+    bool written = false;
+    void* mapped = nullptr;
+    const D3D12_RANGE range{0, static_cast<SIZE_T>(total)};
+    if (ok && SUCCEEDED(buffer->Map(0, &range, &mapped))) {
+        written = WritePng(sc, mapped, footprint.Footprint.RowPitch, path, rect);
+        const D3D12_RANGE none{0, 0};
+        buffer->Unmap(0, &none);
+    }
     Log("dump %s %s", path.c_str(), written ? "written" : "FAILED");
     return written;
 }
+#endif
 
 std::string FormatName(int64_t f) {
     switch (f) {
@@ -832,8 +931,6 @@ std::string FormatName(int64_t f) {
     }
 }
 
-// ------------------------------------------------------------------------------------------------------------ entry points
-
 #define PT_CHECK_STRUCT(ptr, xrtype)                                                                                     \
     do {                                                                                                                 \
         if (!(ptr)) return Violation(XR_ERROR_VALIDATION_FAILURE, "%s: null " #ptr, __func__);                            \
@@ -843,7 +940,11 @@ std::string FormatName(int64_t f) {
 XRAPI_ATTR XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 
 const std::vector<std::pair<const char*, uint32_t>>& Extensions() {
-    static const std::vector<std::pair<const char*, uint32_t>> list = {{XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, 2}};
+    static const std::vector<std::pair<const char*, uint32_t>> list = {{XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, 2},
+#ifdef _WIN32
+                                                                        {XR_KHR_D3D12_ENABLE_EXTENSION_NAME, 9}
+#endif
+    };
     return list;
 }
 
@@ -899,6 +1000,7 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateInstance(const XrInstanceCreateInfo* info, 
         }
     }
     if (const char* ipd = std::getenv("PT_XRTEST_IPD")) inst->ipd = static_cast<float>(std::atof(ipd));
+    if (const char* floor = std::getenv("PT_XRTEST_FLOOR")) inst->floor = static_cast<float>(std::atof(floor));
     if (const char* formats = std::getenv("PT_XRTEST_FORMATS")) {
         for (const std::string& f : Split(formats, ", "))
             if (const int64_t v = ParseFormat(f)) inst->formats.push_back(v);
@@ -907,6 +1009,12 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateInstance(const XrInstanceCreateInfo* info, 
         inst->formats = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM,
                          VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
     }
+#ifdef _WIN32
+    inst->d3d12 = inst->extensions.count(XR_KHR_D3D12_ENABLE_EXTENSION_NAME) != 0;
+    if (inst->d3d12) {
+        for (int64_t& f : inst->formats) f = DxgiOf(f);
+    }
+#endif
     if (const char* out_dir = std::getenv("PT_XRTEST_OUT")) {
         inst->out_dir = out_dir;
         std::error_code ec;
@@ -1063,8 +1171,6 @@ XRAPI_ATTR XrResult XRAPI_CALL EnumerateViewConfigurationViews(XrInstance h, XrS
     return XR_SUCCESS;
 }
 
-// ---- XR_KHR_vulkan_enable2
-
 XRAPI_ATTR XrResult XRAPI_CALL GetVulkanGraphicsRequirements2(XrInstance h, XrSystemId id, XrGraphicsRequirementsVulkanKHR* req) {
     Instance* inst = GetInstance(h);
     if (!inst) return Violation(XR_ERROR_HANDLE_INVALID, "xrGetVulkanGraphicsRequirements2KHR: invalid instance");
@@ -1076,6 +1182,45 @@ XRAPI_ATTR XrResult XRAPI_CALL GetVulkanGraphicsRequirements2(XrInstance h, XrSy
     inst->requirements_checked = true;
     return XR_SUCCESS;
 }
+
+#ifdef _WIN32
+
+XRAPI_ATTR XrResult XRAPI_CALL GetD3D12GraphicsRequirements(XrInstance h, XrSystemId id, XrGraphicsRequirementsD3D12KHR* req) {
+    Instance* inst = GetInstance(h);
+    if (!inst) return Violation(XR_ERROR_HANDLE_INVALID, "xrGetD3D12GraphicsRequirementsKHR: invalid instance");
+    if (!inst->d3d12) return Violation(XR_ERROR_FUNCTION_UNSUPPORTED, "D3D12_enable not enabled");
+    if (id != kSystemId) return XR_ERROR_SYSTEM_INVALID;
+    PT_CHECK_STRUCT(req, XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR);
+    using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+    HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+    auto create = dxgi ? reinterpret_cast<CreateFactory>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1"))) : nullptr;
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    if (!create || FAILED(create(IID_PPV_ARGS(&factory)))) return XR_ERROR_RUNTIME_FAILURE;
+    int wanted = 0;
+    if (const char* n = std::getenv("PT_XRTEST_ADAPTER")) wanted = std::atoi(n);
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    int hardware = 0;
+    bool found = false;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        adapter->GetDesc1(&desc);
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+        if (hardware++ == wanted) {
+            req->adapterLuid = desc.AdapterLuid;
+            inst->adapter_luid = (static_cast<uint64_t>(static_cast<uint32_t>(desc.AdapterLuid.HighPart)) << 32) | desc.AdapterLuid.LowPart;
+            char name[128]{};
+            WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+            Log("d3d12: adapter %d asked for: %s (LUID %08lx:%08lx)", wanted, name, desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart);
+            found = true;
+            break;
+        }
+    }
+    if (!found) return XR_ERROR_RUNTIME_FAILURE;
+    req->minFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+    inst->requirements_checked = true;
+    return XR_SUCCESS;
+}
+#endif
 
 XRAPI_ATTR XrResult XRAPI_CALL CreateVulkanInstance(XrInstance h, const XrVulkanInstanceCreateInfoKHR* info, VkInstance* out, VkResult* vk_result) {
     Instance* inst = GetInstance(h);
@@ -1111,7 +1256,6 @@ XRAPI_ATTR XrResult XRAPI_CALL GetVulkanGraphicsDevice2(XrInstance h, const XrVu
     enumerate(info->vulkanInstance, &count, nullptr);
     std::vector<VkPhysicalDevice> devices(count);
     enumerate(info->vulkanInstance, &count, devices.data());
-    // the headset's GPU: the first discrete one (PT_XRTEST_GPU=<index> picks another)
     VkPhysicalDevice chosen = devices.empty() ? VK_NULL_HANDLE : devices[0];
     for (VkPhysicalDevice d : devices) {
         VkPhysicalDeviceProperties p{};
@@ -1149,8 +1293,6 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateVulkanDevice(XrInstance h, const XrVulkanDe
     return XR_SUCCESS;
 }
 
-// ---- sessions
-
 XRAPI_ATTR XrResult XRAPI_CALL CreateSession(XrInstance h, const XrSessionCreateInfo* info, XrSession* out) {
     std::lock_guard lock(g_mutex);
     Instance* inst = GetInstance(h);
@@ -1159,9 +1301,42 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateSession(XrInstance h, const XrSessionCreate
     if (info->systemId != kSystemId) return XR_ERROR_SYSTEM_INVALID;
     if (!inst->requirements_checked) return Violation(XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING, "xrCreateSession before the graphics requirements");
     const XrGraphicsBindingVulkanKHR* binding = nullptr;
+#ifdef _WIN32
+    const XrGraphicsBindingD3D12KHR* d3d_binding = nullptr;
+#endif
     for (auto* n = static_cast<const XrBaseInStructure*>(info->next); n; n = n->next) {
         if (n->type == XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR) binding = reinterpret_cast<const XrGraphicsBindingVulkanKHR*>(n);
+#ifdef _WIN32
+        if (n->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) d3d_binding = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(n);
+#endif
     }
+#ifdef _WIN32
+    if (inst->d3d12) {
+        if (!d3d_binding || !d3d_binding->device || !d3d_binding->queue) {
+            return Violation(XR_ERROR_GRAPHICS_DEVICE_INVALID, "xrCreateSession without a D3D12 graphics binding");
+        }
+        if (!inst->sessions.empty()) return XR_ERROR_LIMIT_REACHED;
+        const LUID luid = d3d_binding->device->GetAdapterLuid();
+        const uint64_t got = (static_cast<uint64_t>(static_cast<uint32_t>(luid.HighPart)) << 32) | luid.LowPart;
+        if (got != inst->adapter_luid) {
+            Violation(XR_ERROR_GRAPHICS_DEVICE_INVALID, "xrCreateSession: the D3D12 device is on adapter %08lx:%08lx, not the one asked for", luid.HighPart,
+                      luid.LowPart);
+        }
+        auto s = std::make_unique<Session>();
+        s->magic = kMagicSession;
+        s->instance = inst;
+        s->d3d12 = true;
+        s->d3d_device = d3d_binding->device;
+        s->d3d_queue = d3d_binding->queue;
+        Session* raw = s.release();
+        inst->sessions.insert(raw);
+        *out = reinterpret_cast<XrSession>(raw);
+        Log("session created on a D3D12 device and queue (adapter %08lx:%08lx)", luid.HighPart, luid.LowPart);
+        SetState(raw, XR_SESSION_STATE_IDLE);
+        SetState(raw, XR_SESSION_STATE_READY);
+        return XR_SUCCESS;
+    }
+#endif
     if (!binding) return Violation(XR_ERROR_GRAPHICS_DEVICE_INVALID, "xrCreateSession without a Vulkan graphics binding");
     if (!inst->sessions.empty()) return XR_ERROR_LIMIT_REACHED;
     if (binding->instance != inst->created_vk_instance) Violation(XR_ERROR_GRAPHICS_DEVICE_INVALID, "xrCreateSession: VkInstance not the one created through the runtime");
@@ -1194,10 +1369,13 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroySession(XrSession h) {
         static_cast<long long>(s->begun), static_cast<long long>(s->ended), static_cast<long long>(s->projection_layers),
         static_cast<long long>(s->quad_layers));
     if (s->vk.DeviceWaitIdle) s->vk.DeviceWaitIdle(s->vk_device);
+#ifdef _WIN32
+    if (s->d3d12) D3dWaitIdle(s);
+#endif
     for (Swapchain* sc : s->swapchains) {
         for (SwapchainImage& i : sc->images) {
-            s->vk.DestroyImage(s->vk_device, i.image, nullptr);
-            s->vk.FreeMemory(s->vk_device, i.memory, nullptr);
+            if (s->vk.DestroyImage) s->vk.DestroyImage(s->vk_device, i.image, nullptr);
+            if (s->vk.FreeMemory) s->vk.FreeMemory(s->vk_device, i.memory, nullptr);
         }
         sc->magic = 0;
         delete sc;
@@ -1276,8 +1454,6 @@ void ScriptEvents(Session* s, int frame) {
     }
 }
 
-// ---- frame loop
-
 XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* info, XrFrameState* state) {
     std::lock_guard lock(g_mutex);
     Session* s = GetSession(h);
@@ -1285,8 +1461,6 @@ XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* inf
     if (info && info->type != XR_TYPE_FRAME_WAIT_INFO) return Violation(XR_ERROR_VALIDATION_FAILURE, "xrWaitFrame: info type");
     PT_CHECK_STRUCT(state, XR_TYPE_FRAME_STATE);
     if (!s->running) return Violation(XR_ERROR_SESSION_NOT_RUNNING, "xrWaitFrame on a session that is not running");
-    // the frame loop allows one xrWaitFrame ahead of the frame being drawn: waiting again before xrBeginFrame of the
-    // previous wait would block forever on a real runtime
     if (s->waited > s->begun) return Violation(XR_ERROR_CALL_ORDER_INVALID, "xrWaitFrame twice without xrBeginFrame");
     const int frame = static_cast<int>(s->waited);
     ScriptEvents(s, frame);
@@ -1296,7 +1470,6 @@ XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* inf
     state->predictedDisplayTime = s->last_predicted;
     state->predictedDisplayPeriod = kPeriod;
     state->shouldRender = (s->state == XR_SESSION_STATE_VISIBLE || s->state == XR_SESSION_STATE_FOCUSED) ? XR_TRUE : XR_FALSE;
-    // the first frame takes the session to synchronized, a few more to visible and focused, as compositors do
     if (s->state == XR_SESSION_STATE_READY && s->waited >= 1) SetState(s, XR_SESSION_STATE_SYNCHRONIZED);
     if (s->state == XR_SESSION_STATE_SYNCHRONIZED && s->waited >= 3 && !s->exit_requested) {
         SetState(s, XR_SESSION_STATE_VISIBLE);
@@ -1314,7 +1487,6 @@ XRAPI_ATTR XrResult XRAPI_CALL BeginFrame(XrSession h, const XrFrameBeginInfo* i
     if (s->begun >= s->waited) return Violation(XR_ERROR_CALL_ORDER_INVALID, "xrBeginFrame without a matching xrWaitFrame");
     XrResult result = XR_SUCCESS;
     if (s->frame_begun) {
-        // the previous frame is discarded
         result = XR_FRAME_DISCARDED;
         Log("frame %lld discarded (xrBeginFrame again without xrEndFrame)", static_cast<long long>(s->begun));
     }
@@ -1415,7 +1587,6 @@ XRAPI_ATTR XrResult XRAPI_CALL EndFrame(XrSession h, const XrFrameEndInfo* info)
     if (dump) Log("frame %d: %u layers", frame, info->layerCount);
     s->frames_without_layers = info->layerCount == 0 ? s->frames_without_layers + 1 : 0;
     s->predicted.erase(info->displayTime);
-    // display times are handed out in order; older ones can no longer be ended
     s->predicted.erase(s->predicted.begin(), s->predicted.lower_bound(info->displayTime));
     s->frame_begun = false;
     ++s->ended;
@@ -1443,7 +1614,6 @@ XRAPI_ATTR XrResult XRAPI_CALL LocateViews(XrSession h, const XrViewLocateInfo* 
         return XR_SUCCESS;
     }
     const Pose head = HeadPose(s->instance, std::max(0, frame));
-    // a symmetric headset: the left eye's field reaches further out (to the left) than in, the right eye mirrors it
     const XrFovf left_fov{-0.9425f, 0.7330f, 0.8203f, -0.8901f};
     for (uint32_t v = 0; v < 2; ++v) {
         if (views[v].type != XR_TYPE_VIEW) Violation(XR_ERROR_VALIDATION_FAILURE, "xrLocateViews: views[%u].type", v);
@@ -1457,15 +1627,15 @@ XRAPI_ATTR XrResult XRAPI_CALL LocateViews(XrSession h, const XrViewLocateInfo* 
     return XR_SUCCESS;
 }
 
-// ---- spaces
-
 XRAPI_ATTR XrResult XRAPI_CALL EnumerateReferenceSpaces(XrSession h, uint32_t capacity, uint32_t* count, XrReferenceSpaceType* spaces) {
-    if (!GetSession(h)) return Violation(XR_ERROR_HANDLE_INVALID, "xrEnumerateReferenceSpaces: invalid session");
+    Session* s = GetSession(h);
+    if (!s) return Violation(XR_ERROR_HANDLE_INVALID, "xrEnumerateReferenceSpaces: invalid session");
     static const XrReferenceSpaceType types[] = {XR_REFERENCE_SPACE_TYPE_VIEW, XR_REFERENCE_SPACE_TYPE_LOCAL, XR_REFERENCE_SPACE_TYPE_STAGE};
-    *count = 3;
+    const uint32_t n = s->instance->floor > 0.0f ? 3u : 2u;
+    *count = n;
     if (capacity == 0) return XR_SUCCESS;
-    if (capacity < 3) return XR_ERROR_SIZE_INSUFFICIENT;
-    std::copy(std::begin(types), std::end(types), spaces);
+    if (capacity < n) return XR_ERROR_SIZE_INSUFFICIENT;
+    std::copy(std::begin(types), std::begin(types) + n, spaces);
     return XR_SUCCESS;
 }
 
@@ -1475,7 +1645,7 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateReferenceSpace(XrSession h, const XrReferen
     if (!s) return Violation(XR_ERROR_HANDLE_INVALID, "xrCreateReferenceSpace: invalid session");
     PT_CHECK_STRUCT(info, XR_TYPE_REFERENCE_SPACE_CREATE_INFO);
     if (info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_VIEW && info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL &&
-        info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_STAGE) {
+        (info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_STAGE || s->instance->floor <= 0.0f)) {
         return XR_ERROR_REFERENCE_SPACE_UNSUPPORTED;
     }
     if (!Normalized(info->poseInReferenceSpace.orientation)) return Violation(XR_ERROR_POSE_INVALID, "xrCreateReferenceSpace: pose not normalized");
@@ -1548,8 +1718,6 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace h) {
     return XR_SUCCESS;
 }
 
-// ---- swapchains
-
 XRAPI_ATTR XrResult XRAPI_CALL EnumerateSwapchainFormats(XrSession h, uint32_t capacity, uint32_t* count, int64_t* formats) {
     Session* s = GetSession(h);
     if (!s) return Violation(XR_ERROR_HANDLE_INVALID, "xrEnumerateSwapchainFormats: invalid session");
@@ -1574,6 +1742,48 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateSwapchain(XrSession h, const XrSwapchainCre
                          info->arraySize, info->mipCount, info->sampleCount, info->faceCount);
     }
     if (info->faceCount != 1 || info->sampleCount != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
+#ifdef _WIN32
+    if (s->d3d12) {
+        const int64_t vk_format = VkOfDxgi(info->format);
+        const bool d3d_depth = AspectOf(vk_format) != VK_IMAGE_ASPECT_COLOR_BIT;
+        if (d3d_depth && (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT)) {
+            return Violation(XR_ERROR_VALIDATION_FAILURE, "colour usage on a depth format");
+        }
+        auto sc = std::make_unique<Swapchain>();
+        sc->magic = kMagicSwapchain;
+        sc->session = s;
+        sc->info = *info;
+        sc->info.next = nullptr;
+        sc->vk_format = vk_format;
+        sc->images.resize(3);
+        D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = info->width;
+        desc.Height = info->height;
+        desc.DepthOrArraySize = static_cast<UINT16>(info->arraySize);
+        desc.MipLevels = static_cast<UINT16>(info->mipCount);
+        desc.Format = static_cast<DXGI_FORMAT>(info->format);
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        if (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        if (info->usageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        if (info->usageFlags & XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        const D3D12_RESOURCE_STATES state = d3d_depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET;
+        for (SwapchainImage& image : sc->images) {
+            if (FAILED(s->d3d_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&image.texture)))) {
+                return XR_ERROR_RUNTIME_FAILURE;
+            }
+            image.texture->SetName(L"pt_xr_test_runtime swapchain image");
+        }
+        Swapchain* raw = sc.release();
+        s->swapchains.insert(raw);
+        *out = reinterpret_cast<XrSwapchain>(raw);
+        Log("swapchain %p: %ux%u %s (DXGI %lld), array %u, usage %llx", static_cast<void*>(raw), info->width, info->height,
+            FormatName(vk_format).c_str(), static_cast<long long>(info->format), info->arraySize, static_cast<unsigned long long>(info->usageFlags));
+        return XR_SUCCESS;
+    }
+#endif
     const bool depth = AspectOf(info->format) != VK_IMAGE_ASPECT_COLOR_BIT;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -1588,6 +1798,7 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateSwapchain(XrSession h, const XrSwapchainCre
     sc->session = s;
     sc->info = *info;
     sc->info.next = nullptr;
+    sc->vk_format = info->format;
     sc->images.resize(3);
     for (SwapchainImage& image : sc->images) {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -1612,7 +1823,6 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateSwapchain(XrSession h, const XrSwapchainCre
         }
         s->vk.BindImageMemory(s->vk_device, image.image, image.memory, 0);
     }
-    // the images are handed out in the layout the extension promises: colour attachment (depth: depth attachment)
     RunCommands(s, [&](VkCommandBuffer cmd) {
         for (SwapchainImage& image : sc->images) {
             VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -1638,6 +1848,15 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroySwapchain(XrSwapchain h) {
     Swapchain* sc = GetSwapchain(h);
     if (!sc) return Violation(XR_ERROR_HANDLE_INVALID, "xrDestroySwapchain: invalid swapchain");
     Session* s = sc->session;
+#ifdef _WIN32
+    if (s->d3d12) {
+        D3dWaitIdle(s);
+        s->swapchains.erase(sc);
+        sc->magic = 0;
+        delete sc;
+        return XR_SUCCESS;
+    }
+#endif
     s->vk.DeviceWaitIdle(s->vk_device);
     for (SwapchainImage& i : sc->images) {
         s->vk.DestroyImage(s->vk_device, i.image, nullptr);
@@ -1655,6 +1874,18 @@ XRAPI_ATTR XrResult XRAPI_CALL EnumerateSwapchainImages(XrSwapchain h, uint32_t 
     *count = static_cast<uint32_t>(sc->images.size());
     if (capacity == 0) return XR_SUCCESS;
     if (capacity < *count) return XR_ERROR_SIZE_INSUFFICIENT;
+#ifdef _WIN32
+    if (sc->session->d3d12) {
+        auto* d3d_images = reinterpret_cast<XrSwapchainImageD3D12KHR*>(images);
+        for (uint32_t i = 0; i < *count; ++i) {
+            if (d3d_images[i].type != XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR) {
+                return Violation(XR_ERROR_VALIDATION_FAILURE, "xrEnumerateSwapchainImages: image %u type %d", i, d3d_images[i].type);
+            }
+            d3d_images[i].texture = sc->images[i].texture.Get();
+        }
+        return XR_SUCCESS;
+    }
+#endif
     auto* vk_images = reinterpret_cast<XrSwapchainImageVulkanKHR*>(images);
     for (uint32_t i = 0; i < *count; ++i) {
         if (vk_images[i].type != XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR) {
@@ -1701,8 +1932,6 @@ XRAPI_ATTR XrResult XRAPI_CALL ReleaseSwapchainImage(XrSwapchain h, const XrSwap
     ++sc->released_count;
     return XR_SUCCESS;
 }
-
-// ---- paths and actions
 
 XRAPI_ATTR XrResult XRAPI_CALL StringToPath(XrInstance h, const char* text, XrPath* out) {
     std::lock_guard lock(g_mutex);
@@ -1762,7 +1991,6 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroyActionSet(XrActionSet h) {
     std::lock_guard lock(g_mutex);
     ActionSet* set = GetActionSet(h);
     if (!set) return Violation(XR_ERROR_HANDLE_INVALID, "xrDestroyActionSet: invalid action set");
-    // the actions go with the set; action spaces keep working per the specification, so they are kept until the instance goes
     for (Action* a : set->actions) a->magic = 0;
     set->magic = 0;
     return XR_SUCCESS;
@@ -1812,7 +2040,6 @@ XRAPI_ATTR XrResult XRAPI_CALL SuggestInteractionProfileBindings(XrInstance h, c
     const std::string profile_name = NameOf(inst, info->interactionProfile);
     const Profile* profile = FindProfile(profile_name);
     if (!profile) {
-        // an interaction profile this runtime does not know: allowed, the suggestion is ignored (extensions' profiles)
         Log("bindings for unknown profile %s ignored", profile_name.c_str());
         return XR_SUCCESS;
     }
@@ -1833,7 +2060,6 @@ XRAPI_ATTR XrResult XRAPI_CALL SuggestInteractionProfileBindings(XrInstance h, c
         }
         bindings[a].push_back(b.binding);
     }
-    // a new suggestion for the profile replaces the old one
     for (ActionSet* set : inst->action_sets)
         for (Action* a : set->actions) a->bindings.erase(info->interactionProfile);
     for (auto& [a, paths] : bindings) a->bindings[info->interactionProfile] = paths;
@@ -1854,7 +2080,6 @@ XRAPI_ATTR XrResult XRAPI_CALL AttachSessionActionSets(XrSession h, const XrSess
         set->attached = true;
         s->attached.push_back(set);
     }
-    // the simulated controller is a Touch controller; without bindings for it the simple controller's are used
     Instance* inst = s->instance;
     const XrPath touch = PathOf(inst, "/interaction_profiles/oculus/touch_controller");
     const XrPath simple = PathOf(inst, "/interaction_profiles/khr/simple_controller");
@@ -1981,7 +2206,6 @@ XRAPI_ATTR XrResult XRAPI_CALL SyncActions(XrSession h, const XrActionsSyncInfo*
                         next.active = true;
                         float x = 0, y = 0;
                         InputValue(inst, frame, path, x, y);
-                        // several bindings: the largest magnitude wins (vectors), any pressed (booleans)
                         if (std::abs(x) + std::abs(y) > std::abs(next.x) + std::abs(next.y)) {
                             next.x = x;
                             next.y = y;
@@ -2126,6 +2350,9 @@ const Entry kEntries[] = {
     PT_ENTRY("xrCreateVulkanInstanceKHR", CreateVulkanInstance),
     PT_ENTRY("xrCreateVulkanDeviceKHR", CreateVulkanDevice),
     PT_ENTRY("xrGetVulkanGraphicsDevice2KHR", GetVulkanGraphicsDevice2),
+#ifdef _WIN32
+    PT_ENTRY("xrGetD3D12GraphicsRequirementsKHR", GetD3D12GraphicsRequirements),
+#endif
 };
 #undef PT_ENTRY
 
@@ -2135,8 +2362,8 @@ XRAPI_ATTR XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance instance, const ch
     for (const Entry& e : kEntries) {
         if (std::strcmp(e.name, name) == 0) {
             if (e.needs_instance && !GetInstance(instance)) return XR_ERROR_HANDLE_INVALID;
-            // extension functions only when the extension is enabled
             if (std::strstr(name, "Vulkan") && !g_instance->extensions.count(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) return XR_ERROR_FUNCTION_UNSUPPORTED;
+            if (std::strstr(name, "D3D12") && !g_instance->d3d12) return XR_ERROR_FUNCTION_UNSUPPORTED;
             *function = e.fn;
             return XR_SUCCESS;
         }
@@ -2144,7 +2371,7 @@ XRAPI_ATTR XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance instance, const ch
     return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 
-}  // namespace
+}
 
 PT_XR_EXPORT XrResult XRAPI_CALL xrNegotiateLoaderRuntimeInterface(const XrNegotiateLoaderInfo* loader, XrNegotiateRuntimeRequest* request) {
     if (!loader || !request || loader->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||

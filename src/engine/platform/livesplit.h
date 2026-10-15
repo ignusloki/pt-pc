@@ -7,9 +7,6 @@
 
 namespace pt {
 
-// A client of LiveSplit's Server component (LiveSplit: Control > Start TCP Server, port 16834 by default): one text command per
-// line ("starttimer", "split", "reset", "setgametime 0:01:02.345"). Opt-in (pt.ini [extras] livesplit). Never blocks: the
-// connect is non-blocking, retried every few seconds, and commands wait in a short queue until the connection is up.
 class LiveSplitClient {
 public:
     LiveSplitClient() = default;
@@ -20,9 +17,7 @@ public:
     void Configure(bool enabled, std::string host, int port);
     bool Enabled() const { return enabled_; }
     bool Connected() const { return state_ == State::Connected; }
-    // queue a command (without its line end)
     void Send(std::string_view command);
-    // connect, flush the queue; called once per frame
     void Poll();
 
 private:

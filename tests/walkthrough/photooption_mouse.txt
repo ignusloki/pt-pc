@@ -1,0 +1,14 @@
+# The option screen's photo part with the mouse (keyboard and mouse player): Esc opens the menu, the right button is R3 (0x1285F80
+# reads its press and its release). A click whose down and up reach the game in one frame (a very short click, or a mouse or touchpad
+# whose software sends both together) is the PS4's quick tap: the press starts zoom_in, the release is kept and PhotoOption is sent when
+# zoom_in has ended. Before the press was latched the click was lost and nothing happened.
+swait 30
+sktap Escape
+smenu 1
+swait 60
+smquick right
+swait 150
+sexpect menu 1
+sktap Escape
+smenu 0
+slog

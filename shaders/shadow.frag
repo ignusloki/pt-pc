@@ -12,7 +12,7 @@ layout(push_constant) uniform DrawPush {
 void main() {
     Material m = materials[draw.ids.y];
     if ((m.flags & MAT_ALPHA_TEST) != 0u) {
-        float a = texture(textures[nonuniformEXT(m.albedo)], in_uv0).a;
+        float a = texture(PT_TEX2D(m.albedo), in_uv0).a;
         if (a < ShadowAlphaCutoff(m.flags)) {
             discard;
         }

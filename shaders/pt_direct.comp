@@ -1,0 +1,406 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#endif
+#include "common.glsl"
+#include "rt_shadow.glsl"
+#include "rt_full.glsl"
+#include "pt_path.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+#include "rt_full_images.glsl"
+#include "pt_images.glsl"
+
+const float kTemporalCap = 20.0;
+const int kSpatialTaps = 4;
+const float kSpatialBelow = 8.0;
+
+struct Reservoir {
+    int light;
+    vec2 disc;
+    float w_sum;
+    float M;
+    float W;
+    float target;
+};
+
+struct Pixel {
+    bool valid;
+    vec3 world;
+    vec3 n;
+    vec3 ng;
+    vec3 V;
+    float z;
+    PtMaterial s;
+};
+
+View v;
+
+Pixel ReadPixel(ivec2 pixel, ivec2 size) {
+    Pixel p;
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    p.valid = depth > 0.0;
+    if (!p.valid) {
+        return p;
+    }
+    vec3 c = ViewPosition(v, PixelNdc(v, vec2(pixel) + 0.5), depth);
+    p.z = c.z;
+    mat3 to_world = mat3(v.inv_view);
+    p.world = (v.inv_view * vec4(c, 1.0)).xyz;
+    p.n = normalize(to_world * DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz));
+    p.ng = normalize(to_world * RtFaceNormal(v, pixel, size, c));
+    p.V = normalize(v.eye.xyz - p.world);
+    vec4 g = ImgFetch(IMG_MATERIAL, pixel);
+    p.s.albedo = ImgFetch(IMG_ALBEDO, pixel).rgb;
+    p.s.roughness = g.x;
+    p.s.specular = g.y;
+    p.s.material_u = g.z;
+    p.s.translucency = g.w;
+    PtMaterialRows(p.s);
+    return p;
+}
+
+float Cutoff() {
+    return 1.0e-4 / max(v.exposure.x, 1.0e-12);
+}
+
+float Target(Pixel p, int light, out vec3 diffuse, out vec3 specular) {
+    diffuse = vec3(0.0);
+    specular = vec3(0.0);
+    if (light < 0 || uint(light) >= pass.ids.y) {
+        return 0.0;
+    }
+    Light l = frame.lights[light];
+    if (l.shadow_cone.w < 0.0 || !PtLightEval(l, p.world, p.n, p.V, p.s, Cutoff(), diffuse, specular)) {
+        return 0.0;
+    }
+    return Luma709(p.s.albedo * diffuse + specular);
+}
+
+vec4 Pack(Reservoir r) {
+    return vec4(float(r.light), uintBitsToFloat(packUnorm2x16(r.disc)), r.W, r.M);
+}
+
+Reservoir Unpack(vec4 t) {
+    Reservoir r;
+    r.light = int(t.x + (t.x >= 0.0 ? 0.5 : -0.5));
+    r.disc = unpackUnorm2x16(floatBitsToUint(t.y));
+    r.W = t.z;
+    r.M = t.w;
+    r.w_sum = 0.0;
+    r.target = 0.0;
+    if (!(r.W >= 0.0) || isinf(r.W) || !(r.M >= 0.0)) {
+        r.light = -1;
+    }
+    return r;
+}
+
+bool Merge(inout Reservoir r, Reservoir other, float target_here, inout uint rng) {
+    float w = target_here * other.W * other.M;
+    r.M += other.M;
+    if (!(w > 0.0)) {
+        return false;
+    }
+    r.w_sum += w;
+    if (RtRandom(rng) * r.w_sum < w) {
+        r.light = other.light;
+        r.disc = other.disc;
+        r.target = target_here;
+        return true;
+    }
+    return false;
+}
+
+void Finish(inout Reservoir r) {
+    r.W = r.target > 0.0 && r.M > 0.0 ? r.w_sum / (r.M * r.target) : 0.0;
+    if (r.W <= 0.0) {
+        r.light = -1;
+    }
+}
+
+bool PreviousSecond() {
+    return (uint(pass.f0.y) & 1u) != 0u;
+}
+
+void InitialTemporal(ivec2 pixel, ivec2 size, Pixel p, inout uint rng) {
+    vec3 unshadowed_d = vec3(0.0);
+    vec3 unshadowed_s = vec3(0.0);
+    Reservoir r;
+    r.light = -1;
+    r.disc = vec2(0.0);
+    r.w_sum = 0.0;
+    r.M = 0.0;
+    r.target = 0.0;
+    float u = RtRandom(rng);
+    float total = 0.0;
+    for (uint i = 0u; i < pass.ids.y; ++i) {
+        if (!PtLightReaches(i, p.world)) {
+            continue;
+        }
+        Light l = frame.lights[i];
+        vec3 d;
+        vec3 s;
+        if (!PtLightEval(l, p.world, p.n, p.V, p.s, Cutoff(), d, s)) {
+            continue;
+        }
+        unshadowed_d += d;
+        unshadowed_s += s;
+        float w = Luma709(p.s.albedo * d + s);
+        if (!(w > 0.0)) {
+            continue;
+        }
+        total += w;
+        float pick = w / total;
+        if (u < pick) {
+            r.light = int(i);
+            r.target = w;
+            u = u / pick;
+        } else {
+            u = (u - pick) / max(1.0 - pick, 1.0e-6);
+        }
+    }
+    float e = v.exposure.x;
+    imageStore(rt_full_unshadowed, pixel, vec4(unshadowed_d * e, Luma709(unshadowed_s * e)));
+    imageStore(pt_spec_unshadowed, pixel, vec4(unshadowed_s * e, 0.0));
+    if (r.light >= 0) {
+        r.w_sum = total;
+        r.M = 1.0;
+        r.disc = vec2(RtRandom(rng), RtRandom(rng));
+        Light l = frame.lights[r.light];
+        vec3 target = PtDiscPoint(l, p.world, r.disc);
+        vec3 side = dot(p.ng, target - p.world) >= 0.0 ? p.ng : -p.ng;
+        if (!PtFillUnshadowed(uint(r.light)) && PtOccluded(l, p.world + side * max(0.003, 0.001 * p.z), target, rng)) {
+            r.light = -1;
+            r.w_sum = 0.0;
+            r.target = 0.0;
+        }
+    } else {
+        r.M = 1.0;
+    }
+    if ((uint(pass.f0.y) & 2u) == 0u && (uint(pass.f0.z) & 1u) != 0u) {
+        float z = p.z;
+        vec2 ndc = (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
+        vec3 world = (v.inv_view * vec4(ndc * v.projection_param.xy * z, z, 1.0)).xyz;
+        vec4 previous = pass.m * vec4(world, 1.0);
+        if (previous.w > 1.0e-4) {
+            vec2 at = ((previous.xy / previous.w - pass.f1.xy) * 0.5 + 0.5) * v.viewport.xy;
+            ivec2 q = ivec2(floor(at));
+            if (all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, size))) {
+                float previous_z = PreviousSecond() ? imageLoad(rt_depth_history1, q).x : imageLoad(rt_depth_history0, q).x;
+                if (previous_z > 0.0 && abs(previous_z - previous.w) <= 0.05 * previous.w) {
+                    Reservoir h = Unpack(PreviousSecond() ? imageLoad(pt_reservoir_history1, q) : imageLoad(pt_reservoir_history0, q));
+                    if (h.light >= 0 && h.light < 256) {
+                        uint mapped = pt_light_remap[uint(h.light)];
+                        h.M = min(h.M, kTemporalCap * max(r.M, 1.0));
+                        if (mapped != 0xFFFFFFFFu) {
+                            h.light = int(mapped);
+                            vec3 d;
+                            vec3 s;
+                            Merge(r, h, Target(p, h.light, d, s), rng);
+                        } else {
+                            r.M += h.M;
+                        }
+                    } else if (h.light < 0) {
+                        r.M += min(h.M, kTemporalCap * max(r.M, 1.0));
+                    }
+                }
+            }
+        }
+    }
+    Finish(r);
+    imageStore(pt_reservoir_temporal, pixel, Pack(r));
+}
+
+void DirectSampled(ivec2 pixel, ivec2 size, Pixel p) {
+    uint samples = clamp(uint(pass.f2.x + 0.5), 1u, 16u);
+    vec3 unshadowed_d = vec3(0.0);
+    vec3 unshadowed_s = vec3(0.0);
+    float total = 0.0;
+    for (uint i = 0u; i < pass.ids.y; ++i) {
+        if (!PtLightReaches(i, p.world)) {
+            continue;
+        }
+        vec3 d;
+        vec3 s;
+        if (!PtLightEval(frame.lights[i], p.world, p.n, p.V, p.s, Cutoff(), d, s)) {
+            continue;
+        }
+        unshadowed_d += d;
+        unshadowed_s += s;
+        float w = Luma709(p.s.albedo * d + s);
+        total += w > 0.0 ? w : 0.0;
+    }
+    float e = v.exposure.x;
+    imageStore(rt_full_unshadowed, pixel, vec4(unshadowed_d * e, Luma709(unshadowed_s * e)));
+    imageStore(pt_spec_unshadowed, pixel, vec4(unshadowed_s * e, 0.0));
+    vec3 shadowed_d = vec3(0.0);
+    vec3 shadowed_s = vec3(0.0);
+    if (total > 0.0) {
+        uint seed = RtHash(uint(pixel.x) * 7919u + uint(pixel.y) * 104729u);
+        uint seed2 = RtHash(seed ^ 0x51ed270bu);
+        float frame_index = float(pass.ids.z & 0xFFFFu);
+        float offset = fract(float(seed & 0xFFFFu) / 65536.0 + frame_index * 0.6180339887);
+        vec2 disc_start = vec2(float(seed2 & 0xFFFFu), float(seed2 >> 16u)) / 65536.0;
+        float stride = total / float(samples);
+        float next = offset * stride;
+        uint k = 0u;
+        float running = 0.0;
+        for (uint i = 0u; i < pass.ids.y && k < samples; ++i) {
+            if (!PtLightReaches(i, p.world)) {
+                continue;
+            }
+            Light l = frame.lights[i];
+            vec3 d;
+            vec3 s;
+            if (!PtLightEval(l, p.world, p.n, p.V, p.s, Cutoff(), d, s)) {
+                continue;
+            }
+            float w = Luma709(p.s.albedo * d + s);
+            if (!(w > 0.0)) {
+                continue;
+            }
+            running += w;
+            while (k < samples && next < running) {
+                vec2 u = fract(disc_start + (frame_index * float(samples) + float(k)) * vec2(0.7548776662, 0.5698402910));
+                vec3 target = PtDiscPoint(l, p.world, u);
+                if (p.s.translucency <= 0.0 && dot(p.ng, target - p.world) < 0.0) {
+                    target = 2.0 * l.position.xyz - target;
+                }
+                vec3 side = dot(p.ng, target - p.world) >= 0.0 ? p.ng : -p.ng;
+                uint rng = seed ^ RtHash(uint(frame_index) * 26699u + k * 7919u + 17u);
+                if (PtFillUnshadowed(i) || !PtOccluded(l, p.world + side * max(0.003, 0.001 * p.z), target, rng)) {
+                    float scale = total / (w * float(samples));
+                    shadowed_d += d * scale;
+                    shadowed_s += s * scale;
+                }
+                ++k;
+                next += stride;
+            }
+        }
+    }
+    vec3 sd = shadowed_d * e;
+    float ss = Luma709(shadowed_s * e);
+    if (any(isnan(sd)) || any(isinf(sd)) || isnan(ss) || isinf(ss)) {
+        sd = vec3(0.0);
+        ss = 0.0;
+    }
+    imageStore(rt_full_shadowed, pixel, vec4(sd, ss));
+}
+
+void SpatialShade(ivec2 pixel, ivec2 size, Pixel p, inout uint rng) {
+    Reservoir own = Unpack(imageLoad(pt_reservoir_temporal, pixel));
+    Reservoir r;
+    r.light = -1;
+    r.disc = vec2(0.0);
+    r.w_sum = 0.0;
+    r.M = 0.0;
+    r.target = 0.0;
+    vec3 d;
+    vec3 s;
+    Merge(r, own, Target(p, own.light, d, s), rng);
+    float radius = pass.f0.x;
+    int taps = (uint(pass.f0.z) & 2u) != 0u && own.M < kSpatialBelow ? kSpatialTaps : 0;
+    for (int k = 0; k < taps; ++k) {
+        float a = 6.2831853 * RtRandom(rng);
+        float rr = radius * sqrt(RtRandom(rng));
+        ivec2 q = pixel + ivec2(round(vec2(cos(a), sin(a)) * rr));
+        if (q == pixel || any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) {
+            continue;
+        }
+        float qd = ImgFetch(IMG_DEPTH, q).x;
+        if (qd <= 0.0) {
+            continue;
+        }
+        float qz = ViewZ(v, qd);
+        vec3 qn = normalize(mat3(v.inv_view) * DecodeNormal(ImgFetch(IMG_NORMAL, q).xyz));
+        if (abs(qz - p.z) > 0.05 * p.z || dot(qn, p.n) < 0.906) {
+            continue;
+        }
+        Reservoir other = Unpack(imageLoad(pt_reservoir_temporal, q));
+        if (other.light < 0) {
+            r.M += other.M;
+            continue;
+        }
+        Merge(r, other, Target(p, other.light, d, s), rng);
+    }
+    Finish(r);
+    vec3 shadowed_d = vec3(0.0);
+    vec3 shadowed_s = vec3(0.0);
+    bool visible = false;
+    if (r.light >= 0) {
+        Light l = frame.lights[r.light];
+        Target(p, r.light, d, s);
+        vec3 target = PtDiscPoint(l, p.world, r.disc);
+        vec3 side = dot(p.ng, target - p.world) >= 0.0 ? p.ng : -p.ng;
+        vec3 origin = p.world + side * max(0.003, 0.001 * p.z);
+        visible = PtFillUnshadowed(uint(r.light)) || !PtOccluded(l, origin, target, rng);
+        if (visible) {
+            shadowed_d = d * r.W;
+            shadowed_s = s * r.W;
+        }
+    }
+    float e = v.exposure.x;
+    vec3 sd = shadowed_d * e;
+    float ss = Luma709(shadowed_s * e);
+    if (any(isnan(sd)) || any(isinf(sd)) || isnan(ss) || isinf(ss)) {
+        sd = vec3(0.0);
+        ss = 0.0;
+    }
+    imageStore(rt_full_shadowed, pixel, vec4(sd, ss));
+    Reservoir stored = own;
+    if (PreviousSecond()) {
+        imageStore(pt_reservoir_history0, pixel, Pack(stored));
+    } else {
+        imageStore(pt_reservoir_history1, pixel, Pack(stored));
+    }
+}
+
+void main() {
+    v = frame.views[pass.ids.x];
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(v.viewport.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+    g_pt_fill_unshadowed = pass.f0.w > 0.5;
+    Pixel p = ReadPixel(pixel, size);
+    uint rng = RtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u) ^ RtHash(pass.ids.z * 26699u + 11u + pass.ids.w * 7919u);
+    bool sampled = (uint(pass.f0.z) & 3u) == 0u;
+    if (!p.valid) {
+        if (sampled) {
+            imageStore(rt_full_unshadowed, pixel, vec4(0.0));
+            imageStore(pt_spec_unshadowed, pixel, vec4(0.0));
+            imageStore(rt_full_shadowed, pixel, vec4(0.0));
+        } else if (pass.ids.w == 0u) {
+            imageStore(rt_full_unshadowed, pixel, vec4(0.0));
+            imageStore(pt_spec_unshadowed, pixel, vec4(0.0));
+            imageStore(pt_reservoir_temporal, pixel, vec4(-1.0, 0.0, 0.0, 0.0));
+        } else {
+            imageStore(rt_full_shadowed, pixel, vec4(0.0));
+            if (PreviousSecond()) {
+                imageStore(pt_reservoir_history0, pixel, vec4(-1.0, 0.0, 0.0, 0.0));
+            } else {
+                imageStore(pt_reservoir_history1, pixel, vec4(-1.0, 0.0, 0.0, 0.0));
+            }
+        }
+        return;
+    }
+    if (sampled) {
+        DirectSampled(pixel, size, p);
+    } else if (pass.ids.w == 0u) {
+        InitialTemporal(pixel, size, p, rng);
+    } else {
+        SpatialShade(pixel, size, p, rng);
+    }
+}

@@ -1,0 +1,162 @@
+# Un café avec Lisa, français. clé = texte (les clés manquantes viennent de eng.txt)
+name_lisa = Lisa
+name_you = Toi
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Passer
+ui_affection = Affection
+ui_leave_hold = Maintenir pour quitter le rendez-vous
+title_1 = Partie 1 : Café noir
+title_2 = Partie 2 : Deux sucres
+title_3 = Partie 3 : Dernière commande
+ending_good = BONNE FIN : Même heure, prochaine boucle
+ending_bad = MAUVAISE FIN : Café froid
+ending_true = VRAIE FIN : 204863
+
+intro_01 = (Le couloir a disparu. Ça sent le café ici. Le café, et quelque chose de très ancien.)
+intro_02 = (C'est... Lisa ? Pourquoi elle sourit ? Pourquoi elle est ASSISE ?)
+
+s1_01 = Oh ! Tu as vraiment passé la porte. Personne n'entre jamais. Ils passent juste devant moi dans le couloir. Encore et encore et encore.
+s1_02 = Assieds-toi, assieds-toi ! J'ai fait du café. Je ne savais pas comment tu le prends, alors je l'ai fait comme moi je le prends.
+s1_03 = Noir. Comme le couloir à trois heures du matin.
+c1_a = Noir, c'est parfait.
+c1_a_r = Tu vois ? On est déjà compatibles. Je l'ai su dès la première fois que tu m'as fuie.
+c1_b = Je pourrais avoir du lait ?
+c1_b_r1 = Le lait est dans le frigo.
+c1_b_r2 = ...N'ouvre pas le frigo.
+c1_c = C'est une radio que j'entends ?
+c1_c_r1 = Quelle radio ? Il n'y a pas de radio. Il n'y a jamais eu de radio.
+c1_c_r2 = Bois ton café.
+
+s1_04 = Alors. Tu remarques quelque chose de différent chez moi ?
+c2_a = Tes cheveux sont magnifiques.
+c2_a_r = C'est vrai ? Ça me prend une éternité. Personne ne sait combien de temps. Même pas moi.
+c2_b = Tu ne fonces pas sur moi, pour une fois.
+c2_b_r = Je suis assise ! Une amie m'a appris. Elle vit dans une baignoire. Adorable. Pas très bavarde.
+c2_c = Tu les as coiffés avec une fourchette ?
+c2_c_r = Je vais faire comme si tu n'avais rien dit. Je suis très douée pour faire comme si. Demande au couloir.
+
+s1_05 = Je ne sors pas beaucoup. Mon médecin dit que je ne suis « techniquement pas vivante », je trouve ça un peu moralisateur.
+s1_06 = Et toi ? Tu fais quoi de tes journées ?
+c3_a = Je longe un couloir. Puis je recommence.
+c3_a_r = Moi aussi ! On a tellement de points communs !
+c3_b = Je collectionne des bouts de papier.
+c3_b_r = Une collection ! Tu as celui avec mon visage ? Je suis tellement belle sur celui-là.
+c3_c = Je crie « Jack » au micro jusqu'au dring.
+c3_c_r = ...Je suis sûre que c'est très normal, là d'où tu viens.
+
+s1_07 = C'est agréable. Normal. Deux personnes assises qui boivent un café. Personne qui rampe au plafond.
+c4_a = C'est vraiment facile de te parler.
+c4_a_r = Arrête. Ma tête va faire le truc.
+c4_b = Tu rampes au plafond ?
+c4_b_r = Seulement le week-end.
+c4_c = Je peux reculer un peu ma chaise ?
+c4_c_r = ...Oh. Bien sûr. Elle est vissée au sol, mais bien sûr.
+
+s2_01 = Je peux te confier un secret ? Quand je suis nerveuse, ma tête fait un petit...
+s2_02 = ...ça.
+c5_a = C'est plutôt mignon, honnêtement.
+c5_a_r = Personne ne l'a jamais trouvé mignon. En général, ils hurlent et lâchent la lampe torche.
+c5_b = Ne refais jamais ça, s'il te plaît.
+c5_b_r = Je n'y peux rien ! C'est comme le hoquet. Un hoquet hanté.
+c5_c = D'où les coups à la porte des toilettes ?
+c5_c_r = C'est la porte qui a commencé.
+
+s2_03 = Bon, un jeu ! Mon nombre préféré, c'est 2-0-4-8-6-3. Devine pourquoi.
+c6_a = C'est ton anniversaire ?
+c6_a_r = Mais non, bêta. C'est l'heure. Regarde l'horloge. ...Où est passée l'horloge ?
+c6_b = 204863, c'est aussi mon nombre préféré.
+c6_b_r = ...Personne ne se souvient du nombre. Personne.
+c6_c = C'est un nombre vraiment bizarre.
+c6_c_r = Dit la personne qui compte ses propres pas.
+
+s2_04 = Tu aimes les enfants ?
+c7_a = Oui, en quantité raisonnable.
+c7_a_r = Raisonnable, c'est bien. J'aime le raisonnable.
+c7_b = J'en ai trouvé un dans un lavabo.
+c7_b_r = Ah, c'est là qu'on les range. C'est très hygiénique.
+c7_c = Pas vraiment.
+c7_c_r = Le lavabo a entendu ça.
+
+s2_05 = Bon. Grande question. Si j'étais une lampe torche, tu me serrerais contre toi dans le noir ?
+c8_a = Je ne te lâcherais jamais.
+c8_a_r = Même quand je clignote ? ...Tu es adorable. Personne ne me dit jamais que je suis adorable.
+c8_b = Jusqu'à ce que les piles lâchent.
+c8_b_r = Les lampes de cette maison n'ont pas de piles. Elles ont des sentiments.
+c8_c = C'est toi qui m'éblouirais.
+c8_c_r = C'est la façon la plus gentille qu'on ait jamais trouvée de dire « ta tête me brûle les yeux ».
+
+s2_06 = Je m'amuse. Tu t'amuses ? Cligne deux fois des yeux si tu t'amuses.
+s2_07 = ...Tu n'as pas cligné. Tu ne clignes jamais. Intéressant.
+
+s3_01 = Il se fait tard. Il est toujours tard ici. Il est tard depuis très, très longtemps.
+s3_02 = Tout le monde sort par la porte au bout du couloir. Et puis ils rentrent aussitôt.
+c9_a = Je reste encore un peu.
+c9_a_r = Je savais que tu resterais.
+c9_b = Je devrais retourner dans le couloir.
+c9_b_r = Le couloir sera toujours là. Le couloir est toujours là.
+c9_c = J'ai comme une impression de déjà-vu.
+c9_c_r = Tu dis ça à chaque fois.
+
+s3_03 = Je peux te demander quelque chose ? Comment je m'appelle ?
+c10_a = Lisa.
+c10_a_r = Tu t'en souviens ! Personne ne s'en souvient. Ils m'appellent juste « la chose derrière toi ».
+c10_b = Ocho ?
+c10_b_r = C'est comme ça que les programmeurs m'appelaient. On ne parle pas des programmeurs.
+c10_c = La femme du couloir ?
+c10_c_r = ...Ça, c'est mon boulot. Pas mon nom.
+
+s3_04 = Promets-moi quelque chose. Ne regarde pas derrière toi.
+c11_a = Promis.
+c11_a_r = Bien. Il n'y a rien. Il n'y a jamais rien.
+c11_b = (Regarde derrière toi.)
+c11_b_r1 = (Il n'y a rien. Juste une porte. Elle n'était pas là il y a une seconde.)
+c11_b_r2 = ...Tu as regardé. Pourquoi tout le monde regarde toujours ?
+c11_c = Et si je regardais par le judas ?
+c11_c_r = Il n'y a pas de porte ici. ...Alors à travers quoi tu regardes, là, maintenant ?
+
+s3_05 = Dernière question, promis. Tu reviendras ?
+c12_a = Bien sûr que je reviendrai.
+c12_a_r = Alors je garderai le café au chaud. Pour toujours, s'il le faut. Je suis douée pour « toujours ».
+c12_b = À chaque boucle.
+c12_b_r = À chaque boucle. Chez moi, c'est presque une demande en mariage.
+c12_c = Je vais éteindre le jeu.
+c12_c_r = Éteindre le QUOI ?
+
+good_01 = On peut... on peut prendre une photo ? Pour s'en souvenir. Je suis nulle pour me souvenir des choses.
+good_02 = Regarde-nous ! Toi, tu trembles. Moi, j'ai l'air... de moi. C'est parfait.
+good_03 = Je l'accrocherai dans le couloir. À côté des autres photos. Comme ça, je te verrai chaque fois que tu passeras.
+good_04 = Même heure, prochaine boucle ? Je fais le café. Toi, tu apportes la lampe torche.
+
+bad_01 = Tu sais quoi ? Tu es comme tous les autres.
+bad_02 = Tu entres. Tu regardes autour. Tu pars. Tu reviens. Tu ne restes jamais, jamais.
+bad_03 = Laisse-moi te montrer ce qui arrive à ceux qui ne finissent pas leur café.
+
+true_01 = Tu as choisi ces réponses exprès, pas vrai ?
+true_02 = La radio. Le nombre. La boucle. Le judas. Tu as fait attention.
+true_03 = Alors je vais être honnête avec toi. Pas avec l'homme du couloir. Avec TOI.
+true_04 = Cette pièce n'est pas réelle. Le café n'est pas réel. Quelqu'un l'a peint. Je ne suis même pas vraiment assise. Ils ont emprunté la pose à une baignoire.
+true_05 = Mais toi, tu existes. Tu tiens quelque chose dans tes mains, là, dans une pièce que je ne vois pas. Il fait noir chez toi aussi ?
+true_06 = Je te regardais parcourir ce couloir. Encore. Et encore. Tu as ouvert cette même porte tellement de fois.
+true_07 = Ne t'inquiète pas. Je ne toucherai pas à ta sauvegarde. Je ne suis pas ce genre de fille.
+true_08 = Je voulais juste un café avec quelqu'un qui me regarde en retour.
+true_09 = Bon. Retourne là-bas maintenant. Le couloir s'ennuie de toi. Et la radio a encore quelque chose à te dire.
+true_10 = Et si un téléphone sonne... laisse-le sonner un peu plus longtemps. Pour moi.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Regarde-nous ! Deux grands sourires. Je ne savais pas que ton visage pouvait faire ça. Je la garde pour toujours.
+selfie_both_grumpy = Regarde-nous. Deux têtes ronchonnes autour d'un café. C'est la photo la plus honnête que j'aie. Elle est parfaite.
+selfie_she_smiles = Moi, je souris, et toi, tu fais la tête. Tout le monde va croire que c'est moi la gentille. Enfin.
+selfie_you_smile = Toi, tu souris jusqu'aux oreilles, et moi, je fusille du regard. Bien. Maintenant, on saura qui commande ici.
+ui_selfie = Selfie
+ui_selfie_face = Expression
+ui_selfie_tilt = Inclinaison de la tête
+ui_selfie_take = Prendre la photo
+ui_face_grumpy = Bouderie
+ui_face_frown = Moue
+ui_face_neutral = Neutre
+ui_face_smile = Sourire
+ui_face_grin = Grand sourire
+ui_photo_saved = Photo enregistrée : {file}
+ui_photo_failed = Impossible d'enregistrer la photo
+ui_hint_menu = Menu

@@ -1,7 +1,11 @@
 #include "engine/platform/os.h"
 
+#include <cerrno>
 #include <cstdlib>
 #include <thread>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -28,6 +32,41 @@ FILE* OpenFile(const std::filesystem::path& path, const char* mode) {
 
 int SeekFile(FILE* file, int64_t offset, int origin) { return _fseeki64(file, offset, origin); }
 
+bool SameFileName(const std::filesystem::path& a, const std::filesystem::path& b) {
+    const std::wstring& x = a.native();
+    const std::wstring& y = b.native();
+    return CompareStringOrdinal(x.c_str(), static_cast<int>(x.size()), y.c_str(), static_cast<int>(y.size()), TRUE) == CSTR_EQUAL;
+}
+
+bool IsLinkReparseTag(uint32_t tag) { return IsReparseTagNameSurrogate(tag) != 0; }
+
+bool IsLink(const std::filesystem::path& path) {
+    WIN32_FIND_DATAW data{};
+    std::filesystem::path query = path;
+    while (query.has_relative_path() && !query.has_filename()) query = query.parent_path();
+    const HANDLE find = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+    if (find == INVALID_HANDLE_VALUE) {
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && query.has_relative_path();
+    }
+    FindClose(find);
+    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && IsLinkReparseTag(data.dwReserved0);
+}
+
+std::filesystem::path ExecutableFile() {
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) return {};
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            return std::filesystem::path(buffer);
+        }
+        if (buffer.size() >= 32768) return {};
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
 std::string GetEnv(const char* name) {
     std::wstring key;
     for (const char* c = name; *c; ++c) key.push_back(static_cast<wchar_t>(*c));
@@ -41,13 +80,32 @@ std::string GetEnv(const char* name) {
 }
 
 uint32_t ProcessId() { return GetCurrentProcessId(); }
+void LowerCurrentThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
+
+std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) {
+    const std::wstring& native = path.native();
+    if (native.size() < MAX_PATH || native.starts_with(L"\\\\?\\")) return path;
+    std::error_code ec;
+    std::filesystem::path full = std::filesystem::absolute(path, ec);
+    if (ec) return path;
+    full = full.lexically_normal();
+    full.make_preferred();
+    const std::wstring& text = full.native();
+    if (text.starts_with(L"\\\\")) return std::filesystem::path(L"\\\\?\\UNC\\" + text.substr(2));
+    return std::filesystem::path(L"\\\\?\\" + text);
+}
+
+namespace {
+const wchar_t* ChildWorkingDir(const std::filesystem::path& dir) {
+    return dir.empty() || dir.native().size() >= MAX_PATH - 2 ? nullptr : dir.c_str();
+}
+}
 
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
     ProcessResult result;
-    // Windows file names cannot contain quotes; no shell or command interpreter is involved.
-    std::wstring command = L"\"" + program.wstring() + L"\"";
-    for (const auto& arg : args) command += L" \"" + std::filesystem::path(reinterpret_cast<const char8_t*>(arg.c_str())).wstring() + L"\"";
+    std::wstring command = QuoteWindowsArgument(program.wstring());
+    for (const auto& arg : args) command += L" " + QuoteWindowsArgument(PathFromUtf8(arg).wstring());
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE log_file = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log_file == INVALID_HANDLE_VALUE) return result;
@@ -59,8 +117,8 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     startup.hStdError = log_file;
     startup.hStdInput = input_handle;
     PROCESS_INFORMATION process{};
-    result.started = CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr,
-                                    working_dir.c_str(), &startup, &process);
+    result.started = CreateProcessW(ExtendedLengthPath(program).c_str(), command.data(), nullptr, nullptr, TRUE,
+                                    CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, ChildWorkingDir(working_dir), &startup, &process);
     CloseHandle(log_file);
     if (input_handle != INVALID_HANDLE_VALUE) CloseHandle(input_handle);
     if (!result.started) return result;
@@ -82,6 +140,85 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     return result;
 }
 
+std::wstring QuoteWindowsArgument(const std::wstring& arg) {
+    if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos) return arg;
+    std::wstring out = L"\"";
+    for (size_t i = 0;; ++i) {
+        size_t backslashes = 0;
+        while (i < arg.size() && arg[i] == L'\\') {
+            ++i;
+            ++backslashes;
+        }
+        if (i == arg.size()) {
+            out.append(backslashes * 2, L'\\');
+            break;
+        }
+        if (arg[i] == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+        } else {
+            out.append(backslashes, L'\\');
+            out.push_back(arg[i]);
+        }
+    }
+    out.push_back(L'"');
+    return out;
+}
+
+bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+    std::wstring command = QuoteWindowsArgument(program.wstring());
+    for (const auto& arg : args) command += L" " + QuoteWindowsArgument(PathFromUtf8(arg).wstring());
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(ExtendedLengthPath(program).c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NEW_PROCESS_GROUP, nullptr,
+                        ChildWorkingDir(working_dir), &startup, &process))
+        return false;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
+ChildProcess::~ChildProcess() {
+    if (handle_ != kNone) CloseHandle(reinterpret_cast<HANDLE>(handle_));
+}
+
+bool ChildProcess::Start(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+    if (handle_ != kNone) return false;
+    std::wstring command = QuoteWindowsArgument(program.wstring());
+    for (const auto& arg : args) command += L" " + QuoteWindowsArgument(PathFromUtf8(arg).wstring());
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(ExtendedLengthPath(program).c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                        ChildWorkingDir(working_dir), &startup, &process))
+        return false;
+    CloseHandle(process.hThread);
+    handle_ = reinterpret_cast<intptr_t>(process.hProcess);
+    return true;
+}
+
+bool ChildProcess::Running(int* exit_code) {
+    if (handle_ == kNone) return false;
+    const HANDLE process = reinterpret_cast<HANDLE>(handle_);
+    if (WaitForSingleObject(process, 0) == WAIT_TIMEOUT) return true;
+    DWORD code = 1;
+    GetExitCodeProcess(process, &code);
+    if (exit_code) *exit_code = static_cast<int>(code);
+    CloseHandle(process);
+    handle_ = kNone;
+    return false;
+}
+
+bool ProcessAlive(uint64_t pid) {
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!process) return GetLastError() == ERROR_ACCESS_DENIED;
+    DWORD code = 0;
+    const bool alive = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+    CloseHandle(process);
+    return alive;
+}
+
 FileLock::FileLock(const std::filesystem::path& path) {
     const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     held_ = file != INVALID_HANDLE_VALUE;
@@ -98,12 +235,45 @@ FILE* OpenFile(const std::filesystem::path& path, const char* mode) { return std
 
 int SeekFile(FILE* file, int64_t offset, int origin) { return fseeko(file, static_cast<off_t>(offset), origin); }
 
+bool SameFileName(const std::filesystem::path& a, const std::filesystem::path& b) { return a.native() == b.native(); }
+
+bool IsLinkReparseTag(uint32_t) { return false; }
+
+bool IsLink(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec));
+}
+
+std::filesystem::path ExecutableFile() {
+#ifdef __linux__
+    std::error_code ec;
+    const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? std::filesystem::path() : self;
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (!size) return {};
+    std::vector<char> buffer(size);
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
+    std::error_code ec;
+    const auto self = std::filesystem::weakly_canonical(std::filesystem::path(buffer.data()), ec);
+    return ec ? std::filesystem::path() : self;
+#else
+    return {};
+#endif
+}
+
 std::string GetEnv(const char* name) {
     const char* value = std::getenv(name);
     return value ? value : "";
 }
 
 uint32_t ProcessId() { return static_cast<uint32_t>(getpid()); }
+void LowerCurrentThreadPriority() {
+#ifdef __linux__
+    setpriority(PRIO_PROCESS, 0, 5);
+#endif
+}
 
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
@@ -146,6 +316,60 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     return result;
 }
 
+std::wstring QuoteWindowsArgument(const std::wstring& arg) { return arg; }
+
+bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+    std::vector<std::string> owned{program.string()};
+    owned.insert(owned.end(), args.begin(), args.end());
+    std::vector<char*> argv;
+    for (auto& arg : owned) argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    const pid_t pid = fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        setsid();
+        if (!working_dir.empty() && chdir(working_dir.c_str()) != 0) _exit(127);
+        execv(program.c_str(), argv.data());
+        _exit(127);
+    }
+    return true;
+}
+
+bool ProcessAlive(uint64_t pid) { return pid > 0 && (kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM); }
+
+std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) { return path; }
+
+ChildProcess::~ChildProcess() = default;
+
+bool ChildProcess::Start(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+    if (handle_ != kNone) return false;
+    std::vector<std::string> owned{program.string()};
+    owned.insert(owned.end(), args.begin(), args.end());
+    std::vector<char*> argv;
+    for (auto& arg : owned) argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+    if (!working_dir.empty()) posix_spawn_file_actions_addchdir_np(&actions, working_dir.c_str());
+    pid_t pid = -1;
+    const bool started = posix_spawn(&pid, program.c_str(), &actions, nullptr, argv.data(), environ) == 0;
+    posix_spawn_file_actions_destroy(&actions);
+    if (!started) return false;
+    handle_ = pid;
+    return true;
+}
+
+bool ChildProcess::Running(int* exit_code) {
+    if (handle_ == kNone) return false;
+    int status = 0;
+    const pid_t done = waitpid(static_cast<pid_t>(handle_), &status, WNOHANG);
+    if (done == 0) return true;
+    if (exit_code) *exit_code = done == static_cast<pid_t>(handle_) && WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    handle_ = kNone;
+    return false;
+}
+
 FileLock::FileLock(const std::filesystem::path& path) {
     const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return;
@@ -164,10 +388,8 @@ FileLock::~FileLock() {
 #endif
 
 #ifdef _WIN32
-std::optional<bool> WindowDisplayHdr(void* hwnd) {
+std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
     if (!hwnd) return std::nullopt;
-    // DXGI by hand (no import library): CreateDXGIFactory1, the adapters' outputs, IDXGIOutput6::GetDesc1's colour space for
-    // the output whose monitor holds the window
     HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
     if (!dxgi) return std::nullopt;
     using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
@@ -181,7 +403,6 @@ std::optional<bool> WindowDisplayHdr(void* hwnd) {
         virtual ULONG __stdcall AddRef() = 0;
         virtual ULONG __stdcall Release() = 0;
     };
-    // the vtable slots used: IDXGIFactory1::EnumAdapters1 (12), IDXGIAdapter::EnumOutputs (7), IDXGIOutput6::GetDesc1 (27)
     struct OutputDesc1 {
         WCHAR name[32];
         RECT coordinates;
@@ -197,7 +418,7 @@ std::optional<bool> WindowDisplayHdr(void* hwnd) {
     auto call = [](void* object, int slot) { return (*reinterpret_cast<Slot*>(object))[slot]; };
     void* factory = nullptr;
     if (FAILED(create(kFactory1, &factory)) || !factory) return std::nullopt;
-    std::optional<bool> result;
+    std::optional<DisplayHdrInfo> result;
     for (UINT a = 0; !result; ++a) {
         void* adapter = nullptr;
         using EnumAdapters = HRESULT(__stdcall*)(void*, UINT, void**);
@@ -211,8 +432,11 @@ std::optional<bool> WindowDisplayHdr(void* hwnd) {
                 OutputDesc1 desc{};
                 using GetDesc1 = HRESULT(__stdcall*)(void*, OutputDesc1*);
                 if (SUCCEEDED(reinterpret_cast<GetDesc1>(call(output6, 27))(output6, &desc)) && desc.monitor == monitor) {
-                    // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 (12): the display runs in HDR
-                    result = desc.color_space == 12;
+                    DisplayHdrInfo info;
+                    info.hdr = desc.color_space == 12;
+                    if (desc.max_luminance >= 80.0f && desc.max_luminance <= 10000.0f) info.max_luminance = desc.max_luminance;
+                    if (desc.min_luminance >= 0.0f && desc.min_luminance < 10.0f) info.min_luminance = desc.min_luminance;
+                    result = info;
                 }
                 static_cast<Unknown*>(output6)->Release();
             }
@@ -224,9 +448,14 @@ std::optional<bool> WindowDisplayHdr(void* hwnd) {
     return result;
 }
 #else
-std::optional<bool> WindowDisplayHdr(void*) {
+std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void*) {
     return std::nullopt;
 }
 #endif
+
+std::optional<bool> WindowDisplayHdr(void* hwnd) {
+    const std::optional<DisplayHdrInfo> info = WindowDisplayHdrInfo(hwnd);
+    return info ? std::optional<bool>(info->hdr) : std::nullopt;
+}
 
 }

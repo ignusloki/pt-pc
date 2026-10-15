@@ -26,7 +26,6 @@ int main() {
     const glm::vec3 bounded = PanArchiveModel(home, home, right, up, glm::vec2(1.0f, -1.0f), 100.0f, 20.0f, 1.0f);
     assert(std::abs(glm::length(bounded - home) - 1.5f) < 1e-5f);
 
-    // Photo mode and museum inspection share the same free camera mapping.
     pt::Camera fly;
     fly.position = glm::vec3(0.0f);
     fly.yaw = fly.pitch = 0.0f;
@@ -50,7 +49,6 @@ int main() {
     const glm::vec3 invalid_dt = PanArchiveModel(home, home, right, up, glm::vec2(1.0f), 0.0f, 2.0f, 1.0f);
     assert(invalid_dt == home);
 
-    // The radio's controls face local +X; characters face local +Z.
     assert(std::abs(pt::game::ArchiveModelFrontYaw("radio", 0.4f) - (0.4f + glm::radians(90.0f))) < 1e-5f);
     assert(pt::game::ArchiveModelFrontYaw("lisa_stand", 0.4f) == 0.4f);
 
@@ -77,7 +75,6 @@ int main() {
                 front_light += light.intensity.x * attenuation * std::max(0.0f, glm::dot(glm::normalize(to_light), -camera.Forward()));
                 assert(light.id != pt::kHandyLightId && light.specular_scale < 1.0f);
             }
-            // Every orbit angle and model size stays lit, with headroom below white.
             const float exposed_front = front_light * std::exp2(lighting.exposure.pinned_ev);
             assert(exposed_front > 0.4f && exposed_front < 1.0f);
         }

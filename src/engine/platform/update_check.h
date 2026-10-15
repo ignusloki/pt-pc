@@ -1,44 +1,69 @@
 #pragma once
 
-// The check for a newer release, shared by the game and the installer (docs/updates.md). One GET of GitHub release metadata on
-// a thread of its own, started once; nothing waits for it, and offline it simply finds nothing.
-
 #include <atomic>
+#include <cstdint>
+#include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pt::update {
 
-// The release metadata endpoint, set in one place: the CMake cache variable PT_UPDATE_MANIFEST_URL (CMakeLists.txt). The
-// environment variable of the same name overrides it at run time (tests). Empty or the placeholder: no check is made.
 std::string ManifestUrl();
-// this build's version, PT_VERSION in CMakeLists.txt
 std::string_view CurrentVersion();
-// Windows, Linux or the native macOS CPU architecture: the release package to select
 std::string_view Platform();
 
 struct Release {
     std::string version;
-    std::string url;    // the download or release page for this platform
-    std::string notes;  // one short line
+    std::string url;
+    std::string notes;
+    std::string page;
+    std::string package_url;
+    uint64_t package_size = 0;
+    bool signed_update = false;
+    uint64_t download_bytes = 0;
 };
 
-// numeric parts compared left to right ("0.10.0" > "0.9.2"); a suffix after '-' sorts before the plain version
 int CompareVersions(std::string_view a, std::string_view b);
-// GitHub release metadata (or a legacy/custom manifest); nullopt for invalid/unpublished releases
 std::optional<Release> ParseManifest(std::string_view json, std::string_view platform);
+
+std::string_view PackageAsset(std::string_view platform);
+struct PackageEntry {
+    std::string name;
+    uint64_t size = 0;
+    std::string sha256;
+};
+struct FileEntry {
+    std::string path;
+    uint64_t size = 0;
+    std::string sha256;
+    uint64_t offset = 0;
+    uint64_t packed = 0;
+};
+struct UpdateManifest {
+    std::string version;
+    std::map<std::string, PackageEntry> packages;
+    std::map<std::string, std::vector<FileEntry>> files;
+};
+std::string ReleasePublicKey();
+std::optional<UpdateManifest> VerifyManifest(std::string_view manifest, std::string_view signature_text, std::string_view public_key,
+                                             std::string* error = nullptr);
+bool AllowedAssetUrl(std::string_view url);
+bool AllowedMetadataUrl(std::string_view url);
+bool TestOverrides();
+std::optional<UpdateManifest> FetchSignedManifest(const Release& release, std::string* error, bool* range_ignored = nullptr);
+std::optional<UpdateManifest> ReadSignedManifest(const Release& release, const std::filesystem::path& package, std::string* error);
+inline constexpr double kRangeShare = 0.7;
+uint64_t EstimateDownload(const UpdateManifest& manifest, std::string_view platform, const std::filesystem::path& install);
 
 class Checker {
 public:
-    // starts the lookup once, on a detached thread (quitting never waits for it); nothing when the URL is empty or the
-    // placeholder
-    void Start();
-    // tests (--fake-update): the answer is this version, no request is made; a version not newer than this build's is "nothing"
+    void Start(const std::filesystem::path& install = {});
     void Fake(std::string_view version);
-    // the newer release, once the lookup found one
     std::optional<Release> Newer() const;
     bool Done() const;
 

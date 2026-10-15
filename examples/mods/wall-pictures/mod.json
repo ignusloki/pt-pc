@@ -1,1 +1,6 @@
-{"name": "Wall Pictures", "version": "1.0", "author": "P.T. PC Port", "description": "Repaints every painting in the hallway with one PNG."}
+{
+  "name": "Wall Pictures",
+  "version": "1.0",
+  "author": "pt-pc samples",
+  "description": "Every framed picture on the hallway walls becomes a magenta and cyan test pattern."
+}

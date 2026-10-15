@@ -16,7 +16,7 @@ layout(push_constant) uniform PassPush {
     mat4 m;
 } pass;
 
-layout(set = 1, binding = 6) uniform image2D bloom_images[3];
+layout(set = 1, binding = 7) uniform image2D bloom_images[3];
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);

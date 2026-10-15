@@ -4,8 +4,6 @@
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec2 out_depth_range;
 
-// DownSampleDepth_NearFar (lisa_balcony_f070 3881): 2x2 reverse-Z min/max for the half-resolution
-// effects pass, with the minimum also written to its GEQUAL depth attachment.
 void main() {
     ivec2 source_size = ivec2(ImgSize(IMG_DEPTH));
     ivec2 half_pixel = ivec2(gl_FragCoord.xy);

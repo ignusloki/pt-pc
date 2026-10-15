@@ -11,35 +11,13 @@
 20 stap 0 cross
 20 swait 40
 20 sexpect pcrow pc_display_mode
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 sexpect pcrow pc_section_sound
-20 stap 0 cross
-20 swait 20
+20 stap 0 r1
+20 swait 10
+20 stap 0 r1
+20 swait 10
+20 stap 0 r1
+20 swait 10
+20 sexpect pctab pc_section_sound 0
 20 sexpect pcrow pc_volume
 20 stap 0 down
 20 swait 4
@@ -89,9 +67,10 @@
 20 sexpect pcrow pc_microphone_test
 20 stap 0 circle
 20 swait 20
-20 sexpect pcrow pc_section_sound
+20 sexpect page 0
 20 stap 0 cross
-20 swait 20
+20 swait 40
+20 sexpect pctab pc_section_sound 0
 20 sexpect pcvalue pc_microphone_enabled 0
 20 sexpect pcenabled pc_microphone 0
 20 sexpect pcenabled pc_microphone_test 0

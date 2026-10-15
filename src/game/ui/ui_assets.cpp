@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "game/ui/ui_assets.h"
 
 #include <algorithm>
@@ -68,10 +69,8 @@ void UiAssets::UploadDecodedPreviews() {
         std::lock_guard lock(preview_mutex_);
         done.swap(preview_done_);
     }
-    // Preview PNGs are already display-encoded, as is the UI target: sample their stored values.
     for (DecodedPreview& decoded : done) {
         std::erase(preview_pending_, decoded.path);
-        // a picture that failed to decode is decoded again on demand (LocalPreview)
         if (!decoded.rgba.empty()) UploadImage(decoded.path, decoded.width, decoded.height, false, decoded.rgba);
     }
 }
@@ -81,7 +80,7 @@ uint32_t UiAssets::LocalPreview(const std::string& path) {
     if (auto it = texture_cache_.find(path); it != texture_cache_.end()) return it->second;
     if (std::find(preview_pending_.begin(), preview_pending_.end(), path) != preview_pending_.end()) return 0;
     std::error_code ec;
-    if (path.empty() || !std::filesystem::exists(path, ec)) return 0;
+    if (path.empty() || !std::filesystem::exists(pt::os::PathFromUtf8(path), ec)) return 0;
     int width = 0, height = 0, channels = 0;
     unsigned char* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
     if (!pixels) return 0;
@@ -178,6 +177,9 @@ void UiAssets::LoadGenerator() {
 UiFont* UiAssets::Font(UiFontType type, int language) {
     const int index = language >= 7 && language < kLanguageCount ? 6 + (language - 7) * 3 + static_cast<int>(type) : static_cast<int>(type) * 2 + (language == kJapanese ? 1 : 0);
     const int file_index = language >= 7 ? (type == UiFontType::Movie ? 2 : 0) : index % 4;
+    if (!fonts_[index] && std::chrono::steady_clock::now() < font_retry_[index]) {
+        return nullptr;
+    }
     if (!fonts_[index]) {
         fonts_[index] = std::make_unique<UiFont>();
         UiFont& font = *fonts_[index];
@@ -204,12 +206,83 @@ UiFont* UiAssets::Font(UiFontType type, int language) {
             w = std::max(1u, w / 2);
             h = std::max(1u, h / 2);
         }
-        font.atlas = textures_->Create(std::format("ui:font:{}:{}", kFontFiles[file_index], index), VK_FORMAT_R8_UNORM, texture_mips);
+        font.atlas = textures_->Create(std::format("ui:font:{}:{}", kFontFiles[file_index], index), gpu::Format::R8Unorm, texture_mips);
+        if (font.atlas == TextureManager::kWhite) {
+            LogWarn("ui: font {} atlas not made (out of video memory), tried again in 2 s", kFontFiles[file_index]);
+            fonts_[index].reset();
+            font_retry_[index] = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            return nullptr;
+        }
         font.ready = true;
         LogInfo("ui: font {} ({} glyphs, em {}, pad {}, atlas {}x{})", kFontFiles[file_index], font.font.Glyphs().size(), font.font.EmSize(), font.font.Pad(),
                 font.font.AtlasWidth(), font.font.AtlasHeight());
     }
     return fonts_[index]->ready ? fonts_[index].get() : nullptr;
+}
+
+namespace {
+
+std::vector<uint32_t> CodePoints(std::string_view text) {
+    std::vector<uint32_t> out;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        uint32_t code = c;
+        size_t n = 1;
+        if (c >= 0xF0) { code = c & 0x07; n = 4; }
+        else if (c >= 0xE0) { code = c & 0x0F; n = 3; }
+        else if (c >= 0xC0) { code = c & 0x1F; n = 2; }
+        for (size_t k = 1; k < n && i + k < text.size(); ++k) code = (code << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3F);
+        i += n;
+        if (code >= 32) out.push_back(code);
+    }
+    return out;
+}
+
+}
+
+UiFont* UiAssets::FontCovering(UiFontType type, int language, std::string_view text) {
+    UiFont* base = Font(type, language);
+    if (!base) return nullptr;
+    const std::vector<uint32_t> codes = CodePoints(text);
+    bool missing = false;
+    for (uint32_t code : codes) missing = missing || (code != 0x20 && code != 0x3000 && !base->font.Find(code));
+    if (!missing) return base;
+    const std::pair<int, int> key(static_cast<int>(type), language);
+    if (auto it = covering_fonts_.find(key); it != covering_fonts_.end()) return it->second && it->second->ready ? it->second.get() : base;
+    auto made = std::make_unique<UiFont>();
+    const int file_index = language >= 7 ? (type == UiFontType::Movie ? 2 : 0) : (static_cast<int>(type) * 2 + (language == kJapanese ? 1 : 0)) % 4;
+    auto data = vfs_->ReadFile(kFontFiles[file_index]);
+    std::string error;
+    const char* family = language == 8 || language == kJapanese ? "Noto Sans SC"
+                         : language == 9                         ? (type == UiFontType::Movie ? "Noto Naskh Arabic" : "Noto Kufi Arabic")
+                                                                 : "Noto Sans";
+    if (!data || !made->font.Parse(*data, &error) ||
+        !made->font.LoadUnicodeFont(family, localized::Characters(language) + std::string(text), language == 9, &error)) {
+        LogError("ui: a font covering the text in language {} ({}): {}", language, family, error);
+        covering_fonts_[key] = nullptr;
+        return base;
+    }
+    made->crisp = type == UiFontType::PcSystem;
+    std::vector<std::vector<uint8_t>> mips;
+    made->font.BuildAtlas(mips, made->crisp ? 3 : 1, !made->crisp);
+    std::vector<TextureMip> texture_mips;
+    uint32_t w = made->font.AtlasWidth(), h = made->font.AtlasHeight();
+    for (const auto& mip : mips) {
+        texture_mips.push_back({w, h, mip});
+        w = std::max(1u, w / 2);
+        h = std::max(1u, h / 2);
+    }
+    made->atlas = textures_->Create(std::format("ui:font:covering:{}:{}", static_cast<int>(type), language), gpu::Format::R8Unorm, texture_mips);
+    if (made->atlas == TextureManager::kWhite) {
+        LogWarn("ui: a font covering the text in language {}: no video memory for its atlas", language);
+        return base;
+    }
+    made->ready = true;
+    LogInfo("ui: font {} covering the port's text in language {} ({} glyphs, atlas {}x{})", family, language, made->font.Glyphs().size(),
+            made->font.AtlasWidth(), made->font.AtlasHeight());
+    UiFont* out = made.get();
+    covering_fonts_[key] = std::move(made);
+    return out;
 }
 
 const UiFontStyle* UiAssets::FontStyle(std::string_view name, int language) const {

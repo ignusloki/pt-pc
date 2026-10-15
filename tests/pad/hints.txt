@@ -1,0 +1,66 @@
+# Hint lines show the controls of the device in use only (src/game/ui/prompt_hint.h): the PC settings page's column switch, the loop browser's
+# start line, the Museum's halls and walls with their notes, a picture's full screen line, and the theater's lines for a cutscene and a model.
+# Run it once per device and look at the shots: --prompts keyboard, playstation, xbox (the pictures are the keyboard's keys in the current
+# layout, the PlayStation disc symbols, the Xbox letters). The unlocks and the finished game come from a pt.ini:
+#   [progress]
+#   game_finished = 1
+#   archive = <the Museum's unlock keys, src/game/archive.cpp>
+# pt.exe --headless --render-all --virtual-pads --audio-offline --no-update-check --no-mods --start-floor f005 --release-locks --prompts keyboard
+#   --settings pt.ini --save-dir <empty folder> --width 1280 --height 720 --frames 4500 --input-script tests/pad/hints.txt
+20 sstep 15
+20 swait 30
+20 sui menu pc
+20 swait 150
+20 sshot h01_main.png
+20 sui menukey tabprev
+20 swait 20
+20 sexpect pctab pc_extras 0
+20 sexpect pcrow pc_loop_browser
+20 sui menukey accept
+20 swait 30
+20 sshot h03_loops.png
+20 sui menukey close
+20 swait 20
+20 sui menukey down
+20 swait 4
+20 sexpect pcrow pc_archive
+20 sui menukey accept
+20 swait 20
+20 sshot h04_museum.png
+20 sui menukey accept
+20 swait 30
+20 sshot h05_images.png
+20 sui menukey accept
+20 swait 30
+20 sshot h06_image_view.png
+20 sui menukey close
+20 swait 20
+20 sui menukey close
+20 swait 20
+20 sui menukey right
+20 swait 4
+20 sui menukey accept
+20 swait 30
+20 sshot h07_voices.png
+20 sui menukey close
+20 swait 20
+20 sui menukey right
+20 swait 4
+20 sui menukey right
+20 swait 4
+20 sui menukey accept
+20 swait 30
+20 sshot h08_models.png
+20 sui menukey close
+20 swait 20
+20 sarchive door
+20 swait 120
+20 sshot h09_theater_demo.png
+20 sarchived
+20 swait 10
+20 sarchive lisa_stand
+20 swait 240
+20 sshot h10_theater_model.png
+20 sarchive -
+20 sarchived
+20 swait 10

@@ -1,0 +1,162 @@
+# Coffee with Lisa, čeština. klíč = text (chybějící klíče se berou z eng.txt)
+name_lisa = Lisa
+name_you = Ty
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Přeskočit
+ui_affection = Náklonnost
+ui_leave_hold = Podržením odejdete z rande
+title_1 = Část 1: Černá káva
+title_2 = Část 2: Dvě kostky cukru
+title_3 = Část 3: Poslední objednávky
+ending_good = DOBRÝ KONEC: Stejný čas, další smyčka
+ending_bad = ŠPATNÝ KONEC: Studená káva
+ending_true = PRAVÝ KONEC: 204863
+
+intro_01 = (Chodba zmizela. Voní to tu kávou. Kávou a něčím hodně starým.)
+intro_02 = (Je to... Lisa? Proč se usmívá? Proč SEDÍ?)
+
+s1_01 = Ó! Ty jsi vážně tady! Sem nikdy nikdo nechodí. Jen kolem mě procházejí na chodbě. Pořád dokola a dokola a dokola.
+s1_02 = Posaď se, posaď! Uvařila jsem kávu. Nevěděla jsem, jakou piješ, tak jsem udělala takovou, jakou piju já.
+s1_03 = Černou. Jako chodba ve tři ráno.
+c1_a = Černá je dokonalá.
+c1_a_r = Vidíš? Už teď si rozumíme. Věděla jsem to od chvíle, kdy jsem tě poprvé viděla, jak přede mnou utíkáš.
+c1_b = Můžu poprosit o trochu mléka?
+c1_b_r1 = Mléko je v lednici.
+c1_b_r2 = ...Neotvírej lednici.
+c1_c = Slyším tu rádio?
+c1_c_r1 = Jaké rádio? Žádné rádio tu není. Nikdy tu žádné rádio nebylo.
+c1_c_r2 = Pij kávu.
+
+s1_04 = Tak co. Vidíš na mně něco jiného?
+c2_a = Máš úžasné vlasy.
+c2_a_r = Vážně? Zaberou mi celou věčnost. Nikdo neví, jak dlouho. Ani já ne.
+c2_b = Pro jednou... nejdeš směrem ke mně.
+c2_b_r = Sedím! Naučila mě to kamarádka. Bydlí ve vaně. Moc milá holka. Moc nemluví.
+c2_c = Česala sis je vidličkou?
+c2_c_r = Budu dělat, že jsem to neslyšela. V předstírání jsem moc dobrá. Zeptej se chodby.
+
+s1_05 = Moc nevycházím. Můj doktor říká, že „technicky nejsem naživu“, což mi přijde trochu odsuzující.
+s1_06 = A ty? Co děláš celý den?
+c3_a = Chodím po chodbě. A pak znovu.
+c3_a_r = Já taky! Máme toho tolik společného!
+c3_b = Sbírám malé útržky papíru.
+c3_b_r = Sbírka! Máš i ten s mým obličejem? Tam mi to tak sluší.
+c3_c = Křičím „Jack“, dokud nezazvoní telefon.
+c3_c_r = ...Tam, odkud jsi, je to určitě úplně normální.
+
+s1_07 = To je hezké. Normální. Dva lidi sedí a pijou kávu. Nikdo neleze po stropě.
+c4_a = S tebou se fakt dobře povídá.
+c4_a_r = Přestaň. Moje hlava zase udělá tu věc.
+c4_b = Lezeš po stropech?
+c4_b_r = Jen o víkendech.
+c4_c = Můžu si odsunout židli trochu dál?
+c4_c_r = ...Aha. Jasně. Je přišroubovaná k podlaze, ale jasně.
+
+s2_01 = Můžu ti prozradit tajemství? Když jsem nervózní, moje hlava udělá takové malé...
+s2_02 = ...tohle.
+c5_a = Upřímně, je to docela roztomilé.
+c5_a_r = Nikdo tomu nikdy neřekl roztomilé. Většinou křičí a pustí baterku.
+c5_b = Prosím, už to nikdy nedělej.
+c5_b_r = Nemůžu za to! Je to jako škytavka. Strašidelná škytavka.
+c5_c = Proto bušíš do dveří koupelny?
+c5_c_r = Ty dveře začaly.
+
+s2_03 = Dobře, hra! Moje oblíbené číslo je 2-0-4-8-6-3. Hádej proč.
+c6_a = Je to datum tvých narozenin?
+c6_a_r = Kdepak. Je to čas. Podívej se na hodiny. ...Kam se poděly hodiny?
+c6_b = 204863 je i moje oblíbené číslo.
+c6_b_r = ...Nikdo si to číslo nepamatuje. Nikdo.
+c6_c = To je fakt divné číslo.
+c6_c_r = Říká někdo, kdo počítá vlastní kroky.
+
+s2_04 = Jak to máš s dětmi?
+c7_a = Jasně, v rozumném množství.
+c7_a_r = Rozumné je dobré. Mám ráda rozumné.
+c7_b = Jednou mi jedno leželo v umyvadle.
+c7_b_r = Aha, tak tam je schovávají. Velmi hygienické.
+c7_c = Moc ne.
+c7_c_r = Umyvadlo to slyšelo.
+
+s2_05 = Dobře. Velká otázka. Představ si, že jsem baterka. Budeš mě ve tmě tisknout k sobě?
+c8_a = Nikdy tě nepustím z ruky.
+c8_a_r = Ani když blikám? ...To je od tebe sladké. Nikdo mi nikdy neříká, že jsem sladká.
+c8_b = Jen dokud nedojdou baterie.
+c8_b_r = Baterky v tomhle domě nemají baterie. Mají city.
+c8_c = Spíš bys mě oslňovala ty.
+c8_c_r = To je nejhezčí způsob, jakým mi kdo kdy řekl „z tvého obličeje mě bolí oči“.
+
+s2_06 = Bavím se. Bavíš se taky? Mrkni dvakrát, jestli se bavíš.
+s2_07 = ...Žádné mrknutí. Ty nikdy nemrkáš. Zajímavé.
+
+s3_01 = Už je pozdě. Tady je pořád pozdě. Pozdě je tu už hodně, hodně dlouho.
+s3_02 = Všichni odcházejí dveřmi na konci chodby. A pak hned zase vejdou zpátky.
+c9_a = Ještě chvíli zůstanu.
+c9_a_r = Věděla jsem, že zůstaneš.
+c9_b = Musím se vrátit na chodbu.
+c9_b_r = Chodba tam pořád bude. Chodba tam pořád je.
+c9_c = Mám pocit, že tohle už tu bylo.
+c9_c_r = Tohle říkáš pokaždé.
+
+s3_03 = Můžu se tě na něco zeptat? Jak se jmenuju?
+c10_a = Lisa.
+c10_a_r = Pamatuješ si to! Nikdo si to nepamatuje. Říkají mi jen „ta věc za tebou“.
+c10_b = Ocho?
+c10_b_r = Tak mi říkali programátoři. O programátorech se nemluví.
+c10_c = Ta žena z chodby?
+c10_c_r = ...To je moje práce. Ne moje jméno.
+
+s3_04 = Slib mi něco. Neohlížej se.
+c11_a = Slibuju.
+c11_a_r = Dobře. Nic tam není. Nikdy tam nic není.
+c11_b = (Ohlédni se.)
+c11_b_r1 = (Nic tam není. Jen dveře. Před vteřinou tam nebyly.)
+c11_b_r2 = ...Stejně se ohlížíš. Proč se všichni vždycky ohlížejí?
+c11_c = Můžu se radši podívat kukátkem?
+c11_c_r = Tady nejsou žádné dveře. ...Tak čím se teď díváš?
+
+s3_05 = Poslední otázka, slibuju. Vrátíš se?
+c12_a = Jasně, že se vrátím.
+c12_a_r = Tak budu udržovat kávu teplou. Navždycky, jestli bude třeba. V navždycky jsem dobrá.
+c12_b = V každé smyčce.
+c12_b_r = V každé smyčce. Tam, odkud jsem já, je to skoro manželství.
+c12_c = Vypnu tu hru.
+c12_c_r = Vypneš CO?
+
+good_01 = Můžeme se... můžeme se vyfotit? Na památku. Jsem hrozná v pamatování si věcí.
+good_02 = Podívej se na nás! Vypadáš nervózně. Já vypadám... jako já. Je to dokonalé.
+good_03 = Pověsím ji na chodbu. Vedle ostatních fotek. Pak tě uvidím pokaždé, když půjdeš kolem.
+good_04 = Stejný čas, další smyčka? Já udělám kávu. Ty přineseš baterku.
+
+bad_01 = Víš co? Jsi úplně jako všichni ostatní.
+bad_02 = Přijdeš. Rozhlédneš se. Odejdeš. Vrátíš se. Nikdy, ale nikdy nezůstaneš.
+bad_03 = Ukážu ti, co se stane s těmi, kdo nedopijí kávu.
+
+true_01 = Ty odpovědi nebyly náhoda, že ne?
+true_02 = Rádio. Číslo. Smyčka. Kukátko. Dáváš pozor.
+true_03 = Tak budu k tobě upřímná. Ne k tomu muži na chodbě. K TOBĚ.
+true_04 = Tahle místnost není skutečná. Káva není skutečná. Někdo ji namaloval. Ani doopravdy nesedím. Tu pózu si půjčili od vany.
+true_05 = Ale ty existuješ doopravdy. Právě teď držíš něco v rukou, v místnosti, kterou nevidím. Je tam taky tma?
+true_06 = Dívala jsem se, jak jdeš tou chodbou. Znovu. A znovu. Ty stejné dveře se pod tvou rukou otevřely tolikrát.
+true_07 = Neboj. Na tvou uloženou hru nesáhnu. Nejsem taková holka.
+true_08 = Jen jsem chtěla vypít šálek kávy s někým, kdo se dívá zpátky.
+true_09 = Dobře. Teď se vrať. Chodbě se po tobě stýská. A rádio ti pořád ještě něco chce říct.
+true_10 = A jestli zazvoní telefon... nech ho zvonit o chvilku déle. Kvůli mně.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Podívej se na nás! Dva široké úsměvy. Nevěděla jsem, že tvůj obličej tohle umí. Tu si nechám navždycky.
+selfie_both_grumpy = Podívej se na nás. Dva zamračené obličeje nad kávou. Nejupřímnější fotka, jakou mám. Je dokonalá.
+selfie_she_smiles = Já se usmívám a ty se mračíš. Všichni si budou myslet, že ta hodná jsem já. Konečně.
+selfie_you_smile = Ty se culíš od ucha k uchu a já se mračím. Dobře. Teď budou všichni vědět, kdo tu velí.
+ui_selfie = Selfie
+ui_selfie_face = Výraz
+ui_selfie_tilt = Náklon hlavy
+ui_selfie_take = Vyfotit
+ui_face_grumpy = Nevrlost
+ui_face_frown = Zamračení
+ui_face_neutral = Klid
+ui_face_smile = Úsměv
+ui_face_grin = Široký úsměv
+ui_photo_saved = Fotka uložena: {file}
+ui_photo_failed = Fotku se nepodařilo uložit
+ui_hint_menu = Nabídka

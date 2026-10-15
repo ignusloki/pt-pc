@@ -18,17 +18,18 @@ struct Kind {
     uint16_t vendor;
     uint16_t product;
     bool touchpad;
+    bool gyro;
 };
 
 constexpr Kind kKinds[] = {
-    {"xbox", "Xbox Wireless Controller (virtual)", 0x045E, 0x0B13, false},
-    {"ps4", "DUALSHOCK 4 Wireless Controller (virtual)", 0x054C, 0x09CC, true},
-    {"ps5", "DualSense Wireless Controller (virtual)", 0x054C, 0x0CE6, true},
-    {"switch", "Nintendo Switch Pro Controller (virtual)", 0x057E, 0x2009, false},
-    {"steam", "Steam Deck controller (virtual)", 0x28DE, 0x1205, false},
-    {"steam_virtual", "Steam Virtual Gamepad (virtual)", 0x28DE, 0x11FF, false},
-    {"hori_steam", "HORIPAD for Steam (virtual)", 0x0F0D, 0x01AB, false},
-    {"generic", "Generic Gamepad (virtual)", 0x0000, 0x0000, false},
+    {"xbox", "Xbox Wireless Controller (virtual)", 0x045E, 0x0B13, false, false},
+    {"ps4", "DUALSHOCK 4 Wireless Controller (virtual)", 0x054C, 0x09CC, true, true},
+    {"ps5", "DualSense Wireless Controller (virtual)", 0x054C, 0x0CE6, true, true},
+    {"switch", "Nintendo Switch Pro Controller (virtual)", 0x057E, 0x2009, false, true},
+    {"steam", "Steam Deck controller (virtual)", 0x28DE, 0x1205, false, true},
+    {"steam_virtual", "Steam Virtual Gamepad (virtual)", 0x28DE, 0x11FF, false, false},
+    {"hori_steam", "HORIPAD for Steam (virtual)", 0x0F0D, 0x01AB, false, false},
+    {"generic", "Generic Gamepad (virtual)", 0x0000, 0x0000, false, false},
 };
 
 constexpr std::pair<std::string_view, int> kButtons[] = {
@@ -52,6 +53,7 @@ constexpr std::pair<std::string_view, int> kAxes[] = {
 
 constexpr uint32_t kFaceAndDpadMask = (1u << (SDL_GAMEPAD_BUTTON_DPAD_RIGHT + 1)) - 1u;
 const SDL_VirtualJoystickTouchpadDesc kTouchpad = {2, {0, 0, 0}};
+constexpr SDL_VirtualJoystickSensorDesc kGyroSensor = {SDL_SENSOR_GYRO, 250.0f};
 
 uint32_t ButtonMask(const Kind& kind) {
     return kFaceAndDpadMask | (kind.touchpad ? 1u << SDL_GAMEPAD_BUTTON_TOUCHPAD : 0u);
@@ -122,6 +124,8 @@ bool VirtualPads::Attach(int slot, std::string_view kind) {
     desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1u;
     desc.ntouchpads = k->touchpad ? 1 : 0;
     desc.touchpads = k->touchpad ? &kTouchpad : nullptr;
+    desc.nsensors = k->gyro ? 1 : 0;
+    desc.sensors = k->gyro ? &kGyroSensor : nullptr;
     desc.name = k->name;
     desc.userdata = s->rumble.get();
     desc.Rumble = OnRumble;
@@ -187,6 +191,28 @@ bool VirtualPads::SetButton(int slot, std::string_view name, bool down) {
     }
     LogWarn("virtual pad {}: unknown button '{}'", slot, name);
     return false;
+}
+
+bool VirtualPads::SetGyro(int slot, float x, float y, float z) {
+    Slot* s = Get(slot);
+    if (!s || !s->joystick) {
+        return false;
+    }
+    s->gyro[0] = x;
+    s->gyro[1] = y;
+    s->gyro[2] = z;
+    s->gyro_streaming = true;
+    return true;
+}
+
+void VirtualPads::PumpSensors(float dt) {
+    for (Slot& s : slots_) {
+        if (!s.joystick || !s.gyro_streaming) {
+            continue;
+        }
+        s.sensor_time += static_cast<uint64_t>(dt * 1.0e9f);
+        SDL_SendJoystickVirtualSensorData(s.joystick, SDL_SENSOR_GYRO, s.sensor_time, s.gyro, 3);
+    }
 }
 
 bool VirtualPads::SetAxis(int slot, std::string_view name, float value) {

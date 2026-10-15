@@ -1,0 +1,74 @@
+# the retroactive unlock (walkthrough archive_backfill): a save finished three times with no museum keys. What every finished game
+# reaches is open (the boot's and the hallway's cutscenes on the way, f060's required bathroom chain, the gimmicks, the radio
+# broadcasts, the peephole, the phone, the music of the traps on the way), the content that opens with the finish too; chance, an
+# optional look or zoom, a death, the photo pieces, the Game+ radio lines and the date stay locked. Then the halls page (the museum's share in its header, each hall's count)
+# and the radio hall's wall: found exhibits, and "???" with the hint of where a locked one comes from
+sstep 15
+swait 30
+sexpect archive preface 1
+sexpect archive door 1
+sexpect archive gc_p04_310 1
+sexpect archive gc_p01_020 1
+sexpect archive gc_p02_080 1
+sexpect archive ending 1
+sexpect archive lisa_stand 1
+sexpect archive lisa_backwards 1
+sexpect archive radio_news 1
+sexpect archive radio_04 1
+sexpect archive phone 1
+sexpect archive peephole_mask 1
+sexpect archive music_unrest03 1
+sexpect archive radio_01 1
+sexpect archive sub01 0
+sexpect archive sub05 0
+sexpect archive noise 0
+sexpect archive crash_4 0
+sexpect archive radio_06 0
+sexpect archive bag 0
+sexpect archive fetus_1 0
+sexpect archive kill 0
+sexpect archive gc_p01_021 0
+sexpect archive gc_p01_090 1
+sexpect archive gc_p00_030 1
+sexpect archive flashlight 1
+sexpect archive photo_lisa 0
+sexpect archive music_herald 1
+sexpect archive coffee_lisa 0
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 30
+sshot {shots}/museum_halls.png
+swait 10
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_hall_radio
+sui menukey accept
+swait 30
+sshot {shots}/museum_radio_wall.png
+swait 10
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 10
+sshot {shots}/museum_radio_locked.png
+swait 10
+sui menukey close
+swait 20
+sui menukey close
+swait 20
+squit

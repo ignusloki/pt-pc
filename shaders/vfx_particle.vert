@@ -79,13 +79,6 @@ void main() {
     out_bitangent = vec3(0.0, 1.0, 0.0);
     out_normal = vec3(0.0, 0.0, 1.0);
     if ((q.info.y & kLiquid) != 0u) {
-        // The liquid frame is the quad's own, whichever side the camera is on: texel x along the edge from the first corner to the
-        // +u one, y along the upper edge's normal away from the +v corner, z = x cross y. Primitive_Liquid2Final turns the texel
-        // by the conjugate of the particle quaternion, and in liquid_trace_f010 frame 1490 that frame is (v1 - v0, v0 - v3,
-        // cross) for all 345 quads within 0.999, the plane's local x, y and z whatever the UV flips, with z facing away from the
-        // camera on 341 of them (the window glass and its rain, most sconce panes, the blood water, whose z points down);
-        // Primitive_LiqSprt2Final passes (-m_view[0], m_view[1], -m_view[2]), the same frame for a sprite (screen right, up and
-        // toward the camera, since the view x axis points to the left of the screen)
         vec3 t = q.corner[1].xyz - q.corner[0].xyz;
         vec3 b = q.corner[0].xyz - q.corner[2].xyz;
         vec3 n = cross(t, b);
@@ -93,7 +86,6 @@ void main() {
         out_bitangent = normalize(b + vec3(0.0, 1e-7, 0.0));
         out_normal = normalize(n + vec3(0.0, 0.0, 1e-7));
     }
-    // mode 0: world draw on the scene target, 2: world draw into the offscreen particle buffer, 1: flare and screen layers
     if (push.ids.y != 1u) {
         gl_Position = push.view_projection * vec4(p.xyz, 1.0);
         out_view_depth = gl_Position.w;

@@ -1,31 +1,27 @@
+#include "engine/platform/os.h"
 #include "engine/render/texture_manager.h"
 
 #include <stb_image.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <iterator>
-#include <thread>
+#include <utility>
 
 #include "engine/assets/ftex.h"
 #include "engine/assets/enhanced_textures.h"
 #include "engine/core/log.h"
 #include "engine/fs/mods.h"
+#include "engine/render/vk/vk_device.h"
 
 namespace pt {
 namespace {
 
-// Staging memory allowed in flight before Create waits on the oldest uploads; bounds the peak of a stage load on 8 GB machines.
-constexpr VkDeviceSize kMaxPendingUploadBytes = VkDeviceSize(256) << 20;
-constexpr size_t kMaxDecodeWorkers = 4;
-
-// A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
-// light for a colour texture). Uncompressed, so loading never stalls on an encoder.
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
     int w = 0, h = 0, channels = 0;
@@ -81,7 +77,8 @@ bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std:
 
 }
 
-uint32_t FormatBlockBytes(VkFormat format, bool& compressed) {
+uint32_t FormatBlockBytes(gpu::Format gpu_format, bool& compressed) {
+    const VkFormat format = gpu::vk::Native(gpu_format);
     compressed = true;
     switch (format) {
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
@@ -118,55 +115,62 @@ uint32_t FormatBlockBytes(VkFormat format, bool& compressed) {
     }
 }
 
-bool TextureManager::Init(vk::Context& ctx) {
-    ctx_ = &ctx;
+bool TextureManager::Init(gpu::Device& device) {
+    device_ = &device;
+    const bool d3d12 = device.Info().backend == gpu::Backend::D3D12;
     base_sampler_ = CreateSampler(0);
     sampler_ = base_sampler_;
 
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures,
-                   VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    bindings[2] = {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxCubeTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    const VkDescriptorBindingFlags bindless = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-                                             VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
-    VkDescriptorBindingFlags binding_flags[3] = {bindless, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, bindless};
-    VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags_info.bindingCount = 3;
-    flags_info.pBindingFlags = binding_flags;
-    VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.pNext = &flags_info;
-    layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layout_info.bindingCount = 3;
-    layout_info.pBindings = bindings;
-    if (!vk::Check(vkCreateDescriptorSetLayout(ctx.device, &layout_info, nullptr, &set_layout_), "texture set layout")) {
+    const gpu::BindingFlags bindless = gpu::BindingFlag::PartiallyBound | gpu::BindingFlag::UpdateAfterBind | gpu::BindingFlag::UpdateUnusedWhilePending;
+    gpu::BindingLayoutDesc layout;
+    layout.update_after_bind = true;
+    layout.bindings = {{0, gpu::BindingType::CombinedImageSampler, kMaxTextures, gpu::ShaderStage::Fragment | gpu::ShaderStage::Compute, bindless},
+                       {1, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::Fragment | gpu::ShaderStage::Vertex | gpu::ShaderStage::Compute,
+                        gpu::BindingFlag::UpdateAfterBind},
+                       {2, gpu::BindingType::CombinedImageSampler, kMaxCubeTextures, gpu::ShaderStage::Fragment, bindless}};
+    if (d3d12) {
+        layout.bindings.push_back({3, gpu::BindingType::Sampler, 1, gpu::ShaderStage::All, gpu::BindingFlag::UpdateAfterBind});
+    }
+    set_layout_ = device.CreateBindingLayout(layout);
+    if (!set_layout_) {
+        LogError("textures: texture set layout failed");
         return false;
     }
-    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures + kMaxCubeTextures},
-                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    pool_info.maxSets = 1;
-    pool_info.poolSizeCount = 2;
-    pool_info.pPoolSizes = sizes;
-    vkCreateDescriptorPool(ctx.device, &pool_info, nullptr, &pool_);
-    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    alloc.descriptorPool = pool_;
-    alloc.descriptorSetCount = 1;
-    alloc.pSetLayouts = &set_layout_;
-    if (!vk::Check(vkAllocateDescriptorSets(ctx.device, &alloc, &set_), "texture set")) {
+    gpu::BindingPoolDesc pool;
+    pool.sizes = {{gpu::BindingType::CombinedImageSampler, kMaxTextures + kMaxCubeTextures}, {gpu::BindingType::StorageBuffer, 1}};
+    if (d3d12) {
+        pool.sizes.push_back({gpu::BindingType::Sampler, 1});
+    }
+    pool.max_sets = 1;
+    pool.update_after_bind = true;
+    pool_ = device.CreateBindingPool(pool);
+    set_ = device.AllocateBindingSet(pool_, set_layout_);
+    if (!set_) {
+        LogError("textures: texture set failed");
         return false;
     }
-    ctx.CreateBuffer(material_buffer_, sizeof(MaterialGpu) * kMaxMaterials, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-    VkDescriptorBufferInfo buffer_info{material_buffer_.buffer, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = set_;
-    write.dstBinding = 1;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.pBufferInfo = &buffer_info;
-    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+    gpu::BufferDesc materials;
+    materials.size = sizeof(MaterialGpu) * kMaxMaterials;
+    materials.usage = gpu::BufferUsage::StorageBuffer;
+    materials.host_visible = true;
+    if (!device.CreateBuffer(materials, material_buffer_)) {
+        return false;
+    }
+    const gpu::BufferBinding buffer_binding{material_buffer_.buffer, 0, ~0ull};
+    gpu::BindingWrite write;
+    write.set = set_;
+    write.binding = 1;
+    write.type = gpu::BindingType::StorageBuffer;
+    write.buffers = std::span(&buffer_binding, 1);
+    device.WriteBindings(std::span(&write, 1));
+    if (d3d12) {
+        gpu::BindingWrite sampler;
+        sampler.set = set_;
+        sampler.binding = 3;
+        sampler.type = gpu::BindingType::Sampler;
+        sampler.samplers = std::span(&sampler_, 1);
+        device.WriteBindings(std::span(&sampler, 1));
+    }
 
     const uint8_t white[4] = {255, 255, 255, 255};
     const uint8_t flat[4] = {128, 128, 255, 255};
@@ -174,18 +178,19 @@ bool TextureManager::Init(vk::Context& ctx) {
     const TextureMip white_mip{1, 1, white};
     const TextureMip flat_mip{1, 1, flat};
     const TextureMip black_mip{1, 1, black};
-    Create("builtin:white", VK_FORMAT_R8G8B8A8_UNORM, {&white_mip, 1});
-    Create("builtin:flat_normal", VK_FORMAT_R8G8B8A8_UNORM, {&flat_mip, 1});
-    Create("builtin:black", VK_FORMAT_R8G8B8A8_UNORM, {&black_mip, 1});
+    Create("builtin:white", gpu::Format::R8G8B8A8Unorm, {&white_mip, 1});
+    Create("builtin:flat_normal", gpu::Format::R8G8B8A8Unorm, {&flat_mip, 1});
+    Create("builtin:black", gpu::Format::R8G8B8A8Unorm, {&black_mip, 1});
     const TextureMip black_faces[6] = {black_mip, black_mip, black_mip, black_mip, black_mip, black_mip};
-    Create("builtin:black_cube", VK_FORMAT_R8G8B8A8_UNORM, black_faces, 6, true);
+    Create("builtin:black_cube", gpu::Format::R8G8B8A8Unorm, black_faces, 6, true);
     const uint8_t grey[4] = {128, 128, 128, 255};
     const TextureMip grey_mip{1, 1, grey};
-    Create("builtin:grey", VK_FORMAT_R8G8B8A8_UNORM, {&grey_mip, 1});
-    Create("builtin:grey_srgb", VK_FORMAT_R8G8B8A8_SRGB, {&grey_mip, 1});
+    Create("builtin:grey", gpu::Format::R8G8B8A8Unorm, {&grey_mip, 1});
+    Create("builtin:grey_srgb", gpu::Format::R8G8B8A8Srgb, {&grey_mip, 1});
     const uint8_t clear[4] = {0, 0, 0, 0};
     const TextureMip clear_mip{1, 1, clear};
-    Create("builtin:clear", VK_FORMAT_R8G8B8A8_UNORM, {&clear_mip, 1});
+    Create("builtin:clear", gpu::Format::R8G8B8A8Unorm, {&clear_mip, 1});
+    if (images_.size() != kClear + 1) return false;
     AddMaterial(MaterialGpu{});
     FlushMaterials();
     return true;
@@ -193,21 +198,25 @@ bool TextureManager::Init(vk::Context& ctx) {
 
 void TextureManager::Shutdown() {
     StopEnhancedWorker();
-    for (std::future<void>& worker : decode_workers_) {
-        worker.wait();
+    for (const std::shared_ptr<ParallelTask>& worker : decode_workers_) {
+        worker->Wait();
     }
     decode_workers_.clear();
+    decode_jobs_.clear();
     decoding_.clear();
     decode_order_.clear();
-    if (!ctx_) {
+    if (!device_) {
         return;
     }
-    ReclaimUploads(0);
-    for (vk::Image& image : images_) {
-        ctx_->DestroyImage(image);
+    for (gpu::ImageResource& image : images_) {
+        device_->DestroyImage(image);
     }
     images_.clear();
     cube_.clear();
+    names_.clear();
+    model_refs_.clear();
+    pinned_.clear();
+    free_.clear();
     by_name_.clear();
     cube_slots_.clear();
     fox_sources_.clear();
@@ -215,17 +224,20 @@ void TextureManager::Shutdown() {
     enhanced_bytes_ = 0;
     enhanced_qar_ = nullptr;
     enhanced_enabled_ = false;
-    ctx_->DestroyBuffer(material_buffer_);
-    vkDestroyDescriptorPool(ctx_->device, pool_, nullptr);
-    vkDestroyDescriptorSetLayout(ctx_->device, set_layout_, nullptr);
+    device_->DestroyBuffer(material_buffer_);
+    device_->DestroyBindingPool(pool_);
+    device_->DestroyBindingLayout(set_layout_);
     if (sampler_ != base_sampler_) {
-        vkDestroySampler(ctx_->device, sampler_, nullptr);
+        device_->DestroySampler(sampler_);
     }
-    vkDestroySampler(ctx_->device, base_sampler_, nullptr);
-    sampler_ = VK_NULL_HANDLE;
-    base_sampler_ = VK_NULL_HANDLE;
+    device_->DestroySampler(base_sampler_);
+    sampler_ = {};
+    base_sampler_ = {};
+    pool_ = {};
+    set_ = {};
+    set_layout_ = {};
     anisotropy_ = 0;
-    ctx_ = nullptr;
+    device_ = nullptr;
 }
 
 uint32_t TextureManager::CubeSlot(uint32_t texture) const {
@@ -233,56 +245,53 @@ uint32_t TextureManager::CubeSlot(uint32_t texture) const {
     return it == cube_slots_.end() ? kNoCube : it->second;
 }
 
-VkSampler TextureManager::CreateSampler(int anisotropy) const {
-    VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.anisotropyEnable = anisotropy > 1 ? VK_TRUE : VK_FALSE;
-    sampler_info.maxAnisotropy = anisotropy > 1 ? static_cast<float>(anisotropy) : 1.0f;
-    sampler_info.maxLod = VK_LOD_CLAMP_NONE;
-    VkSampler sampler = VK_NULL_HANDLE;
-    vk::Check(vkCreateSampler(ctx_->device, &sampler_info, nullptr, &sampler), "texture sampler");
-    return sampler;
+gpu::SamplerHandle TextureManager::CreateSampler(int anisotropy) const {
+    gpu::SamplerDesc desc;
+    desc.max_anisotropy = anisotropy > 1 ? static_cast<float>(anisotropy) : 1.0f;
+    return device_->CreateSampler(desc);
 }
 
 int TextureManager::SetAnisotropy(int level) {
-    if (!ctx_) {
+    if (!device_) {
         return 0;
     }
-    const int limit = static_cast<int>(ctx_->properties.limits.maxSamplerAnisotropy);
+    const int limit = static_cast<int>(device_->Info().max_sampler_anisotropy);
     level = level > 1 ? std::min(level, limit) : 0;
     if (level == anisotropy_) {
         return anisotropy_;
     }
-    const VkSampler sampler = level > 1 ? CreateSampler(level) : base_sampler_;
+    const gpu::SamplerHandle sampler = level > 1 ? CreateSampler(level) : base_sampler_;
     if (!sampler) {
         return anisotropy_;
     }
-    // every texture descriptor takes the new sampler; frames in flight still read the old ones
-    vkDeviceWaitIdle(ctx_->device);
-    std::vector<VkDescriptorImageInfo> infos(images_.size());
+    device_->WaitIdle();
+    std::vector<gpu::ImageBinding> infos(images_.size());
     for (size_t i = 0; i < images_.size(); ++i) {
         uint32_t shown = static_cast<uint32_t>(i);
         if (enhanced_enabled_) {
             if (auto it = enhanced_images_.find(shown); it != enhanced_images_.end()) shown = it->second;
         }
-        infos[i] = {sampler, cube_[i] ? images_[kWhite].view : images_[shown].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        const uint32_t view = cube_[i] || !images_[shown].view ? kWhite : shown;
+        infos[i] = {images_[view].view, gpu::Layout::ShaderReadOnly, sampler, &images_[view]};
     }
     if (!infos.empty()) {
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = set_;
-        write.dstBinding = 0;
-        write.descriptorCount = static_cast<uint32_t>(infos.size());
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = infos.data();
-        vkUpdateDescriptorSets(ctx_->device, 1, &write, 0, nullptr);
+        gpu::BindingWrite write;
+        write.set = set_;
+        write.binding = 0;
+        write.type = gpu::BindingType::CombinedImageSampler;
+        write.images = infos;
+        device_->WriteBindings(std::span(&write, 1));
+    }
+    if (device_->Info().backend == gpu::Backend::D3D12) {
+        gpu::BindingWrite write;
+        write.set = set_;
+        write.binding = 3;
+        write.type = gpu::BindingType::Sampler;
+        write.samplers = std::span(&sampler, 1);
+        device_->WriteBindings(std::span(&write, 1));
     }
     if (sampler_ != base_sampler_) {
-        vkDestroySampler(ctx_->device, sampler_, nullptr);
+        device_->DestroySampler(sampler_);
     }
     sampler_ = sampler;
     anisotropy_ = level;
@@ -292,100 +301,208 @@ int TextureManager::SetAnisotropy(int level) {
 
 uint32_t TextureManager::Find(const std::string& name) const {
     auto it = by_name_.find(name);
-    return it == by_name_.end() ? kWhite : it->second;
+    if (it == by_name_.end()) return kWhite;
+    Pin(it->second);
+    return it->second;
 }
 
-uint32_t TextureManager::Create(const std::string& name, VkFormat format, std::span<const TextureMip> mips, uint32_t layers, bool cube) {
+void TextureManager::Pin(uint32_t index) const {
+    if (index < pinned_.size()) pinned_[index] = 1;
+}
+
+void TextureManager::AddModelRef(uint32_t index) {
+    if (index < model_refs_.size()) ++model_refs_[index];
+}
+
+uint64_t TextureManager::ReleaseModelRef(uint32_t index) {
+    if (index >= model_refs_.size() || model_refs_[index] == 0) return 0;
+    if (--model_refs_[index] > 0 || pinned_[index] || index <= kGreySrgb) return 0;
+    return FreeTexture(index);
+}
+
+uint64_t TextureManager::FreeTexture(uint32_t index) {
+    uint64_t bytes = 0;
+    auto destroy = [&](uint32_t slot) {
+        if (slot >= images_.size() || !images_[slot].image) return;
+        bytes += device_->ImageBytes(images_[slot]);
+        device_->DestroyImage(images_[slot]);
+        if (auto it = by_name_.find(names_[slot]); it != by_name_.end() && it->second == slot) by_name_.erase(it);
+        names_[slot].clear();
+        model_refs_[slot] = 0;
+        pinned_[slot] = 0;
+        cube_[slot] = 0;
+        fox_sources_.erase(slot);
+        if (redirects_.erase(slot) > 0) materials_dirty_ = true;
+        for (auto it = redirects_.begin(); it != redirects_.end();) {
+            if (it->second == slot) {
+                it = redirects_.erase(it);
+                materials_dirty_ = true;
+            } else {
+                ++it;
+            }
+        }
+        free_.push_back(slot);
+    };
+    if (auto it = enhanced_images_.find(index); it != enhanced_images_.end()) {
+        const uint32_t replacement = it->second;
+        enhanced_images_.erase(it);
+        const uint64_t before = bytes;
+        destroy(replacement);
+        enhanced_bytes_ -= std::min(enhanced_bytes_, bytes - before);
+        UpdateTextureDescriptor(replacement);
+    }
+    destroy(index);
+    UpdateTextureDescriptor(index);
+    return bytes;
+}
+
+uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std::span<const TextureMip> mips, uint32_t layers, bool cube) {
     if (auto it = by_name_.find(name); it != by_name_.end()) {
+        if (!model_scope_) Pin(it->second);
         return it->second;
     }
-    if (mips.empty() || images_.size() >= kMaxTextures) {
+    if (mips.empty() || (images_.size() >= kMaxTextures && (free_.empty() || cube))) {
         return kWhite;
     }
-    vk::Image image;
-    const uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;
-    if (!ctx_->CreateImage(image, format, {mips[0].width, mips[0].height, 1}, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                           mip_count, layers, VK_IMAGE_ASPECT_COLOR_BIT, cube)) {
-        return kWhite;
+    const bool enhanced = name.find("#enhanced-") != std::string::npos;
+    gpu::ImageResource image;
+    uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;
+    uint32_t dropped = 0;
+    if (memory_short_ && !enhanced && layers == 1 && mip_count > 1 && std::max(mips[0].width, mips[0].height) > 512) {
+        mips = mips.subspan(1);
+        --mip_count;
+        ++dropped;
     }
-    VkDeviceSize total = 0;
+    const auto create_image = [&] {
+        gpu::ImageDesc desc;
+        desc.format = format;
+        desc.extent = {mips[0].width, mips[0].height, 1};
+        desc.usage = gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst;
+        desc.mip_levels = mip_count;
+        desc.layers = layers;
+        desc.cube = cube;
+        desc.name = enhanced ? "enhanced textures" : "textures";
+        return device_->CreateImage(desc, image);
+    };
+    while (!create_image()) {
+        if (enhanced) {
+            return kWhite;
+        }
+        if (ReleaseEnhancedTextures("video memory short")) {
+            continue;
+        }
+        if (!memory_short_) {
+            memory_short_ = true;
+            LogWarn("textures: out of video memory: from now on textures over 512 px load without their largest mip");
+        }
+        if (layers != 1 || mip_count < 2 || std::max(mips[1].width, mips[1].height) < 64) {
+            LogWarn("texture: {} not loaded: out of video memory", name);
+            return kWhite;
+        }
+        mips = mips.subspan(1);
+        --mip_count;
+        ++dropped;
+    }
+    if (dropped) {
+        LogWarn("texture: {} loaded at {}x{} without its {} largest mips: out of video memory", name, mips[0].width, mips[0].height, dropped);
+    }
+    uint64_t total = 0;
     for (const TextureMip& mip : mips) {
-        total += (mip.data.size() + 15) & ~VkDeviceSize(15);
+        total += (mip.data.size() + 15) & ~uint64_t(15);
     }
-    vk::Buffer staging;
-    ctx_->CreateBuffer(staging, total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-    std::vector<VkBufferImageCopy> regions;
-    VkDeviceSize offset = 0;
+    gpu::BufferResource staging;
+    gpu::BufferDesc staging_desc;
+    staging_desc.size = total;
+    staging_desc.usage = gpu::BufferUsage::TransferSrc;
+    staging_desc.host_visible = true;
+    staging_desc.name = enhanced ? "enhanced textures" : "textures";
+    if (!device_->CreateBuffer(staging_desc, staging)) {
+        device_->DestroyImage(image);
+        LogWarn("texture: {} not uploaded: staging allocation failed", name);
+        return kWhite;
+    }
+    std::vector<gpu::BufferImageCopy> regions;
+    uint64_t offset = 0;
     for (uint32_t layer = 0; layer < layers; ++layer) {
         for (uint32_t level = 0; level < mip_count; ++level) {
             const TextureMip& mip = mips[layer * mip_count + level];
             std::memcpy(static_cast<uint8_t*>(staging.mapped) + offset, mip.data.data(), mip.data.size());
-            VkBufferImageCopy region{};
-            region.bufferOffset = offset;
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1};
-            region.imageExtent = {mip.width, mip.height, 1};
+            gpu::BufferImageCopy region;
+            region.buffer_offset = offset;
+            region.image = {gpu::Aspect::Color, level, layer, 1};
+            region.extent = {mip.width, mip.height, 1};
             regions.push_back(region);
-            offset += (mip.data.size() + 15) & ~VkDeviceSize(15);
+            offset += (mip.data.size() + 15) & ~uint64_t(15);
         }
     }
-    vmaFlushAllocation(ctx_->allocator, staging.allocation, 0, total);
-    // No CPU wait: everything samples on the same queue after this submit, and the barrier below orders those reads after the copy.
-    const vk::Submission submission = ctx_->SubmitAsync([&](VkCommandBuffer cmd) {
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()),
-                               regions.data());
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    });
-    pending_upload_bytes_ += staging.size;
-    pending_uploads_.push_back({submission, staging});
-    ReclaimUploads(kMaxPendingUploadBytes);
-    const uint32_t index = static_cast<uint32_t>(images_.size());
-    const bool cube_slot = cube && cube_slots_.size() < kMaxCubeTextures;
-    VkDescriptorImageInfo image_info{sampler_, image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    if (cube && !images_.empty()) {
-        image_info.imageView = images_[kWhite].view;
+    device_->FlushMapped(staging, 0, total);
+    static const bool upload_wait = std::getenv("PT_TEXTURE_UPLOAD_WAIT") != nullptr;
+    const auto record_upload = [&](gpu::CommandList& list) {
+        gpu::ImageBarrier to_copy;
+        to_copy.image = image.image;
+        to_copy.src_stage = gpu::PipelineStage::TopOfPipe;
+        to_copy.dst_stage = gpu::PipelineStage::Transfer;
+        to_copy.dst_access = static_cast<uint64_t>(gpu::Access::TransferWrite);
+        to_copy.new_layout = gpu::Layout::TransferDst;
+        list.Barrier(to_copy);
+        list.CopyBufferToImage(staging, image, gpu::Layout::TransferDst, regions);
+        gpu::ImageBarrier to_read;
+        to_read.image = image.image;
+        to_read.src_stage = gpu::PipelineStage::Transfer;
+        to_read.src_access = static_cast<uint64_t>(gpu::Access::TransferWrite);
+        to_read.old_layout = gpu::Layout::TransferDst;
+        to_read.dst_stage = gpu::PipelineStage::FragmentShader | gpu::PipelineStage::ComputeShader;
+        to_read.dst_access = static_cast<uint64_t>(gpu::Access::ShaderSampledRead);
+        to_read.new_layout = gpu::Layout::ShaderReadOnly;
+        list.Barrier(to_read);
+    };
+    if (upload_wait) {
+        device_->Submit(record_upload);
+        device_->DestroyBuffer(staging);
+    } else {
+        device_->SubmitDeferred(record_upload, staging);
     }
-    VkDescriptorImageInfo cube_info{base_sampler_, image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[2]{};
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writes[0].dstSet = set_;
-    writes[0].dstBinding = 0;
-    writes[0].dstArrayElement = index;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo = &image_info;
+    const bool reuse = !cube && !free_.empty();
+    const uint32_t index = reuse ? free_.back() : static_cast<uint32_t>(images_.size());
+    if (reuse) free_.pop_back();
+    const bool cube_slot = cube && cube_slots_.size() < kMaxCubeTextures;
+    gpu::ImageBinding image_info{image.view, gpu::Layout::ShaderReadOnly, sampler_, &image};
+    if (cube && !images_.empty()) {
+        image_info.view = images_[kWhite].view;
+        image_info.image = &images_[kWhite];
+    }
+    const gpu::ImageBinding cube_info{image.view, gpu::Layout::ShaderReadOnly, base_sampler_, &image};
+    gpu::BindingWrite writes[2];
+    writes[0].set = set_;
+    writes[0].binding = 0;
+    writes[0].first = index;
+    writes[0].type = gpu::BindingType::CombinedImageSampler;
+    writes[0].images = std::span(&image_info, 1);
     writes[1] = writes[0];
-    writes[1].dstBinding = 2;
-    writes[1].dstArrayElement = static_cast<uint32_t>(cube_slots_.size());
-    writes[1].pImageInfo = &cube_info;
-    vkUpdateDescriptorSets(ctx_->device, cube_slot ? 2 : 1, writes, 0, nullptr);
+    writes[1].binding = 2;
+    writes[1].first = static_cast<uint32_t>(cube_slots_.size());
+    writes[1].images = std::span(&cube_info, 1);
+    device_->WriteBindings(std::span(writes, cube_slot ? 2 : 1));
     if (cube_slot) {
         const uint32_t slot = static_cast<uint32_t>(cube_slots_.size());
         cube_slots_[index] = slot;
     }
-    images_.push_back(image);
-    cube_.push_back(cube && index > 0 ? 1 : 0);
+    const uint8_t pinned = model_scope_ == 0 || cube || index <= kGreySrgb ? 1 : 0;
+    if (reuse) {
+        images_[index] = image;
+        cube_[index] = 0;
+        names_[index] = name;
+        model_refs_[index] = 0;
+        pinned_[index] = pinned;
+    } else {
+        images_.push_back(image);
+        cube_.push_back(cube && index > 0 ? 1 : 0);
+        names_.push_back(name);
+        model_refs_.push_back(0);
+        pinned_.push_back(pinned);
+    }
     by_name_[name] = index;
     return index;
-}
-
-// Frees the staging buffers of finished uploads, waiting on the oldest ones while more than max_pending_bytes are still in flight.
-void TextureManager::ReclaimUploads(VkDeviceSize max_pending_bytes) {
-    while (!pending_uploads_.empty()) {
-        PendingUpload& upload = pending_uploads_.front();
-        if (pending_upload_bytes_ > max_pending_bytes) {
-            ctx_->CheckDeviceLost(vkWaitForFences(ctx_->device, 1, &upload.submission.fence, VK_TRUE, UINT64_MAX), "texture upload wait");
-        } else if (vkGetFenceStatus(ctx_->device, upload.submission.fence) == VK_NOT_READY) {
-            break;
-        }
-        pending_upload_bytes_ -= upload.staging.size;
-        ctx_->DestroyBuffer(upload.staging);
-        ctx_->Release(upload.submission);
-        pending_uploads_.pop_front();
-    }
 }
 
 uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path, bool* ok, bool raw) {
@@ -395,6 +512,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
         if (ok) {
             *ok = true;
         }
+        if (!model_scope_) Pin(it->second);
         return it->second;
     }
     if (mods::Active()) {
@@ -411,6 +529,10 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
     FtexTexture ftex;
     bool read = false;
     if (auto it = decoding_.find(stem); it != decoding_.end() && !raw) {
+        if (auto job = decode_jobs_.find(stem); job != decode_jobs_.end()) {
+            job->second->Wait();
+            decode_jobs_.erase(job);
+        }
         const std::shared_ptr<FtexTexture> decoded = it->second.get();
         decoding_.erase(it);
         if (decoded) {
@@ -422,7 +544,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
         read = LoadFtex(qar, stem, ftex);
         read_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     }
-    if (!read || ftex.Format() == VK_FORMAT_UNDEFINED || ftex.depth > 1) {
+    if (!read || ftex.Format() == gpu::Format::Undefined || ftex.depth > 1) {
         if (ok) {
             *ok = false;
         }
@@ -455,7 +577,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
     upload_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - upload_started).count();
     if (index != kWhite && !raw && EnhancedTextureEligible(stem, ftex)) {
         fox_sources_[index] = stem;
-        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex, true);
+        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex);
     }
     if (ok) {
         *ok = index != kWhite;
@@ -481,27 +603,24 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
     if (jobs.empty()) {
         return;
     }
-    // QarArchive::Read serializes the raw file reads; inflating runs in parallel. Workers take jobs in FIFO order for PumpDecoded.
-    auto shared = std::make_shared<decltype(jobs)>(std::move(jobs));
-    auto next = std::make_shared<std::atomic<size_t>>(0);
-    const size_t workers = std::min<size_t>({kMaxDecodeWorkers, std::max(1u, std::thread::hardware_concurrency()), shared->size()});
-    for (size_t w = 0; w < workers; ++w) {
-        decode_workers_.push_back(std::async(std::launch::async, [&qar, shared, next] {
-            for (size_t i = next->fetch_add(1); i < shared->size(); i = next->fetch_add(1)) {
-                auto& [stem, promise] = (*shared)[i];
-                auto ftex = std::make_shared<FtexTexture>();
-                if (!LoadFtex(qar, stem, *ftex)) {
-                    ftex.reset();
-                }
-                promise.set_value(std::move(ftex));
-            }
-        }));
+    std::vector<std::string> stems;
+    for (const auto& [stem, promise] : jobs) {
+        stems.push_back(stem);
     }
-}
-
-bool TextureManager::StillDecoding(const std::string& path) const {
-    auto it = decoding_.find(FtexStem(path));
-    return it != decoding_.end() && it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+    auto batch = std::make_shared<decltype(jobs)>(std::move(jobs));
+    auto task = std::make_shared<ParallelTask>([&qar, batch] {
+        for (auto& [stem, promise] : *batch) {
+            auto ftex = std::make_shared<FtexTexture>();
+            if (!LoadFtex(qar, stem, *ftex)) {
+                ftex.reset();
+            }
+            promise.set_value(std::move(ftex));
+        }
+    });
+    for (std::string& stem : stems) {
+        decode_jobs_[std::move(stem)] = task;
+    }
+    decode_workers_.push_back(std::move(task));
 }
 
 bool TextureManager::AdoptDecoded(const std::string& path, std::shared_ptr<FtexTexture> decoded) {
@@ -518,6 +637,7 @@ bool TextureManager::AdoptDecoded(const std::string& path, std::shared_ptr<FtexT
 void TextureManager::DropDecoded(const std::vector<std::string>& paths) {
     for (const std::string& path : paths) {
         decoding_.erase(FtexStem(path));
+        decode_jobs_.erase(FtexStem(path));
     }
 }
 
@@ -527,6 +647,11 @@ std::unordered_set<std::string> TextureManager::Names() const {
         names.insert(name);
     }
     return names;
+}
+
+bool TextureManager::StillDecoding(const std::string& path) const {
+    const auto it = decoding_.find(FtexStem(path));
+    return it != decoding_.end() && it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
 }
 
 uint32_t TextureManager::PumpDecoded(const QarArchive& qar, uint32_t count) {
@@ -545,22 +670,18 @@ uint32_t TextureManager::PumpDecoded(const QarArchive& qar, uint32_t count) {
         LoadFox(qar, stem);
         ++uploaded;
     }
-    std::erase_if(decode_workers_, [](std::future<void>& worker) { return worker.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
-    ReclaimUploads(kMaxPendingUploadBytes);
+    std::erase_if(decode_workers_, [](const std::shared_ptr<ParallelTask>& worker) { return worker->Done(); });
     return uploaded;
 }
 
 uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png,
                                       bool raw) {
-    // the game's texture, when there is one, says whether the picture is colour (sRGB) and whether a PNG can stand in for it
     FtexTexture original;
     const bool has_original = LoadFtex(qar, stem, original);
     if (has_original && (original.faces != 1 || original.depth > 1)) {
         LogWarn("mods: {}.png ignored: a cube or volume texture is replaced by a .ftex only", stem);
         return kWhite;
     }
-    // a new picture (a mod's own path, a glTF model's image) is colour unless its name says it is data as the game's names do
-    // (_nrm normal maps, _srm specular maps, _lin linear)
     const bool data_name = stem.ends_with("_nrm") || stem.ends_with("_srm") || stem.ends_with("_lin");
     const bool srgb = !raw && (has_original ? original.Srgb() : !data_name);
     std::vector<std::vector<uint8_t>> levels;
@@ -574,7 +695,7 @@ uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& 
     for (uint32_t level = 0; level < levels.size(); ++level) {
         mips.push_back({std::max(1u, width >> level), std::max(1u, height >> level), levels[level]});
     }
-    const uint32_t index = Create(key, srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, mips);
+    const uint32_t index = Create(key, srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
     if (index != kWhite) {
         LogInfo("mods: texture {} from a {} x {} PNG", stem, width, height);
     }
@@ -598,12 +719,23 @@ uint32_t TextureManager::LoadImageFile(const std::filesystem::path& path, const 
     for (uint32_t level = 0; level < levels.size(); ++level) {
         mips.push_back({std::max(1u, width >> level), std::max(1u, height >> level), levels[level]});
     }
-    // UNORM: the UI draws the encoded values as they are, as it does the game's own UI textures (an sRGB view decoded the
-    // title picture to linear and the UI showed that, darker than the PS4's start screen: Discord report 11 October)
-    return Create(key, VK_FORMAT_R8G8B8A8_UNORM, mips);
+    return Create(key, gpu::Format::R8G8B8A8Unorm, mips);
 }
 
-void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std::filesystem::path& cache, uint64_t model) {
+namespace {
+bool ReadEnhancedCache(const std::filesystem::path& file, uint64_t key, FtexTexture& cached) {
+    if (ReadTextureCache(file, key, cached)) return true;
+    if (TextureCacheCurrent(file, key)) {
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        LogWarn("textures: enhanced texture {} failed its check and was removed; it is made again at the next start", pt::os::PathToUtf8(file.filename()));
+    }
+    return false;
+}
+}
+
+void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std::filesystem::path& cache, uint64_t model, uint32_t kinds) {
+    enhanced_kinds_ = kinds;
     if(enhanced_qar_ == &qar && enhanced_cache_ == cache && enhanced_model_ == model) return;
     SetEnhancedTextures(false);
     enhanced_qar_ = &qar;
@@ -613,16 +745,17 @@ void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std:
     enhanced_bytes_ = 0;
 }
 
-void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source, bool fresh) {
-    if (!enhanced_qar_ || !enhanced_model_ || enhanced_images_.contains(index)) return;
+void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source) {
+    if (!enhanced_qar_ || !enhanced_model_ || enhanced_suspended_ || enhanced_images_.contains(index)) return;
     FtexTexture loaded, cached;
     if (!source) {
         if (!LoadFtex(*enhanced_qar_, path, loaded)) return;
         source = &loaded;
     }
-    const uint64_t key = EnhancedTextureKey(*source, enhanced_model_);
-    if (!ReadTextureCache(EnhancedCacheFile(enhanced_cache_, path), key, cached)) return;
-    // twice the source's size, or the source's size where the capped mode reduced the 2x result (a 2048 source capped at 2048)
+    const EnhancedKind kind = EnhancedTextureKindOf(path, *source);
+    if (!(enhanced_kinds_ & EnhancedKindBit(kind))) return;
+    const uint64_t key = EnhancedTextureKey(*source, enhanced_model_, kind);
+    if (!ReadEnhancedCache(EnhancedCacheFile(enhanced_cache_, path), key, cached)) return;
     const bool doubled = cached.width == source->width * 2 && cached.height == source->height * 2;
     const bool kept = cached.width == source->width && cached.height == source->height;
     if (!(doubled || kept) || cached.Srgb() != source->Srgb()) return;
@@ -637,10 +770,35 @@ void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path
     enhanced_images_[index] = replacement;
     enhanced_bytes_ += bytes;
     if (enhanced_enabled_) {
-        // A freshly created element is not referenced by any submitted frame, so it can be rewritten without idling the device.
-        if (!fresh) vkDeviceWaitIdle(ctx_->device);
+        device_->WaitIdle();
         UpdateTextureDescriptor(index);
     }
+}
+
+bool TextureManager::ReleaseEnhancedTextures(const char* why) {
+    if (enhanced_images_.empty() && !enhanced_queue_) return false;
+    StopEnhancedWorker();
+    enhanced_suspended_ = true;
+    device_->WaitIdle();
+    uint64_t bytes = 0;
+    const size_t count = enhanced_images_.size();
+    for (const auto& [index, replacement] : std::exchange(enhanced_images_, {})) {
+        if (replacement < images_.size() && images_[replacement].image) {
+            bytes += device_->ImageBytes(images_[replacement]);
+            device_->DestroyImage(images_[replacement]);
+            if (auto it = by_name_.find(names_[replacement]); it != by_name_.end() && it->second == replacement) by_name_.erase(it);
+            names_[replacement].clear();
+            model_refs_[replacement] = 0;
+            pinned_[replacement] = 0;
+            free_.push_back(replacement);
+            UpdateTextureDescriptor(replacement);
+        }
+        UpdateTextureDescriptor(index);
+    }
+    enhanced_bytes_ = 0;
+    LogWarn("textures: enhanced textures released ({}): {} replacements, {:.0f} MB; the original textures stay for this session", why, count,
+            static_cast<double>(bytes) / 1048576.0);
+    return count > 0;
 }
 
 void TextureManager::UpdateTextureDescriptor(uint32_t index) {
@@ -648,11 +806,12 @@ void TextureManager::UpdateTextureDescriptor(uint32_t index) {
     if (enhanced_enabled_) {
         if (auto it = enhanced_images_.find(index); it != enhanced_images_.end()) shown = it->second;
     }
-    VkDescriptorImageInfo info{sampler_, images_[shown].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = set_; write.dstBinding = 0; write.dstArrayElement = index;
-    write.descriptorCount = 1; write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; write.pImageInfo = &info;
-    vkUpdateDescriptorSets(ctx_->device, 1, &write, 0, nullptr);
+    const gpu::ImageResource& view = images_[shown].view ? images_[shown] : images_[kWhite];
+    const gpu::ImageBinding info{view.view, gpu::Layout::ShaderReadOnly, sampler_, &view};
+    gpu::BindingWrite write;
+    write.set = set_; write.binding = 0; write.first = index;
+    write.type = gpu::BindingType::CombinedImageSampler; write.images = std::span(&info, 1);
+    device_->WriteBindings(std::span(&write, 1));
 }
 
 void TextureManager::StopEnhancedWorker() {
@@ -662,52 +821,74 @@ void TextureManager::StopEnhancedWorker() {
     enhanced_queue_.reset();
 }
 
-void TextureManager::SetEnhancedTextures(bool enabled) {
-    if (!ctx_ || enabled == enhanced_enabled_) return;
-    StopEnhancedWorker();
-    if (enabled && enhanced_qar_ && enhanced_model_) {
-        std::vector<std::pair<uint32_t, std::string>> todo;
-        for (const auto& [index, path] : fox_sources_) {
-            if (!enhanced_images_.contains(index)) todo.emplace_back(index, path);
-        }
-        auto queue = std::make_shared<EnhancedQueue>();
-        queue->total = todo.size();
-        enhanced_queue_ = queue;
-        const QarArchive* qar = enhanced_qar_;
-        const std::filesystem::path cache = enhanced_cache_;
-        const uint64_t model = enhanced_model_;
-        enhanced_worker_ = std::async(std::launch::async, [queue, todo = std::move(todo), qar, cache, model] {
-            for (const auto& [index, path] : todo) {
-                if (queue->stop) break;
-                FtexTexture source;
-                EnhancedPrepared prepared;
-                if (LoadFtex(*qar, path, source)) {
-                    prepared.key = EnhancedTextureKey(source, model);
-                    if (ReadTextureCache(EnhancedCacheFile(cache, path), prepared.key, prepared.cached)) {
-                        const FtexTexture& c = prepared.cached;
-                        const bool doubled = c.width == source.width * 2 && c.height == source.height * 2;
-                        const bool kept = c.width == source.width && c.height == source.height;
-                        if ((doubled || kept) && c.Srgb() == source.Srgb()) {
-                            prepared.index = index;
-                            prepared.path = path;
-                            std::lock_guard lock(queue->mutex);
-                            queue->ready.push_back(std::move(prepared));
-                        }
+void TextureManager::StartEnhancedWorker(bool only_cached) {
+    std::vector<std::pair<uint32_t, std::string>> todo;
+    for (const auto& [index, path] : fox_sources_) {
+        if (!enhanced_images_.contains(index)) todo.emplace_back(index, path);
+    }
+    auto queue = std::make_shared<EnhancedQueue>();
+    queue->total = todo.size();
+    queue->refresh = only_cached;
+    enhanced_queue_ = queue;
+    const QarArchive* qar = enhanced_qar_;
+    const std::filesystem::path cache = enhanced_cache_;
+    const uint64_t model = enhanced_model_;
+    const uint32_t kinds = enhanced_kinds_;
+    enhanced_worker_ = std::async(std::launch::async, [queue, todo = std::move(todo), qar, cache, model, kinds, only_cached] {
+        for (const auto& [index, path] : todo) {
+            if (queue->stop) break;
+            std::error_code ec;
+            if (only_cached && !std::filesystem::exists(EnhancedCacheFile(cache, path), ec)) { ++queue->done; continue; }
+            FtexTexture source;
+            EnhancedPrepared prepared;
+            if (LoadFtex(*qar, path, source) && (kinds & EnhancedKindBit(EnhancedTextureKindOf(path, source)))) {
+                prepared.key = EnhancedTextureKey(source, model, EnhancedTextureKindOf(path, source));
+                if (ReadEnhancedCache(EnhancedCacheFile(cache, path), prepared.key, prepared.cached)) {
+                    const FtexTexture& c = prepared.cached;
+                    const bool doubled = c.width == source.width * 2 && c.height == source.height * 2;
+                    const bool kept = c.width == source.width && c.height == source.height;
+                    if ((doubled || kept) && c.Srgb() == source.Srgb()) {
+                        prepared.index = index;
+                        prepared.path = path;
+                        std::lock_guard lock(queue->mutex);
+                        queue->ready.push_back(std::move(prepared));
                     }
                 }
-                ++queue->done;
             }
-        });
-    }
-    vkDeviceWaitIdle(ctx_->device);
+            ++queue->done;
+        }
+    });
+}
+
+void TextureManager::SetEnhancedTextures(bool enabled) { SetEnhancedTexturesFrom(enabled, false); }
+
+void TextureManager::SetEnhancedTexturesFrom(bool enabled, bool only_cached) {
+    if (!device_ || enabled == enhanced_enabled_) return;
+    StopEnhancedWorker();
+    if (enabled && enhanced_qar_ && enhanced_model_ && !enhanced_suspended_) StartEnhancedWorker(only_cached);
+    device_->WaitIdle();
     enhanced_enabled_ = enabled;
     for (const auto& [index, replacement] : enhanced_images_) UpdateTextureDescriptor(index);
     LogInfo("textures: enhanced textures {}, {} loaded replacements ({:.0f} MB of texture data)", enabled ? "on" : "off", enhanced_images_.size(),
             static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
 }
 
+void TextureManager::RefreshEnhancedTextures() {
+    if (!device_ || !enhanced_qar_ || !enhanced_model_ || enhanced_suspended_) return;
+    if (!enhanced_enabled_) { SetEnhancedTexturesFrom(true, true); return; }
+    if (enhanced_queue_) return;
+    StartEnhancedWorker(true);
+}
+
+std::vector<std::string> TextureManager::LoadedTextureStems() const {
+    std::vector<std::string> stems;
+    stems.reserve(fox_sources_.size());
+    for (const auto& [index, path] : fox_sources_) stems.push_back(path);
+    return stems;
+}
+
 void TextureManager::PumpEnhancedTextures(double budget_ms) {
-    if (!enhanced_queue_ || !ctx_) return;
+    if (!enhanced_queue_ || !device_) return;
     const auto start = std::chrono::steady_clock::now();
     std::vector<uint32_t> swapped;
     for (;;) {
@@ -718,7 +899,8 @@ void TextureManager::PumpEnhancedTextures(double budget_ms) {
             prepared = std::move(enhanced_queue_->ready.front());
             enhanced_queue_->ready.pop_front();
         }
-        if (!enhanced_images_.contains(prepared.index)) {
+        const auto source = fox_sources_.find(prepared.index);
+        if (!enhanced_images_.contains(prepared.index) && source != fox_sources_.end() && source->second == prepared.path) {
             std::vector<TextureMip> mips;
             uint64_t bytes = 0;
             for (uint32_t level = 0; level < prepared.cached.mip_count; ++level) {
@@ -730,12 +912,13 @@ void TextureManager::PumpEnhancedTextures(double budget_ms) {
                 enhanced_images_[prepared.index] = replacement;
                 enhanced_bytes_ += bytes;
                 swapped.push_back(prepared.index);
+                ++enhanced_queue_->applied;
             }
         }
         if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budget_ms) break;
     }
     if (!swapped.empty() && enhanced_enabled_) {
-        vkDeviceWaitIdle(ctx_->device);
+        device_->WaitIdle();
         for (const uint32_t index : swapped) UpdateTextureDescriptor(index);
     }
     bool finished = false;
@@ -744,13 +927,22 @@ void TextureManager::PumpEnhancedTextures(double budget_ms) {
         finished = enhanced_queue_->ready.empty() && enhanced_queue_->done.load() >= enhanced_queue_->total;
     }
     if (finished) {
+        const bool quiet = enhanced_queue_->refresh && enhanced_queue_->applied == 0;
         StopEnhancedWorker();
-        LogInfo("textures: enhanced textures ready, {} replacements ({:.0f} MB of texture data)", enhanced_images_.size(),
-                static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
+        if (!quiet) LogInfo("textures: enhanced textures ready, {} replacements ({:.0f} MB of texture data)", enhanced_images_.size(),
+                            static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
     }
 }
 
 uint32_t TextureManager::AddMaterial(const MaterialGpu& material) {
+    if (materials_.size() >= kMaxMaterials) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LogWarn("textures: material table full ({} entries), further materials use the default one", kMaxMaterials);
+        }
+        return 0;
+    }
     materials_.push_back(material);
     materials_dirty_ = true;
     return static_cast<uint32_t>(materials_.size() - 1);
@@ -768,8 +960,6 @@ void TextureManager::RedirectTexture(uint32_t texture, uint32_t shown) {
         materials_dirty_ = redirects_.erase(texture) > 0 || materials_dirty_;
         return;
     }
-    // The shared material buffer is rewritten under frames still in flight, which must not see an image whose upload is pending.
-    ReclaimUploads(0);
     redirects_[texture] = shown;
     materials_dirty_ = true;
 }
@@ -792,7 +982,7 @@ void TextureManager::FlushMaterials() {
             }
         }
     }
-    vmaFlushAllocation(ctx_->allocator, material_buffer_.allocation, 0, count * sizeof(MaterialGpu));
+    device_->FlushMapped(material_buffer_, 0, count * sizeof(MaterialGpu));
     materials_dirty_ = false;
 }
 

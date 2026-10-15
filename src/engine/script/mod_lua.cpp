@@ -14,8 +14,6 @@ extern "C" {
 namespace pt {
 namespace {
 
-// what a mod's environment gets of the base library: no load, loadstring, dofile, require, getfenv/setfenv, io or debug, so
-// a script reaches nothing beyond its own tables and the Mod API
 constexpr const char* kBaseFunctions[] = {"assert", "error",  "ipairs", "next",     "pairs",    "pcall",  "rawequal", "rawget",
                                           "rawset", "select", "tonumber", "tostring", "type", "unpack", "xpcall", "setmetatable"};
 constexpr const char* kLibraries[] = {"string", "table", "math", "coroutine"};
@@ -29,7 +27,6 @@ void OpenLibrary(lua_State* L, lua_CFunction open, const char* name) {
     lua_call(L, 1, 0);
 }
 
-// a shallow copy of the global table `name` into the table at the top of the stack, so one mod's changes stay its own
 void CopyLibrary(lua_State* L, const char* name, const char* const* only = nullptr, size_t only_count = 0) {
     lua_newtable(L);
     lua_getglobal(L, name);
@@ -91,7 +88,6 @@ void* ModLua::Allocate(void* ud, void* ptr, size_t old_size, size_t new_size) {
         self->memory_ -= old_size;
         return nullptr;
     }
-    // growth past the limit fails as a Lua memory error inside the protected call; shrinking never fails
     if (new_size > old_size && self->memory_ + (new_size - old_size) > kMemoryLimit) {
         return nullptr;
     }
@@ -122,7 +118,6 @@ void ModLua::Log(size_t mod, bool error, std::string_view text) {
     sink_(error, line);
 }
 
-// The C functions below raise Lua errors (a longjmp) only while no C++ object with a destructor is alive in them
 int ModLua::LuaLog(lua_State* L) {
     const int count = lua_gettop(L);
     for (int i = 1; i <= count; ++i) {
@@ -205,7 +200,6 @@ int ModLua::LuaStep(lua_State* L) {
     return 1;
 }
 
-// getmetatable of tables only: the strings' shared metatable would hand out the real string library
 int ModLua::LuaGetMetatable(lua_State* L) {
     if (!lua_istable(L, 1) || !lua_getmetatable(L, 1)) {
         lua_pushnil(L);
@@ -272,7 +266,6 @@ void ModLua::Fail(size_t mod, std::string_view error) {
         luaL_unref(L_, LUA_REGISTRYINDEX, state.handlers);
         state.handlers = LUA_NOREF;
     }
-    // what the failed mod held (all of it after a memory error) goes now: Lua 5.1 collects nothing when an allocation fails
     lua_gc(L_, LUA_GCCOLLECT, 0);
 }
 
@@ -300,7 +293,6 @@ bool ModLua::AddMod(std::string name, std::string_view chunk_name, std::span<con
         Fail(mod, "the mods' Lua state could not be created");
         return false;
     }
-    // precompiled chunks skip the parser's checks (Lua 5.1 has no bytecode verifier): source text only
     if (code.size() >= 4 && std::memcmp(code.data(), LUA_SIGNATURE, 4) == 0) {
         Fail(mod, std::string(chunk_name) + ": precompiled Lua is not loaded, ship the source");
         return false;

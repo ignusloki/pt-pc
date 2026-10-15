@@ -1,6 +1,6 @@
 #include "engine/render/upscale/frame_generation.h"
 
-#if defined(PT_WITH_FSR)
+#if defined(PT_WITH_FSR) && defined(_WIN32)
 
 #include <windows.h>
 
@@ -17,10 +17,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <mutex>
 #include <vector>
 
 #include "engine/core/log.h"
+#include "engine/render/renderer.h"
 #include "engine/render/upscale/upscale_platform.h"
 
 namespace pt {
@@ -180,6 +183,12 @@ public:
             debug_flags_ = FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
         }
         only_generated_ = std::getenv("PT_FG_ONLY_GENERATED") != nullptr;
+        if (const char* capture = std::getenv("PT_FG_CAPTURE")) {
+            const std::string text(capture);
+            const size_t comma = text.rfind(',');
+            capture_dir_ = text.substr(0, comma);
+            capture_count_ = comma == std::string::npos ? 32u : static_cast<uint32_t>(std::strtoul(text.c_str() + comma + 1, nullptr, 10));
+        }
     }
 
     ~FsrFrameGeneration() override { Shutdown(); }
@@ -199,8 +208,6 @@ public:
         const bool owned = ctx_.SwapchainOwner() == this;
         bool recreate = false;
         if (wanted && !owned && ctx_.swapchain.color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            // the generation swapchain presents SDR: with the native HDR output on, frame generation stays off rather than
-            // turning the HDR picture into a washed out SDR one mid-session
             if (!hdr_refused_) {
                 LogWarn("frame generation: off while the native HDR output is on (its swapchain is SDR only)");
                 hdr_refused_ = true;
@@ -242,6 +249,14 @@ public:
         if (!generating_ || !fg_context_) {
             return;
         }
+        if (p.render.width > display_.width || p.render.height > display_.height) {
+            if (!oversize_logged_) {
+                LogWarn("frame generation: render size {}x{} is larger than the context's {}x{}, no generation until the swapchain follows",
+                        p.render.width, p.render.height, display_.width, display_.height);
+                oversize_logged_ = true;
+            }
+            return;
+        }
         ffxDispatchDescFrameGenerationPrepareCameraInfo camera{};
         camera.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_CAMERAINFO;
         for (int i = 0; i < 3; ++i) {
@@ -268,6 +283,23 @@ public:
                                 FFX_API_RESOURCE_USAGE_DEPTHTARGET);
         d.motionVectors = ImageResource(p.motion.image, p.motion.format, p.motion.extent, FFX_API_RESOURCE_STATE_COMPUTE_READ,
                                         FFX_API_RESOURCE_USAGE_READ_ONLY);
+        if (capture_armed_ && captured_motion_.size() < capture_count_ / 2 + 1) {
+            vk::Buffer buffer;
+            const VkExtent2D e{p.motion.extent.width, p.motion.extent.height};
+            if (ctx_.CreateBuffer(buffer, VkDeviceSize(e.width) * e.height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+                constexpr VkPipelineStageFlags2 all = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                constexpr VkAccessFlags2 rw = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                vk::ImageBarrier(p.cmd, p.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, all, rw,
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {e.width, e.height, 1};
+                vkCmdCopyImageToBuffer(p.cmd, p.motion.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &region);
+                vk::ImageBarrier(p.cmd, p.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, rw,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                captured_motion_.push_back({buffer, e.width, e.height, false, frame_id_, 0.0});
+            }
+        }
         const ffxReturnCode_t result = fn_.Dispatch(&fg_context_, &d.header);
         if (result != FFX_API_RETURN_OK) {
             if (!error_logged_) {
@@ -289,14 +321,26 @@ public:
         }
         const bool generate = generating_ && prepared_;
         const vk::Image* hudless = generate && image_index < hudless_.size() ? &hudless_[image_index] : nullptr;
+        const bool layer_mode = hudless && image_index < layers_.size();
+        if (layer_registered_) {
+            RegisterUiResource(nullptr);
+        }
         ffxConfigureDescFrameGeneration c{};
         c.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
         c.swapChain = reinterpret_cast<void*>(ctx_.swapchain.handle);
         c.frameGenerationCallback = &FsrFrameGeneration::Generate;
         c.frameGenerationCallbackUserContext = this;
+        if (!capture_dir_.empty()) {
+            if (!capture_armed_ && frame_id_ % 30 == 0 && std::filesystem::exists(std::filesystem::path(capture_dir_) / "go")) {
+                capture_armed_ = true;
+                LogInfo("frame generation: capturing {} presented frames to {}", capture_count_, capture_dir_);
+            }
+            c.presentCallback = &FsrFrameGeneration::CapturePresent;
+            c.presentCallbackUserContext = this;
+        }
         c.frameGenerationEnabled = generate;
         c.allowAsyncWorkloads = false;
-        if (hudless) {
+        if (hudless && !layer_mode) {
             c.HUDLessColor = ImageResource(hudless->image, hudless->format, {hudless->extent.width, hudless->extent.height},
                                            FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ, FFX_API_RESOURCE_USAGE_RENDERTARGET);
         }
@@ -322,6 +366,16 @@ public:
         return hudless;
     }
 
+    const vk::Image* UiLayer(uint32_t image_index) override {
+        if (!generating_ || image_index >= layers_.size()) {
+            return nullptr;
+        }
+        RegisterUiResource(&layers_[image_index]);
+        return &layers_[image_index];
+    }
+
+    bool UiLayerOverRendered() const override { return true; }
+
     void Shutdown() override {
         if (!ctx_.device) {
             return;
@@ -330,6 +384,7 @@ public:
         if (ctx_.swapchain_hooks == this) {
             ctx_.swapchain_hooks = nullptr;
         }
+        WriteCapture();
         if (ctx_.SwapchainOwner() == this) {
             vkDeviceWaitIdle(ctx_.device);
             ctx_.DestroySwapchain();
@@ -396,6 +451,9 @@ public:
 
     void DestroySwapchain(VkSwapchainKHR handle) override {
         if (swapchain_context_ && replace_.pOutDestroySwapchainFFXAPI) {
+            if (layer_registered_) {
+                RegisterUiResource(nullptr);
+            }
             WaitForPresents();
             swapchain_alive_ = false;
             replace_.pOutDestroySwapchainFFXAPI(ctx_.device, handle, nullptr, swapchain_context_);
@@ -459,6 +517,97 @@ private:
         }
     }
 
+    static VkImageLayout CaptureLayout(uint32_t state) {
+        switch (state) {
+            case FFX_API_RESOURCE_STATE_COMPUTE_READ:
+            case FFX_API_RESOURCE_STATE_PIXEL_READ:
+            case FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ: return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            case FFX_API_RESOURCE_STATE_COPY_SRC: return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            case FFX_API_RESOURCE_STATE_COPY_DEST: return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            case FFX_API_RESOURCE_STATE_PRESENT: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            case FFX_API_RESOURCE_STATE_RENDER_TARGET: return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            default: return VK_IMAGE_LAYOUT_GENERAL;
+        }
+    }
+
+    static ffxReturnCode_t CapturePresent(ffxCallbackDescFrameGenerationPresent* params, void* user) {
+        auto* self = static_cast<FsrFrameGeneration*>(user);
+        auto cmd = static_cast<VkCommandBuffer>(params->commandList);
+        auto source = static_cast<VkImage>(params->currentBackBuffer.resource);
+        auto target = static_cast<VkImage>(params->outputSwapChainBuffer.resource);
+        const VkImageLayout source_layout = CaptureLayout(params->currentBackBuffer.state);
+        const VkImageLayout target_layout = CaptureLayout(params->outputSwapChainBuffer.state);
+        const uint32_t w = params->currentBackBuffer.description.width;
+        const uint32_t h = params->currentBackBuffer.description.height;
+        constexpr VkPipelineStageFlags2 all = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        constexpr VkAccessFlags2 rw = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        vk::ImageBarrier(cmd, source, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, source_layout, all, rw, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, target_layout, all, rw, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy copy{};
+        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.dstSubresource = copy.srcSubresource;
+        copy.extent = {w, h, 1};
+        vkCmdCopyImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        if (self->capture_armed_ && self->captured_.size() < self->capture_count_) {
+            vk::Buffer buffer;
+            if (self->ctx_.CreateBuffer(buffer, VkDeviceSize(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {w, h, 1};
+                vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &region);
+                self->captured_.push_back({buffer, w, h, params->isGeneratedFrame, params->frameID,
+                                           std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count()});
+                auto ui = static_cast<VkImage>(params->currentUI.resource);
+                vk::Buffer ui_buffer;
+                if (ui && self->ctx_.CreateBuffer(ui_buffer, VkDeviceSize(w) * h * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+                    const VkImageLayout ui_layout = CaptureLayout(params->currentUI.state);
+                    vk::ImageBarrier(cmd, ui, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, ui_layout, all, rw, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    vkCmdCopyImageToBuffer(cmd, ui, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ui_buffer.buffer, 1, &region);
+                    vk::ImageBarrier(cmd, ui, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, rw, ui_layout);
+                    self->captured_ui_.push_back({ui_buffer, w, h, params->isGeneratedFrame, self->captured_.size() - 1, 0.0});
+                }
+            }
+        }
+        vk::ImageBarrier(cmd, source, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, rw, source_layout);
+        vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, all, rw, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, all, rw, target_layout);
+        return FFX_API_RETURN_OK;
+    }
+
+    void WriteCapture() {
+        if (captured_.empty() && captured_motion_.empty() && captured_ui_.empty()) {
+            return;
+        }
+        WaitForPresents();
+        vkDeviceWaitIdle(ctx_.device);
+        std::ofstream index(std::filesystem::path(capture_dir_) / "frames.txt");
+        for (size_t i = 0; i < captured_.size(); ++i) {
+            Captured& c = captured_[i];
+            vmaInvalidateAllocation(ctx_.allocator, c.buffer.allocation, 0, VK_WHOLE_SIZE);
+            const std::filesystem::path path = std::filesystem::path(capture_dir_) / std::format("present-{:04d}.bgra", i);
+            std::ofstream out(path, std::ios::binary);
+            out.write(static_cast<const char*>(c.buffer.mapped), static_cast<std::streamsize>(size_t(c.width) * c.height * 4));
+            index << i << " " << c.width << " " << c.height << " " << (c.generated ? 1 : 0) << " " << c.frame << " " << c.ms << "\n";
+            ctx_.DestroyBuffer(c.buffer);
+        }
+        LogInfo("frame generation: {} captured frames written to {}", captured_.size(), capture_dir_);
+        captured_.clear();
+        for (Captured& c : captured_motion_) {
+            vmaInvalidateAllocation(ctx_.allocator, c.buffer.allocation, 0, VK_WHOLE_SIZE);
+            std::ofstream out(std::filesystem::path(capture_dir_) / std::format("motion-{:06d}-{}x{}.rg16f", c.frame, c.width, c.height),
+                              std::ios::binary);
+            out.write(static_cast<const char*>(c.buffer.mapped), static_cast<std::streamsize>(size_t(c.width) * c.height * 4));
+            ctx_.DestroyBuffer(c.buffer);
+        }
+        captured_motion_.clear();
+        for (Captured& c : captured_ui_) {
+            vmaInvalidateAllocation(ctx_.allocator, c.buffer.allocation, 0, VK_WHOLE_SIZE);
+            std::ofstream out(std::filesystem::path(capture_dir_) / std::format("ui-{:04d}.rgba16f", c.frame), std::ios::binary);
+            out.write(static_cast<const char*>(c.buffer.mapped), static_cast<std::streamsize>(size_t(c.width) * c.height * 8));
+            ctx_.DestroyBuffer(c.buffer);
+        }
+        captured_ui_.clear();
+    }
+
     static ffxReturnCode_t Generate(ffxDispatchDescFrameGeneration* params, void* user) {
         auto* self = static_cast<FsrFrameGeneration*>(user);
         if (self->reset_) {
@@ -470,7 +619,6 @@ private:
     }
 
     bool Check(std::string& reason) {
-        // the hardware first, so a GPU that could never run it says so whatever the window (upscale.cpp, FsrFrameGenHardware)
         /* GPU check before the window check, so a GPU that can never run it says so even in a headless run. */
         if (!FsrFrameGenHardware(ctx_.physical, ctx_.properties, reason)) {
             return false;
@@ -537,12 +685,15 @@ private:
         desc.displaySize = {display_.width, display_.height};
         desc.maxRenderSize = desc.displaySize;
         desc.backBufferFormat = ffxApiGetSurfaceFormatVK(format_);
+        const auto create_start = std::chrono::steady_clock::now();
         const ffxReturnCode_t result = fn_.CreateContext(&fg_context_, &desc.header, nullptr);
         if (result != FFX_API_RETURN_OK) {
             LogError("frame generation: context creation failed ({})", result);
             fg_context_ = nullptr;
             return;
         }
+        LogInfo("frame generation: context for {}x{} created in {:.0f} ms", display_.width, display_.height,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - create_start).count());
         hudless_.resize(ctx_.swapchain.images.size());
         for (vk::Image& image : hudless_) {
             if (!ctx_.CreateImage(image, format_, {display_.width, display_.height, 1},
@@ -552,8 +703,27 @@ private:
                 return;
             }
         }
+        static const bool layer_wanted = [] {
+            const char* e = std::getenv("PT_FG_UI_LAYER");
+            return !e || std::atoi(e) != 0;
+        }();
+        if (layer_wanted) {
+            layers_.resize(ctx_.swapchain.images.size());
+            for (vk::Image& image : layers_) {
+                if (!ctx_.CreateImage(image, Renderer::kUiLayerFormat, {display_.width, display_.height, 1},
+                                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+                    LogWarn("frame generation: UI layer target creation failed, the UI is taken from the HUD-less difference");
+                    for (vk::Image& made : layers_) {
+                        ctx_.DestroyImage(made);
+                    }
+                    layers_.clear();
+                    break;
+                }
+            }
+        }
         reset_ = true;
-        LogInfo("frame generation: FSR 3 frame generation for {}x{}, {} hud-less targets", display_.width, display_.height, hudless_.size());
+        LogInfo("frame generation: FSR 3 frame generation for {}x{}, {} hud-less targets{}", display_.width, display_.height, hudless_.size(),
+                layers_.empty() ? "" : ", film grain and UI laid over every frame");
     }
 
     void DestroyGenerationContext() {
@@ -569,6 +739,33 @@ private:
             ctx_.DestroyImage(image);
         }
         hudless_.clear();
+        if (layer_registered_) {
+            RegisterUiResource(nullptr);
+        }
+        for (vk::Image& image : layers_) {
+            ctx_.DestroyImage(image);
+        }
+        layers_.clear();
+    }
+
+    void RegisterUiResource(const vk::Image* image) {
+        if (!swapchain_context_ || !swapchain_alive_) {
+            layer_registered_ = false;
+            return;
+        }
+        ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceVK ui{};
+        ui.header.type = FFX_API_CONFIGURE_DESC_TYPE_FGSWAPCHAIN_REGISTERUIRESOURCE_VK;
+        if (image) {
+            ui.uiResource = ImageResource(image->image, image->format, {image->extent.width, image->extent.height},
+                                          FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY);
+            ui.flags = FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_USE_PREMUL_ALPHA | FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING;
+        }
+        const ffxReturnCode_t result = fn_.Configure(&swapchain_context_, &ui.header);
+        if (result != FFX_API_RETURN_OK && !ui_error_logged_) {
+            LogError("frame generation: UI resource registration failed ({})", result);
+            ui_error_logged_ = true;
+        }
+        layer_registered_ = image != nullptr && result == FFX_API_RETURN_OK;
     }
 
     void DestroyContexts() {
@@ -619,6 +816,9 @@ private:
     ffxContext fg_context_ = nullptr;
     ffxQueryDescSwapchainReplacementFunctionsVK replace_{};
     std::vector<vk::Image> hudless_;
+    std::vector<vk::Image> layers_;
+    bool layer_registered_ = false;
+    bool ui_error_logged_ = false;
     VkExtent2D display_{};
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     uint64_t frame_id_ = 0;
@@ -637,9 +837,24 @@ private:
     bool prepared_ = false;
     bool reset_ = true;
     bool error_logged_ = false;
+    bool oversize_logged_ = false;
     bool swapchain_alive_ = false;
     Clock::time_point last_present_{};
     std::vector<float> intervals_;
+    struct Captured {
+        vk::Buffer buffer;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool generated = false;
+        uint64_t frame = 0;
+        double ms = 0.0;
+    };
+    std::string capture_dir_;
+    uint32_t capture_count_ = 0;
+    bool capture_armed_ = false;
+    std::vector<Captured> captured_;
+    std::vector<Captured> captured_motion_;
+    std::vector<Captured> captured_ui_;
 };
 
 VKAPI_ATTR VkResult VKAPI_CALL WaitIdleAfterPresents(VkDevice device) {

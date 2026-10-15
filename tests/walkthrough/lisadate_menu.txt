@@ -1,0 +1,26 @@
+# Coffee with Lisa and the pause menu: Escape opens it over the date (the date waits), Escape closes it and the date goes on;
+# its "Leave the date" line (H asks, H again leaves) ends the date with no ending and the player is back in the game
+slisadate
+swait 420
+sktap Escape
+swait 90
+sexpect menu 1
+sexpect lisadate 1
+sshot {shots}/menu_over_date.png
+swait 2
+sktap Escape
+swait 60
+sexpect menu 0
+slisachoice 1
+swait 30
+sktap Escape
+swait 90
+sexpect menu 1
+sktap H
+swait 20
+sshot {shots}/menu_leave_confirm.png
+swait 2
+sktap H
+swait 200
+sexpect lisadate 0
+sexpect menu 0

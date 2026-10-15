@@ -1,6 +1,6 @@
-# The graphics page of the PC settings with a pad: the Graphics row (the last of the left column) opens it with cross, the
-# d-pad moves over its rows (ray-traced shadows, contact shadows, ambient occlusion, anisotropic filtering) and changes
-# anisotropic filtering, circle returns to the PC settings page (cursor on its first row) and circle again to the option screen.
+# The Graphics tab of the PC settings with a pad: R1 twice from the first tab (Display, Upscaling, Graphics) shows it, the d-pad
+# steps from the preset to the first lighting row, and the rows after it are reached by label; right and left change reflections and
+# anisotropic filtering, circle returns to the option screen.
 # pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/pc_graphics.txt
 10 pattach 0 ps4
 20 sstep 15
@@ -13,49 +13,46 @@
 20 swait 40
 20 sexpect page 1
 20 sexpect pcrow pc_display_mode
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 sexpect pcrow pc_graphics
-20 stap 0 cross
-20 swait 4
+20 stap 0 r1
+20 swait 10
+20 stap 0 r1
+20 swait 10
+20 sexpect pctab pc_graphics 0
 20 sexpect page 1
-20 sexpect pcrow pc_rt_shadows
-20 sexpect pcvalue pc_rt_shadows 0
+20 sexpect pcrow pc_graphics_preset
+20 sexpect pcvalue pc_graphics_preset 1
 20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_shadows
+20 sexpect pcvalue pc_shadows 3
+20 sui pcfocus pc_rt_contact
 20 swait 4
 20 sexpect pcrow pc_rt_contact
 20 sexpect pcvalue pc_rt_contact 0
-20 stap 0 down
+20 sui pcfocus pc_rt_ao
 20 swait 4
 20 sexpect pcrow pc_rt_ao
-20 sexpect pcvalue pc_rt_ao 0
-20 stap 0 down
+20 sexpect pcvalue pc_rt_ao 1
+20 sui pcfocus pc_reflections
 20 swait 4
-20 sexpect pcrow pc_rt_reflections
-20 sexpect pcvalue pc_rt_reflections 0
+20 sexpect pcrow pc_reflections
+20 sexpect pcvalue pc_reflections 1
 20 stap 0 right
 20 swait 4
-20 sexpect pcvalue pc_rt_reflections 1
+20 sexpect pcvalue pc_reflections 2
 20 stap 0 left
 20 swait 4
-20 sexpect pcvalue pc_rt_reflections 0
-20 stap 0 down
+20 sexpect pcvalue pc_reflections 1
+20 sui pcfocus pc_ray_quality
+20 swait 4
+20 sexpect pcrow pc_ray_quality
+20 sexpect pcvalue pc_ray_quality 1
+20 sexpect pcenabled pc_ray_quality 0
+20 sui pcfocus pc_enhanced_textures
+20 swait 4
+20 sexpect pcrow pc_enhanced_textures
+20 sexpect pcvalue pc_enhanced_textures 0
+20 sui pcfocus pc_anisotropy
 20 swait 4
 20 sexpect pcrow pc_anisotropy
 20 sexpect pcvalue pc_anisotropy 0
@@ -80,14 +77,10 @@
 20 stap 0 left
 20 swait 4
 20 sexpect pcvalue pc_anisotropy 0
-20 stap 0 down
+20 sui pcfocus pc_texture_detail
 20 swait 4
-20 sexpect pcrow pc_enhanced_textures
-20 sexpect pcvalue pc_enhanced_textures 0
-20 stap 0 circle
-20 swait 10
-20 sexpect page 1
-20 sexpect pcrow pc_display_mode
+20 sexpect pcrow pc_texture_detail
+20 sexpect pcvalue pc_texture_detail 1
 20 stap 0 circle
 20 swait 40
 20 sexpect page 0

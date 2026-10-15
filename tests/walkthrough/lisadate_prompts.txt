@@ -1,0 +1,39 @@
+# Coffee with Lisa's button prompts for the device in use (lisadate_prompts_*): a line (the accept button by the next line's
+# heart, Auto and Skip, the menu and, on a pad, the hold to leave), the choices (up and down, the accept button), the hold to leave
+# bar (Circle held 1 s on a pad), the selfie's panel (its rows' buttons, the accept and Square buttons on Take the photo)
+slisadate
+swait 420
+stap 0 down
+swait 140
+sshot {shots}/prompts_1_line.png
+swait 2
+slisaadvance
+swait 200
+sshot {shots}/prompts_2_choice.png
+swait 2
+sbutton 0 circle 1
+swait 60
+sshot {shots}/prompts_3_leave_hold.png
+swait 2
+sbutton 0 circle 0
+swait 10
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 40
+stap 0 down
+swait 20
+sshot {shots}/prompts_4_selfie_panel.png
+swait 2
+slisawait
+sexpect lisadate 0

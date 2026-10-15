@@ -1,4 +1,3 @@
-// The option defaults before a save is read (Options_StaticInit 0x91D7B0, save_data.cpp DefaultOptionsForLocale).
 #include <cstdio>
 
 #include "game/save_data.h"
@@ -33,7 +32,6 @@ int main() {
     expect("cs", true, 12);
     expect("pl", true, 13);
     expect("pl-PL", true, 13);
-    // a language the original does not know: English with the subtitles left on
     expect("ko-KR", true, 0);
     expect("zh-TW", true, 0);
     expect("zh-Hant-HK", true, 0);

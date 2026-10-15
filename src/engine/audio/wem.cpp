@@ -317,11 +317,33 @@ std::shared_ptr<Media> Media::Create(uint32_t id, std::shared_ptr<const std::vec
     return media;
 }
 
+std::shared_ptr<Media> Media::CreateGenerated(uint32_t channels, uint32_t sample_rate, uint64_t frames,
+                                              std::function<std::unique_ptr<MediaReader>()> open, uint32_t channel_mask) {
+    if (channels == 0 || sample_rate == 0 || !open) {
+        return nullptr;
+    }
+    std::shared_ptr<Media> media(new Media());
+    media->info_.codec_tag = wem_codec::Pcm;
+    media->info_.channels = static_cast<uint16_t>(channels);
+    media->info_.sample_rate = sample_rate;
+    media->info_.bits_per_sample = 16;
+    media->info_.channel_mask = channel_mask ? channel_mask : DefaultChannelMask(channels);
+    media->frames_ = frames;
+    media->open_ = std::move(open);
+    return media;
+}
+
 std::span<const uint8_t> Media::Blob() const {
+    if (!storage_) {
+        return {};
+    }
     return std::span<const uint8_t>(storage_->data() + offset_, size_);
 }
 
 std::unique_ptr<MediaReader> Media::OpenReader() const {
+    if (open_) {
+        return open_();
+    }
     const auto blob = Blob();
     switch (info_.codec_tag) {
         case wem_codec::Pcm:
@@ -337,6 +359,9 @@ std::unique_ptr<MediaReader> Media::OpenReader() const {
 }
 
 std::vector<float> Media::DecodeAll() const {
+    if (open_) {
+        return {};
+    }
     std::vector<float> out(static_cast<size_t>(frames_) * info_.channels);
     auto reader = OpenReader();
     if (!reader) {
@@ -356,6 +381,9 @@ std::vector<float> Media::DecodeAll() const {
 }
 
 const char* Media::CodecName() const {
+    if (open_) {
+        return "generated";
+    }
     switch (info_.codec_tag) {
         case wem_codec::Pcm:
         case wem_codec::PcmExtensible: return "PCM";

@@ -36,13 +36,15 @@ include(cmake/Dependencies.cmake)
 
 file(GLOB_RECURSE PT_ENGINE_SOURCES CONFIGURE_DEPENDS src/engine/*.cpp src/engine/*.h)
 file(GLOB_RECURSE PT_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp src/game/*.h src/decomp/*.cpp src/decomp/*.h)
+# the D3D12 renderer backend is its own library, Windows only (cmake/D3D12Backend.cmake)
+list(FILTER PT_ENGINE_SOURCES EXCLUDE REGEX "src/engine/render/d3d12/backend/")
 
 # The release version and metadata endpoint shared by the game and installers (docs/updates.md).
 # GitHub supplies release metadata and platform asset URLs; no separate JSON release asset is needed.
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.7")
+set(PT_VERSION "1.0.8")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()
@@ -73,13 +75,15 @@ else()
   target_compile_definitions(pt_engine PUBLIC PT_GAMEPLUS=0)
 endif()
 target_include_directories(pt_engine PRIVATE "${CMAKE_BINARY_DIR}/generated")
+# the first start without game files (src/game/first_run.cpp) uses the setup's own package checks (installer/Native/setup_core.h)
+target_include_directories(pt_engine PRIVATE installer/Native)
 add_dependencies(pt_engine pt_version)
 target_include_directories(pt_engine PUBLIC src)
 target_compile_definitions(pt_engine PUBLIC VK_NO_PROTOTYPES NOMINMAX WIN32_LEAN_AND_MEAN GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
 target_link_libraries(pt_engine PUBLIC pt_thirdparty SDL3::SDL3-static)
 if(WIN32)
   # dbghelp: the crash report (src/engine/core/crash_report.cpp) writes minidumps from pt_engine, so every test links it
-  target_link_libraries(pt_engine PUBLIC gdi32 usp10 winhttp dbghelp ws2_32)
+  target_link_libraries(pt_engine PUBLIC gdi32 usp10 winhttp dbghelp ws2_32 bcrypt)
 else()
   # Linux: the platform layer loads libcurl at run time (src/engine/platform/http.cpp); fonts are shaped with HarfBuzz
   target_link_libraries(pt_engine PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
@@ -91,16 +95,23 @@ endif()
 if(WIN32)
   enable_language(RC)
   configure_file(assets/pt.rc.in "${CMAKE_BINARY_DIR}/pt.rc" @ONLY)
-  # the icon is read by the resource compiler, which the build does not track: a new pt.ico left the old one in pt.exe
-  set_source_files_properties("${CMAKE_BINARY_DIR}/pt.rc" PROPERTIES OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/pt.ico")
+  # the icon and the manifest are read by the resource compiler, which the build does not track: a new pt.ico left the old one
+  # in pt.exe. The manifest (UTF-8 ANSI code page, long paths) goes in as a resource; the linker must not make its own.
+  set_source_files_properties("${CMAKE_BINARY_DIR}/pt.rc" PROPERTIES OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/pt.ico;${CMAKE_SOURCE_DIR}/assets/pt.manifest")
 endif()
 add_executable(pt WIN32 src/main.cpp)
 if(WIN32)
   target_sources(pt PRIVATE "${CMAKE_BINARY_DIR}/pt.rc")
+  target_link_options(pt PRIVATE /MANIFEST:NO)
 endif()
 target_link_libraries(pt PRIVATE pt_engine)
 if(WIN32)
   target_link_libraries(pt PRIVATE dbghelp ole32 uuid)
+  # DLSS 5 on RTX 20, 30 and 40 (docs/upscaling.md): the community route puts a ReShade dxgi.dll next to pt.exe. dxgi.dll is
+  # delay loaded so the game chooses at startup which one enters the process (nr_unlock::LoadDxgiForRoute) - ReShade only while
+  # neural rendering is on, Windows' own otherwise - instead of the loader binding the proxy before main runs.
+  target_link_options(pt PRIVATE /DELAYLOAD:dxgi.dll)
+  target_link_libraries(pt PRIVATE delayimp)
 endif()
 # PT_BUILD_ID: the commit the executable is built from (plus "-dirty" for local changes), in the crash dump names and pt.log
 add_custom_target(pt_build_id
@@ -114,6 +125,7 @@ add_dependencies(pt pt_build_id)
 add_executable(pt_release WIN32 EXCLUDE_FROM_ALL src/main.cpp)
 if(WIN32)
   target_sources(pt_release PRIVATE "${CMAKE_BINARY_DIR}/pt.rc")
+  target_link_options(pt_release PRIVATE /MANIFEST:NO)
 endif()
 target_compile_definitions(pt_release PRIVATE PT_RELEASE_LOCKS=1)
 target_include_directories(pt_release PRIVATE "${CMAKE_BINARY_DIR}/generated")
@@ -121,6 +133,8 @@ add_dependencies(pt_release pt_build_id)
 target_link_libraries(pt_release PRIVATE pt_engine)
 if(WIN32)
   target_link_libraries(pt_release PRIVATE dbghelp ole32 uuid)
+  target_link_options(pt_release PRIVATE /DELAYLOAD:dxgi.dll)
+  target_link_libraries(pt_release PRIVATE delayimp)
 endif()
 add_executable(pt_gouge_input_test tests/gouge_input_test.cpp)
 target_link_libraries(pt_gouge_input_test PRIVATE pt_engine)
@@ -148,21 +162,42 @@ if(WIN32 AND EXISTS "${PT_SETUP_PAYLOAD}")
   configure_file(installer/Native/setup.rc.in "${CMAKE_BINARY_DIR}/private-setup.rc" @ONLY)
   set_source_files_properties("${CMAKE_BINARY_DIR}/private-setup.rc" PROPERTIES OBJECT_DEPENDS "${PT_SETUP_PAYLOAD};${PT_SETUP_MANIFEST};${CMAKE_SOURCE_DIR}/assets/pt.ico")
   add_executable(pt_setup WIN32 EXCLUDE_FROM_ALL installer/Native/setup.cpp src/engine/platform/http.cpp
-    src/engine/platform/update_check.cpp "${CMAKE_BINARY_DIR}/private-setup.rc")
+    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp "${CMAKE_BINARY_DIR}/private-setup.rc")
   target_include_directories(pt_setup PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
   add_dependencies(pt_setup pt_version)
   target_compile_definitions(pt_setup PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
-  target_link_libraries(pt_setup PRIVATE zlibstatic winhttp comctl32 comdlg32 shell32 ole32 uuid bcrypt gdiplus)
+  target_link_libraries(pt_setup PRIVATE zlibstatic winhttp comctl32 comdlg32 shell32 ole32 oleaut32 uuid bcrypt gdiplus)
   target_link_options(pt_setup PRIVATE /MANIFEST:NO)
   if(MSVC)
     target_compile_options(pt_setup PRIVATE /utf-8 /EHsc)
     target_link_options(pt_setup PRIVATE /OPT:REF /OPT:ICF)
   endif()
 endif()
+if(WIN32)
+  # the in-game update's updater (docs/updates.md): the setup's program without its payload, shipped next to the game as
+  # pt-updater.exe (tools/package.py); built with the game so every build folder has it
+  enable_language(RC)
+  set(PT_SETUP_MANIFEST "${CMAKE_SOURCE_DIR}/installer/Native/setup.manifest")
+  configure_file(installer/Native/updater.rc.in "${CMAKE_BINARY_DIR}/private-updater.rc" @ONLY)
+  set_source_files_properties("${CMAKE_BINARY_DIR}/private-updater.rc" PROPERTIES OBJECT_DEPENDS "${PT_SETUP_MANIFEST};${CMAKE_SOURCE_DIR}/assets/pt.ico")
+  add_executable(pt_updater WIN32 installer/Native/setup.cpp src/engine/platform/http.cpp src/engine/platform/update_check.cpp
+    src/engine/platform/ed25519.cpp src/engine/platform/os.cpp "${CMAKE_BINARY_DIR}/private-updater.rc")
+  set_target_properties(pt_updater PROPERTIES OUTPUT_NAME "pt-updater")
+  target_include_directories(pt_updater PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
+  add_dependencies(pt_updater pt_version)
+  target_compile_definitions(pt_updater PRIVATE PT_UPDATER_ONLY NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+  target_link_libraries(pt_updater PRIVATE zlibstatic winhttp comctl32 comdlg32 shell32 ole32 oleaut32 uuid bcrypt gdiplus)
+  target_link_options(pt_updater PRIVATE /MANIFEST:NO)
+  if(MSVC)
+    target_compile_options(pt_updater PRIVATE /utf-8 /EHsc)
+    target_link_options(pt_updater PRIVATE /OPT:REF /OPT:ICF)
+  endif()
+  add_dependencies(pt pt_updater)
+endif()
 if(UNIX AND NOT APPLE)
   # the Linux installer (installer/Native/setup_linux.cpp); tools/linux/attach_payload.py appends the payload after the build
   add_executable(pt_setup_linux EXCLUDE_FROM_ALL installer/Native/setup_linux.cpp src/engine/platform/http.cpp
-    src/engine/platform/update_check.cpp src/engine/platform/os.cpp)
+    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp)
   target_include_directories(pt_setup_linux PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
   add_dependencies(pt_setup_linux pt_version)
   target_link_libraries(pt_setup_linux PRIVATE zlibstatic ${CMAKE_DL_LIBS} Threads::Threads)
@@ -172,6 +207,7 @@ if(MSVC)
   target_compile_options(pt_release PRIVATE /utf-8 /EHsc)
 endif()
 
+include(cmake/D3D12.cmake)
 include(cmake/Upscalers.cmake)
 include(cmake/EnhancedTextures.cmake)
 include(cmake/OpenXR.cmake)
@@ -211,6 +247,18 @@ endforeach()
 add_custom_target(pt_shaders ALL DEPENDS ${PT_SPIRV_OUTPUTS})
 add_dependencies(pt pt_shaders)
 add_dependencies(pt_release pt_shaders)
+if(WIN32)
+  # the same shaders as DXIL for the D3D12 backend (cmake/D3D12Shaders.cmake); the Vulkan SPIR-V above is unchanged; the D3D12 backend loads these
+  option(PT_D3D12_SHADERS "Translate the shaders to DXIL (GLSL -> SPIR-V -> SPIRV-Cross -> DXC) for the D3D12 backend" ON)
+  if(PT_D3D12_SHADERS)
+    include(cmake/D3D12Shaders.cmake)
+  endif()
+  # the D3D12 renderer backend and its test (docs/rhi.md, stage b); the game does not link it yet
+  option(PT_D3D12_BACKEND "Build the Direct3D 12 renderer backend library and its test" ON)
+  if(PT_D3D12_BACKEND)
+    include(cmake/D3D12Backend.cmake)
+  endif()
+endif()
 target_compile_definitions(pt_engine PUBLIC PT_SHADER_DIR="${PT_SPIRV_DIR}" PT_VOICE_MODEL_DIR="${CMAKE_BINARY_DIR}/voice")
 target_include_directories(pt_engine PRIVATE ${PT_WHISPER_INCLUDE_DIRS} "${whisper_SOURCE_DIR}/ggml/src")
 # whisper.cpp, ggml and its CPU variants in voice/ for every game target (tools/package.py ships them with any of these)
@@ -228,6 +276,8 @@ add_executable(pt_vfx_test tests/vfx_test.cpp)
 target_link_libraries(pt_vfx_test PRIVATE pt_engine)
 
 add_executable(pt_collision_test tests/collision_test.cpp)
+add_executable(pt_parallel_for_test tests/parallel_for_test.cpp)
+target_link_libraries(pt_parallel_for_test PRIVATE pt_engine)
 add_executable(pt_localization_test tests/localization_test.cpp)
 target_link_libraries(pt_localization_test PRIVATE pt_engine)
 if(MSVC)
@@ -240,6 +290,10 @@ target_link_libraries(pt_texture_cache_test PRIVATE pt_engine)
 
 add_executable(pt_texture_job_test tests/texture_job_test.cpp)
 target_link_libraries(pt_texture_job_test PRIVATE pt_engine)
+
+# the enhanced texture generation timed on its own: pt_texture_bench <game> <runtime> <new-cache-dir> [limit] [kinds] [max-output]
+add_executable(pt_texture_bench tests/texture_bench.cpp)
+target_link_libraries(pt_texture_bench PRIVATE pt_engine)
 
 set(PT_TEXTURE_DESCRIPTOR_SHADER "${CMAKE_BINARY_DIR}/tests/texture_descriptor.comp.spv")
 add_custom_command(OUTPUT "${PT_TEXTURE_DESCRIPTOR_SHADER}"
@@ -300,12 +354,32 @@ target_link_libraries(pt_blur_sway_test PRIVATE pt_engine)
 
 add_executable(pt_unicode_paths_test tests/unicode_paths_test.cpp)
 target_link_libraries(pt_unicode_paths_test PRIVATE pt_engine)
+# the installer's ASCII file name rules (setup_core.h) are checked under a Turkish locale too
+target_include_directories(pt_unicode_paths_test PRIVATE installer/Native)
+if(WIN32)
+  target_sources(pt_unicode_paths_test PRIVATE tests/unicode_paths_test.rc)
+  set_source_files_properties(tests/unicode_paths_test.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/tests/unicode_paths_test.manifest")
+  target_link_options(pt_unicode_paths_test PRIVATE /MANIFEST:NO)
+  target_link_libraries(pt_unicode_paths_test PRIVATE shell32)
+endif()
+if(MSVC)
+  target_compile_options(pt_unicode_paths_test PRIVATE /utf-8)
+endif()
 
 add_executable(pt_user_data_test tests/user_data_test.cpp)
 target_link_libraries(pt_user_data_test PRIVATE pt_engine)
+add_executable(pt_crash_upload_test tests/crash_upload_test.cpp)
+target_link_libraries(pt_crash_upload_test PRIVATE pt_engine)
 
 add_executable(pt_settings_roundtrip_test tests/settings_roundtrip_test.cpp)
 target_link_libraries(pt_settings_roundtrip_test PRIVATE pt_engine)
+
+# the Rendering API choice: parsing, the Vulkan fallback, pt.ini keys, the texts in 14 languages (engine/platform/rendering_api.h)
+add_executable(pt_rendering_api_test tests/rendering_api_test.cpp)
+target_link_libraries(pt_rendering_api_test PRIVATE pt_engine)
+if(MSVC)
+  target_compile_options(pt_rendering_api_test PRIVATE /utf-8)
+endif()
 
 # the published body yaw that PlayerInputDir (0x915850) reads
 add_executable(pt_player_publish_test tests/player_publish_test.cpp)
@@ -323,8 +397,50 @@ target_link_libraries(pt_vr_view_test PRIVATE pt_engine)
 add_executable(pt_upscaler_gpu_test tests/upscaler_gpu_test.cpp)
 target_link_libraries(pt_upscaler_gpu_test PRIVATE pt_engine)
 
+add_executable(pt_nr_unlock_test tests/nr_unlock_test.cpp)
+target_link_libraries(pt_nr_unlock_test PRIVATE pt_engine)
+if(WIN32)
+  target_link_libraries(pt_nr_unlock_test PRIVATE winhttp)
+endif()
+
+# what the monitor shows frame by frame (Desktop Duplication), for the frame generation checks (tools/fg_screen_check.py)
+if(WIN32)
+  add_executable(pt_screen_capture tests/screen_capture.cpp)
+  target_link_libraries(pt_screen_capture PRIVATE d3d11 dxgi)
+  # ReShade's update check kept off the network by a process-scoped WinINet proxy (docs/upscaling.md)
+  add_executable(pt_wininet_block_test tests/wininet_block_test.cpp)
+  target_link_libraries(pt_wininet_block_test PRIVATE wininet)
+endif()
+
+add_executable(pt_fg_unlock_test tests/fg_unlock_test.cpp)
+target_link_libraries(pt_fg_unlock_test PRIVATE pt_engine)
+if(WIN32)
+  target_link_libraries(pt_fg_unlock_test PRIVATE winhttp)
+endif()
+
+# the restart queue of the two community routes (src/engine/render/upscale/route_queue.h, tools/route_queue_check.py)
+add_executable(pt_route_queue_test tests/route_queue_test.cpp)
+target_link_libraries(pt_route_queue_test PRIVATE pt_engine)
+if(WIN32)
+  # stands in for pt.exe and DLSS5-Autopilot in the pt-updater restart queue test
+  add_executable(pt_route_fake_tool tests/route_fake_tool.cpp)
+  target_compile_definitions(pt_route_fake_tool PRIVATE UNICODE _UNICODE)
+endif()
+
 add_executable(pt_peephole_look_test tests/peephole_look_test.cpp)
 target_link_libraries(pt_peephole_look_test PRIVATE pt_engine)
+
+add_executable(pt_sound_captions_test tests/sound_captions_test.cpp)
+target_link_libraries(pt_sound_captions_test PRIVATE pt_engine)
+if(MSVC)
+  target_compile_options(pt_sound_captions_test PRIVATE /utf-8)
+endif()
+
+add_executable(pt_gyro_test tests/gyro_test.cpp)
+target_link_libraries(pt_gyro_test PRIVATE pt_engine)
+# the start's controllers and audio devices off the main thread, with slow starts simulated (src/engine/platform/device_start.h)
+add_executable(pt_device_start_test tests/device_start_test.cpp)
+target_link_libraries(pt_device_start_test PRIVATE pt_engine)
 
 # the occluder stage of the original's light culling (0xD2A100, 0xD2AC10), src/engine/render/light_cull.cpp
 add_executable(pt_light_cull_test tests/light_cull_test.cpp)
@@ -349,6 +465,12 @@ endif()
 
 target_compile_definitions(pt_engine PUBLIC PT_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 add_custom_command(TARGET pt POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:pt>/fonts")
+# Coffee with Lisa (src/game/lisa_date): its script, text, placeholder art and music beside the game
+target_compile_definitions(pt_engine PUBLIC PT_LISA_DATE_DIR="${CMAKE_SOURCE_DIR}/assets/lisa_date")
+# copied on every build (a text or picture change alone relinks nothing)
+add_custom_target(pt_lisa_date_assets ALL COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/lisa_date" "${CMAKE_BINARY_DIR}/lisa_date")
+add_dependencies(pt pt_lisa_date_assets)
+add_dependencies(pt_release pt_lisa_date_assets)
 # the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
 file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
 foreach(license ${PT_FONT_LICENSES})
@@ -372,6 +494,9 @@ endif()
 add_executable(pt_mouse_render_test tests/mouse_render_test.cpp)
 target_link_libraries(pt_mouse_render_test PRIVATE pt_engine)
 
+add_executable(pt_camera_blend_test tests/camera_blend_test.cpp)
+target_link_libraries(pt_camera_blend_test PRIVATE pt_engine)
+
 add_executable(pt_skin_render_test tests/skin_render_test.cpp)
 target_link_libraries(pt_skin_render_test PRIVATE pt_engine)
 
@@ -384,8 +509,53 @@ add_executable(pt_mods_test tests/mods_test.cpp)
 target_link_libraries(pt_mods_test PRIVATE pt_engine)
 
 
+add_executable(pt_lisa_date_test tests/lisa_date_test.cpp)
+target_link_libraries(pt_lisa_date_test PRIVATE pt_engine)
+
+# the prompts' keycaps follow the keyboard layout (KeyBindingName with stand-in AZERTY, QWERTZ and Turkish F layouts)
+add_executable(pt_key_layout_test tests/key_layout_test.cpp)
+target_link_libraries(pt_key_layout_test PRIVATE pt_engine)
+
+# Game+ tier 2's intercom: its flicker stays under three flashes a second, its lit time, its sounds' levels and its ring's roll
+add_executable(pt_intercom_test tests/intercom_test.cpp)
+target_link_libraries(pt_intercom_test PRIVATE pt_engine)
+
 add_executable(pt_archive_model_camera_test tests/archive_model_camera_test.cpp)
 target_link_libraries(pt_archive_model_camera_test PRIVATE pt_engine)
+
+add_executable(pt_pc_prompt_note_test tests/pc_prompt_note_test.cpp)
+target_link_libraries(pt_pc_prompt_note_test PRIVATE pt_engine)
+
+# the hint lines' controls: tokens become the device in use's pictures, a hint names no list of devices in any language
+add_executable(pt_prompt_hint_test tests/prompt_hint_test.cpp)
+target_link_libraries(pt_prompt_hint_test PRIVATE pt_engine)
+
+# the top banner's lines (update, Game+ tier, enhanced textures): one at a time, each for its whole time, never two at once
+add_executable(pt_notice_queue_test tests/notice_queue_test.cpp)
+target_link_libraries(pt_notice_queue_test PRIVATE pt_engine)
+
+# the dialogs' buttons (dialog_view.h): the focus starts on the safe choice, the D-pad, the arrows and the pointer move it, accept and a click choose,
+# back cancels, Arabic lays the plates out from the right
+add_executable(pt_dialog_nav_test tests/dialog_nav_test.cpp)
+target_link_libraries(pt_dialog_nav_test PRIVATE pt_engine)
+
+# the enhanced textures' manifest names the archive, kinds, size cap and model it was made for: the start skips its preparation screen while it does
+add_executable(pt_enhanced_manifest_test tests/enhanced_manifest_test.cpp)
+target_link_libraries(pt_enhanced_manifest_test PRIVATE pt_engine)
+
+# the Museum's unlock keys: what each exhibit waits for and what a sound, a picture or a demo shown in play opens
+add_executable(pt_archive_unlock_test tests/archive_unlock_test.cpp)
+target_link_libraries(pt_archive_unlock_test PRIVATE pt_engine)
+
+if(WIN32)
+  add_executable(pt_discord_presence_test tests/discord_presence_test.cpp)
+  target_include_directories(pt_discord_presence_test PRIVATE src)
+  target_compile_definitions(pt_discord_presence_test PRIVATE NOMINMAX)
+  add_executable(pt_spatial_output_test tests/spatial_output_test.cpp)
+  target_include_directories(pt_spatial_output_test PRIVATE src)
+  target_compile_definitions(pt_spatial_output_test PRIVATE NOMINMAX)
+  target_link_libraries(pt_spatial_output_test PRIVATE ole32)
+endif()
 
 add_executable(pt_display_modes_test tests/display_modes_test.cpp)
 target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
@@ -396,7 +566,7 @@ target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)
 
 # Shared installer transaction regressions; no game assets required.
 add_executable(pt_installer_update_test EXCLUDE_FROM_ALL tests/installer_update_test.cpp)
-target_include_directories(pt_installer_update_test PRIVATE installer/Native)
+target_include_directories(pt_installer_update_test PRIVATE installer/Native src)
 target_link_libraries(pt_installer_update_test PRIVATE zlibstatic)
 if(MSVC)
   target_compile_options(pt_installer_update_test PRIVATE /utf-8 /EHsc)

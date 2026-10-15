@@ -1,9 +1,13 @@
+#include "engine/platform/os.h"
+#include "engine/core/ascii.h"
 #include "game/input_script.h"
+#include "game/lisa_date/lisa_date.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <format>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -22,7 +26,7 @@ namespace pt::game {
 bool InputScript::Load(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        LogError("input script: cannot open {}", path.string());
+        LogError("input script: cannot open {}", pt::os::PathToUtf8(path));
         return false;
     }
     std::stringstream buffer;
@@ -48,7 +52,6 @@ bool InputScript::Parse(const std::string& text) {
                 continue;
             }
             if (command.op == "sshot" || command.op == "shot") {
-                // the rest of the line is the path, which may hold spaces (the loop browser's previews go to the user's folder)
                 std::string path;
                 std::getline(words >> std::ws, path);
                 while (!path.empty() && std::isspace(static_cast<unsigned char>(path.back()))) {
@@ -102,6 +105,9 @@ const Stage* InputScript::NearestHallway(Game& game) const {
 }
 
 void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
+    if (pads_) {
+        pads_->PumpSensors(1.0f / 60.0f);
+    }
     for (size_t i = 0; i < releases_.size();) {
         if (releases_[i].frame <= frame) {
             if (pads_) {
@@ -129,14 +135,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         game.RequestScreenshot(std::format("{}-{:02d}.png", burst_prefix_, burst_index_++));
         --burst_left_;
     }
-    // shold: the frame at which the capture's game gave control. When the port gives control earlier (a save boot: the capture's
-    // boot is slower), its game is held (paused) from its StartGame until that frame, which lines up what runs from there on, such
-    // as the CeilLamp's idle swing, the Ocho timers and effect loops. When the port gives control later (a first boot: the
-    // capture's frame count starts about 120 frames into the opening gc_p02_500, whose clock runs on elapsed time, while the
-    // demos after it take as long as the port's), the script's remaining lines move by the difference, so its input and shots
-    // keep their distance to control. Lines from the hold frame on wait for control: f010's first walk (the capture's frame 1100,
-    // tick 2205) had run out its 120 ticks before the port's control at tick 2340, the player stayed in the start room until the
-    // next walk, and the shots of the first hallway were rendered from a hallway that was not loaded yet (black frames 1200-1340)
     if (hold_until_ > 0 && !hold_done_ && game.Controller().Step() >= 15) {
         if (!holding_ && frame < hold_until_) {
             holding_ = true;
@@ -165,24 +163,30 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         const Command& c = commands_[next_++];
         auto arg = [&](size_t i) { return i < c.args.size() ? c.args[i] : 0.0f; };
         if (c.op == "pattach" || c.op == "pdetach" || c.op == "pbutton" || c.op == "ptap" || c.op == "paxis" || c.op == "ptouch" || c.op == "pbot" ||
-            c.op == "expect" || c.op == "sound") {
+            c.op == "pgyro" || c.op == "expect" || c.op == "sound") {
             PadCommand(c.op, c.words, c.args, frame, game, input);
         } else if (c.op == "slightstick") {
-            // immediate, at its frame: the handy light's stick of a replayed capture (compare_ref), the look does not turn
             if (c.text == "off") {
                 game.GetPlayer().SetLightStickOverride(std::nullopt);
             } else {
                 game.GetPlayer().SetLightStickOverride(glm::vec2(arg(0), arg(1)));
             }
-        } else if (c.op == "key" || c.op == "ktap" || c.op == "mbutton" || c.op == "mtap") {
+        } else if (c.op == "key" || c.op == "ktap" || c.op == "mbutton" || c.op == "mtap" || c.op == "mquick") {
             KeyCommand(c.op, c.words, c.args, frame);
-        } else if (c.op == "stap" || c.op == "sbutton" || c.op == "saxis" || c.op == "stouch" || c.op == "sexpect" || c.op == "ssound" ||
+        } else if (c.op == "stap" || c.op == "sbutton" || c.op == "saxis" || c.op == "stouch" || c.op == "sgyro" || c.op == "sexpect" || c.op == "ssound" ||
                    c.op == "smenu" || c.op == "spaused" || c.op == "sfocus" || c.op == "skey" || c.op == "sktap" || c.op == "smbutton" ||
-                   c.op == "smtap" || c.op == "sattach" || c.op == "sdetach") {
+                   c.op == "smtap" || c.op == "smquick" || c.op == "sattach" || c.op == "sdetach") {
             Waypoint item{glm::vec3(0.0f), false, false, c.op, 0, c.text};
             item.words = c.words;
             item.args = c.args;
             waypoints_.push_back(std::move(item));
+        } else if (c.op == "mmotion") {
+            if (device_) {
+                device_->InjectMouseMotion(arg(0), arg(1), static_cast<int>(arg(2)));
+                LogInfo("input script frame {}: mouse motion ({:.2f} {:.2f}) for {} drawn frames", frame, arg(0), arg(1), static_cast<int>(arg(2)));
+            } else {
+                LogWarn("input script frame {}: mmotion: no input device (--virtual-pads)", frame);
+            }
         } else if (c.op == "move") {
             move_ = glm::vec2(arg(0), arg(1));
         } else if (c.op == "look") {
@@ -196,8 +200,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "pitch") {
             game.GetPlayer().SetScriptPitch(arg(0));
         } else if (c.op == "teleport") {
-            // Warp, not the raw controller position: a raw write leaves the eye and the camera where they were, so a
-            // teleport that is meant to place the camera (a distance sweep of a measurement) did not move it at all
             game.GetPlayer().Warp(glm::vec3(arg(0), arg(1), arg(2)), game.GetPlayer().BodyFoxYaw());
             LogInfo("input script frame {}: teleport to ({:.3f} {:.3f} {:.3f}) camera ({:.3f} {:.3f} {:.3f})", frame, arg(0), arg(1), arg(2),
                     game.GetCamera().position.x, game.GetCamera().position.y, game.GetCamera().position.z);
@@ -215,13 +217,9 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
                 anchored_ = true;
             }
         } else if (c.op == "sfeet") {
-            // sfeet x z [max]: once the player has stood still for 4 ticks, moves its feet to (x, z) if that is within max (default
-            // 0.3 m); compare_ref --replay lands each walk where the capture's player came to rest
             waypoints_.push_back({glm::vec3(arg(0), 0.0f, arg(1)), false, false, "feet", 0});
             waypoints_.back().extra.x = c.args.size() > 2 ? arg(2) : 0.3f;
         } else if (c.op == "goto") {
-            // goto x y z [frames [tolerance]]: with a tolerance the walk ends when the player's eye is that close to the point (x, z), as the
-            // capture tool's closed loop NAV goto measures the camera (compare_ref --replay); without, when the feet are within 0.35 m
             waypoints_.push_back({glm::vec3(arg(0), arg(1), arg(2)), false, false, "goto", static_cast<int>(arg(3))});
             waypoints_.back().extra.x = arg(4);
         } else if (c.op == "gfile" || c.op == "ffile") {
@@ -235,73 +233,69 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "slisa" || c.op == "flisa") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op == "slisa" ? "lisa" : "face_lisa", static_cast<int>(arg(0))});
         } else if (c.op == "sdframe") {
-            // sdframe demo frame [max]: waits until the demo plays at that frame; past max ticks (when given) the wait gives up and the
-            // next sshot is dropped
             waypoints_.push_back({glm::vec3(0.0f), false, false, "dframe", static_cast<int>(arg(0)), c.text});
             waypoints_.back().extra.x = arg(1);
         } else if (c.op == "sarchive") {
-            // sarchive <entry>: open an Archive entry (src/game/archive.cpp) as its menu row does (`sarchive -` leaves its viewer);
-            // sarchived [max]: wait until the viewer has ended (default 7200 frames)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "archive", 0, c.text});
         } else if (c.op == "sarchived") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "archived", c.args.empty() ? 7200 : static_cast<int>(arg(0))});
         } else if (c.op == "sarchiveshown") {
-            // sarchiveshown [max]: wait until the viewer has its picture on screen (default 3600 frames)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "archiveshown", c.args.empty() ? 3600 : static_cast<int>(arg(0))});
         } else if (c.op == "sloop") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "browse_loop", static_cast<int>(arg(0))});
         } else if (c.op == "sbrowsed" || c.op == "sfade") {
-            // sbrowsed [max]: waits until the last sloop pick has reached its loop (Game::BrowseArrived); sfade [max]: until no fade
-            // covers the screen. Past max frames (default 3600) the wait gives up and the next sshot is dropped
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), c.args.empty() ? 3600 : static_cast<int>(arg(0))});
         } else if (c.op == "sat") {
-            // sat floor pass: the game is in play (step 15) on that floor and loop count; otherwise the next sshot is dropped
             waypoints_.push_back({glm::vec3(0.0f), false, false, "at", static_cast<int>(arg(0)), c.text});
         } else if (c.op == "sstep") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "step", static_cast<int>(arg(0))});
         } else if (c.op == "steleport") {
-            // steleport x z | x y z: Warp in the sequence; with two values the feet keep their height
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "teleport"};
             item.args = c.args;
             waypoints_.push_back(std::move(item));
         } else if (c.op == "sgamestep") {
-            // sgamestep <name>: ChangeGameStep(name) in the sequence, as the Lua binding does (step names of gameplay.md 2.2)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "gamestep", 0, c.text});
         } else if (c.op == "sstreet") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "street"});
         } else if (c.op == "sbody") {
-            // sbody <entity> 0|1: shows or hides a stage entity's static model (or switches a light) in every loaded stage; a name
-            // ending in * takes every entity whose full name contains the rest (a light group). A mockup tool: hidden or unused
-            // data seen in place, not something the game does
             Waypoint item{glm::vec3(0.0f), false, false, "body", static_cast<int>(arg(0))};
             item.text = c.words.empty() ? std::string() : c.words.front();
             waypoints_.push_back(item);
         } else if (c.op == "smodel") {
-            // smodel <fmdl path> x y z [yaw pitch roll [scale]] | smodel off: draws a model in the anchored stage's file space
-            // (sanchor; degrees, yaw about y first), visual only, without an entity (a mockup tool, as sbody); off removes them
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "model"};
             item.text = c.words.empty() ? std::string() : c.words.front();
             item.extra = glm::vec4(arg(3), arg(4), arg(5), c.args.size() > 6 ? arg(6) : 1.0f);
             waypoints_.push_back(item);
         } else if (c.op == "splaydemo") {
-            // splaydemo <demo id> [entity]: plays a demo by its id, as a trap's ShDemoExec would (a mockup tool for demos no trap
-            // plays); with an entity of the anchored stage, the demo's frame is that entity's world transform (a stage's environ
-            // model with an identity transform puts a hallway demo in that hallway copy). splaydemo ?<id> logs its models' places
             Waypoint item{glm::vec3(0.0f), false, false, "playdemo", 0, c.words.empty() ? std::string() : c.words.front()};
             item.words = c.words;
             waypoints_.push_back(item);
+        } else if (c.op == "slisaexpr" || c.op == "slisatwitch") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), 0, c.text});
+        } else if (c.op == "slisaline") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "lisaline", 0, c.text});
+        } else if (c.op == "slisaselfie") {
+            auto value = [&](size_t i) { return i < c.args.size() ? static_cast<int>(c.args[i]) : 0; };
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "lisaselfie", 0, std::format("{} {} {} {} {}", value(0), value(1), value(2), value(3), c.text)});
+        } else if (c.op == "slisadate" || c.op == "slisachoice" || c.op == "slisaadvance" || c.op == "slisawait" || c.op == "fportrait" ||
+                   c.op == "slisarushes") {
+            Waypoint item{glm::vec3(0.0f), false, false, c.op == "fportrait" ? "face_portrait" : c.op.substr(1), static_cast<int>(arg(0))};
+            waypoints_.push_back(item);
+        } else if (c.op == "sintercom") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "intercom", 0, c.words.empty() ? std::string() : c.words.front()});
         } else if (c.op == "sgameplus") {
-            // the finished game's marker, as a finish sets it (Game::EnableGamePlus)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "gameplus"});
         } else if (c.op == "soffer") {
-            // soffer: the end of the credits' question (Game::OfferStreetWalk) asked where the script stands; the PC page opens on it
             waypoints_.push_back({glm::vec3(0.0f), false, false, "offer"});
         } else if (c.op == "scredits") {
-            // scredits: the port's credits page (Game::StartPortCredits, controller step 33) where the script stands, as the end of
-            // the ending's credits starts it
             waypoints_.push_back({glm::vec3(0.0f), false, false, "credits"});
         } else if (c.op == "squit") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "quit"});
+        } else if (c.op == "sallocfail") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "allocfail", 0,
+                                  !c.words.empty() ? c.words.front() : c.args.empty() ? std::string("0") : std::format("{}", c.args.front())});
+        } else if (c.op == "svram") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "vram"});
         } else if (c.op == "sev") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "ev", 0, c.text});
             waypoints_.back().point.x = arg(0);
@@ -309,14 +303,17 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), 0, c.text});
             waypoints_.back().point.x = arg(0);
         } else if (c.op == "sburst") {
-            // sburst N prefix: a screenshot on each of the next N frames (prefix-00.png ...), while the queue goes on
             waypoints_.push_back({glm::vec3(0.0f), false, false, "burst", static_cast<int>(arg(0)), c.text});
         } else if (c.op == "ssteps") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "steps", static_cast<int>(arg(0))});
         } else if (c.op == "sstick" || c.op == "srstick" || c.op == "slook") {
-            // slook dx dy N: a mouse look of (dx, dy) radians on each of the next N frames, in sequence (the pad's srstick for the mouse)
             Waypoint item{glm::vec3(0.0f), false, false, c.op.substr(1), static_cast<int>(arg(2))};
             item.stick = glm::vec2(arg(0), arg(1));
+            waypoints_.push_back(item);
+        } else if (c.op == "sportraitjit") {
+            Waypoint item{glm::vec3(0.0f), false, false, "portrait_jitter", static_cast<int>(arg(3))};
+            item.stick = glm::vec2(arg(0), arg(1));
+            item.extra.x = arg(2);
             waypoints_.push_back(item);
         } else if (c.op == "strace") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "trace", static_cast<int>(arg(0))});
@@ -325,7 +322,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "goto_loop") {
             waypoints_.push_back({glm::vec3(arg(0), arg(1), arg(2)), true, true, "goto"});
         } else if (c.op == "scamera" || c.op == "scamfile") {
-            // scamfile: position, forward and up in the anchored stage's file space (sanchor), as gfile
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "camera", 0, c.text};
             item.extra = glm::vec4(arg(3), arg(4), arg(5), arg(6));
             item.up = glm::vec3(arg(7), arg(8), arg(9));
@@ -335,19 +331,14 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(arg(0), arg(1), arg(2)), c.op == "sface_rel", false, "face"});
         } else if (c.op == "sphotoset") {
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photoset", static_cast<int>(arg(4))};
-            // exposure in half EV steps, the player's body (1 shown, 0 hidden; shown when not given)
             item.extra = glm::vec4(arg(3), arg(5), c.args.size() > 6 ? arg(6) : 1.0f, 0.0f);
-            // Optional resolution: 0 native, 1 4K. Keep the existing seven-argument form unchanged.
             item.up.x = c.args.size() > 7 ? arg(7) : -1.0f;
             waypoints_.push_back(item);
         } else if (c.op == "sphotocam") {
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photocam", 0};
-            // the look target: the eye raised by arg 3, moved by args 4 and 5 along the player's right and facing
             item.extra = glm::vec4(arg(3), arg(4), arg(5), 0.0f);
             waypoints_.push_back(item);
         } else if (c.op == "sphotoview" || c.op == "sphotofile") {
-            // sphotoview px py pz tx ty tz: the photo camera at p looking at t, world space; sphotofile: both in the anchored stage's
-            // file space (sanchor), as gfile
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photoview", 0};
             item.extra = glm::vec4(arg(3), arg(4), arg(5), 0.0f);
             item.file_space = c.op == "sphotofile";
@@ -355,32 +346,27 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "sphoto") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "photo", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sfreeze") {
-            // sfreeze 1|0: holds the game's clock (Game::SetPaused) while the renderer keeps drawing, so a camera sweep sees
-            // one moment of the world (no lamp swing, no effect animation) and a change between poses comes from the camera
             waypoints_.push_back({glm::vec3(0.0f), false, false, "freeze", static_cast<int>(arg(0))});
         } else if (c.op == "sfreecam") {
-            // sfreecam 1|0: the free camera (Extras) on or off, as F6 or the menu row would
             waypoints_.push_back({glm::vec3(0.0f), false, false, "freecam", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
+        } else if (c.op == "senhanced") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "enhanced", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
+        } else if (c.op == "sneural") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "neural", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sthird") {
-            // sthird 1|0: the third person view (Extras) on or off, as the menu row would
             waypoints_.push_back({glm::vec3(0.0f), false, false, "third", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sstate") {
-            // sstate save: keeps the session state (Game::DescribeSessionState); sstate compare: an expectation that it is the
-            // same now, each differing line logged (a reset or a browser pick must rebuild what a fresh boot has)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "state", 0, c.text});
         } else if (c.op == "sreset") {
-            // sreset: the PC settings page's Reset progress (Game::ResetProgress; needs --save-dir for a save store)
             waypoints_.push_back({glm::vec3(0.0f), false, false, "reset"});
         } else if (c.op == "saction" || c.op == "slog" || c.op == "svoice") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), 0, c.text});
         } else if (c.op == "sui") {
-            // sui <op> [text] [args]: one of the immediate UI ops (menu, subs, subtitle, overlay, fade, subliminal...) in sequence
             Waypoint item{glm::vec3(0.0f), false, false, "ui"};
             item.words = c.words;
             item.args = c.args;
             waypoints_.push_back(item);
         } else if (c.op == "swait" || c.op == "szoom" || c.op == "shandylight") {
-            // shandylight 0|1: the handy light's switch in sequence, as the immediate handylight
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), static_cast<int>(arg(0))});
         } else if (c.op == "mmove" || c.op == "mclick" || c.op == "mright") {
             input.pointer = glm::vec2(arg(0), arg(1));
@@ -393,27 +379,20 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "pose") {
             game.LogCapturePose(game.ViewCamera());
         } else if (c.op == "inspect") {
-            // the mods' inspector as F8 (Game::LogModInspect)
             game.LogModInspect(game.ViewCamera());
         } else if (c.op == "camera") {
-            // immediate, at its frame (compare_ref --replay's shots, outside the queue): x y z fx fy fz [fov [ux uy uz]]
             if (c.text == "off") {
                 game.SetCameraOverride(std::nullopt);
             } else {
-                // the replay's view follows the capture's camera, so the handy light keeps its lag (Game::SetCameraOverride)
                 SetScriptCamera(game, glm::vec3(arg(0), arg(1), arg(2)), glm::vec4(arg(3), arg(4), arg(5), arg(6)), glm::vec3(arg(7), arg(8), arg(9)),
                                 true);
             }
         } else if (c.op == "trace") {
-            // immediate, at its frame: the camera trace of strace for N ticks (replay diagnostics outside the queue)
             trace_frames_ = static_cast<int>(arg(0));
         } else if (c.op == "ev") {
-            // immediate exposure pin, as sev
             game.Effects().ev_pinned = c.text != "auto";
             game.Effects().pinned_ev = arg(0);
         } else if (c.op == "handylight") {
-            // immediate, at its frame: the handy light's switch, as the `expect handylight` read (measurements that
-            // need the flash light off or on independently of the demos that toggle it)
             game.GetPlayer().handy_light.enable = arg(0) != 0.0f;
             LogInfo("input script frame {}: handy light {}", frame, game.GetPlayer().handy_light.enable ? 1 : 0);
         } else if (c.op == "log") {
@@ -426,14 +405,12 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         --trace_frames_;
         const Camera camera = game.GetCamera();
         const glm::vec3 feet = game.GetPlayer().Feet();
-        // the demo frames let a capture's frames be matched to the demos' clocks (compare_ref --demo-sync)
         std::string demos;
         for (const PlayingDemo& demo : game.Demos().Playing()) {
             demos += std::format(" {}@{:.3f}", demo.demo_id, demo.frame);
             if (demo.audio_clock) {
                 demos += std::format(" audio {:.3f}", demo.audio_frame);
             }
-            // the head of each drawn skinned demo model, world space: the per-tick motion of the actors against the camera
             for (const DemoModel& m : demo.models) {
                 const int head = m.skeleton && m.drawn && m.visible ? m.skeleton->FindName("SKL_004_HEAD") : -1;
                 if (head >= 0 && static_cast<size_t>(head) < m.bone_world.size()) {
@@ -443,8 +420,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             }
         }
         const glm::vec3 aim = game.HandyAim();
-        // the handy light as the frame places it (AddHandyLight): a trace of a frozen-bean measurement shows whether the
-        // per-frame difference left there is the light's own position or direction moving
         glm::vec3 handy_position(0.0f);
         glm::vec3 handy_direction(0.0f);
         HandyLightPose(camera, aim, game.HandyPickupHold(), game.HandyDemoPose(), handy_position, handy_direction);
@@ -476,12 +451,12 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             seq_focus_ = !item.args.empty() && item.args[0] != 0.0f;
             seq_focus_frame_ = frame;
             seq_focus_until_ = item.args.size() > 1 && item.args[1] > 0.0f ? frame + static_cast<uint64_t>(item.args[1]) : 0;
-        } else if (item.op == "stap" || item.op == "sbutton" || item.op == "saxis" || item.op == "stouch" || item.op == "sexpect" ||
+        } else if (item.op == "stap" || item.op == "sbutton" || item.op == "saxis" || item.op == "stouch" || item.op == "sgyro" || item.op == "sexpect" ||
                    item.op == "ssound") {
             PadCommand("p" + item.op.substr(1), item.words, item.args, frame, game, input);
         } else if (item.op == "sattach" || item.op == "sdetach") {
             PadCommand(item.op == "sattach" ? "pattach" : "pdetach", item.words, item.args, frame, game, input);
-        } else if (item.op == "skey" || item.op == "sktap" || item.op == "smbutton" || item.op == "smtap") {
+        } else if (item.op == "skey" || item.op == "sktap" || item.op == "smbutton" || item.op == "smtap" || item.op == "smquick") {
             KeyCommand(item.op.substr(1), item.words, item.args, frame);
         } else if (item.op == "wait") {
             if (--item.frames > 0) {
@@ -505,6 +480,18 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
                 input.mouse_look += item.stick;
                 break;
             }
+        } else if (item.op == "portrait_jitter") {
+            if (item.frames-- > 0) {
+                glm::vec3 portrait;
+                if (game.LisaPortraitPosition(portrait)) {
+                    Face(game, portrait);
+                    Player& player = game.GetPlayer();
+                    const float shake = (item.frames & 2) ? item.extra.x : -item.extra.x;
+                    player.yaw = player.target_yaw = player.yaw + glm::radians(item.stick.x + shake);
+                    player.SetScriptPitch(player.pitch + glm::radians(item.stick.y));
+                }
+                break;
+            }
         } else if (item.op == "trace") {
             trace_frames_ = item.frames;
         } else if (item.op == "burst") {
@@ -523,8 +510,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             }
             LogInfo("input script: walked {} footsteps", item.frames);
         } else if (item.op == "feet") {
-            // the port's stop slides the feet about 0.11 m after the stick lets go where the original's camera stops within 0.03 m
-            // (lisa_kill 1733), so a replayed walk ended 7 to 13 cm past the capture's and placed the kill demo there
             Player& player = game.GetPlayer();
             const glm::vec3 feet = player.Feet();
             const bool still = glm::length(feet - eye_last_feet_) < 0.0005f;
@@ -604,6 +589,10 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             LogInfo("input script: game clock {}", item.frames != 0 ? "frozen" : "running");
         } else if (item.op == "freecam") {
             game.RequestFreeCamera(item.frames != 0);
+        } else if (item.op == "enhanced") {
+            game.RequestEnhancedTextures(item.frames != 0);
+        } else if (item.op == "neural") {
+            game.RequestNeuralRendering(std::clamp(item.frames, 0, 3));
         } else if (item.op == "third") {
             game.SetThirdPerson(item.frames != 0);
         } else if (item.op == "state") {
@@ -612,9 +601,71 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             LogInfo("input script: reset progress {}", game.ResetProgress() ? "accepted" : "refused (no save store)");
         } else if (item.op == "gameplus") {
             game.EnableGamePlus();
+        } else if (item.op == "intercom") {
+            game.IntercomScript(item.text);
+        } else if (item.op == "lisadate") {
+            game.RequestLisaDate("the input script");
+        } else if (item.op == "lisarushes") {
+            game.SetLisaRushesForTest(item.frames);
+        } else if (item.op == "lisaadvance") {
+            if (LisaDate* date = game.LisaDateScene()) date->SetSkip(true);
+        } else if (item.op == "lisaselfie") {
+            LisaDate* date = game.LisaDateScene();
+            if (!date || !date->SelfieUp()) {
+                if (date) date->SetSkip(true);
+                item.extra.x += 1.0f;
+                if (item.extra.x < 3600.0f) break;
+                LogWarn("input script frame {}: lisaselfie gave up, no selfie panel up", frame);
+            } else {
+                int v[4] = {0, 0, 0, 0};
+                char take[8] = {};
+                std::sscanf(item.text.c_str(), "%d %d %d %d %7s", &v[0], &v[1], &v[2], &v[3], take);
+                date->SetSelfie(v[0], v[1], v[2], v[3], std::string_view(take) == "take");
+                LogInfo("input script frame {}: lisaselfie {}", frame, item.text);
+            }
+        } else if (item.op == "lisachoice") {
+            LisaDate* date = game.LisaDateScene();
+            if (date && date->SelfieUp()) date->SetSelfie(0, 0, 0, 0, true);
+            if (!date || !date->ChoicesUp()) {
+                if (date) date->SetSkip(true);
+                item.extra.x += 1.0f;
+                if (item.extra.x < 3600.0f) break;
+                LogWarn("input script frame {}: lisachoice {} gave up, no choice up", frame, item.frames);
+            } else if (!date->Choose(item.frames - 1)) {
+                LogWarn("input script frame {}: lisachoice {} is not an option", frame, item.frames);
+            }
+        } else if (item.op == "lisaexpr" || item.op == "lisatwitch") {
+            if (LisaDate* date = game.LisaDateScene()) {
+                if (item.op == "lisaexpr") date->SetExpression(item.text);
+                else date->TwitchNow(item.text == "violent");
+                LogInfo("input script frame {}: {} {}", frame, item.op, item.text);
+            }
+        } else if (item.op == "lisaline") {
+            LisaDate* date = game.LisaDateScene();
+            if (date && date->SelfieUp()) date->SetSelfie(0, 0, 0, 0, true);
+            if (date && date->LineKey() != item.text) {
+                date->SkipTo(item.text);
+                break;
+            }
+            if (date) {
+                LogInfo("input script frame {}: lisaline {} reached", frame, item.text);
+            } else {
+                LogWarn("input script frame {}: lisaline {} without a date", frame, item.text);
+            }
+        } else if (item.op == "lisawait") {
+            if (game.LisaDateActive()) {
+                if (LisaDate* date = game.LisaDateScene()) {
+                    if (date->SelfieUp()) date->SetSelfie(0, 0, 0, 0, true);
+                    date->SetSkip(true);
+                }
+                break;
+            }
+        } else if (item.op == "face_portrait") {
+            glm::vec3 portrait;
+            if (game.LisaPortraitPosition(portrait)) Face(game, portrait);
+            else LogWarn("input script frame {}: no portrait to face", frame);
         } else if (item.op == "playdemo") {
             if (item.text.starts_with("?")) {
-                // splaydemo ?<id>: logs where the playing demo's models are (the anchored file frame and world)
                 for (const PlayingDemo& demo : game.Demos().Playing()) {
                     if (demo.demo_id != item.text.substr(1)) continue;
                     for (const DemoModel& m : demo.models) {
@@ -682,6 +733,12 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             }
         } else if (item.op == "quit") {
             game.RequestQuit();
+        } else if (item.op == "allocfail") {
+            if (!game.Models().Scene().Context().SetAllocFailure(item.text)) {
+                LogWarn("input script frame {}: sallocfail {} not understood", frame, item.text);
+            }
+        } else if (item.op == "vram") {
+            game.Models().Scene().Context().LogMemoryReport(std::format("input script frame {}", frame).c_str());
         } else if (item.op == "shot" && std::exchange(skip_next_shot_, false)) {
             LogWarn("input script: shot {} dropped, loop not reached", item.text);
         } else if (item.op == "shot") {
@@ -775,7 +832,7 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
                     camera.position.y, camera.position.z, f.x, f.y, f.z, u.x, u.y, u.z, glm::degrees(camera.fov_y));
         }
         waypoints_.erase(waypoints_.begin());
-        if (item.op == "action" || item.op == "face" || item.op == "fent" || item.op == "fdir" || item.op == "face_lisa") {
+        if (item.op == "action" || item.op == "face" || item.op == "fent" || item.op == "fdir" || item.op == "face_lisa" || item.op == "face_portrait") {
             break;
         }
     }
@@ -791,8 +848,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
     if (action_) {
         held |= kPadAction;
         action_ = false;
-        // the scripts' action is the capture's CROSS, which on a PlayStation pad is also the X mark's gouge button
-        // (TrapSystem takes the gouge from kPadGouge alone)
         gouge = (previous_held_ & kPadAction) == 0;
     }
     input.pressed |= held & ~previous_held_ & ~input.held;
@@ -803,7 +858,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
     previous_held_ = held;
 }
 
-// The camera of the camera ops: position, forward (w: vertical field of view in degrees, 0 keeps it) and up (zero keeps no roll)
 void InputScript::SetScriptCamera(Game& game, const glm::vec3& position, const glm::vec4& forward_fov, const glm::vec3& requested_up,
                                   bool follows_view) {
     game.SetCameraOverride(std::nullopt);
@@ -814,7 +868,6 @@ void InputScript::SetScriptCamera(Game& game, const glm::vec3& position, const g
     camera.yaw = std::atan2(-forward.x, -forward.z);
     camera.roll = 0.0f;
     if (glm::length(requested_up) > 0.5f) {
-        // signed angle from the unrolled up to the requested up about the forward axis (Camera::Up rotates by roll)
         const glm::vec3 level = camera.Up();
         const glm::vec3 up = glm::normalize(requested_up - forward * glm::dot(requested_up, forward));
         camera.roll = std::atan2(glm::dot(forward, glm::cross(level, up)), glm::dot(level, up));
@@ -831,7 +884,6 @@ void InputScript::Face(Game& game, const glm::vec3& point) {
     Player& player = game.GetPlayer();
     const glm::vec3 d = point - player.Eye();
     player.yaw = player.target_yaw = std::atan2(-d.x, -d.z);
-    // as far as the look can turn (Player::ClampPitch, 0x97B010): the original's closed loop look stops at the limit too
     player.SetScriptPitch(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)));
 }
 
@@ -854,7 +906,6 @@ bool InputScript::EntityTransform(Game& game, const std::string& name, glm::mat4
             return true;
         }
     }
-    // a NazoManageData control asset name (XMarkText, HELL_H, Peephole, ...)
     if (glm::vec3 p; game.Nazo().ControlAssetPosition(name, p)) {
         out = glm::mat4(1.0f);
         out[3] = glm::vec4(p, 1.0f);
@@ -1029,6 +1080,8 @@ void InputScript::PadCommand(const std::string& op, const std::vector<std::strin
         pads_->SetAxis(slot, word(0), arg(1));
     } else if (op == "ptouch") {
         pads_->SetTouch(slot, arg(3) != 0.0f, arg(1), arg(2));
+    } else if (op == "pgyro") {
+        pads_->SetGyro(slot, arg(1), arg(2), arg(3));
     } else if (op == "pbot") {
         if (bot_slot_ >= 0 && slot < 0) {
             SendBot(BotOutput{});
@@ -1039,17 +1092,19 @@ void InputScript::PadCommand(const std::string& op, const std::vector<std::strin
     }
 }
 
-// key <name> <0|1>, ktap <name> [frames], mbutton <left|middle|right> <0|1>, mtap <button> [frames]: keyboard and mouse input sent through
-// the input device's event path (InputDevice::InjectKey), so it reaches the game one frame later as a pad change does. Key names are
-// SDL scancode names with '_' for spaces (W, Q, Left_Shift, Escape, Return, Backspace, F10). Headless runs need --virtual-pads, which
-// runs the input device without a window.
 bool InputScript::KeyCommand(const std::string& op, const std::vector<std::string>& words, const std::vector<float>& args, uint64_t frame) {
     const std::string name = words.empty() ? std::string() : words.front();
-    const bool mouse = op == "mbutton" || op == "mtap";
+    const bool mouse = op == "mbutton" || op == "mtap" || op == "mquick";
     const uint32_t code = mouse ? MouseButtonFromName(name) : ScancodeFromName(name);
     if (!device_ || code == 0) {
         LogWarn("input script frame {}: {} '{}': {}", frame, op, name, device_ ? "unknown name" : "no input device (--virtual-pads)");
         return false;
+    }
+    if (op == "mquick") {
+        device_->InjectMouseButton(static_cast<uint8_t>(code), true);
+        device_->InjectMouseButton(static_cast<uint8_t>(code), false);
+        LogInfo("input script frame {}: mouse button {} down and up in one frame", frame, name);
+        return true;
     }
     const bool tap = op == "ktap" || op == "mtap";
     const bool down = tap || (!args.empty() && args.front() != 0.0f);
@@ -1092,7 +1147,6 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         ok = gimmick && gimmick->motion == word(2);
         got = std::format("gimmick {} motion {}", word(1), gimmick ? gimmick->motion : "missing");
     } else if (what == "gimmick") {
-        // gimmick Name drawn: the record would reach the draw list (GameObjects::CollectDraws) or not, with every flag it reads
         const Gimmick* g = game.Objects().FindGimmick(word(1));
         const bool drawn = game.Objects().GimmickDrawn(word(1));
         ok = g && drawn == (arg(0) != 0.0f);
@@ -1101,21 +1155,30 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
                                word(1), drawn ? 1 : 0, g->enabled ? 1 : 0, g->shown ? 1 : 0, g->placed ? 1 : 0, g->active ? 1 : 0,
                                g->mesh ? 1 : 0, g->hidden_views, g->hidden_meshes.size(), g->motion);
     } else if (what == "ocho") {
-        // ocho State: Lisa's logic state (0 None, 1 Warp, 2 Chase, 3 KillChase, 4 Dash, 5 Kill)
         ok = game.Objects().Ocho().State() == static_cast<int>(arg(0));
         got = std::format("ocho state {} visible {} killed {}", game.Objects().Ocho().State(), game.Objects().Ocho().Visible(),
                           game.Objects().Ocho().HasKilled());
     } else if (what == "ocholook") {
-        // ocholook N: the KillChase look-back phase (0 none, 1 armed by a turn of more than 105 degrees, 2 the kill went off)
         ok = game.Objects().Ocho().LookPhase() == static_cast<int>(arg(0));
         got = std::format("ocho look-back phase {}", game.Objects().Ocho().LookPhase());
+    } else if (what == "lisadate") {
+        ok = game.LisaDateActive() == (arg(0) != 0.0f);
+        got = std::format("lisa date {}", game.LisaDateActive() ? "running" : "not running");
+    } else if (what == "lisarushes") {
+        ok = game.LisaRushes() == static_cast<int>(arg(0));
+        got = std::format("lisa rushes {}", game.LisaRushes());
     } else if (what == "gameplus") {
-        // gameplus 0|1: Game+'s bathtub Lisa is drawn in an active stage (Game::UpdateGamePlus)
         const bool shown = game.GamePlusTubShown();
         ok = shown == (arg(0) != 0.0f);
         got = std::format("game+ tub lisa {}", shown ? "shown" : "not shown");
+    } else if (what == "intercom") {
+        const bool shown = game.IntercomShown() > 0;
+        ok = shown == (arg(0) != 0.0f);
+        got = shown ? std::format("intercom shown in {} active stage(s)", game.IntercomShown()) : std::string("intercom not shown");
+    } else if (what == "intercomlit") {
+        ok = game.IntercomActive() == (arg(0) != 0.0f);
+        got = std::format("intercom {}", game.IntercomActive() ? "active" : "idle");
     } else if (what == "body") {
-        // body Entity 0|1: a stage entity's body is visible (its static model drawn), in any loaded stage
         int found = -1;
         game.Stages().ForEachStage([&](Stage& stage) {
             for (const auto& file : stage.files) {
@@ -1127,12 +1190,10 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         ok = found == static_cast<int>(arg(0));
         got = std::format("body {} {}", word(1), found < 0 ? std::string("missing") : found ? std::string("visible") : std::string("hidden"));
     } else if (what == "hello") {
-        // hello N: the Hello puzzle's state word (4 after Activate, then 8, 16, 32, 64, 128 per step, 512 solved)
         const uint32_t value = game.Nazo().Word(NazoId::Hello);
         ok = value == static_cast<uint32_t>(arg(0));
         got = std::format("hello word {}", value);
     } else if (what == "speech") {
-        // speech 0|1: a subtitle or caption is on screen or queued in the UI
         const bool shown = GameUi::Active() && GameUi::Active()->SpeechShown();
         ok = shown == (arg(0) != 0.0f);
         got = std::format("speech {}", shown ? 1 : 0);
@@ -1167,26 +1228,53 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
     } else if (what == "paused") {
         ok = game.Paused() == (arg(0) != 0.0f);
         got = std::format("paused {}", game.Paused() ? 1 : 0);
+    } else if (what == "dialog") {
+        int focus = 0;
+        const std::string kind = GameUi::Active() ? GameUi::Active()->DialogKind(&focus) : std::string("none");
+        ok = kind == word(1) && (args.empty() || focus == static_cast<int>(arg(0)));
+        got = std::format("dialog {} focus {}", kind, focus);
     } else if (what == "page") {
         const int page = GameUi::Active() && GameUi::Active()->Menu().CurrentPage() == OptionsMenu::Page::Pc ? 1 : 0;
         ok = page == static_cast<int>(arg(0));
         got = std::format("menu page {}", page);
     } else if (what == "archive") {
-        // expect archive <entry> <0|1>: the Archive entry can be opened (Game::ArchiveUnlocked)
         const ArchiveEntry* entry = FindArchiveEntry(word(1));
         const bool open = entry && game.ArchiveUnlocked(*entry);
         ok = entry && open == (arg(0) != 0.0f);
         got = std::format("archive entry {} {}", word(1), !entry ? "missing" : open ? "open" : "locked");
+    } else if (what == "bugfill") {
+        const bool filled = GameUi::Active() && GameUi::Active()->DemoGraphs().BugPillarColor().a > 0.0f;
+        ok = filled == (arg(0) != 0.0f);
+        got = std::format("bug picture side fill {}", filled ? "on" : "off");
     } else if (what == "viewer") {
-        // expect viewer <0|1>: an Archive viewer (cutscene theater or model viewer) is open
         const bool active = game.ArchiveTheaterActive();
         ok = active == (arg(0) != 0.0f);
         got = std::format("archive viewer {}", active ? "open" : "closed");
     } else if (what == "unlocked") {
-        // expect unlocked <entry> <0|1>: the loop browser entry can be picked (Game::BrowseUnlocked)
         const int index = static_cast<int>(arg(0));
         ok = game.BrowseUnlocked(index) == (arg(1) != 0.0f);
         got = std::format("loop browser entry {} {}", index, game.BrowseUnlocked(index) ? "unlocked" : "locked");
+    } else if (what == "gameplustier") {
+        ok = game.GamePlusTier() == static_cast<int>(arg(0));
+        got = std::format("game+ tier {}", game.GamePlusTier());
+    } else if (what == "pcabsent") {
+        const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
+        ok = GameUi::Active() && !row;
+        got = std::format("PC setting {} {}", word(1), row ? "present" : "absent");
+    } else if (what == "pcvaluekey") {
+        const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
+        const std::string key = row && row->value >= 0 && row->value < static_cast<int>(row->values.size()) ? row->values[row->value] : std::string("missing");
+        ok = row && key == word(2);
+        got = std::format("PC setting {} holds {}", word(1), key);
+    } else if (what == "pcdonate") {
+        const int n = GameUi::Active() ? GameUi::Active()->Menu().PcPage().Donations() : -1;
+        ok = n == static_cast<int>(arg(0));
+        got = std::format("PC settings donations {}", n);
+    } else if (what == "pctab") {
+        const PcSettingsPage* page = GameUi::Active() ? &GameUi::Active()->Menu().PcPage() : nullptr;
+        const std::string shown = page ? std::string(page->ShownTab()) : std::string();
+        ok = page && shown == word(1) && (args.empty() || page->StripFocused() == (arg(0) != 0.0f));
+        got = std::format("PC settings tab {}, strip {}", shown.empty() ? std::string("none") : shown, page && page->StripFocused() ? 1 : 0);
     } else if (what == "pcenabled") {
         const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
         ok = row && row->enabled == (arg(0) != 0.0f);
@@ -1195,7 +1283,6 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const PcSettingsPage* page = GameUi::Active() ? &GameUi::Active()->Menu().PcPage() : nullptr;
         const PcSettingRow* row = !page ? nullptr : what == "pcrow" ? page->CurrentRow() : page->FindRow(word(1));
         if (what == "pcshown") {
-            // expect pcshown <label> <value> <note key>: the value the page shows (a greyed one included) and the help line's note
             const int shown = row ? page->ShownValue(*row) : -1;
             const std::string note = row ? std::string(page->ShownNote(*row)) : std::string("missing");
             ok = row && shown == static_cast<int>(arg(0)) && note == word(2);
@@ -1214,10 +1301,14 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
             got = std::format("PC setting {} = {} ({})", word(1), row ? row->value : -1,
                               row && !row->values.empty() ? row->values[shown] : std::string());
         }
+    } else if (what == "menulang") {
+        const int shown = GameUi::Active() ? GameUi::Active()->Menu().TextLanguage() : -1;
+        ok = shown == static_cast<int>(arg(0));
+        got = std::format("option menu text language {}", shown);
     } else if (what == "prompts") {
         const PromptDevice shown = GameUi::Active() ? GameUi::Active()->Menu().Prompts() : PromptDevice::Keyboard;
         std::string name = PromptDeviceName(shown);
-        std::transform(name.begin(), name.end(), name.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+        std::transform(name.begin(), name.end(), name.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
         ok = name == word(1);
         got = std::format("option menu prompts {}", name);
     } else if (what == "invert") {
@@ -1225,7 +1316,6 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         ok = on == (arg(0) != 0.0f);
         got = std::format("invert {} {}", word(1), on ? 1 : 0);
     } else if (what == "mirrorbits") {
-        // mirrorbits N: the MirrorCapture viewport bits (0x1C938D0) the MirrorSwitch traps set and clear
         ok = static_cast<int>(game.MirrorViewportBits()) == static_cast<int>(arg(0));
         got = std::format("mirror bits {:#x}", game.MirrorViewportBits());
     } else if (what == "brightness") {
@@ -1397,7 +1487,6 @@ bool InputScript::ArchiveWait(Game& game, Waypoint& item) {
 
 bool InputScript::BrowseWait(Game& game, Waypoint& item) {
     if (item.op == "browse_loop") {
-        // a pick is taken only in play (Game::BrowseLoop): one refused while a reset or a game over runs is tried again for 20 s
         if (item.text.empty() || item.text == "refused") {
             const bool picked = game.BrowseLoop(item.frames);
             if (!picked && ++item.extra.x < 1200.0f) {
@@ -1410,7 +1499,6 @@ bool InputScript::BrowseWait(Game& game, Waypoint& item) {
                 skip_next_shot_ = true;
             }
         }
-        // the pick fades out before its reset starts: the next item waits for the reset, as it followed the pick at once before
         return game.LoopReloadPending();
     }
     if (item.op == "at") {
@@ -1523,7 +1611,7 @@ void InputScript::ApplyBot(uint64_t frame, Game& game, const InputState& input) 
             seq_focus_ = !item.args.empty() && item.args[0] != 0.0f;
             seq_focus_frame_ = frame;
             seq_focus_until_ = item.args.size() > 1 && item.args[1] > 0.0f ? frame + static_cast<uint64_t>(item.args[1]) : 0;
-        } else if (op == "stap" || op == "sbutton" || op == "saxis" || op == "stouch" || op == "sexpect" || op == "ssound") {
+        } else if (op == "stap" || op == "sbutton" || op == "saxis" || op == "stouch" || op == "sgyro" || op == "sexpect" || op == "ssound") {
             PadCommand("p" + op.substr(1), item.words, item.args, frame, game, input);
         } else if (op == "lisa") {
             if (!game.Objects().Ocho().Visible() && (item.frames <= 0 || --item.frames > 0)) {

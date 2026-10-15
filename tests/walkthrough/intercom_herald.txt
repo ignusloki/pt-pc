@@ -1,0 +1,11 @@
+# the HELLO loop (f090): no ring, standing at the corridor's end until Lisa's Warp ends its hidden wait; the intercom crackles a few
+# seconds before her herald
+sintercom never
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -6.6 -1.4 8.0
+ffile -9.49 0.2 9.0
+swait 6000
+slog

@@ -22,6 +22,12 @@ vec3 Lut16(uint lut, vec3 c) {
     return mix(a, b, 15.0 * c.b - slice);
 }
 
+vec3 QuantizeDither(vec3 c, float salt) {
+    vec3 seed = fract((vec3(gl_FragCoord.xyx) + salt) * vec3(0.1031, 0.1030, 0.0973));
+    seed += dot(seed, seed.yxz + 33.33);
+    return c + (fract((seed.x + seed.y) * seed.z) - 0.5) / 255.0;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec3 c;
@@ -30,26 +36,19 @@ void main() {
         c = ImgFetch(pass.ids.x, pixel).rgb;
     } else {
         hdr = ImgFetch(IMG_HDR, pixel).rgb * pass.f0.z;
-        // the lens flare buffer adds to the encoded scene before the Tonemap pass (CopyRenderBuffer, ONE + ONE on the UNORM view);
-        // pass.ids.z is 0 on frames without flare effects, whose buffer is then neither cleared nor read
         vec3 flare = pass.ids.z != 0u ? max(ImgFetch(IMG_FLARE, pixel).rgb, vec3(0.0)) : vec3(0.0);
         vec3 x = min(SrgbEncode(clamp(hdr, 0.0, 1.0)) + flare, vec3(1.0));
-        // Tonemap samples the bloom half a bloom texel down and right of the pixel (m_renderBuffer.zw * 2 at 1080p)
         vec2 bloom_uv = in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);
         vec3 b = pass.f0.x > 0.0 ? min(vec3(0.5), Img(IMG_BLOOM_SUM, SMP_LINEAR_CLAMP, bloom_uv).rgb) : vec3(0.0);
         c = ScreenTonemap(x, b);
     }
     vec3 graded = c;
     if (pass.f0.w > 0.0) {
-        // the LUT takes the colour within 0 to 1 (a value past 1 from the HDR target had reached into the next blue slice of the
-        // strip: cyan lamp bulbs with HDR on)
         vec3 within = clamp(c, 0.0, 1.0);
         graded = Lut16(RES_COLOR_LUT, within);
         if (pass.f0.y < 1.0) {
             graded = mix(Lut16(RES_COLOR_LUT_PREV, within), graded, pass.f0.y);
         }
     }
-    // HDR outputs keep the tonemapped range (paper white at the top) as the original's clipped image: the lamp globes are
-    // translucent and made to clip, and every extended range tried showed the wall's lines through them (1.0.3 tests)
-    out_color = vec4(graded, Luma601(graded));
+    out_color = vec4(pass.f1.x > 0.0 ? QuantizeDither(graded, pass.ids.y == 1u ? 17.0 : 0.0) : graded, Luma601(graded));
 }

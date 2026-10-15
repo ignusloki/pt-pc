@@ -1,0 +1,14 @@
+# one notice in the start room, the door opened 2.5 s after it appeared (before its time is out): the loop must not show it again
+sstep 15
+sui notice pc_gameplus_notice 2
+swait 90
+sshot {shots}/early_a_start_room.png
+swait 60
+slog
+goto 0 0 12.5
+swait 10
+sfree
+swait 120
+sshot {shots}/early_b_loop.png
+swait 780
+slog

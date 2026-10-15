@@ -1,4 +1,4 @@
-# the PC settings page's corner line (the version, by language: English, Japanese, Turkish, Arabic), then the port's credits page
+# the PC settings page's corner line (the version, by language: English, Japanese, Turkish, Arabic) and the Extras page's corner credit (English, Japanese, Arabic), then the port's credits page
 # (scredits, as the end of the ending's credits starts it) at normal speed: a shot per card at its held alpha, and the street
 # question that follows it once the page has run out
 srate 1
@@ -8,9 +8,14 @@ sui menu pc
 swait 150
 sexpect menu 1
 sshot {shots}/corner_eng.png
+sui menukey tabprev
+swait 30
+sexpect pctab pc_extras 0
+sshot {shots}/extras_eng.png
 swait 10
 sui menukey close
 swait 30
+swait 10
 sui menukey close
 swait 60
 sui subs 1 4
@@ -18,9 +23,14 @@ sui menu pc
 swait 150
 sexpect menu 1
 sshot {shots}/corner_jpn.png
+sui menukey tabprev
+swait 30
+sexpect pctab pc_extras 0
+sshot {shots}/extras_jpn.png
 swait 10
 sui menukey close
 swait 30
+swait 10
 sui menukey close
 swait 60
 sui subs 1 7
@@ -38,9 +48,15 @@ sui menu pc
 swait 150
 sexpect menu 1
 sshot {shots}/corner_ara.png
+# the tabs run right to left in Arabic: Extras is to the right of Display, around the end
+sui menukey tabnext
+swait 30
+sexpect pctab pc_extras 0
+sshot {shots}/extras_ara.png
 swait 10
 sui menukey close
 swait 30
+swait 10
 sui menukey close
 swait 60
 sui subs 1 0

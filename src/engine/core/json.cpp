@@ -208,7 +208,6 @@ private:
         out.type = Value::Type::Number;
         const char* first = text_.data() + at_ + (text_[at_] == '+' ? 1 : 0);
 #ifdef __APPLE__
-        // Floating-point from_chars requires macOS 26; the app also supports older macOS.
         std::istringstream number(std::string(first, text_.data() + end));
         number.imbue(std::locale::classic());
         if (!(number >> out.number)) return Fail("bad number");

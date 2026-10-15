@@ -49,7 +49,6 @@ std::vector<uint32_t> DecodeUtf8(std::string_view text) {
         for (int k = 0; k < extra && i < text.size(); ++k, ++i) {
             code = (code << 6) | (static_cast<uint8_t>(text[i]) & 0x3F);
         }
-        // typographic quotes: the game's fonts have no glyph for them (a box in "Lisa’s"); the plain ones look the same
         if (code == 0x2018 || code == 0x2019) {
             code = 0x27;
         } else if (code == 0x201C || code == 0x201D) {
@@ -165,7 +164,6 @@ bool FfntFont::Bit(const FfntGlyph& glyph, int x, int y) const {
 }
 
 void FfntFont::AddTurkishGlyphs() {
-    // Retain the original Latin letter shapes and advances; add only missing Turkish marks.
     struct Addition { uint32_t code, base; int kind; };
     for (const auto a : {Addition{0x11e,'G',0}, {0x11f,'g',0}, {0x130,'I',1}, {0x131,'i',2}, {0x15e,'S',3}, {0x15f,'s',3}}) {
         if (Find(a.code)) continue;
@@ -187,7 +185,6 @@ void FfntFont::AddTurkishGlyphs() {
             for(int x=-3;x<=3;++x) { put(cx+x,std::abs(x)>=2 ? 1 : 2); put(cx+x,std::abs(x)>=2 ? 2 : 3); }
         } else if(a.kind==1) { put(cx,1); put(cx+1,1); put(cx,2); put(cx+1,2); }
         else if(a.kind==2) {
-            // Remove the isolated dot above the original lowercase i, stopping at its first blank row.
             bool ink=false; int gap=-1;
             for(int y=0;y<base.height;++y) {
                 bool row=false; for(int x=0;x<base.width;++x) row |= Bit(base,x,y);

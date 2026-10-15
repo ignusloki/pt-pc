@@ -1,0 +1,162 @@
+# Kaffee mit Lisa, Deutsch. Schlüssel = Text (fehlende Schlüssel kommen aus eng.txt)
+name_lisa = Lisa
+name_you = Du
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Überspringen
+ui_affection = Zuneigung
+ui_leave_hold = Halten, um das Date zu verlassen
+title_1 = Teil 1: Schwarzer Kaffee
+title_2 = Teil 2: Zwei Stück Zucker
+title_3 = Teil 3: Letzte Runde
+ending_good = GUTES ENDE: Selbe Zeit, nächste Schleife
+ending_bad = SCHLECHTES ENDE: Kalter Kaffee
+ending_true = WAHRES ENDE: 204863
+
+intro_01 = (Der Flur ist weg. Hier riecht es nach Kaffee. Nach Kaffee und nach etwas sehr Altem.)
+intro_02 = (Ist das... Lisa? Warum lächelt sie? Warum SITZT sie?)
+
+s1_01 = Oh! Du bist wirklich reingekommen. Niemand kommt je rein. Alle laufen im Flur nur an mir vorbei. Immer und immer und immer wieder.
+s1_02 = Setz dich, setz dich! Ich hab Kaffee gemacht. Ich wusste nicht, wie du ihn trinkst, also hab ich ihn so gemacht, wie ich ihn trinke.
+s1_03 = Schwarz. Wie der Flur um drei Uhr morgens.
+c1_a = Schwarz ist perfekt.
+c1_a_r = Siehst du? Wir passen jetzt schon zusammen. Ich wusste es, als du das erste Mal vor mir weggerannt bist.
+c1_b = Könnte ich etwas Milch haben?
+c1_b_r1 = Die Milch ist im Kühlschrank.
+c1_b_r2 = ...Mach den Kühlschrank nicht auf.
+c1_c = Höre ich da ein Radio?
+c1_c_r1 = Welches Radio? Hier gibt es kein Radio. Hier gab es nie ein Radio.
+c1_c_r2 = Trink deinen Kaffee.
+
+s1_04 = Also. Fällt dir an mir etwas auf?
+c2_a = Deine Haare sehen toll aus.
+c2_a_r = Wirklich? Das dauert bei mir ewig. Keiner weiß, wie lange. Nicht mal ich.
+c2_b = Du kommst... mal nicht auf mich zu.
+c2_b_r = Ich sitze! Eine Freundin hat's mir beigebracht. Sie wohnt in einer Badewanne. Süßes Mädchen. Nicht sehr gesprächig.
+c2_c = Hast du sie mit einer Gabel gekämmt?
+c2_c_r = Ich tu so, als hättest du das nicht gesagt. Im So-tun-als-ob bin ich sehr gut. Frag den Flur.
+
+s1_05 = Ich komme nicht viel raus. Mein Arzt sagt, ich sei "technisch gesehen nicht am Leben". Das finde ich ein bisschen wertend.
+s1_06 = Und du? Was machst du den ganzen Tag?
+c3_a = Ich gehe einen Flur entlang. Und nochmal.
+c3_a_r = Ich auch! Wir haben so viel gemeinsam!
+c3_b = Ich sammle kleine Papierschnipsel.
+c3_b_r = Eine Sammlung! Hast du den mit meinem Gesicht drauf? Auf dem sehe ich so gut aus.
+c3_c = Ins Mikro "Jack" rufen, bis es klingelt.
+c3_c_r = ...Da, wo du herkommst, ist das bestimmt ganz normal.
+
+s1_07 = Das ist schön. Normal. Zwei Leute sitzen da und trinken Kaffee. Niemand krabbelt an irgendeiner Decke herum.
+c4_a = Mit dir kann man so gut reden.
+c4_a_r = Hör auf. Gleich macht mein Kopf wieder dieses Ding.
+c4_b = Krabbelst du an Decken herum?
+c4_b_r = Nur am Wochenende.
+c4_c = Darf ich meinen Stuhl etwas wegrücken?
+c4_c_r = ...Oh. Klar. Er ist am Boden festgeschraubt, aber klar.
+
+s2_01 = Darf ich dir ein Geheimnis verraten? Wenn ich nervös werde, macht mein Kopf so ein kleines...
+s2_02 = ...das.
+c5_a = Ehrlich gesagt ist das irgendwie süß.
+c5_a_r = Das hat noch nie jemand süß genannt. Meistens schreien sie und lassen die Taschenlampe fallen.
+c5_b = Bitte mach das nie wieder.
+c5_b_r = Ich kann nichts dafür! Das ist wie Schluckauf. Spukschluckauf.
+c5_c = Hämmerst du deshalb an die Badezimmertür?
+c5_c_r = Die Tür hat angefangen.
+
+s2_03 = Okay, ein Spiel! Meine Lieblingszahl ist 2-0-4-8-6-3. Rate mal, warum.
+c6_a = Ist es dein Geburtstag?
+c6_a_r = Nein, du Dummerchen. Es ist die Uhrzeit. Schau auf die Uhr. ...Wo ist die Uhr hin?
+c6_b = 204863 ist auch meine Lieblingszahl.
+c6_b_r = ...Niemand erinnert sich an die Zahl. Niemand.
+c6_c = Das ist eine echt seltsame Zahl.
+c6_c_r = Sagt die Person, die ihre eigenen Schritte zählt.
+
+s2_04 = Magst du Kinder?
+c7_a = Klar, in vernünftigen Mengen.
+c7_a_r = Vernünftig ist gut. Ich mag vernünftig.
+c7_b = Ich hab mal eins im Waschbecken gefunden.
+c7_b_r = Ach, da bewahrt man sie also auf. Sehr hygienisch.
+c7_c = Nicht wirklich.
+c7_c_r = Das hat das Waschbecken gehört.
+
+s2_05 = Okay. Große Frage. Wenn ich eine Taschenlampe wäre, würdest du mich im Dunkeln ganz fest halten?
+c8_a = Ich würde dich nie loslassen.
+c8_a_r = Auch wenn ich flackere? ...Du bist süß. Niemand sagt je, dass ich süß bin.
+c8_b = Nur bis die Batterien leer sind.
+c8_b_r = Die Taschenlampen in diesem Haus haben keine Batterien. Sie haben Gefühle.
+c8_c = Du würdest eher mich blenden.
+c8_c_r = So nett hat noch nie jemand gesagt: "Dein Gesicht tut mir in den Augen weh".
+
+s2_06 = Ich hab Spaß. Hast du Spaß? Blinzle zweimal, wenn du Spaß hast.
+s2_07 = ...Du hast nicht geblinzelt. Du blinzelst nie. Interessant.
+
+s3_01 = Es wird spät. Hier ist es immer spät. Es ist schon sehr, sehr lange spät.
+s3_02 = Alle gehen durch die Tür am Ende des Flurs. Und dann kommen sie gleich wieder rein.
+c9_a = Ich bleibe noch ein bisschen.
+c9_a_r = Ich wusste, dass du bleibst.
+c9_b = Ich sollte zurück in den Flur.
+c9_b_r = Der Flur ist dann immer noch da. Der Flur ist immer noch da.
+c9_c = Ich glaube, ich war schon mal hier.
+c9_c_r = Das sagst du jedes Mal.
+
+s3_03 = Darf ich dich was fragen? Wie heiße ich?
+c10_a = Lisa.
+c10_a_r = Du hast es dir gemerkt! Niemand merkt es sich. Alle nennen mich nur "das Ding hinter dir".
+c10_b = Ocho?
+c10_b_r = So haben mich die Programmierer genannt. Über die Programmierer reden wir nicht.
+c10_c = Die Frau im Flur?
+c10_c_r = ...Das ist mein Job. Nicht mein Name.
+
+s3_04 = Versprich mir was. Schau nicht hinter dich.
+c11_a = Versprochen.
+c11_a_r = Gut. Da ist nichts. Da ist nie etwas.
+c11_b = (Dreh dich um.)
+c11_b_r1 = (Da ist nichts. Nur eine Tür. Vor einer Sekunde war sie noch nicht da.)
+c11_b_r2 = ...Du hast hingeschaut. Warum schauen immer alle hin?
+c11_c = Kann ich durch den Türspion schauen?
+c11_c_r = Hier gibt es keine Tür. ...Wodurch schaust du dann gerade?
+
+s3_05 = Letzte Frage, versprochen. Kommst du wieder?
+c12_a = Natürlich komme ich wieder.
+c12_a_r = Dann halte ich den Kaffee warm. Für immer, wenn's sein muss. Für immer kann ich gut.
+c12_b = In jeder Schleife.
+c12_b_r = In jeder Schleife. Da, wo ich herkomme, ist das quasi eine Ehe.
+c12_c = Ich mache jetzt das Spiel aus.
+c12_c_r = Du machst WAS aus?
+
+good_01 = Können wir... können wir ein Foto machen? Zur Erinnerung. Ich bin furchtbar im Erinnern.
+good_02 = Sieh uns an! Du siehst nervös aus. Ich sehe aus... wie ich. Es ist perfekt.
+good_03 = Ich hänge es im Flur auf. Neben die anderen Bilder. Dann sehe ich dich jedes Mal, wenn du vorbeigehst.
+good_04 = Selbe Zeit, nächste Schleife? Ich mache den Kaffee. Du bringst die Taschenlampe mit.
+
+bad_01 = Weißt du was? Du bist genau wie alle anderen.
+bad_02 = Du kommst rein. Du siehst dich um. Du gehst. Du kommst zurück. Du bleibst nie, niemals.
+bad_03 = Ich zeig dir, was mit Leuten passiert, die ihren Kaffee nicht austrinken.
+
+true_01 = Das hast du absichtlich ausgewählt, oder?
+true_02 = Das Radio. Die Zahl. Die Schleife. Der Türspion. Du hast aufgepasst.
+true_03 = Also bin ich ehrlich zu dir. Nicht zu dem Mann im Flur. Zu DIR.
+true_04 = Dieser Raum ist nicht echt. Der Kaffee ist nicht echt. Jemand hat das alles gemalt. Ich sitze nicht mal wirklich. Die Pose ist von einer Badewanne geliehen.
+true_05 = Aber du bist echt. Du hältst gerade etwas in den Händen, in einem Raum, den ich nicht sehen kann. Ist es dort auch dunkel?
+true_06 = Ich habe dir in diesem Flur zugesehen. Wieder. Und wieder. So oft hast du diese eine Tür geöffnet.
+true_07 = Keine Sorge. Deinen Spielstand fasse ich nicht an. So eine bin ich nicht.
+true_08 = Ich wollte nur eine Tasse Kaffee mit jemandem, der zurückschaut.
+true_09 = Okay. Geh jetzt zurück. Der Flur vermisst dich. Und das Radio hat dir noch etwas zu sagen.
+true_10 = Und wenn ein Telefon klingelt... lass es noch ein bisschen länger klingeln. Für mich.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Sieh uns an! Zwei breite Lächeln. Ich wusste nicht, dass dein Gesicht das kann. Das behalte ich für immer.
+selfie_both_grumpy = Sieh uns an. Zwei grummelige Gesichter beim Kaffee. Das ehrlichste Bild, das ich habe. Es ist perfekt.
+selfie_she_smiles = Ich lächle und du schaust finster. Alle werden denken, ich bin die Nette. Endlich.
+selfie_you_smile = Du grinst und ich starre finster. Gut. Jetzt wissen alle, wer hier das Sagen hat.
+ui_selfie = Selfie
+ui_selfie_face = Ausdruck
+ui_selfie_tilt = Kopfneigung
+ui_selfie_take = Foto aufnehmen
+ui_face_grumpy = Grummelig
+ui_face_frown = Stirnrunzeln
+ui_face_neutral = Neutral
+ui_face_smile = Lächeln
+ui_face_grin = Breites Grinsen
+ui_photo_saved = Foto gespeichert: {file}
+ui_photo_failed = Das Foto konnte nicht gespeichert werden
+ui_hint_menu = Menü

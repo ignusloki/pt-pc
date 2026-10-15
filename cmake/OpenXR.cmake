@@ -35,6 +35,10 @@ if(PT_OPENXR)
     add_library(pt_xr_test_runtime SHARED tools/xr_test_runtime/xr_test_runtime.cpp)
     target_include_directories(pt_xr_test_runtime PRIVATE "${PT_OPENXR_INCLUDE}" "${stb_SOURCE_DIR}")
     target_link_libraries(pt_xr_test_runtime PRIVATE Vulkan::Headers)
+    if(WIN32)
+      # XR_KHR_D3D12_enable: the swapchain images are D3D12 resources on the application's device
+      target_link_libraries(pt_xr_test_runtime PRIVATE d3d12)
+    endif()
     set_target_properties(pt_xr_test_runtime PROPERTIES OUTPUT_NAME "pt_xr_test_runtime"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/xr_test_runtime" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/xr_test_runtime")
     if(MSVC)

@@ -1,0 +1,3 @@
+# below tier 4: no rush counted, no date
+sexpect lisarushes 0
+sexpect lisadate 0

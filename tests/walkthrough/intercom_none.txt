@@ -1,0 +1,13 @@
+# below tier 2 the painting stays and nothing rings, even with every ring forced (PT_INTERCOM_RING=1)
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -6.6 -1.4 8.0
+ffile -9.49 0.2 9.0
+swait 400
+sexpect intercom 0
+sexpect intercomlit 0
+sexpect body shsb_pctr001_vrtn003_0007 1
+sexpect body shsb_mntr001_0000 0
+slog

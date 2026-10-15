@@ -9,22 +9,23 @@
 #include <string>
 #include <vector>
 
+#include "engine/render/gpu/gpu_resources.h"
+#include "engine/render/upscale/neural_rendering.h"
 #include "engine/render/vk_context.h"
 
 namespace pt {
 
+namespace gpu {
+class CommandList;
+class Device;
+}
+
 class FrameGeneration;
 
-// Fsr is AMD FSR 3.1 (pt.ini fsr3, or fsr from older builds); Fsr4 is listed for the FidelityFX Vulkan DLL that would carry an
-// FSR 4 upscaler (none does yet: upscaling.md, AMD FSR 4); MetalFx is Apple MetalFX on macOS (metalfx_backend.mm)
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
-// the DLSS Super Resolution model (NGX render preset): Auto takes NVIDIA's default for each quality mode
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
-// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp), NVIDIA DLSS Frame Generation (Streamline) or Apple MetalFX
-// frame interpolation (metalfx_backend.mm, macOS 26 or newer)
-enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Count = 4 };
+enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Xess = 4, Count = 5 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
-
 
 struct UpscaleSettings {
     UpscalerKind kind = UpscalerKind::Off;
@@ -33,6 +34,7 @@ struct UpscaleSettings {
     float sharpness = 0.0f;
     DlssModel dlss_model = DlssModel::Auto;
     FrameGenKind frame_generation = FrameGenKind::Off;
+    bool ray_reconstruction = true;
     bool operator==(const UpscaleSettings&) const = default;
 };
 
@@ -45,24 +47,12 @@ bool ParseUpscaleQuality(const std::string& text, UpscaleQuality& out);
 const char* DlssModelKey(DlssModel model);
 bool ParseDlssModel(const std::string& text, DlssModel& out);
 const char* FrameGenKey(FrameGenKind kind);
-// pt.ini frame_generation: off, fsr3, dlss; 0 and 1 (and the other bool spellings) from the builds before DLSS Frame
-// Generation read as off and fsr3
 bool ParseFrameGen(const std::string& text, FrameGenKind& out);
 
-// AMD FSR 3 frame generation needs an RDNA GPU (Radeon RX 5000 series or newer; AMD lists the RX 5700 as its minimum). A GCN
-// part (Polaris, Vega: the RX 400, 500 and Vega series) is below that, and on an RX 580 2048SP the interpolation lost the device
-// at frame submit (upscaling.md, FSR 3 frame generation on GCN). GCN runs wave 64 only, RDNA wave 32 and 64, so an AMD GPU whose
-// subgroup size range is 64 to 64 (VkPhysicalDeviceVulkan13Properties) is GCN. The device IDs are not listed: AMD's are not
-// ordered by generation.
 constexpr uint32_t kAmdVendor = 0x1002;
 bool AmdGcnGpu(uint32_t vendor_id, uint32_t min_subgroup_size, uint32_t max_subgroup_size);
-// the hardware check of FSR 3 frame generation: false with the reason (the page's text key is pc_note_fsr_fg_gpu) on a GPU
-// below AMD's minimum. PT_FSR_FG_ALLOW_UNSUPPORTED=1 (a developer test override, never set by the game) skips it.
 bool FsrFrameGenHardware(VkPhysicalDevice physical, const VkPhysicalDeviceProperties& properties, std::string& reason);
 
-// What NVIDIA DLSS Frame Generation needs on this machine (upscaling.md, DLSS Frame Generation): NGX's requirement query of
-// the FrameGeneration feature (an RTX 40 or later GPU and a driver that has it), hardware-accelerated GPU scheduling, and
-// a build with Streamline. note is the PC settings page's text key for the first requirement that fails.
 struct DlssFrameGenSupport {
     bool checked = false;
     bool hardware = false;
@@ -82,14 +72,13 @@ struct UpscaleImage {
     VkImageUsageFlags usage = 0;
     VkExtent2D extent{};
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    bool Valid() const { return image != VK_NULL_HANDLE; }
+    gpu::ImageHandle handle;
+    bool Valid() const { return image != VK_NULL_HANDLE || static_cast<bool>(handle); }
 };
-
-class Renderer;
 
 struct UpscaleDispatch {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
-    Renderer* renderer = nullptr;
+    gpu::CommandList* list = nullptr;
     UpscaleImage color;
     UpscaleImage depth;
     UpscaleImage motion;
@@ -108,6 +97,13 @@ struct UpscaleDispatch {
     float fov_y = 1.0f;
     bool reset = false;
     uint32_t frame_index = 0;
+    UpscaleImage diffuse_albedo;
+    UpscaleImage specular_albedo;
+    UpscaleImage normal_roughness;
+    UpscaleImage specular_hit_distance;
+    UpscaleImage color_before_transparency;
+    glm::mat4 world_to_view{1.0f};
+    glm::mat4 view_to_clip{1.0f};
 };
 
 struct DeviceFeatureSet {
@@ -126,7 +122,11 @@ struct UpscaleCreate {
     UpscaleQuality quality = UpscaleQuality::Quality;
     DlssModel dlss_model = DlssModel::Auto;
     VkFormat color_format = VK_FORMAT_UNDEFINED;
+    bool ray_reconstruction = false;
+    gpu::CommandList* list = nullptr;
 };
+
+using D3D12UpscaleFactory = std::unique_ptr<class UpscaleBackend> (*)(UpscalerKind kind, gpu::Device& device);
 
 class UpscaleBackend {
 public:
@@ -139,14 +139,11 @@ public:
     virtual void Release() = 0;
     virtual float MipBias(float render_over_display) const;
     virtual bool UsesReactive() const { return true; }
-    // A backend that runs outside the Vulkan command buffer (Apple MetalFX encodes into a Metal command buffer, and a Metal
-    // command buffer cannot be part of one). The renderer ends and submits the frame at the upscale inputs, calls
-    // ExternalSync, runs ExternalRun, then resumes in a new command buffer that waits on ExternalSync's output semaphore.
-    // Dispatch on such a backend is never called.
+    virtual bool RayReconstructionAvailable(std::string& reason) {
+        reason = "only with DLSS";
+        return false;
+    }
     virtual bool ExternalSubmit() const { return false; }
-    // The timeline semaphore and value the renderer submits the inputs with, and the one and value the resumed command buffer
-    // waits on (one shared event, two values: the inputs are submitted signaling v, MetalFX waits v and signals v+1, the resume
-    // waits v+1). The backend advances the pair each call. Returns false when it is not ready.
     virtual bool ExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) {
         signal_semaphore = VK_NULL_HANDLE;
         signal_value = 0;
@@ -154,7 +151,6 @@ public:
         wait_value = 0;
         return false;
     }
-    // Runs the pass on a Metal command buffer; the semaphores of ExternalSync order it against the Vulkan submits
     virtual bool ExternalRun(const UpscaleDispatch& dispatch) {
         (void)dispatch;
         return false;
@@ -170,25 +166,28 @@ public:
                      VkPhysicalDeviceFeatures2& features) override;
     void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family, std::vector<VkDeviceQueueCreateInfo>& queues) override;
     void DeviceCreated(vk::Context& ctx) override;
-    bool AllowsHdr() const override;
     FrameGeneration* FrameGen();
-    // Apple MetalFX frame interpolation (metalfx_backend.mm), macOS 26 or newer; null elsewhere
     FrameGeneration* MetalFxFrameGen();
-    // NVIDIA DLSS Frame Generation (streamline.cpp), only while Streamline is loaded
     FrameGeneration* DlssFrameGenImpl();
+    FrameGeneration* XefgFrameGen();
+    NeuralBackend* Neural();
     const DlssFrameGenSupport& DlssFrameGen() const { return dlss_fg_; }
-    // a menu or the paused game is up (main.cpp): DLSS Frame Generation stays off there (Streamline's guide, section 6.4)
     void SetMenuOpen(bool open) { menu_open_ = open; }
     bool MenuOpen() const { return menu_open_; }
-    // the start that should have loaded Streamline found its crash marker (main.cpp): DLSS Frame Generation reads as failed
     void SetDlssFrameGenFailed(bool failed) {
         dlss_fg_failed_ = failed;
         if (ctx_) {
             CheckDlssFrameGen();
+        } else if (d3d12_checked_) {
+            CheckDlssFrameGenD3D12(d3d12_vendor_, d3d12_device_id_, d3d12_luid_);
         }
     }
+    void CheckDlssFrameGenD3D12(uint32_t vendor_id, uint32_t device_id, const uint8_t (&luid)[8]);
     void FrameTick();
     void Shutdown();
+    void SetD3D12Factory(D3D12UpscaleFactory factory) { d3d12_factory_ = factory; }
+    void SetD3D12Device(gpu::Device* device) { d3d12_device_ = device; }
+    bool D3D12() const { return d3d12_device_ != nullptr; }
     UpscaleBackend* Backend(UpscalerKind kind);
     bool Available(UpscalerKind kind, std::string& reason, bool probe = true);
     bool Enabled(const char* name, bool device) const;
@@ -196,11 +195,17 @@ public:
 
 private:
     void CheckDlssFrameGen();
+    bool d3d12_checked_ = false;
+    uint32_t d3d12_vendor_ = 0;
+    uint32_t d3d12_device_id_ = 0;
+    uint8_t d3d12_luid_[8] = {};
     bool InstanceHas(const char* name) const;
     bool DeviceHas(const char* name) const;
     bool AddExtension(std::vector<const char*>& extensions, const char* name, bool device);
 
     vk::Context* ctx_ = nullptr;
+    gpu::Device* d3d12_device_ = nullptr;
+    D3D12UpscaleFactory d3d12_factory_ = nullptr;
     std::unique_ptr<UpscaleBackend> backends_[static_cast<int>(UpscalerKind::Count)];
     bool probed_[static_cast<int>(UpscalerKind::Count)] = {};
     bool available_[static_cast<int>(UpscalerKind::Count)] = {};
@@ -216,10 +221,14 @@ private:
     uint32_t fg_index_[3] = {};
     VkQueue fg_queue_[3] = {};
     std::unique_ptr<FrameGeneration> frame_gen_;
+    std::unique_ptr<NeuralBackend> neural_;
+    bool neural_created_ = false;
     std::unique_ptr<FrameGeneration> metalfx_frame_gen_;
     bool metalfx_frame_gen_created_ = false;
     std::unique_ptr<FrameGeneration> dlss_frame_gen_;
     bool dlss_frame_gen_created_ = false;
+    std::unique_ptr<FrameGeneration> xefg_frame_gen_;
+    bool xefg_frame_gen_created_ = false;
     DlssFrameGenSupport dlss_fg_;
     bool dlss_fg_failed_ = false;
     bool menu_open_ = false;
@@ -235,19 +244,14 @@ private:
 
 std::unique_ptr<UpscaleBackend> CreateFsrBackend(vk::Context& ctx, int generation);
 std::unique_ptr<UpscaleBackend> CreateDlssBackend(vk::Context& ctx);
-// Apple MetalFX (metalfx_backend.mm, macOS only): the port's temporal upscaler on a Metal command buffer
 std::unique_ptr<UpscaleBackend> CreateMetalfxBackend(vk::Context& ctx);
-// DLSS Super Resolution through Streamline's sl.dlss (streamline.cpp), used instead while Streamline is loaded
 std::unique_ptr<UpscaleBackend> CreateStreamlineDlssBackend(vk::Context& ctx);
-// the NGX render preset hint for a model and whether DLSS runs in auto exposure (dlss_backend.cpp), shared by both DLSS paths
 uint32_t DlssPresetHint(DlssModel model);
 bool DlssAutoExposure();
 std::unique_ptr<UpscaleBackend> CreateXessBackend(vk::Context& ctx);
 void XessDeviceRequirements(bool query, VkInstance instance, VkPhysicalDevice physical, DeviceFeatureSet& out);
 void DlssInstanceExtensions(bool query, std::vector<std::string>& out);
 void DlssDeviceExtensions(bool query, VkInstance instance, VkPhysicalDevice physical, std::vector<std::string>& out);
-// NGX's support query for DLSS Frame Generation (NVSDK_NGX_VULKAN_GetFeatureRequirements, no NGX initialisation): false
-// when the query itself fails; unsupported holds NVSDK_NGX_Feature_Support_Result bits, 0 when supported
 bool DlssFrameGenRequirements(VkInstance instance, VkPhysicalDevice physical, uint32_t& unsupported, std::string& detail);
 
 }

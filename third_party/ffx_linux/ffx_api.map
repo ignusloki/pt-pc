@@ -1,0 +1,4 @@
+{
+  global: ffxCreateContext; ffxDestroyContext; ffxConfigure; ffxQuery; ffxDispatch;
+  local: *;
+};

@@ -1,0 +1,4 @@
+# back on after the next floor: the saved tier (one finish)
+sexpect gameplustier 1
+slog
+squit

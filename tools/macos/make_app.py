@@ -2,6 +2,7 @@
 
 P.T. PC Port.app/Contents
   MacOS/pt                    the game
+  MacOS/extractor/PT.PkgExtract the setup's PKG extraction helper (--extractor), run by the game's first-run screen
   Frameworks/libMoltenVK.dylib Vulkan on Metal (pt looks for it here, src/engine/render/vk_context.cpp)
   Resources/                  what pt finds through SDL_GetBasePath(), which is this folder in a bundle: shaders/, fonts/,
                               voice/, texture-tools/, licenses/ and the loop browser's previews
@@ -100,6 +101,7 @@ def main():
                         help="the game files, for the loop browser previews (shot by the bundled game, --make-loop-previews)")
     parser.add_argument("--identity", default="-", help="Developer ID Application identity, or ad-hoc signing with -")
     parser.add_argument("--no-zip", action="store_true", help="leave the bundle unzipped")
+    parser.add_argument("--extractor", help="the PKG extraction helper published for this Mac (tools/macos/build.py or tools/ci/publish_extractor.py); its LGPL notices are read from <folder>-notices")
     args = parser.parse_args()
     build = Path(args.build)
     exe = Path(args.exe) if args.exe else build / "pt"
@@ -127,6 +129,7 @@ def main():
         shutil.copy2(spv, resources / "shaders" / spv.name)
     copy_voice(build / "voice", resources / "voice")
     shutil.copytree(build / "fonts", resources / "fonts")
+    shutil.copytree(build / "lisa_date", resources / "lisa_date")
     if (build / "texture-tools").is_dir():
         shutil.copytree(build / "texture-tools", resources / "texture-tools")
     if (build / "licenses").is_dir():
@@ -159,6 +162,21 @@ def main():
             "NSMicrophoneUsageDescription": "P.T. uses your microphone for its voice puzzle and microphone test. You can turn microphone input off in PC Settings.",
         }, f)
     (contents / "PkgInfo").write_text("APPL????")
+    # the first-run screen (src/game/first_run.h) extracts a PKG with the setups' own helper: code goes in Contents/MacOS, where it is
+    # signed with the app; the LGPL licence and corresponding source beside the other licences
+    if args.extractor:
+        extractor = Path(args.extractor)
+        notices = extractor.with_name(extractor.name + "-notices")
+        helper = extractor / "PT.PkgExtract"
+        if not helper.is_file() or not is_macho(helper) or architecture(helper) != arch:
+            sys.exit(f"{helper} is not a {arch} Mach-O executable; publish it for the matching osx-arm64 or osx-x64 runtime")
+        if not (notices / "LICENSE-LibOrbisPkg.txt").is_file() or not (notices / "LibOrbisPkg-corresponding-source.zip").is_file():
+            sys.exit(f"{notices} lacks the LibOrbisPkg licence or corresponding source")
+        shutil.copytree(extractor, contents / "MacOS" / "extractor", ignore=shutil.ignore_patterns("*.pdb"))
+        (contents / "MacOS" / "extractor" / "PT.PkgExtract").chmod(0o755)
+        shutil.copytree(notices, resources / "licenses" / "PT.PkgExtract")
+    else:
+        print("no PKG extraction helper (--extractor): a PKG chosen on the first-run screen cannot be extracted, only an extracted folder works")
     # the loop browser's previews are shot by the bundled game itself (tools/package.py does the same for Windows)
     if Path(args.game).is_dir():
         previews = resources / "loop-previews"

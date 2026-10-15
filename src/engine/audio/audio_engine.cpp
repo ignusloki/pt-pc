@@ -5,10 +5,14 @@
 #include <string>
 
 #include "engine/audio/channel_layout.h"
+#include "engine/audio/spatial_output.h"
 #include "engine/core/log.h"
+#include "engine/platform/device_start.h"
 #include "engine/platform/sdl_diag.h"
 
 namespace pt::audio {
+
+AudioOutput::AudioOutput() = default;
 
 AudioOutput::~AudioOutput() {
     Close();
@@ -16,12 +20,24 @@ AudioOutput::~AudioOutput() {
 
 bool AudioOutput::Open(uint32_t sample_rate, bool surround, RenderFunction render) {
     Close();
-    if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    if (devices::AudioStarting()) {
+        LogWarn("audio: the audio devices are still starting (surround requested: {})", surround);
+        return false;
+    }
+    if (!devices::EnsureAudio()) {
         LogError("audio: SDL audio init failed (surround requested: {}): {} (audio drivers built in: {})", surround,
                  SDL_GetError(), SdlCompiledAudioDrivers());
         return false;
     }
     render_ = std::move(render);
+    if (prefer_spatial_) {
+        auto spatial = std::make_unique<SpatialOutput>();
+        if (spatial->Open(sample_rate, render_)) {
+            spatial_ = std::move(spatial);
+            channels_ = 8;
+            return true;
+        }
+    }
     SDL_AudioSpec preferred_spec{};
     const bool queried = SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &preferred_spec, nullptr);
     const int preferred_channels = queried ? preferred_spec.channels : -1;
@@ -145,6 +161,7 @@ bool AudioOutput::Open(uint32_t sample_rate, bool surround, RenderFunction rende
 }
 
 void AudioOutput::Close() {
+    spatial_.reset();
     if (stream_) {
         SDL_UnbindAudioStream(stream_);
         SDL_DestroyAudioStream(stream_);

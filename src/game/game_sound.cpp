@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "game/game_sound.h"
 
 #include <algorithm>
@@ -5,21 +6,33 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 
 #include "engine/core/log.h"
+#include "engine/core/strcode.h"
+#include "engine/audio/wwise_bank.h"
 #include "engine/vfx/vfx_file.h"
+#include "game/archive.h"
 
 namespace pt::game {
 namespace {
+
+const std::unordered_map<uint32_t, std::string>& ArchiveEventIds() {
+    static const std::unordered_map<uint32_t, std::string> ids = [] {
+        std::unordered_map<uint32_t, std::string> out;
+        for (const ArchiveEntry& e : ArchiveEntries()) {
+            if (e.unlock.starts_with("event:")) out.emplace(audio::Fnv1Hash32(e.unlock.substr(6)), std::string(e.unlock.substr(6)));
+        }
+        return out;
+    }();
+    return ids;
+}
 
 struct FootstepSwitch {
     const char* name;
     uint32_t id;
 };
 
-// the Material switch values of 0x1279AF0's surface types 1 to 6 (FNV-1 of the names; 3 and 5 have no known name). The stair
-// treads (0x4FB17187) play type 5: the original's steps down the f010 stairs match its containers (normalized correlation 0.94,
-// wood 0.75), the hallway floor around them matches wood and the start room concrete
 FootstepSwitch FootstepMaterial(uint32_t geom_material) {
     switch (geom_material) {
     case 0x59D11AF1: return {"tile", 0x9D366849};
@@ -94,12 +107,9 @@ bool GameSound::Init(bool open_device, std::string_view language, bool surround)
         const std::string id = system_.Subtitles().SubtitleIdForMarker(label);
         LogInfo("sound: marker {} -> subtitle {}", label, id.empty() ? "none" : id);
         if (!id.empty()) {
-            // the subtitle follows its sound: a sound stopped early (a stop trap, Set_state_game_over's Stop_ALL after Lisa's
-            // kill, a stage unload) ends it (SubtitlePlayer::EndStopped)
             game_.QueueSubtitle(id, 0.0f, playing);
-            // the Archive's spoken lines (archive.h): a line heard in play opens its entry
             std::string key = "voice:" + id;
-            std::transform(key.begin(), key.end(), key.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+            std::transform(key.begin(), key.end(), key.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
             game_.NoteArchive(key);
         }
     });
@@ -127,7 +137,6 @@ audio::GameObjectId GameSound::OneShotObject(const glm::vec3& position) {
     return id;
 }
 
-// 0xF9B040: groups sorted by ascending priority (0x1392650), the first one containing the point wins
 const GameSound::Area* GameSound::AreaAt(const glm::vec3& position) const {
     const Area* best = nullptr;
     for (const Area& area : areas_) {
@@ -141,7 +150,6 @@ const GameSound::Area* GameSound::AreaAt(const glm::vec3& position) const {
     return best;
 }
 
-// 0xFA9680, 0xFA8DC0: the aux sends of the area at the object's own position (0xF9B040)
 void GameSound::SetAreaSends(audio::GameObjectId object, const glm::vec3& position) {
     const Area* area = AreaAt(position);
     system_.SetObjectAuxSends(object, area ? std::span<const audio::AuxSendLevel>(area->sends) : std::span<const audio::AuxSendLevel>());
@@ -158,7 +166,6 @@ uint32_t GameSound::PostEvent(std::string_view name, const glm::vec3* position) 
     return playing;
 }
 
-// the Archive's sounds without a transcript (archive.h, unlock key event:<name>): the event posted in play opens the entry
 void GameSound::NoteArchiveEvent(std::string_view name) {
     if (name.starts_with("Play_")) {
         game_.NoteArchive("event:" + std::string(name));
@@ -169,6 +176,7 @@ uint32_t GameSound::PostEventId(uint32_t id, const glm::vec3* position) {
     if (!ready_) {
         return 0;
     }
+    if (const auto it = ArchiveEventIds().find(id); it != ArchiveEventIds().end()) NoteArchiveEvent(it->second);
     const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
     const audio::PlayingId playing = system_.PostEventId(id, object);
     if (position) one_shot_objects_.Track(object, playing);
@@ -201,8 +209,6 @@ uint32_t GameSound::PostRecordEventId(int record, uint32_t id, const glm::vec3& 
     return system_.PostEventId(id, kRecordSoundBase + record);
 }
 
-// the record's slot of the ShGimmick sound control follows its connect point or body while its sounds play (0x954270; Lisa's
-// steps and breath, 0x12888D0: +0xC0 sets her slot's position, +0x78 moves the voices); its area sends follow too
 void GameSound::MoveRecordSound(int record, const glm::vec3& position) {
     if (!ready_ || record < 0 || record >= kRecordSoundCount) {
         return;
@@ -267,6 +273,26 @@ uint32_t GameSound::PlayStream(std::vector<uint8_t> wem, const glm::vec3* positi
     return playing;
 }
 
+uint32_t GameSound::PlayStreamAs(std::vector<uint8_t> wem, std::string_view donor_event, const glm::vec3& position) {
+    if (!ready_) {
+        return 0;
+    }
+    const audio::GameObjectId object = OneShotObject(position);
+    const audio::PlayingId playing = system_.PlayStreamAs(std::move(wem), donor_event, object);
+    one_shot_objects_.Track(object, playing);
+    return playing;
+}
+
+uint32_t GameSound::PlayMedia(std::shared_ptr<const audio::Media> media, const glm::vec3* position) {
+    if (!ready_) {
+        return 0;
+    }
+    const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
+    const audio::PlayingId playing = system_.PlayMedia(std::move(media), object);
+    if (position) one_shot_objects_.Track(object, playing);
+    return playing;
+}
+
 void GameSound::SeekPlayingId(uint32_t playing_id, float seconds) {
     if (ready_ && playing_id) {
         system_.SeekPlayingId(playing_id, seconds);
@@ -304,12 +330,10 @@ void GameSound::Footstep(bool left, const glm::vec3& position) {
         footstep_surface_ = surface;
         LogDebug("sound: footstep material {} (surface {:#x} at {:.2f} {:.2f} {:.2f})", material.name, surface, position.x, position.y, position.z);
     }
-    system_.SetSwitchId(0xE6640542, material.id, kPlayerObject);  // group Material
+    system_.SetSwitchId(0xE6640542, material.id, kPlayerObject);
     system_.PostEvent(left ? "Play_plr_footstep_wk_l" : "Play_plr_footstep_wk_r", kPlayerObject);
 }
 
-// 0xF923C0, 0xFA7FB0: an anim event posts its sound on an object of its own, registered on demand ("AnimEvent"); 0x634080 releases the
-// object once its sounds end, so the -200 dB SetVolume_O of Play_plr_footstep_creak mutes a creak only while the previous one plays
 void GameSound::AnimEvent(std::string_view sound, uint64_t event, const glm::vec3& position) {
     if (!ready_) {
         return;
@@ -321,7 +345,19 @@ void GameSound::AnimEvent(std::string_view sound, uint64_t event, const glm::vec
     }
     system_.SetObjectTransform(o.object, position, game_.GetPlayer().BodyForward());
     SetAreaSends(o.object, position);
-    system_.SetSwitchId(0xE6640542, FootstepMaterial(game_.SurfaceMaterial(position)).id, o.object);
+    const uint32_t surface = game_.SurfaceMaterial(position);
+    const FootstepSwitch material = FootstepMaterial(surface);
+    static const uint64_t kFootCreak = StrCode64("FOOT_CREAK") & kStrCode64Mask;
+    const bool silent = event == kFootCreak && material.id != FootstepMaterial(0).id;
+    if (surface != o.logged_surface) {
+        o.logged_surface = surface;
+        LogDebug("sound: motion event {} on material {} (surface {:#x} at {:.2f} {:.2f} {:.2f}){}", sound, material.name, surface, position.x, position.y,
+                 position.z, silent ? ", not posted" : "");
+    }
+    if (silent) {
+        return;
+    }
+    system_.SetSwitchId(0xE6640542, material.id, o.object);
     o.playing.push_back(system_.PostEvent(sound, o.object));
 }
 
@@ -329,11 +365,6 @@ audio::PlayingId GameSound::PostGimmickDialogue(uint32_t dialogue_event, std::sp
     if (!ready_) {
         return 0;
     }
-    // One talk at a time: every record's dialogue goes to slot 0 of the shared ShGimmick sound control, and a new one queued
-    // there (0x1255B20, priority not below the playing one's; every P.T. dialogue event has priority 0) has the update
-    // 0x1255F70 stop the playing sequence (slot flag 4, vfunc +0x88 with the slot's transition, 0) before 0x12563B0 opens
-    // the new one. The port had kept the old talk playing under the new one, so each re-entry into the maze B bathroom
-    // stacked another baby's talk.
     for (const DialogueObject& d : dialogue_objects_) {
         system_.StopPlayingId(d.playing, 0.0f);
         system_.UnregisterObject(d.object);
@@ -449,8 +480,6 @@ void GameSound::OnStageLoaded(Stage& stage) {
                 }
                 edges_.push_back(std::move(edge));
             } else if (e.class_name == "FxLocatorData") {
-                // any effect with an FxSoundCallProgramEffectNode sounds while its locator is shown, not only the fxsd files:
-                // fx_sh_wtrbld01b_s2, the blood water of the bathroom, drips Play_sfx_water_drop_b
                 const std::string vfx = f.GetString(e, "vfxFile");
                 auto node = sound_nodes_.find(vfx);
                 if (node == sound_nodes_.end()) {
@@ -501,8 +530,6 @@ void GameSound::OnStageLoaded(Stage& stage) {
     }
 }
 
-// An active block is deactivated before it unloads (0x486FA0): its sources stop at once (0xF9FED0) and its effect instances are
-// suspended, then deleted with the bodies (0xB56190 marks the instance, +0xB9 bit 0), which releases their sound nodes (0xB6E0F0)
 void GameSound::OnStageUnloading(const Stage& stage) {
     for (Emitter& e : emitters_) {
         if (e.stage_id == stage.id) {
@@ -528,9 +555,6 @@ void GameSound::OnStageUnloading(const Stage& stage) {
 
 void GameSound::UpdateEmitters() {
     for (Emitter& e : emitters_) {
-        // A SoundSourceBody takes its event (+0x7C) and shapes only at its block's activation (+0x40, 0xF9F4B0 -> 0xF9F4D0);
-        // until then the source manager's update (0xF9E810 -> +0xD0, 0xFA0B30) finds no event and starts nothing. The
-        // deactivation (+0x48, 0xF9FED0) stops a playing sound at once (transition 0, linear)
         const Stage* stage = game_.Stages().FindById(e.stage_id);
         if (!stage || !stage->active) {
             if (e.playing) {
@@ -575,8 +599,6 @@ void GameSound::UpdateEmitters() {
     }
 }
 
-// the locator's effect instance goes, and the sound node's release 0xB6E0F0 stops a sound that still plays over the node's fade and
-// curve, or posts its soundStop, or lets it play out
 void GameSound::ReleaseVfxSound(VfxSound& v) {
     if (v.playing && system_.IsPlaying(v.playing)) {
         if (v.stop_playing) {
@@ -588,7 +610,6 @@ void GameSound::ReleaseVfxSound(VfxSound& v) {
     v.playing = 0;
 }
 
-// PT_MUTE_EVENT=<event>: that effect sound is not posted (a test compares a capture with and without it)
 audio::PlayingId GameSound::PostVfxEvent(const std::string& event, audio::GameObjectId object) {
     static const char* muted = std::getenv("PT_MUTE_EVENT");
     if (muted && event == muted) {
@@ -604,8 +625,6 @@ void GameSound::UpdateVfxSounds(float dt) {
         if (!stage) {
             continue;
         }
-        // the effect instance of a loaded but inactive stage is suspended until the activation (VfxScene::SyncStages), so its
-        // sound node posts nothing before it
         const BodyState& body = stage->Body(v.entity);
         const bool visible = stage->active && body.visible && body.enable;
         if (!visible) {
@@ -636,7 +655,6 @@ void GameSound::UpdateVfxSounds(float dt) {
     }
 }
 
-// 0xF9B650, 0xF9CD00, 0xF9CF00, 0xF9D260: one Ambient object per ambience, volumeRtpc ramps over the edge fadeTime + 1 ms
 void GameSound::UpdateAreas(float dt) {
     const Area* best = AreaAt(listener_);
     const uint32_t stage = best ? best->stage_id : 0;
@@ -674,6 +692,7 @@ void GameSound::UpdateAreas(float dt) {
         a.fade = std::clamp(a.fade + (a.event == event ? step : -step), 0.0f, 1.0f);
         if (a.fade > 0.0f) {
             if (!a.playing || !system_.IsPlaying(a.playing)) {
+                NoteArchiveEvent(a.event);
                 a.playing = system_.PostEvent(a.event, a.object);
             }
             system_.SetRtpc(volume_rtpc_, a.fade, a.object);

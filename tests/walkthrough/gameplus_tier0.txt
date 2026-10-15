@@ -1,0 +1,2 @@
+# the next floor entered is a new loop: Game+ is off, the original game
+sexpect gameplustier 0

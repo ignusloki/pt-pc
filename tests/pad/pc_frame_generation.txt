@@ -23,25 +23,7 @@
 20 swait 40
 20 sexpect page 1
 20 sexpect pcrow pc_display_mode
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
+20 sui pcfocus pc_upscaler
 20 swait 6
 20 sexpect pcrow pc_upscaler
 20 sexpect pcvalue pc_upscaler 0
@@ -52,17 +34,7 @@
 20 swait 6
 20 sexpect pcvalue pc_upscaler 1
 20 sexpect pcenabled pc_frame_generation 1
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
+20 sui pcfocus pc_frame_generation
 20 swait 6
 20 sexpect pcrow pc_frame_generation
 20 sexpect pcvalue pc_frame_generation 0
@@ -72,33 +44,7 @@
 20 swait 120
 20 sexpect pcvalue pc_frame_generation 1
 20 sshot fg1_on.png
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
+20 sui pcfocus pc_resolution
 20 swait 6
 20 sexpect pcrow pc_resolution
 20 sbutton 0 left 1
@@ -106,33 +52,7 @@
 20 sbutton 0 left 0
 20 swait 120
 20 sshot fg2_smaller_window.png
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
-20 swait 6
-20 sbutton 0 down 1
-20 swait 3
-20 sbutton 0 down 0
+20 sui pcfocus pc_frame_generation
 20 swait 6
 20 sexpect pcrow pc_frame_generation
 20 sexpect pcvalue pc_frame_generation 1
@@ -142,17 +62,7 @@
 20 swait 120
 20 sexpect pcvalue pc_frame_generation 0
 20 sshot fg3_off.png
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
-20 swait 6
-20 sbutton 0 up 1
-20 swait 3
-20 sbutton 0 up 0
+20 sui pcfocus pc_upscaler
 20 swait 6
 20 sexpect pcrow pc_upscaler
 20 sbutton 0 left 1

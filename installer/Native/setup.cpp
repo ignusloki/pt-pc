@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <optional>
 #include <cwctype>
+#include "engine/platform/os.h"
 #include "engine/platform/self_integrity.h"
 #include "engine/platform/update_check.h"
 #include "setup_core.h"
@@ -27,17 +28,14 @@ namespace fs=std::filesystem;
 namespace {
 using namespace pt::setup;
 constexpr const wchar_t* kProduct=L"P.T. PC Port";constexpr const wchar_t* kSetupTitle=L"P.T. PC Port Setup";constexpr const wchar_t* kFolder=L"P.T. PC Port";
-// the worker thread never touches a window: it posts the status text, the progress (permille) and the result
 constexpr UINT kStatus=WM_APP+1,kFinished=WM_APP+2,kProgress=WM_APP+3;
 HWND window,pkg_edit,dest_edit,status_label,install_button,cancel_button,shortcut_check,progress_bar,update_label;
-// a newer release, looked for once when the window opens (docs/updates.md); a timer shows it when the thread is done
 pt::update::Checker updates;constexpr UINT_PTR kUpdateTimer=1;
 float dpi_scale=1.0f;HFONT body_font;
 std::atomic<bool> cancel{false},busy{false};std::thread worker;
 std::atomic<int> posted_permille{-1};
-// the status line: the current step and, once the install is measured, its percentage; the bar is a marquee until then
 std::wstring status_text;int percent=-1;bool marquee=false;
-ProgressTrace trace;  // the --install command line's progress record
+ProgressTrace trace;
 std::wstring Widen(const std::string& s){int n=MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),nullptr,0);std::wstring w(n,L'\0');MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),w.data(),n);return w;}
 std::wstring Text(HWND h){int n=GetWindowTextLengthW(h);std::wstring s(n+1,L'\0');GetWindowTextW(h,s.data(),n+1);s.resize(n);return s;}
 void ReportWide(const std::wstring& text){if(window)PostMessageW(window,kStatus,0,reinterpret_cast<LPARAM>(new std::wstring(text)));}
@@ -53,27 +51,27 @@ void BarMarquee(bool on){
     SendMessageW(progress_bar,PBM_SETMARQUEE,FALSE,0);SetWindowLongPtrW(progress_bar,GWL_STYLE,GetWindowLongPtrW(progress_bar,GWL_STYLE)&~LONG_PTR(PBS_MARQUEE));
     SendMessageW(progress_bar,PBM_SETRANGE32,0,1001);SendMessageW(progress_bar,PBM_SETPOS,0,0);
 }
-// the themed bar animates towards a higher position over a second and shows less than it was told; a step back is drawn at once
 void BarAt(int permille){if(marquee)BarMarquee(false);SendMessageW(progress_bar,PBM_SETPOS,permille+1,0);SendMessageW(progress_bar,PBM_SETPOS,permille,0);}
-// the target (when it exists) and every folder above it: no junctions or symbolic links
 void CheckParents(const fs::path& destination){
     for(auto p=fs::absolute(destination);!p.empty();){
-        DWORD attr=GetFileAttributesW(p.c_str());if(attr!=INVALID_FILE_ATTRIBUTES && (attr&FILE_ATTRIBUTE_REPARSE_POINT))throw std::runtime_error("Choose a destination without junctions or symbolic links.");
+        if(pt::os::IsLink(p))throw std::runtime_error("Choose a destination without junctions or symbolic links.");
         auto parent=p.parent_path();if(parent==p)break;p=parent;
     }
 }
-std::string Hash(const fs::path& file){
+std::string HashPart(const fs::path& file,uint64_t limit){
     BCRYPT_ALG_HANDLE algorithm{};BCRYPT_HASH_HANDLE hash{};
     if(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0)throw std::runtime_error("SHA256 provider unavailable.");
     DWORD size=0,used=0;BCryptGetProperty(algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&size),sizeof(size),&used,0);
     std::vector<UCHAR> object(size);if(BCryptCreateHash(algorithm,&hash,object.data(),size,nullptr,0,0)<0){BCryptCloseAlgorithmProvider(algorithm,0);throw std::runtime_error("SHA256 initialization failed.");}
     std::ifstream input(file,std::ios::binary);std::vector<char> buffer(1024*1024);bool ok=bool(input);
-    while(input){CheckCancel();input.read(buffer.data(),buffer.size());if(input.gcount() && BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),ULONG(input.gcount()),0)<0)ok=false;}
-    std::array<UCHAR,32> bytes{};ok=ok && input.eof() && BCryptFinishHash(hash,bytes.data(),bytes.size(),0)>=0;BCryptDestroyHash(hash);BCryptCloseAlgorithmProvider(algorithm,0);
+    uint64_t left=limit;
+    while(input && left){CheckCancel();input.read(buffer.data(),std::streamsize(std::min<uint64_t>(buffer.size(),left)));left-=uint64_t(input.gcount());if(input.gcount() && BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),ULONG(input.gcount()),0)<0)ok=false;}
+    std::array<UCHAR,32> bytes{};ok=ok && (input.eof() || left==0) && BCryptFinishHash(hash,bytes.data(),bytes.size(),0)>=0;BCryptDestroyHash(hash);BCryptCloseAlgorithmProvider(algorithm,0);
     if(!ok)throw std::runtime_error("Could not verify file integrity.");
     const char* hex="0123456789abcdef";std::string result;for(auto b:bytes){result+=hex[b>>4];result+=hex[b&15];}return result;
 }
-// the setup's own file against a corrupt download (self_integrity.h, the stamp of tools/ci/stamp_integrity.py)
+std::string Hash(const fs::path& file){return HashPart(file,UINT64_MAX);}
+std::string HashBody(const fs::path& file){return HashPart(file,pt::trailer::BodySize(file));}
 void VerifyIntegrity(){
     CheckCancel();
     if(!pt::integrity::IntegrityOk())throw std::runtime_error("This setup file is damaged or was modified. Please download it again.");
@@ -85,13 +83,15 @@ std::vector<InstalledFile> Unpack(const fs::path& root){
 }
 void Extract(const fs::path& staging,const fs::path& package){
     fs::path helper=staging/L"extractor/PT.PkgExtract.exe",assets=staging/L"CUSA01127";
-    std::wstring command=L"\""+helper.native()+L"\" \""+fs::absolute(package).native()+L"\" \""+assets.native()+L"\"";
+    using pt::os::QuoteWindowsArgument;
+    std::wstring command=QuoteWindowsArgument(helper.native())+L" "+QuoteWindowsArgument(fs::absolute(package).native())+L" "+QuoteWindowsArgument(assets.native());
     SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
     HANDLE log=CreateFileW((staging/L"install-extraction.log").c_str(),GENERIC_WRITE,FILE_SHARE_READ,&security,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(log==INVALID_HANDLE_VALUE)throw std::runtime_error("Could not create extraction log.");
     HANDLE nul=CreateFileW(L"NUL",GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,&security,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     STARTUPINFOW start{sizeof(start)};start.dwFlags=STARTF_USESTDHANDLES;start.hStdOutput=start.hStdError=log;start.hStdInput=nul;PROCESS_INFORMATION process{};
-    BOOL launched=CreateProcessW(helper.c_str(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,staging.c_str(),&start,&process);CloseHandle(log);if(nul!=INVALID_HANDLE_VALUE)CloseHandle(nul);
+    BOOL launched=CreateProcessW(pt::os::ExtendedLengthPath(helper).c_str(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,
+                                 staging.native().size()<MAX_PATH-2?staging.c_str():nullptr,&start,&process);CloseHandle(log);if(nul!=INVALID_HANDLE_VALUE)CloseHandle(nul);
     if(!launched)throw std::runtime_error("Could not start the PKG extraction helper.");
     const uint64_t before=progress.done;
     while(WaitForSingleObject(process.hProcess,100)==WAIT_TIMEOUT){
@@ -101,7 +101,6 @@ void Extract(const fs::path& staging,const fs::path& package){
     DWORD code=1;GetExitCodeProcess(process.hProcess,&code);CloseHandle(process.hThread);CloseHandle(process.hProcess);CheckCancel();
     if(code){std::ifstream input(staging/L"install-extraction.log");std::string details((std::istreambuf_iterator<char>(input)),{});throw std::runtime_error("PKG extraction failed. "+details.substr(0,600));}
 }
-// The folder of the port install the desktop shortcut "P.T. PC Port" starts, or empty
 fs::path ShortcutInstall(){
     fs::path result;PWSTR desktop=nullptr;
     if(FAILED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&desktop))){CoTaskMemFree(desktop);return result;}
@@ -109,10 +108,10 @@ fs::path ShortcutInstall(){
     std::error_code error;if(!fs::is_regular_file(name,error))return result;
     const bool com=SUCCEEDED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED));IShellLinkW* link=nullptr;
     if(SUCCEEDED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_IShellLinkW,reinterpret_cast<void**>(&link)))){
-        IPersistFile* persist=nullptr;wchar_t target[MAX_PATH]{};
+        IPersistFile* persist=nullptr;std::wstring target(32768,L'\0');
         if(SUCCEEDED(link->QueryInterface(IID_IPersistFile,reinterpret_cast<void**>(&persist)))){
-            if(SUCCEEDED(persist->Load(name.c_str(),STGM_READ)) && SUCCEEDED(link->GetPath(target,MAX_PATH,nullptr,SLGP_RAWPATH))){
-                const fs::path dir=fs::path(target).parent_path();try{if(InspectInstall(dir).found)result=dir;}catch(...){}
+            if(SUCCEEDED(persist->Load(name.c_str(),STGM_READ)) && SUCCEEDED(link->GetPath(target.data(),int(target.size()),nullptr,SLGP_RAWPATH))){
+                target.resize(wcslen(target.c_str()));const fs::path dir=fs::path(target).parent_path();try{if(InspectInstall(dir).found)result=dir;}catch(...){}
             }
             persist->Release();
         }
@@ -125,11 +124,9 @@ void Shortcut(const fs::path& destination){
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);IShellLinkW* link=nullptr;
     if(SUCCEEDED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_IShellLinkW,reinterpret_cast<void**>(&link)))){
         link->SetPath((destination/L"pt.exe").c_str());link->SetWorkingDirectory(destination.c_str());link->SetDescription(kProduct);
-        // the port's own icon (assets/pt.ico, in pt.exe), not one made from the game's icon0.png
         link->SetIconLocation((destination/L"pt.exe").c_str(),0);
         PWSTR desktop=nullptr;IPersistFile* persist=nullptr;
         if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&desktop)) && SUCCEEDED(link->QueryInterface(IID_IPersistFile,reinterpret_cast<void**>(&persist)))){
-            // the shortcut always starts what was just installed: an existing one is rewritten (it kept an update's old exe and icon)
             const fs::path name=fs::path(desktop)/(std::wstring(kProduct)+L".lnk");
             persist->Save(name.c_str(),TRUE);persist->Release();
         }
@@ -137,14 +134,29 @@ void Shortcut(const fs::path& destination){
     }
     CoUninitialize();
 }
-// A new install, or the update of the install in `destination` (the window asks first; the command line updates directly).
+constexpr size_t kMaxGamePath=250;
 InstallOutcome Install(const fs::path& input,const fs::path& destination,bool shortcut){
+    if(!destination.empty() && (FolderPath(destination)/L"pt.exe").native().size()>=kMaxGamePath)
+        throw std::runtime_error("This installation folder's path is too long: the game cannot start when its path has 250 characters or more. Choose a folder with a shorter path.");
     InstallSteps steps;steps.version=std::string(pt::update::CurrentVersion());
     GUID guid{};CoCreateGuid(&guid);wchar_t id[40];StringFromGUID2(guid,id,40);std::wstring wide(id);steps.unique_id=std::string(wide.begin()+1,wide.end()-1);
     steps.check_parents=CheckParents;steps.verify_integrity=VerifyIntegrity;steps.unpack=Unpack;steps.extract=Extract;steps.shortcut=Shortcut;
     steps.validate_runtime=[](const std::vector<InstalledFile>& files){RequireProgramFiles(files,{"amd_fidelityfx_vk.dll","nvngx_dlss.dll","libxess.dll"});};
+    steps.process_alive=[](uint64_t pid){return pt::os::ProcessAlive(pid);};
+    steps.known_folders=[]{std::vector<fs::path> folders;for(const KNOWNFOLDERID& id:{FOLDERID_Downloads,FOLDERID_Desktop,FOLDERID_Documents}){PWSTR path=nullptr;if(SUCCEEDED(SHGetKnownFolderPath(id,0,nullptr,&path))&&path)folders.emplace_back(path);CoTaskMemFree(path);}return folders;};
     steps.payload_bytes=[]{auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(100),RT_RCDATA);if(!resource)throw std::runtime_error("Installer payload missing.");
         return PayloadBytes(static_cast<const unsigned char*>(LockResource(LoadResource(nullptr,resource))),SizeofResource(nullptr,resource));};
+    auto payload=[]{auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(100),RT_RCDATA);if(!resource)throw std::runtime_error("Installer payload missing.");
+        return std::pair{static_cast<const unsigned char*>(LockResource(LoadResource(nullptr,resource))),size_t(SizeofResource(nullptr,resource))};};
+    steps.hash_file=Hash;
+    steps.entries=[payload]{auto [data,size]=payload();return ListPayload(data,size);};
+    steps.fetch=[payload](const fs::path& folder,const std::vector<PayloadEntry>& wanted){std::set<std::string> names;for(const auto& entry:wanted)names.insert(entry.path);
+        auto [data,size]=payload();return UnpackPayload(data,size,folder,Hash,[&names](const std::string& name){return names.count(name)>0;});};
+    if(pt::update::TestOverrides()){
+        if(const char* at=std::getenv("PT_UPDATE_TEST_FAIL_AT"))steps.fail_at=std::atoi(at);
+        if(const char* at=std::getenv("PT_UPDATE_TEST_PAUSE_AT"))steps.pause_at=std::atoi(at);
+        if(const char* file=std::getenv("PT_UPDATE_TEST_CORRUPT"))steps.corrupt_after_swap=file;
+    }
     return RunInstall(input,destination,shortcut,steps);
 }
 std::wstring Outcome(const InstallOutcome& outcome){
@@ -153,6 +165,7 @@ std::wstring Outcome(const InstallOutcome& outcome){
         std::to_string(outcome.swap.added)+" added, "+std::to_string(outcome.swap.removed)+" removed"+(outcome.archives_restored?", game archives restored":"")+". Your settings and saves are unchanged.");
     else text=L"Installed. Launch pt.exe or the desktop shortcut.";
     if(!outcome.notes.empty())text+=L" Your copy differs from the tested US release; install-notes.txt in the install folder lists how.";
+    if(outcome.title_picture_missing)text+=L" The start picture (sce_sys/pic1.png) is still missing: select your PKG or dump folder above and press Install again to add it.";
     return text;
 }
 HWND Control(const wchar_t* kind,const wchar_t* text,DWORD style,int x,int y,int w,int h,int id){
@@ -165,16 +178,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
         switch(LOWORD(wp)){
         case 10:{wchar_t path[32768]{};OPENFILENAMEW dialog{sizeof(dialog)};dialog.hwndOwner=hwnd;dialog.lpstrFilter=L"PS4 package (*.pkg)\0*.pkg\0\0";dialog.lpstrFile=path;dialog.nMaxFile=32768;dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;if(GetOpenFileNameW(&dialog))SetWindowTextW(pkg_edit,path);break;}
         case 17:{BROWSEINFOW browse{};browse.hwndOwner=hwnd;browse.lpszTitle=L"Select the CUSA01127 game folder from your console dump (it holds chunk1.psarc).";browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;auto item=SHBrowseForFolderW(&browse);wchar_t path[MAX_PATH];if(item && SHGetPathFromIDListW(item,path)){
-            // a port install picked here (the folder players mean by "select your folder" when they update) is the update target, and
-            // its own CUSA01127 the game source: an update chosen this way had gone into a second install in the default folder
             fs::path chosen(path);bool existing=false;try{existing=InspectInstall(chosen).found;}catch(...){}
             std::error_code error;const fs::path inner=chosen/L"CUSA01127";
             if(existing && fs::is_directory(inner,error)){SetWindowTextW(pkg_edit,inner.c_str());SetWindowTextW(dest_edit,chosen.c_str());}
             else SetWindowTextW(pkg_edit,path);}
             CoTaskMemFree(item);break;}
         case 11:{BROWSEINFOW browse{};browse.hwndOwner=hwnd;browse.lpszTitle=L"Select a parent directory. Setup creates a new P.T. folder inside it.";browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;auto item=SHBrowseForFolderW(&browse);wchar_t path[MAX_PATH];if(item && SHGetPathFromIDListW(item,path)){
-            // a folder that already holds the port is updated in place; anything else gets a new P.T. folder inside it (an update
-            // pointed at the install itself went into "<install>\P.T. PC Port" and the old shortcut kept starting 1.0.1)
             fs::path chosen(path);bool existing=false;try{existing=InspectInstall(chosen).found;}catch(...){}
             SetWindowTextW(dest_edit,(existing?chosen:chosen/kFolder).c_str());}CoTaskMemFree(item);break;}
         case 12:{if(busy)break;if(worker.joinable())worker.join();auto package=Text(pkg_edit),destination=Text(dest_edit);
@@ -203,24 +212,37 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     return DefWindowProcW(hwnd,message,wp,lp);
 }
 }
+#include "updater_win.h"
+#include "route_win.h"
+#include "fg_route_win.h"
+#include "route_queue_win.h"
+
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     hooks.report=[](const std::string& text){ReportWide(Widen(text));};hooks.cancelled=[]{return cancel.load();};hooks.progress=ReportProgress;
     int argc=0;auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    if(const auto update=pt::setup::win_updater::Parse(argc,argv)){LocalFree(argv);return pt::setup::win_updater::Run(*update);}
+    if(const auto queue=pt::setup::route_queue_win::ParseQueue(argc,argv)){LocalFree(argv);return pt::setup::route_queue_win::RunQueue(*queue);}
+    if(const auto route=pt::setup::win_route::ParseRoute(argc,argv)){LocalFree(argv);return pt::setup::win_route::RunRoute(*route);}
+    if(const auto fg=pt::setup::fg_route::ParseRoute(argc,argv)){LocalFree(argv);return pt::setup::fg_route::RunRoute(*fg);}
+#ifdef PT_UPDATER_ONLY
+    if(argc<2){LocalFree(argv);MessageBoxW(nullptr,L"This is the updater of P.T. PC Port. The game starts it when you choose Update the game in the PC settings.",kSetupTitle,MB_OK|MB_ICONINFORMATION);return 0;}
+#endif
     bool preview=argc==3 && std::wstring(argv[1])==L"--preview";fs::path preview_file=preview?argv[2]:L"";
     if(argc>1 && !preview){
         int result=0;try{
             if(std::wstring(argv[1])==L"--install" && argc==5){window=nullptr;if(!ResultPathWritable(argv[4]))throw std::runtime_error("refusing to overwrite the result file");auto outcome=Install(argv[2],argv[3],false);std::ofstream out(argv[4]);
-                out<<(outcome.updated?"PASS updated":"PASS installed");if(outcome.updated)out<<"\nfrom "<<(outcome.old_version.empty()?"older install":outcome.old_version)<<" replaced "<<outcome.swap.replaced<<" added "<<outcome.swap.added<<" removed "<<outcome.swap.removed<<" archives "<<(outcome.archives_restored?"restored":"kept");
-                for(const auto& note:outcome.notes)out<<"\nnote: "<<note;out<<"\n"<<trace.Summary();}
+                out<<(outcome.updated?"PASS updated":"PASS installed");if(outcome.updated)out<<"\nfrom "<<(outcome.old_version.empty()?"older install":outcome.old_version)<<" replaced "<<outcome.swap.replaced<<" added "<<outcome.swap.added<<" removed "<<outcome.swap.removed<<" archives "<<(outcome.archives_restored?"restored":"kept")
+                    <<"\nunchanged "<<outcome.unchanged<<" verified "<<outcome.verified<<" repaired "<<outcome.repaired<<" written "<<outcome.written_bytes<<" bytes";
+                for(const auto& note:outcome.notes)out<<"\nnote: "<<note;if(outcome.title_picture_missing)out<<"\ntitle picture missing";if(outcome.recovered)out<<"\nrecovered an interrupted update";out<<"\n"<<trace.Summary();}
             else if(std::wstring(argv[1])==L"--check-update" && argc==3){
                 updates.Start();for(int i=0;i<200 && !updates.Done();++i)Sleep(50);auto newer=updates.Newer();
                 std::ofstream(argv[2])<<"url "<<pt::update::ManifestUrl()<<"\nthis "<<pt::update::CurrentVersion()<<"\ndone "<<updates.Done()<<"\nnewer "<<(newer?newer->version+" "+newer->url:std::string("none"));
             }
+            else if(std::wstring(argv[1])==L"--range-test" && argc==6 && pt::update::TestOverrides()){if(!ResultPathWritable(argv[5]))throw std::runtime_error("refusing to overwrite the result file");
+                const std::wstring url(argv[2]);std::ofstream(argv[5])<<RangeFetchTest(std::string(url.begin(),url.end()),argv[3],argv[4],Hash);}
             else if(std::wstring(argv[1])==L"--verify-integrity" && argc==3){if(!ResultPathWritable(argv[2]))throw std::runtime_error("refusing to overwrite the result file");VerifyIntegrity();std::ofstream(argv[2])<<"PASS integrity verified";}
             else if(std::wstring(argv[1])==L"--self-test" && argc==3){
                 bool rejected=false;try{Contained(L"C:/test","../escape");}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Traversal accepted");
-                // input formats: a dump folder found below the picked folder, other names found by content, an encrypted copy refused,
-                // other regions installed with a note, another game refused
                 GUID guid{};CoCreateGuid(&guid);wchar_t id[40];StringFromGUID2(guid,id,40);const fs::path root=fs::temp_directory_path()/(std::wstring(L"pt-setup-selftest-")+id);
                 const fs::path game=root/L"dump"/L"CUSA01127-app";fs::create_directories(game);
                 auto write=[](const fs::path& file,const std::string& bytes){std::ofstream(file,std::ios::binary)<<bytes;};
@@ -237,10 +259,12 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 write(game/L"other_list.bin","/Assets/other/level/"+std::string(40,'x'));GameFiles other;other.title="CUSA99999";other.pathid=game/L"other_list.bin";if(ConfirmPt(other))failures+=" other-game-accepted";
                 fs::remove_all(root);
                 failures+=SelfTestUpdate(root/L"update");
+                failures+=SelfTestTitlePictureUpdate(root/L"title-picture",Hash);
+                failures+=SelfTestJournalRecovery(root/L"journal");
+                failures+=SelfTestFileUpdate(root/L"files",Hash);
                 failures+=SelfTestUnicodePaths(root);
                 fs::remove_all(root);
                 if(!failures.empty())throw std::runtime_error("Self test failed:"+failures);
-                // the update check: version order and the manifest (docs/updates.md)
                 using pt::update::CompareVersions;
                 if(!(CompareVersions("0.10.0","0.9.2")>0 && CompareVersions("v0.2.0","0.2.0")==0 && CompareVersions("0.2.0-rc1","0.2.0")<0 && CompareVersions("0.1","0.1.0")==0))throw std::runtime_error("Version order failure");
                 if(pt::update::CurrentVersion()=="0.0.0-dev" || pt::update::ManifestUrl().find("github.com/")==std::string::npos)throw std::runtime_error("Built without pt_version.h or with a placeholder manifest address");
@@ -262,7 +286,6 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     std::wstring line=L"Version "+Widen(std::string(pt::update::CurrentVersion()));Control(L"STATIC",line.c_str(),0,24,90,572,24,0);
     pkg_edit=Control(L"EDIT",L"",ES_AUTOHSCROLL|WS_TABSTOP,24,128,376,28,14);Control(L"BUTTON",L"PKG...",WS_TABSTOP,410,128,90,28,10);Control(L"BUTTON",L"Folder...",WS_TABSTOP,506,128,90,28,17);
     PWSTR local=nullptr;SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local);std::wstring dest=local?(fs::path(local)/L"Programs"/kFolder).native():L"";CoTaskMemFree(local);
-    // an earlier install that the desktop shortcut starts is the default, so an update lands on it without picking a folder
     if(const fs::path previous=ShortcutInstall();!previous.empty())dest=previous.native();
     dest_edit=Control(L"EDIT",dest.c_str(),ES_AUTOHSCROLL|WS_TABSTOP,24,166,472,28,15);Control(L"BUTTON",L"Location...",WS_TABSTOP,506,166,90,28,11);
     shortcut_check=Control(L"BUTTON",L"Create desktop shortcut with your game icon",BS_AUTOCHECKBOX|WS_TABSTOP,24,205,420,24,16);SendMessageW(shortcut_check,BM_SETCHECK,BST_CHECKED,0);

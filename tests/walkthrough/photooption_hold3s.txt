@@ -1,0 +1,12 @@
+# The option screen's photo part with R3 held for 3 s (shadPS4 capture photops4_hold90): zoom_in plays to its end and stays zoomed
+# (the clean picture shown white) while R3 is held; PhotoOption is sent with zoom_out at the release, 3 s after the press
+pattach 0 ps5
+stap 0 options
+smenu 1
+swait 60
+stap 0 r3 180
+swait 300
+sexpect menu 1
+stap 0 options
+smenu 0
+slog

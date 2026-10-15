@@ -14,7 +14,7 @@
 20 sktap F10
 20 swait 40
 20 sexpect page 1
-20 sktap Up
+20 sui pcfocus pc_reset
 20 swait 4
 20 sexpect pcrow pc_reset
 20 sktap Return
@@ -51,7 +51,7 @@
 20 stap 1 a
 20 swait 40
 20 sexpect page 1
-20 stap 1 up
+20 sui pcfocus pc_reset
 20 swait 4
 20 sexpect pcrow pc_reset
 20 stap 1 a
@@ -72,8 +72,9 @@
 20 stap 2 south
 20 swait 40
 20 sexpect page 1
-20 stap 2 up
+20 sui pcfocus pc_reset
 20 swait 4
+20 sexpect pcrow pc_reset
 20 stap 2 south
 20 swait 4
 20 sshot prompts_pc_nintendo.png

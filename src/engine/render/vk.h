@@ -7,6 +7,8 @@
 #include <span>
 #include <vector>
 
+#include "engine/render/gpu/gpu_resources.h"
+
 namespace pt::vk {
 
 const char* ResultName(VkResult result);
@@ -21,7 +23,11 @@ struct Image {
     uint32_t mip_levels = 1;
     uint32_t layers = 1;
     VkImageUsageFlags usage = 0;
+
+    operator gpu::ImageResource() const;
 };
+
+Image FromGpu(const gpu::ImageResource& image);
 
 struct Buffer {
     VkBuffer buffer = VK_NULL_HANDLE;

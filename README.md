@@ -2,12 +2,14 @@
 
 ![Lisa in the hallway](docs/media/lisa.gif)
 
-If the port is worth something to you, you can buy me a coffee: [patreon.com/loreanxavier](https://www.patreon.com/loreanxavier). It keeps the testing hardware and the releases coming.
+If the port is worth something to you, you can buy me a coffee: [ko-fi.com/loreanxavier](https://ko-fi.com/loreanxavier). It keeps the testing hardware and the releases coming.
 
 This is a native PC port of P.T., the 2014 PS4 teaser by Kojima Productions. It is not an emulator. The game logic was
 rebuilt in C++ from the original's behaviour and the renderer is written on Vulkan; every level, model, texture, sound,
 script and cutscene is read at run time from your own copy of the PS4 game. There is no game data in this repository
 and none in the installer.
+
+The port runs on its own engine, Hallway Engine.
 
 I made this in my spare time, with AI tools (see AI Disclosure at the end), because P.T. deserved to keep existing
 somewhere other than on consoles that still have it installed. It plays the whole teaser from the first wake-up to
@@ -34,12 +36,10 @@ the street, with the voice part included.
 Download the installer from the Releases page: `P.T.PC.Port.Setup.exe` on Windows, the Linux setup binary on Linux.
 Point it at your dump folder or fake PKG and at a destination folder (the default on Windows is
 `%LocalAppData%\Programs\P.T. PC Port`). It copies the three game archives it needs (`chunk1.psarc`,
-`texture.qar`, `pathid_list_ps4.bin`) next to the port and makes a desktop shortcut if you want one. The shortcut
-uses `icon0.png` from your own copy, the icon the PS4 shows for the game. This repository does not contain the
-package or that image: the installer reads it from the PKG or dump you select. The eboot, modules and the rest of
-`sce_sys` are not used.
+`texture.qar`, `pathid_list_ps4.bin`) next to the port and makes a shortcut if you want one. The eboot, modules and
+system files are not used.
 
-Linux: `chmod +x` the setup and run it, from a terminal or from the file manager (it uses zenity or kdialog for its windows). The game needs only glibc and the system's Vulkan driver. On a Steam Deck
+Linux: `chmod +x` the setup and run it from a terminal. The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
 macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later) or
@@ -50,17 +50,15 @@ steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The
 fork with upstream's 1.0.3 line. See the [Mac release notes](docs/release-notes-macos-1.0.7.md) and
 [integration report](docs/integration/upstream-regression-20261012.md) for validation and Intel GPU limitations.
 
-Portable downloads: `P.T.PC.Port-portable-windows.zip` and `P.T.PC.Port-portable-linux.zip` hold the same files the
-setups install. Unpack one anywhere you can write to, then either put your extracted `CUSA01127` folder next to `pt.exe`
-(`pt` on Linux) or pick the folder when the game asks at the first start. The macOS app zips work the same way. Game
-archives are never included; the setups also accept a fake PKG, the portable zips need the extracted folder.
+The published 1.0.1 release contains setup downloads, not a portable ZIP. The earlier README incorrectly claimed
+a ZIP was available. The setup accepts an already extracted dump folder as well as a fake PKG.
 
-Settings, saves, logs and caches live in `data/` beside the executable on Windows and Linux, so a whole game folder can
-be moved or copied; an older profile is migrated once without overwriting newer files. On macOS they stay in
-`~/Library/Application Support/pt-port/pt/`. The game checks GitHub Releases for a newer version at startup;
-`[network] check_updates = 0` disables that check.
+This source tree contains the upcoming 1.0.2 changes; its new features and macOS packages are not yet published release
+downloads. On Windows and Linux, 1.0.2 stores settings, saves, logs and cache in `data/` beside the executable and migrates
+existing user data without overwriting newer files. On macOS, these stay in `~/Library/Application Support/pt-port/pt/`.
+The game checks GitHub Releases for a newer version at startup; `[network] check_updates = 0` disables that check.
 
-Thanks to ahm3texe for the Apple silicon port(even though he is an easy ragebaitted dumbass), totsu0jv for Czech translation, GrzybDev for Polish translation, and yewhochen for the Linux library-loading
+Thanks to ahm3texe for the Apple silicon port, totsu0jv for Czech translation, and yewhochen for the Linux library-loading
 and startup-focus fixes. Their contributions are incorporated here, with platform and release changes adapted for 1.0.2.
 
 ## Playing
@@ -113,13 +111,12 @@ Extras
 
 Languages
 - The original's English, French, German, Spanish, Italian, Portuguese and Japanese, plus Turkish, Simplified Chinese,
-  Arabic, Russian, Ukrainian, Czech and Polish added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
+  Arabic, Russian, Ukrainian and Czech added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
   original English, and the word the microphone listens for is always "Jack".
 
 Mods
-- A `mods` folder next to the executable: add or replace models with your own glTF (`.glb`) files, Lisa included, edit
-  levels with a `level.json` (hide, move, replace, relight), replace textures and sounds, and run Lua scripts. Start with
-  docs/modding-quickstart.md and the working examples in examples/mods.
+- A `mods` folder next to the executable can replace game files, textures and sounds, and run Lua scripts that react
+  to game events. See docs/modding.md and docs/lua_api.md.
 
 ## Building from source
 
@@ -138,10 +135,8 @@ GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-on
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
 vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
-build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The Windows upscalers and the
-VR mode are left out there too, and MoltenVK has no ray queries. The macOS build upscales with Apple MetalFX; on Apple silicon
-with macOS 26 or newer it can also interpolate one frame between rendered frames (experimental). `-DPT_METALFX=OFF` leaves
-both out. More in docs/macos.md.
+build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
+are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
 
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the

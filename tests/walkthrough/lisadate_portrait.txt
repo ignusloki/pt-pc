@@ -1,0 +1,15 @@
+# Coffee with Lisa: at the telephone table, zoom on Lisa's portrait (the wedding photo) for over 10 s
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 3.0
+gfile 0.05 -1.4 6.9
+fportrait
+swait 30
+sshot {shots}/portrait_before.png
+swait 2
+szoom 1
+swait 200
+sshot {shots}/portrait_zoom.png
+swait 500
+szoom 0
+swait 60

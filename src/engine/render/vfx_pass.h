@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,72 +22,66 @@ public:
     void Shutdown();
 
     uint32_t Texture(const std::string& path);
-    // queues the textures not loaded yet for TextureManager::DecodeAhead
     void DecodeAhead(const std::vector<std::string>& paths);
-    // cube slot of a liquid's reflection cube, vfx::kNoTexture when the file is missing or not a cube map
     uint32_t Cube(const std::string& path);
-    // takes the list and hands back the previous one, cleared with its capacity kept, for the next frame's build
     void Submit(vfx::RenderList& list);
     void RecordForward(const SceneVfxContext& context);
     void RecordFilter(const SceneFilterContext& context);
     bool HasFilter(uint32_t layers) const;
-    // the opaque liquids' depth (Primitive_Liquid2Final with the alpha test writes depth, DB_DEPTH_CONTROL 0x7e6 in
-    // liquid_trace_f010), drawn after the effect pass with only the depth attachment bound; false when the frame has none
     bool HasOpaqueLiquids() const;
     void RecordLiquidDepth(const SceneVfxContext& context);
     const vfx::RenderList& List() const { return list_; }
+    void AddPipelineWarmup(vk::PipelineWarmup& warmup, gpu::Format color, gpu::Format depth, gpu::Format filter_color);
 
 private:
     struct PipelineKey {
-        VkFormat color = VK_FORMAT_UNDEFINED;
-        VkFormat depth = VK_FORMAT_UNDEFINED;
+        gpu::Format color = gpu::Format::Undefined;
+        gpu::Format depth = gpu::Format::Undefined;
         uint8_t blend = 0;
         bool depth_test = false;
         bool cull = false;
-        // effect buffer draw: alpha is the transmittance (SceneVfxContext::subset kVfxOffscreen)
         bool offscreen = false;
-        // depth only (RecordLiquidDepth): no colour attachment, depth written
         bool depth_write = false;
         bool operator==(const PipelineKey&) const = default;
     };
 
     struct FrameSlot {
-        vk::Buffer quads;
-        // fog block of the forward set at 0 and of the filter set at kFogStride
-        vk::Buffer fog;
-        VkDescriptorSet forward = VK_NULL_HANDLE;
-        VkDescriptorSet filter = VK_NULL_HANDLE;
-        VkDescriptorSet effects = VK_NULL_HANDLE;
-        VkDescriptorSet depth_only = VK_NULL_HANDLE;
-        VkImageView depth_only_scene = VK_NULL_HANDLE;
-        VkImageView forward_view = VK_NULL_HANDLE;
-        VkImageView filter_view = VK_NULL_HANDLE;
-        VkImageView effects_depth_view = VK_NULL_HANDLE;
-        VkImageView forward_scene = VK_NULL_HANDLE;
-        VkImageView filter_scene = VK_NULL_HANDLE;
-        VkImageView effects_scene = VK_NULL_HANDLE;
+        gpu::BufferResource quads;
+        gpu::BufferResource fog;
+        gpu::BindingSetHandle forward;
+        gpu::BindingSetHandle filter;
+        gpu::BindingSetHandle effects;
+        gpu::BindingSetHandle depth_only;
+        gpu::ImageViewHandle depth_only_scene;
+        gpu::ImageViewHandle forward_view;
+        gpu::ImageViewHandle filter_view;
+        gpu::ImageViewHandle effects_depth_view;
+        gpu::ImageViewHandle forward_scene;
+        gpu::ImageViewHandle filter_scene;
+        gpu::ImageViewHandle effects_scene;
         uint64_t uploaded = 0;
     };
 
-    VkPipeline Pipeline(const PipelineKey& key);
+    gpu::PipelineHandle Pipeline(const PipelineKey& key);
     bool Upload(uint32_t frame_index);
-    void WriteSet(FrameSlot& slot, VkDescriptorSet set, VkImageView view, VkImageLayout depth_layout, VkImageView scene, VkDeviceSize fog_offset);
-    uint32_t DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer layer, VkFormat color, VkFormat depth, bool depth_test, uint32_t mode,
-                       const glm::mat4& view_projection, const glm::vec3& eye, float exposure, float near_plane, VkExtent2D extent,
-                       const std::function<void()>* copy_scene, uint32_t subset = kVfxAll, uint32_t* recorded = nullptr);
+    void WriteSet(FrameSlot& slot, gpu::BindingSetHandle set, gpu::ImageViewHandle view, gpu::Layout depth_layout, gpu::ImageViewHandle scene,
+                  uint64_t fog_offset);
+    uint32_t DrawLayer(gpu::CommandList& cmd, gpu::BindingSetHandle set, vfx::Layer layer, gpu::Format color, gpu::Format depth, bool depth_test,
+                       uint32_t mode, const glm::mat4& view_projection, const glm::vec3& eye, float exposure, float near_plane,
+                       gpu::Extent2D extent, const std::function<void()>* copy_scene, uint32_t subset = kVfxAll, uint32_t* recorded = nullptr);
 
     Renderer* renderer_ = nullptr;
     TextureManager* textures_ = nullptr;
     Vfs* vfs_ = nullptr;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool pool_ = VK_NULL_HANDLE;
-    VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkSampler sampler_ = VK_NULL_HANDLE;
-    VkSampler scene_sampler_ = VK_NULL_HANDLE;
-    VkShaderModule vertex_ = VK_NULL_HANDLE;
-    VkShaderModule fragment_ = VK_NULL_HANDLE;
-    std::vector<std::pair<PipelineKey, VkPipeline>> pipelines_;
+    gpu::Device* gpu_ = nullptr;
+    gpu::BindingLayoutHandle set_layout_;
+    gpu::BindingPoolHandle pool_;
+    gpu::PipelineLayoutHandle layout_;
+    gpu::SamplerHandle sampler_;
+    gpu::SamplerHandle scene_sampler_;
+    bool shaders_ = false;
+    std::vector<std::pair<PipelineKey, gpu::PipelineHandle>> pipelines_;
+    std::mutex pipelines_mutex_;
     FrameSlot slots_[Renderer::kFramesInFlight];
     std::unordered_map<std::string, uint32_t> texture_cache_;
     std::unordered_map<std::string, uint32_t> cube_cache_;

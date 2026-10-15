@@ -7,21 +7,33 @@ AMD FidelityFX SDK v1.1.4 (amd_fidelityfx_vk.dll: FSR 3.1 upscaler and frame gen
   AMD FSR 4 is listed in the menu but not shipped: AMD releases it for DirectX 12 only
   (FSR SDK 2.x), and this game renders with Vulkan.
 
-NVIDIA DLSS SDK 310.9.1 (nvngx_dlss.dll: DLSS Super Resolution)
+NVIDIA DLSS SDK 310.9.1 (nvngx_dlss.dll: DLSS Super Resolution; nvngx_dlssd.dll: DLSS Ray
+Reconstruction, the denoiser of the Path traced ray quality)
   NVIDIA RTX SDKs licence (NVIDIA_RTX_SDKs_LICENSE.txt): the SDK's binaries may be
   distributed in object code inside an application with material additional functionality,
   only for systems with NVIDIA GPUs, under terms at least as protective as NVIDIA's.
 
 NVIDIA Streamline 2.14.1 (experimental DLSS Frame Generation; builds with PT_STREAMLINE)
-  sl.interposer.dll, sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, sl.reflex.dll, sl.pcl.dll:
+  sl.interposer.dll, sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, sl.dlss_d.dll, sl.reflex.dll,
+  sl.pcl.dll:
   Streamline is MIT licensed (NVIDIA_Streamline_LICENSE.txt); only NVIDIA's signed
   production builds ship. nvngx_dlssg.dll (DLSS Frame Generation) is under the NVIDIA RTX
   SDKs licence (NVIDIA_Streamline_DLSS_LICENSE.txt). Reflex: NVIDIA_Reflex_LICENSE.txt;
   NvLowLatencyVk.dll is not shipped.
 
-Intel XeSS SDK 3.0.2 (libxess.dll: XeSS Super Resolution)
-  Intel Simplified Software License (Intel_XeSS_SDK_LICENSE.txt): the binary may be
-  redistributed unmodified.
+Intel XeSS SDK 3.0.2 (libxess.dll: XeSS Super Resolution; libxess_fg.dll: XeSS Frame
+Generation; libxell.dll: Intel Xe Low Latency, which XeSS Frame Generation requires)
+  Intel Simplified Software License (Intel_XeSS_SDK_LICENSE.txt): the binaries may be
+  redistributed unmodified, and are neither modified nor altered in their operation (the
+  port loads them as they are and hooks nothing in them). The third-party components Intel
+  lists for the SDK: Intel_XeSS_SDK_third-party-programs.txt. XeSS Frame Generation runs on
+  DirectX 12 only; the port presents through a DirectX 12 device for it.
+
+ReShade 6.8.0 (reshade/dxgi.dll: the carrier of the DLSS 5 community route's add-on)
+  BSD 3-Clause licence (ReShade_LICENSE.md), copyright Patrick Mours. Built by the port from
+  the v6.8.0 source (github.com/crosire/reshade) with its user interface and update check
+  switched off (tools/build_reshade.py lists the changes); it is installed only by the
+  DLSS 5 route, on the player's request, and removed with it. Not an official ReShade build.
 
 Not shipped, looked for or loaded: any DLSS neural rendering runtime (nvngx_dlssnr.dll)
 and any third-party frame generation unlock. NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation; AMD and

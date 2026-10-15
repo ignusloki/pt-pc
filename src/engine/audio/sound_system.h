@@ -6,9 +6,11 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -42,6 +44,7 @@ struct SoundSystemStats {
 
 class SoundEngine;
 class AudioOutput;
+class Media;
 
 class SoundSystem {
 public:
@@ -55,13 +58,10 @@ public:
 
     PlayingId PostEvent(std::string_view event_name, GameObjectId object = 0);
     PlayingId PostEventId(uint32_t event_id, GameObjectId object = 0);
-    // the event playing these media of its container in order, once (SoundEngine::PostEventMedia)
     PlayingId PostEventMedia(std::string_view event_name, std::vector<uint32_t> media_ids, GameObjectId object = 0);
     PlayingId PostDialogueEvent(std::string_view dialogue_event, std::span<const std::string_view> arguments, GameObjectId object = 0);
     PlayingId PostDialogueEventId(uint32_t dialogue_event_id, std::span<const std::string_view> arguments, GameObjectId object = 0);
-    // stop every voice of a playing id with a fade of that curve (AK::SoundEngine::ExecuteActionOnPlayingID Stop)
     void StopPlayingId(PlayingId id, float fade_seconds = 0.0f, Interp curve = Interp::Linear);
-    // move every voice of a playing id to that time of its media (AK::SoundEngine::SeekOnEvent)
     void SeekPlayingId(PlayingId id, float seconds);
     void StopAll(float fade_seconds = 0.0f);
     void ResetSession();
@@ -85,12 +85,15 @@ public:
     void ResetRtpc(std::string_view name, GameObjectId object = 0);
 
     PlayingId PlayStream(std::vector<uint8_t> wem_riff, GameObjectId object = 0);
+    PlayingId PlayStreamAs(std::vector<uint8_t> wem_riff, std::string_view donor_event, GameObjectId object);
+    PlayingId PlayMedia(std::shared_ptr<const Media> media, GameObjectId object = 0);
+    std::shared_ptr<const Media> FindMedia(uint32_t media_id) const;
+    void SetPostObserver(std::function<void(uint32_t event_id, const std::optional<glm::vec3>& position)> observer);
     void SetMarkerCallback(std::function<void(PlayingId, std::string_view label)> callback);
     void SetEndCallback(std::function<void(PlayingId)> callback);
 
     void Update(float dt);
     void RenderOffline(float* interleaved_stereo, uint32_t frames);
-    // the offline mix with the device mix's speaker layout (2, 6 or 8 channels; PT_CAPTURE_CHANNELS checks the surround panning)
     void RenderOfflineChannels(float* interleaved, uint32_t frames, uint32_t channels);
 
     bool LoadSubtitles(std::string_view language);
@@ -102,11 +105,11 @@ public:
     SoundSystemStats Stats() const;
     bool HasEvent(uint32_t event_id) const;
     bool DeviceOpen() const;
+    bool OpenDevice(bool surround_output);
     uint64_t RenderedFrames() const;
     MotionLevels Motion() const;
     void SetControllerCaptureEvent(uint32_t event_id);
     void SetControllerCaptureEvents(std::span<const uint32_t> event_ids);
-    // events felt on the DualSense actuators only (not heard on its speaker)
     void SetControllerHapticEvents(std::span<const uint32_t> event_ids);
     bool TryReadControllerPcm(ControllerPcmBlock& block);
     uint32_t ControllerPcmDroppedBlocks() const;
@@ -118,10 +121,12 @@ private:
     std::unique_ptr<AudioOutput> output_;
     std::function<void(PlayingId, std::string_view)> marker_callback_;
     std::function<void(PlayingId)> end_callback_;
+    std::function<void(uint32_t, const std::optional<glm::vec3>&)> post_observer_;
+    std::mutex position_mutex_;
+    std::unordered_map<GameObjectId, glm::vec3> positions_;
     SubtitleTable subtitles_;
     std::mutex warn_mutex_;
     std::unordered_set<uint32_t> warned_events_;
-    // PT_SOLO_EVENT: the one event posted, 0 all
     uint32_t solo_event_ = 0;
 };
 

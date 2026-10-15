@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- paths longer than MAX_PATH work when Windows allows them (LongPathsEnabled, Windows 10 1607 and later). The ANSI code
+           page stays the system's (no activeCodePage UTF-8): the game's own paths are wide and run under 932, 936, 1251, 1254 and
+           1252 alike (tools/unicode_e2e_check.py), while with UTF-8 a game folder of 230 characters whose UTF-8 form passed 260
+           bytes ended its start with exit code 1 right after the renderer came up (the same folder runs under 1252 and 932). -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

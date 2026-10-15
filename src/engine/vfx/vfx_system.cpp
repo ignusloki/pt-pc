@@ -47,11 +47,6 @@ glm::mat3 EulerYxz(const glm::vec3& r) {
     return glm::mat3(m);
 }
 
-// FxPlaneRotShapeNode axisFix (0xB75D30 reads it at node +0x54): the direction to the camera in the effect's space (d) turns the
-// plane about one effect axis so that a reference axis faces the camera: 1 about X (+Z; the angle from z and -y), 2 about Y
-// (+Z; from x and z), 3 about Z (-Y; from x and -y). A double-sided additive plane looks the same turned by pi, so only the
-// axis matters for the image. Users: the ending's hand light beam planes (3), the street lamp lens planes and two blood
-// effects (2)
 glm::mat3 PlaneAxisFix(uint32_t mode, const glm::vec3& d) {
     switch (mode) {
     case 1:
@@ -65,13 +60,11 @@ glm::mat3 PlaneAxisFix(uint32_t mode, const glm::vec3& d) {
     }
 }
 
-// 0xB8DF70: rows Rx Ry Rz in row vector form
 glm::mat4 EulerZyx(const glm::vec3& r) {
     return glm::rotate(glm::mat4(1.0f), r.z, glm::vec3(0.0f, 0.0f, 1.0f)) * glm::rotate(glm::mat4(1.0f), r.y, glm::vec3(0.0f, 1.0f, 0.0f)) *
            glm::rotate(glm::mat4(1.0f), r.x, glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
-// 0xB8DF70: RGBA8 vertex colour, truncated and wrapped, not clamped
 glm::vec4 WrapUnorm8(const glm::vec4& c) {
     glm::vec4 out;
     for (int i = 0; i < 4; ++i) {
@@ -92,7 +85,6 @@ uint32_t XorShiftOnce(uint32_t x) {
     return x;
 }
 
-// 0xC72590: halves, truncated
 float HalfTrunc(float f) {
     uint32_t bits = 0;
     std::memcpy(&bits, &f, 4);
@@ -102,12 +94,10 @@ float HalfTrunc(float f) {
     return f;
 }
 
-// 0xC72590: RGBA8, truncated
 float Unorm8(float f) {
     return std::floor(std::clamp(f, 0.0f, 1.0f) * 255.0f) / 255.0f;
 }
 
-// 0x8F4020, Draw2D_TppLensFlare vs
 glm::vec3 PackedColor(const glm::vec4& c) {
     const float u = HalfTrunc(std::floor(c.r * 15.0f) * 16.0f + std::floor(c.g * 15.0f) + c.b * 0.9375f);
     const float hi = std::floor(u * 0.0625f);
@@ -242,8 +232,6 @@ void System::ClearCache() {
     models_.clear();
 }
 
-// 0xBA1A40, 0xB6D5B0 and the other random node inits: randomGatherType 2 takes randomGatherSeedValue (1 for 0), 1 adds it to the
-// instance's random value, 0 adds the node's id (the instance's random value + 0xFFFF x the emitter + the node's place, 0xBB0E70)
 uint32_t System::SeedFor(const Instance& inst, uint32_t seed, uint8_t type, uint32_t node_id) const {
     if (type == 2) {
         return seed ? seed : 1u;
@@ -268,7 +256,6 @@ bool System::Spawn(const InstanceKey& key, const std::string& path, const glm::m
     inst.def = def;
     inst.world = world;
     inst.previous_world = world;
-    // 0xB5AFB0 creates with 0xFFFFFF for a zero seed; 0xB61AB0 keeps the seed's xorshift (+0x2A8, 1 for 0)
     inst.seed = requested_seed ? requested_seed : 0xFFFFFFu;
     inst.random = XorShiftOnce(inst.seed);
     if (inst.random == 0) {
@@ -292,7 +279,6 @@ bool System::Spawn(const InstanceKey& key, const std::string& path, const glm::m
         }
         const LifeDef& life = def->shapes[i].life;
         state.life_rng = SeedFor(inst, life.seed, life.seed_type, life.node_id);
-        // 0xBB00A0: the emitter's particle random state (+0xBC) starts at the instance's random value
         state.particle_rng = inst.random;
         state.material_rng = SeedFor(inst, 0, 0, def->shapes[i].material.node_id);
     }
@@ -442,7 +428,6 @@ void System::InitEmit(EmitState& s, const EmitNode& e) {
     s.initialized = true;
 }
 
-// 0xBA1760 (interval), 0xBA33A0 and 0xBA3480 (delay)
 int System::Emit(Instance& inst, ShapeState& state, const EffectDef& def, int32_t index, float dframes, const ViewInfo& view) {
     if (index < 0 || index >= static_cast<int32_t>(def.emits.size())) {
         return 0;
@@ -561,11 +546,6 @@ void System::GenerateSlots(Instance& inst, const EffectDef& def, int32_t index, 
         break;
     }
     case ExprOp::UvRandom: {
-        // 0xB941D0: without random flips one xorshift per non-zero grid dimension, the column (x % width) and then the row; with
-        // either flip enabled the draws are the column (if the width is not 0), the row (if the height is not 0), then one for the
-        // U flip and one for the V flip (bit 0 of each), and all of them are drawn whichever flips are enabled. The port had drawn
-        // one value for both flips (bits 0 and 1), so every particle of the ending's ground smoke (fx_sh_smkgnd03_s5, an 8 x 8
-        // sheet) showed another cell than the original's (ending_halo_trace 3570: same positions and ages, other cells and flips)
         const uint32_t w = static_cast<uint32_t>(e.v0.x);
         const uint32_t h = static_cast<uint32_t>(e.v0.y);
         const float cw = w ? 1.0f / static_cast<float>(w) : 1.0f;
@@ -591,7 +571,6 @@ void System::GenerateSlots(Instance& inst, const EffectDef& def, int32_t index, 
         break;
     }
     case ExprOp::UvAnime: {
-        // 0xBA09A0 reads the particle's random value (context +0x40): the start is the value modulo the frames, bit 0 flips U, bit 1 V
         const uint32_t v = p.random;
         const uint32_t total = std::max(1u, static_cast<uint32_t>(e.v0.y * e.v0.z));
         out = glm::vec4((e.flags & 2u) ? static_cast<float>(v % total) : 0.0f, (e.flags & 4u) ? static_cast<float>(v & 1u) : 0.0f,
@@ -599,11 +578,6 @@ void System::GenerateSlots(Instance& inst, const EffectDef& def, int32_t index, 
         break;
     }
     case ExprOp::Spread: {
-        // 0xB96F10. v0 = (elevation / 180, rangeAngle, shortest, longest length). The default draws a latitude uniform in
-        // [pi/2 (1 - elevation / 180), pi/2], the angle around y and the length, in that order: elevation 180 is the upper
-        // hemisphere, 360 the whole sphere. With 0xE6B68466 (mode bit 0) the angle from +y is fixed at elevation / 180 * 1.57 and
-        // only the length and the angle around y are drawn: elevation 180 is a flat disc. Bit 1 (0xD8F07EBD, with bit 0) draws one
-        // length for the batch and spaces the angles evenly. x takes the sine of the angle around y, z its cosine
         float horizontal = 0.0f;
         float vertical = 0.0f;
         float length = 0.0f;
@@ -647,7 +621,6 @@ void System::Spawn(Instance& inst, size_t shape_index, int count, const ViewInfo
     const EffectDef& def = *inst.def;
     const ShapeDef& shape = def.shapes[shape_index];
     ShapeState& state = inst.shapes[shape_index];
-    (void)view;
     if (count <= 0) {
         return;
     }
@@ -665,7 +638,8 @@ void System::Spawn(Instance& inst, size_t shape_index, int count, const ViewInfo
         p.life = std::max(p.life, 1.0f / kFrameRate);
         p.infinite = shape.life.infinite;
         p.spawn_world = inst.world;
-        // 0xBA7F20: an emitter with 0x180 (a UV animation that uses it) gives each new particle the low 16 bits of its next xorshift
+        p.spawn_camera = glm::mat4(glm::vec4(view.right, 0.0f), glm::vec4(view.up, 0.0f),
+                                   glm::vec4(view.forward, 0.0f), glm::vec4(view.position, 1.0f));
         if (shape.particle_random) {
             p.random = static_cast<uint16_t>(XorShift(state.particle_rng));
         }
@@ -677,7 +651,6 @@ void System::Spawn(Instance& inst, size_t shape_index, int count, const ViewInfo
         }
         state.particles.push_back(p);
     }
-    // and steps once more after the batch
     if (shape.particle_random && state.particles.size() > before) {
         XorShift(state.particle_rng);
     }
@@ -700,7 +673,6 @@ void System::Update(float dt, const ViewInfo& view) {
             ShapeState& state = inst.shapes[i];
             const MaterialDef& material = def.shapes[i].material;
             if (material.kind == MaterialKind::Scroll) {
-                // B72840: scrolling and the two independently randomized sine phases belong to the material instance.
                 state.rain_offset -= glm::vec2(dt * material.rain_scroll_speed);
                 state.rain_offset -= glm::floor(state.rain_offset);
                 for (int layer = 0; layer < 2; ++layer) {
@@ -731,11 +703,6 @@ void System::Update(float dt, const ViewInfo& view) {
         if (inst.started) {
             inst.frame += dframes;
             if (def.play_mode == 2) {
-                // 0xBA7D80: mode 2 repeats only the interval between the root fade boundaries: past fadeOutStartFrame the clock
-                // goes back to fadeInEndFrame and the loop count goes up. The two mode 2 effects of P.T. have equal boundaries
-                // (fx_sh_dstgls01b_s1 30/30 of 50, fx_sh_wtrbld03_s1 250/250 of 260), so their clock holds there with the loop
-                // count rising every tick: FirstLoopOnly emitters stop and the effect ratio curves keep their held value.
-                // Looping them whole every allFrame replayed the glass shards' settling turn every 50 frames
                 if (inst.frame > static_cast<float>(def.fade_out_start)) {
                     inst.frame = static_cast<float>(def.fade_in_end);
                     ++inst.loop;
@@ -786,9 +753,6 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
     case ExprOp::Spread: {
         glm::vec4 v = e.op == ExprOp::Const ? e.v0 : e.slot >= 0 ? c.slots[e.slot] : glm::vec4(0.0f);
         if ((e.flags & 1u) && !(e.flags & 8u)) {
-            // a global vector holds world axes: in the effect's frame it is turned back by the frame's rotation, so after the
-            // particle's transform it points along the world's (the f070 window glass lies to +x +z of its locator whatever way
-            // the hallway copy faces; taken in the locator's frame it lay a quarter turn off in the copies turned by 90 degrees)
             const glm::vec3 x = glm::vec3(c.world[0]), y = glm::vec3(c.world[1]), z = glm::vec3(c.world[2]);
             const float lx = glm::length(x), ly = glm::length(y), lz = glm::length(z);
             if (lx > 1e-6f && ly > 1e-6f && lz > 1e-6f) {
@@ -911,20 +875,36 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
         return in + glm::vec4(dir * e.v0.x, 0.0f);
     }
     case ExprOp::CameraFollow: {
-        const glm::vec3 q = glm::vec3(Eval(c, e.in[0]) + e.v0);
-        glm::vec3 forward = c.view->forward;
-        glm::vec3 up = c.view->up;
-        glm::vec3 right = c.view->right;
+        const glm::vec3 q = glm::vec3(Eval(c, e.in[0]));
+        const bool born = c.follow_spawn && c.particle;
+        glm::vec3 forward = born ? glm::vec3(c.particle->spawn_camera[2]) : c.view->forward;
+        glm::vec3 up = born ? glm::vec3(c.particle->spawn_camera[1]) : c.view->up;
+        glm::vec3 right = born ? glm::vec3(c.particle->spawn_camera[0]) : c.view->right;
+        const glm::vec3 eye = born ? glm::vec3(c.particle->spawn_camera[3]) : c.view->position;
         if (e.flags & 1u) {
             forward.y = 0.0f;
             forward = glm::length(forward) > 1e-5f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f);
             up = glm::vec3(0.0f, 1.0f, 0.0f);
             right = glm::normalize(glm::cross(forward, up));
         }
-        return glm::vec4(c.view->position + right * q.x + up * q.y + forward * q.z, 0.0f);
+        const glm::vec3 center = eye + right * e.v0.x + up * e.v0.y + forward * e.v0.z;
+        const glm::vec3 input = (e.flags & 2u) ? right * q.x + up * q.y + forward * q.z : glm::mat3(c.world) * q;
+        return glm::vec4(center + input, 0.0f);
     }
     case ExprOp::CenterScroll: {
-        const glm::vec3 p = glm::vec3(Eval(c, e.in[0]));
+        glm::vec3 p;
+        if ((e.flags & 1u) && c.particle) {
+            ViewInfo birth = *c.view;
+            birth.right = glm::vec3(c.particle->spawn_camera[0]);
+            birth.up = glm::vec3(c.particle->spawn_camera[1]);
+            birth.forward = glm::vec3(c.particle->spawn_camera[2]);
+            birth.position = glm::vec3(c.particle->spawn_camera[3]);
+            EvalContext anchored = c;
+            anchored.view = &birth;
+            p = glm::vec3(Eval(anchored, e.in[0]));
+        } else {
+            p = glm::vec3(Eval(c, e.in[0]));
+        }
         const glm::vec3 center = c.view->position + c.view->right * e.v1.x + c.view->up * e.v1.y + c.view->forward * e.v1.z;
         const glm::vec3 range = glm::max(glm::vec3(e.v0), glm::vec3(1e-3f));
         glm::vec3 d = p - center + range;
@@ -943,7 +923,6 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
         return in * (e.v2.x + (e.v2.y - e.v2.x) * t);
     }
     case ExprOp::CameraAngle: {
-        // 0xB9FBE0: against a camera axis, not the direction to the camera (vfx.md 11)
         glm::vec3 axis(0.0f);
         axis[std::min<int>(e.mode, 2)] = 1.0f;
         if (e.flags & 1u) {
@@ -960,7 +939,6 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
     case ExprOp::Pass:
         return Eval(c, e.in[0]);
     case ExprOp::Wind: {
-        // 0x826680, 0x826770
         glm::mat3 r(c.world);
         for (int i = 0; i < 3; ++i) {
             const float l = glm::length(r[i]);
@@ -975,6 +953,7 @@ glm::vec4 System::Eval(const EvalContext& c, int32_t index) const {
 void System::Build(const ViewInfo& view, const TextureResolver& textures, const TextureResolver& cubes, const LightingProbe& lighting,
                    RenderList& out, std::vector<LightOut>& lights, float blend) {
     out.near_plane = view.near_plane;
+    auto is_light = [](const ShapeDef& shape) { return shape.kind == ShapeKind::SpotLight || shape.kind == ShapeKind::PointLight; };
     for (auto& [key, inst] : instances_) {
         const EffectDef& def = *inst.def;
         if (!filter_.empty() && def.name.find(filter_) == std::string::npos) {
@@ -982,10 +961,28 @@ void System::Build(const ViewInfo& view, const TextureResolver& textures, const 
         }
         const glm::mat4 world = BlendTransform(inst.previous_world, inst.world, blend);
         for (size_t i = 0; i < def.shapes.size(); ++i) {
+            if (!is_light(def.shapes[i])) {
+                continue;
+            }
             const size_t first = lights.size();
             BuildShape(inst, world, def.shapes[i], inst.shapes[i], view, textures, cubes, lighting, out, lights);
             for (size_t k = first; k < lights.size(); ++k) {
                 lights[k].id = (key.owner * 0x9E3779B97F4A7C15ull) ^ (key.id << 12) ^ (uint64_t(i) << 6) ^ (k - first) ^ 0xFA00000000000000ull;
+            }
+        }
+    }
+    if (lights_ready_) {
+        lights_ready_(lights);
+    }
+    for (auto& [key, inst] : instances_) {
+        const EffectDef& def = *inst.def;
+        if (!filter_.empty() && def.name.find(filter_) == std::string::npos) {
+            continue;
+        }
+        const glm::mat4 world = BlendTransform(inst.previous_world, inst.world, blend);
+        for (size_t i = 0; i < def.shapes.size(); ++i) {
+            if (!is_light(def.shapes[i])) {
+                BuildShape(inst, world, def.shapes[i], inst.shapes[i], view, textures, cubes, lighting, out, lights);
             }
         }
         for (size_t i = 0; i < def.flares.size() && !inst.stopped; ++i) {
@@ -1027,6 +1024,7 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             c.age = p.infinite ? std::fmod(p.age, p.life) : p.age;
             c.ratio = Saturate(c.age / p.life);
             c.world = shape.local_space ? world : p.spawn_world;
+            c.follow_spawn = !shape.local_space;
             LightOut l;
             l.spot = shape.kind == ShapeKind::SpotLight;
             const glm::vec3 pos = glm::vec3(Eval(c, shape.attr[kPosition]));
@@ -1042,8 +1040,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             l.shadow_bias = shape.shadow_bias;
             if (l.spot) {
                 const glm::vec3 rot = glm::vec3(Eval(c, shape.attr[kRotation]));
-                // the light points along the frame's -Y; its own +Y (the shadow map's v axis) is the frame's +Z, as a 90 degree turn
-                // about X makes +Z -Y (shadow_f010 1704-1708: the CeilLamp's map axes are the lamp's -X and -Z)
                 const glm::mat3 frame = glm::mat3(c.world) * EulerYxz(rot);
                 l.direction = glm::normalize(frame * glm::vec3(0.0f, -1.0f, 0.0f));
                 l.up = frame * glm::vec3(0.0f, 0.0f, 1.0f);
@@ -1067,8 +1063,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
                 }
             }
             if (shape.light_area) {
-                // 0xB848E0 hands the area box to the light (0xCDA020: centre, full size, rotation) in the particle's frame: the centre at
-                // frame x (position + translation), the frame's rotation x the node's, the node's scale x the frame's axis lengths
                 const glm::mat3 frame(c.world);
                 const glm::vec3 lengths(glm::length(frame[0]), glm::length(frame[1]), glm::length(frame[2]));
                 if (lengths.x > 1.0e-6f && lengths.y > 1.0e-6f && lengths.z > 1.0e-6f) {
@@ -1144,13 +1138,10 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
     using Item = BuildItem;
     std::vector<Item>& items = build_items_;
     items.clear();
-    // lit particles with a light block: their colour before lighting and their position, lit once the draw's box is known
     using LitRef = BuildLitRef;
     std::vector<LitRef>& lit_refs = build_lit_refs_;
     lit_refs.clear();
     const bool block_lit = m.kind == MaterialKind::Lit && static_cast<bool>(light_block_);
-    // Primitive_Liquid2Final lights each pixel by the draw's first two point lights (m_lightParams[2] to [5]); lighting the quad at its
-    // centre striped the f060 bathtub water quad by quad under the flashlight's reflection light, which sits on the water
     const bool liquid_block = m.kind == MaterialKind::Liquid && static_cast<bool>(light_block_);
     const bool any_block = block_lit || liquid_block;
     items.reserve(state.particles.size());
@@ -1162,6 +1153,7 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         c.age = p.infinite ? std::fmod(p.age, p.life) : p.age;
         c.ratio = Saturate(c.age / p.life);
         c.world = shape.local_space ? world : p.spawn_world;
+        c.follow_spawn = !shape.local_space;
         const glm::vec3 local = glm::vec3(Eval(c, shape.attr[kPosition]));
         glm::vec3 world_pos = shape.world_position ? local : TransformPoint(c.world, local);
         c.position = world_pos;
@@ -1205,10 +1197,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
                     const glm::vec3 d = glm::inverse(frame) * (view.position - world_pos);
                     fix = PlaneAxisFix(shape.axis_fix, d);
                 }
-                // the plane's own rotation turns X, then Y, then Z (rows Rx Ry Rz in row vector form, as the model shape's
-                // 0xB8DF70): the hand light's beam planes (rotation (0, 90, 90), centerU 1) then reach along the spot's axis,
-                // local +Z, with the camera fix turning them about it, and the CeilLamp glass's (90, 90, 0) plane stays its
-                // horizontal cap. The port had turned Z, X, Y, which laid the beam planes across the beam (local -Y)
                 const glm::mat3 basis = frame * fix * glm::mat3(EulerZyx(glm::vec3(rot)));
                 ax = basis[0];
                 ay = basis[1];
@@ -1283,7 +1271,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             }
             if (m.kind == MaterialKind::Liquid) {
                 quad_luminance.y = glm::dot(rgb, glm::vec3(0.2126f, 0.7152f, 0.0722f));
-                // the particle colour before lighting multiplies the transmitted scene (inColor.rgb * (1 - T) * ... * screen)
                 unlit = rgb;
                 rgb *= light.ambient * m.ambient_rate + (liquid_block ? glm::vec3(0.0f) : light.point * (m.point_rate * (1.0f - m.transparency)));
                 if (liquid_block) {
@@ -1302,13 +1289,8 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             rgb *= m.luminance;
         }
         q.color = glm::vec4(rgb, color.a);
-        // 0x12C4010, 0xDC9D40: 1 / softBlendFactor
         q.params = glm::vec4((flags & kQuadSoft) ? 1.0f / m.soft_factor : 0.0f, m.fade_near, m.fade_far, blend_weight);
         q.luminance = quad_luminance;
-        // A blended effect draw (every material's draw setup sets bit 3 of the draw flags unless the material is opaque: liquid
-        // 0x8E57F0, DL 0xB73370, Lit 0xB71620) goes to the half resolution effect pass, where the liquid shader's refraction is in
-        // pixels of that 960 x 540 target (liquid_trace_f010 frame 1490: the blood water draws 652 and 653 at 960 x 540 with
-        // m_localParam[2].zw = 1/960, 1/540, the opaque glass at 1920 x 1080), so it moves the view twice as far per 1080p pixel
         q.extra = glm::vec4(m.reflection, m.kind == MaterialKind::Liquid && !m.opaque ? 2.0f * m.refraction : m.refraction, m.roughness, unlit.b);
         q.info = glm::uvec4(texture, flags, cube, glm::packHalf2x16(glm::vec2(unlit.r, unlit.g)));
         if (m.kind == MaterialKind::Scroll) {
@@ -1320,8 +1302,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         }
         const float depth = glm::dot(world_pos - view.position, view.forward);
         if (mesh) {
-            // 0xB8DF70: world = base * Rz * Ry * Rx * scale with the base translation at the position; 0xB8C700 keeps the model's
-            // winding and swaps the second and third index with invertFace
             glm::mat4 base = c.world;
             base[3] = glm::vec4(world_pos, 1.0f);
             const glm::mat4 xf = base * EulerZyx(glm::vec3(rot)) * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
@@ -1366,9 +1346,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         return;
     }
     if (any_block && !lit_refs.empty()) {
-        // the draw object's world box: the box around its quads. A shape with 0x94390DB1 draws every particle as its own draw
-        // object (ending_fx_trace: all 976 Prim_Poly_LitDP3_NS_VF draws of its 20 traced frames are one quad), so each particle
-        // gets the block of its own quad; the others share one block for the shape's draw
         auto box_block = [&](size_t first, size_t last) {
             glm::vec3 lo(1e30f);
             glm::vec3 hi(-1e30f);
@@ -1397,7 +1374,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             for (size_t k = r.first; k < r.last; ++k) {
                 Quad& q = items[k].quad;
                 if (liquid_block) {
-                    // the shader adds pointLightRate (1 - T) saturate((1 - T) N.L + T) saturate(1/d^2 - w d^2) colour per light
                     q.light_factors = glm::vec4(0.0f, 0.0f, 0.0f, m.point_rate);
                     for (uint32_t i = 0; i < std::min(block.count, 2u); ++i) {
                         q.light_position[i] = glm::vec4(block.position[i], block.inv_r4[i]);
@@ -1425,7 +1401,6 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
     out.draws.push_back(draw);
 }
 
-// 0x907B40
 System::FlareLight System::Light(const glm::mat4& world, const FlareDef& flare, const ViewInfo& view) const {
     FlareLight l;
     l.position = TransformPoint(world, glm::vec3(flare.offset));
@@ -1451,7 +1426,6 @@ System::FlareLight System::Light(const glm::mat4& world, const FlareDef& flare, 
     return l;
 }
 
-// 0x907B40
 void System::UpdateFlare(const Instance& inst, const FlareDef& flare, FlareState& s, float dt, const ViewInfo& view, bool cut) {
     const LensFlareDef* def = LoadFlare(flare.lens_flare);
     if (!def) {
@@ -1491,7 +1465,6 @@ void System::UpdateFlare(const Instance& inst, const FlareDef& flare, FlareState
     }
 }
 
-// 0x8F25D0, 0x8F3300, 0x8F4020, 0x8FCA80
 void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const FlareState& s, const ViewInfo& view, const TextureResolver& textures,
                         RenderList& out) {
     const LensFlareDef* def = LoadFlare(flare.lens_flare);
@@ -1499,10 +1472,6 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
         return;
     }
     const FlareLight light = Light(world, flare, view);
-    // A light behind the drawn view has no place on the screen: projected, it lands mirrored through the centre (clip w below
-    // 0). UpdateFlare shields such a light, but only from the view of the tick; while the game is held (the photo mode pauses
-    // it, VfxScene::Update returns) the state stays the one the player's own view left, and the photo camera turned away
-    // from a wall lamp drew its flare as a large white glow that moved with that camera (near the lamp, nearly the whole frame)
     if (light.cone <= 0.0f || light.depth <= 0.0f) {
         return;
     }
@@ -1527,11 +1496,6 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
         if (!s.visible && s.shield_time >= el.fade_out) {
             continue;
         }
-        // Deliberate deviation: the full screen ghosts (a shape at least two screens wide, mirrored through the centre, the Gost1
-        // of the sconce, CeilLamp and red CeilLamp flares) are not drawn. Their alpha field is a narrow band around a lamp half way
-        // to the screen's edge, so turning through that band washed the whole frame (+55 % mean luma at the CeilLamp in the first
-        // corridor). The Original (PS4) graphics preset draws them at the strength a shadPS4 sweep of the original measured
-        // (SetFlareGhostScale); the other presets leave them out. PT_FLARE_GHOSTS=<scale> overrides it (1 = the original's alpha).
         static const char* ghost_env = std::getenv("PT_FLARE_GHOSTS");
         const float ghost_scale = ghost_env ? static_cast<float>(std::atof(ghost_env)) : g_flare_ghost_scale.load();
         const bool full_ghost = el.offset_type == 2 && el.offset_scale < 0.0f && el.width >= 2.0f;
@@ -1619,7 +1583,6 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
         q.luminance = root;
         q.info = glm::uvec4(textures ? textures(el.texture) : 0u, kQuadFlare, kNoTexture, 0u);
         out.quads.push_back(q);
-        // PT_FLARE_LOG=1: each drawn flare shape with its light, screen position, size and alpha (a glow with no lamp names its effect)
         if (static const bool flare_log = std::getenv("PT_FLARE_LOG") != nullptr; flare_log) {
             LogInfo("flare: {} {} light ({:.2f} {:.2f} {:.2f}) d {:.2f} ndc ({:.3f} {:.3f}) w {:.2f} on_screen {} cone {:.2f} fade {:.2f} visible {} "
                     "shape pos ({:.3f} {:.3f}) size ({:.2f} {:.2f}) alpha {:.3f}",

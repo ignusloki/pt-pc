@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "game/speedrun.h"
 
 #include <algorithm>
@@ -22,7 +23,6 @@ double Seconds(std::chrono::steady_clock::duration d) {
     return std::chrono::duration<double>(d).count();
 }
 
-// LiveSplit's time spans: hh:mm:ss.fffffff
 std::string LssTime(double seconds) {
     seconds = std::max(0.0, seconds);
     const auto ticks = static_cast<long long>(std::llround(seconds * 1e7));
@@ -47,7 +47,6 @@ std::string Escape(std::string_view text) {
     return out;
 }
 
-// the segment's name in the LiveSplit file: English, as the overlay names it in English
 std::string SegmentName(const SpeedrunSplit& s) {
     return SpeedrunTimer::SplitName(s, 0);
 }
@@ -126,7 +125,23 @@ void SpeedrunTimer::SetRecordDirectory(const std::filesystem::path& directory) {
     records_loaded_ = false;
 }
 
+void SpeedrunTimer::PauseReal() {
+    if (real_paused_) return;
+    real_paused_ = true;
+    paused_at_ = std::chrono::steady_clock::now();
+}
+
+void SpeedrunTimer::ResumeReal() {
+    if (!real_paused_) return;
+    real_paused_ = false;
+    const auto paused = std::chrono::steady_clock::now() - paused_at_;
+    start_ += paused;
+    last_split_at_ += paused;
+    LogInfo("speedrun: real time paused {:.1f} s (Coffee with Lisa)", Seconds(paused));
+}
+
 double SpeedrunTimer::Real() const {
+    if (state_ == State::Running && real_paused_) return Seconds(paused_at_ - start_);
     if (state_ == State::Running) return Seconds(std::chrono::steady_clock::now() - start_);
     return real_final_;
 }
@@ -161,7 +176,6 @@ void SpeedrunTimer::Start(std::string_view floor, bool full) {
         livesplit_->Send("reset");
         livesplit_->Send("initgametime");
         livesplit_->Send("starttimer");
-        // LiveSplit's game time moves only with the game's own (setgametime)
         livesplit_->Send("pausegametime");
         livesplit_sent_ = start_;
     }
@@ -192,7 +206,6 @@ void SpeedrunTimer::Split(std::string_view floor, int pass) {
 void SpeedrunTimer::Finish(std::string_view floor, int pass) {
     if (state_ != State::Running) return;
     if (floor == "ending" && !splits_.empty()) {
-        // the final loop's door already split it (NextFloor f160 -> ending): the few ticks to GotoEnding belong to it
         SpeedrunSplit& last = splits_.back();
         const double real = Real();
         last.real += real - last.real_total;
@@ -265,7 +278,6 @@ double SpeedrunTimer::BestTotal() const {
 
 bool SpeedrunTimer::LastSplitDelta(double& delta) const {
     if (splits_.empty() || !full_) return false;
-    // after the finish the record may be this run: the total against the record it replaced
     if (state_ == State::Finished) {
         if (previous_best_ <= 0.0) return false;
         delta = (ShowsGameTime() ? game_ : real_final_) - previous_best_;
@@ -288,8 +300,6 @@ std::string SpeedrunTimer::Describe() const {
     return text;
 }
 
-// speedrun.ini: [stats] attempts and finished full runs, [best_real] and [best_game] (total and the record run's splits as
-// key:real_total:game_total), [gold_real] and [gold_game] (best segment per key). Seconds.
 void SpeedrunTimer::LoadRecords() {
     records_loaded_ = true;
     best_real_ = best_game_ = {};
@@ -375,7 +385,7 @@ void SpeedrunTimer::SaveRecords() {
     std::filesystem::create_directories(directory_, ec);
     std::ofstream out(directory_ / kRecordsFile, std::ios::binary);
     out << text.str();
-    if (!out) LogWarn("speedrun: cannot write {}", (directory_ / kRecordsFile).string());
+    if (!out) LogWarn("speedrun: cannot write {}", pt::os::PathToUtf8(directory_ / kRecordsFile));
 }
 
 void SpeedrunTimer::AppendHistory() {
@@ -393,8 +403,6 @@ void SpeedrunTimer::AppendHistory() {
     out << std::format("{} {} real {} game {}  {}\n", stamp, full_ ? "full" : "partial", Format(real_final_), Format(game_), Describe());
 }
 
-// speedrun_pb.lss: the record run of the shown clock as a LiveSplit splits file (its segments named as the overlay names
-// them), with both clocks of that run as the personal best and the best segments
 void SpeedrunTimer::WriteLss() const {
     if (directory_.empty()) return;
     const Record& pb = Best(ShowsGameTime());
