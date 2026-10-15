@@ -150,13 +150,16 @@ def main():
     # using the SDK's metadata without selecting its host-specific runtime.
     sdk_packs = subprocess.check_output(["dotnet", "msbuild", str(REPO / "installer/Extractor/Extractor.csproj"),
                                          "-getProperty:NetCoreTargetingPackRoot"], cwd=REPO, text=True).strip()
-    run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
+    publish_command = ["dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
         "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
         f"-p:PrunePackageTargetingPackRoots={sdk_packs}",
-        "--artifacts-path", dotnet_artifacts, "-o", extractor)
+        "--artifacts-path", dotnet_artifacts]
+    run(*publish_command, "-o", extractor)
     copy_runtime_notices(extractor, dotnet_artifacts, "osx-" + args.arch)
-    # Both the portable app's first-run screen and Setup use the same audited helper and corresponding source.
-    notices = extractor.with_name(extractor.name + "-notices")
+    # App code folders cannot contain unsigned managed DLLs. Embed them and the official runtime in one signed helper.
+    app_extractor = build / f"extractor-app-osx-{args.arch}-{uuid.uuid4().hex}"
+    run(*publish_command, "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", app_extractor)
+    notices = app_extractor.with_name(app_extractor.name + "-notices")
     notices.mkdir()
     shutil.copy2(source / "LICENSE.txt", notices / "LICENSE-LibOrbisPkg.txt")
     shutil.copy2(source_archive(source, notices, "osx-" + args.arch), notices / "LibOrbisPkg-corresponding-source.zip")
@@ -166,7 +169,7 @@ def main():
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
     game_args = ["--game", args.game.resolve()] if args.game else []
     run(sys.executable, REPO / "tools/macos/make_app.py", "--build", build, "--exe", build / "pt_release",
-        "--out", output, "--identity", args.identity, "--extractor", extractor, *game_args)
+        "--out", output, "--identity", args.identity, "--extractor", app_extractor, *game_args)
     archive = output / f"pt-port-{make_app.version(build)}-macos-{args.arch}.zip"
     if not args.skip_tests:
         verify_packaged_voice(output / (make_app.APP_NAME + ".app"), output)

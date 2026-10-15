@@ -48,6 +48,7 @@ def source_archive(source, out, rid):
         z.writestr("BUILD.txt", f"dotnet publish PT.PkgExtract/Extractor.csproj -c Release -r {rid} --self-contained true -p:LibOrbisSource=<absolute LibOrbisPkg folder>{microsoft_packs}. Library and wrapper are LGPL-3.0-or-later; the library DLL may be replaced. Changes: net10.0/modern SDK, fixed three-file root extraction, identity validation, safe output creation and unreadable PKG diagnostics; PFSC decompression uses ReadExactly and chunked reads use the current chunk length. These read fixes are included in this corresponding source. No original game assets in this archive.\n")
         if rid.startswith("osx-"):
             z.writestr("RUNTIME.txt", "Use an empty folder for NetCoreTargetingPackRoot to download Microsoft's runtime packs rather than a Homebrew host runtime. Obtain the SDK packs folder before overriding it: dotnet msbuild PT.PkgExtract/Extractor.csproj -getProperty:NetCoreTargetingPackRoot. Pass that value only to PrunePackageTargetingPackRoots for .NET 10 restore metadata.\n")
+            z.writestr("APP-HELPER.txt", "The portable Mac app publishes this same source with -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true. Rebuild with a modified LibOrbisPkg.Core to replace the embedded library, replace Contents/MacOS/extractor/PT.PkgExtract, then sign the helper and app again. Setup's external extractor keeps a replaceable library DLL.\n")
     return sourcezip
 
 

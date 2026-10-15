@@ -110,6 +110,11 @@ class PackagingTests(unittest.TestCase):
     def test_first_run_helper_without_corresponding_source_is_refused(self):
         with self.assertRaisesRegex(SystemExit,'lacks the LibOrbisPkg licence or corresponding source'):
             self.portable(extractor=True)
+
+    def test_managed_dlls_in_the_app_code_folder_are_refused(self):
+        (self.extractor/'LibOrbisPkg.Core.dll').write_bytes(b'Managed DLL fixture')
+        with self.assertRaisesRegex(SystemExit,'must be a single-file publish'):
+            self.portable(extractor=True)
     def test_wrong_runtime_architecture_refused(self):
         with self.assertRaisesRegex(RuntimeError,'architecture mismatch'):self.payload(self.portable(),'osx-x64')
     def test_unsafe_duplicates_assets_and_data_refused(self):

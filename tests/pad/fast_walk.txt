@@ -44,7 +44,7 @@
 20 sexpect fastwalkenabled 1
 20 sshot fast-walk-menu.png
 20 sktap Escape
-20 swait 10
+20 swait 40
 20 sktap Escape
 20 swait 90
 20 sexpect menu 0

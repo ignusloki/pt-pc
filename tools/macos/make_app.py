@@ -101,7 +101,8 @@ def main():
                         help="the game files, for the loop browser previews (shot by the bundled game, --make-loop-previews)")
     parser.add_argument("--identity", default="-", help="Developer ID Application identity, or ad-hoc signing with -")
     parser.add_argument("--no-zip", action="store_true", help="leave the bundle unzipped")
-    parser.add_argument("--extractor", help="the PKG extraction helper published for this Mac (tools/macos/build.py or tools/ci/publish_extractor.py); its LGPL notices are read from <folder>-notices")
+    parser.add_argument("--extractor", help="the single-file PKG helper published for this Mac (tools/macos/build.py or "
+                        "tools/ci/publish_extractor.py --single-file); LGPL notices are read from <folder>-notices")
     args = parser.parse_args()
     build = Path(args.build)
     exe = Path(args.exe) if args.exe else build / "pt"
@@ -168,6 +169,8 @@ def main():
         extractor = Path(args.extractor)
         notices = extractor.with_name(extractor.name + "-notices")
         helper = extractor / "PT.PkgExtract"
+        if any(p.suffix.lower() == ".dll" for p in extractor.rglob("*")):
+            sys.exit("The in-app extractor must be a single-file publish; managed DLLs cannot be signed in Contents/MacOS.")
         if not helper.is_file() or not is_macho(helper) or architecture(helper) != arch:
             sys.exit(f"{helper} is not a {arch} Mach-O executable; publish it for the matching osx-arm64 or osx-x64 runtime")
         if not (notices / "LICENSE-LibOrbisPkg.txt").is_file() or not (notices / "LibOrbisPkg-corresponding-source.zip").is_file():
