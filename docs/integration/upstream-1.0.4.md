@@ -45,6 +45,10 @@ this task's acceptance checks; no Windows/Linux compatibility result is claimed.
   gameplay on the user's 2019 MacBook Pro remains a separate check.
 - Local Apple silicon candidate: `dist/macos-1.0.8-rc1/arm64/`, version `1.0.8-rc1`, source `6520a41`. `BUILD.json` and `SHA256SUMS`
   record the exact source and portable/Setup ZIP hashes. No original game archives or player profile are bundled.
+- Intel candidate: [native CI artifact](https://github.com/ignusloki/pt-pc/actions/runs/38803970601/artifacts/12006137858), containing
+  `P.T.PC.Port.Setup-macOS-x64.zip`, the portable ZIP/DMG, installer self-test and voice smoke log. It reports version `1.0.8`
+  because the manual CI build uses the prepared version; it is still unpublished and uses the same source `6520a41` as the local ARM candidate.
+  The approximately 1 GB artifact was left on GitHub after cancelling a slow local download; no local Intel package is claimed.
 - A copy of the live profile is preserved in ignored local backups. All gameplay tests use separate settings/save paths and saving disabled.
 
 ## Before publishing
