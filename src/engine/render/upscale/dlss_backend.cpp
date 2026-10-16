@@ -80,10 +80,10 @@ std::filesystem::path FindRuntime(const char* pattern) {
     const std::string stem = std::string(pattern).substr(0, std::string(pattern).size() - 1);
     std::filesystem::path best;
     std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(ExecutableDir(), ec)) {
-        const std::string name = entry.path().filename().string();
+    for (std::filesystem::directory_iterator it(ExecutableDir(), ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
         if (name.starts_with(stem) && name.size() > stem.size() && (best.empty() || name > best.filename().string())) {
-            best = entry.path();
+            best = it->path();
         }
     }
     return best;

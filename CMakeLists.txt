@@ -162,7 +162,7 @@ if(WIN32 AND EXISTS "${PT_SETUP_PAYLOAD}")
   configure_file(installer/Native/setup.rc.in "${CMAKE_BINARY_DIR}/private-setup.rc" @ONLY)
   set_source_files_properties("${CMAKE_BINARY_DIR}/private-setup.rc" PROPERTIES OBJECT_DEPENDS "${PT_SETUP_PAYLOAD};${PT_SETUP_MANIFEST};${CMAKE_SOURCE_DIR}/assets/pt.ico")
   add_executable(pt_setup WIN32 EXCLUDE_FROM_ALL installer/Native/setup.cpp src/engine/platform/http.cpp
-    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp "${CMAKE_BINARY_DIR}/private-setup.rc")
+    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp src/engine/core/log.cpp "${CMAKE_BINARY_DIR}/private-setup.rc")
   target_include_directories(pt_setup PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
   add_dependencies(pt_setup pt_version)
   target_compile_definitions(pt_setup PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
@@ -180,7 +180,7 @@ if(WIN32)
   set(PT_SETUP_MANIFEST "${CMAKE_SOURCE_DIR}/installer/Native/setup.manifest")
   configure_file(installer/Native/updater.rc.in "${CMAKE_BINARY_DIR}/private-updater.rc" @ONLY)
   set_source_files_properties("${CMAKE_BINARY_DIR}/private-updater.rc" PROPERTIES OBJECT_DEPENDS "${PT_SETUP_MANIFEST};${CMAKE_SOURCE_DIR}/assets/pt.ico")
-  add_executable(pt_updater WIN32 installer/Native/setup.cpp src/engine/platform/http.cpp src/engine/platform/update_check.cpp
+  add_executable(pt_updater WIN32 installer/Native/setup.cpp src/engine/platform/http.cpp src/engine/platform/update_check.cpp src/engine/core/log.cpp
     src/engine/platform/ed25519.cpp src/engine/platform/os.cpp "${CMAKE_BINARY_DIR}/private-updater.rc")
   set_target_properties(pt_updater PROPERTIES OUTPUT_NAME "pt-updater")
   target_include_directories(pt_updater PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
@@ -197,7 +197,7 @@ endif()
 if(UNIX AND NOT APPLE)
   # the Linux installer (installer/Native/setup_linux.cpp); tools/linux/attach_payload.py appends the payload after the build
   add_executable(pt_setup_linux EXCLUDE_FROM_ALL installer/Native/setup_linux.cpp src/engine/platform/http.cpp
-    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp)
+    src/engine/platform/update_check.cpp src/engine/platform/ed25519.cpp src/engine/platform/os.cpp src/engine/core/log.cpp)
   target_include_directories(pt_setup_linux PRIVATE src installer/Native "${CMAKE_BINARY_DIR}/generated")
   add_dependencies(pt_setup_linux pt_version)
   target_link_libraries(pt_setup_linux PRIVATE zlibstatic ${CMAKE_DL_LIBS} Threads::Threads)

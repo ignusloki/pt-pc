@@ -46,6 +46,7 @@ struct MenuInput {
     glm::vec2 pointer{0.0f};
     bool click = false;
     bool right_click = false;
+    float wheel = 0.0f;
 };
 
 inline constexpr uint32_t kMenuMusicBack = kMusicPressBack;
@@ -53,7 +54,7 @@ inline constexpr uint32_t kMenuMusicForward = kMusicPressForward;
 inline constexpr uint32_t kMenuMusicRestart = kMusicPressRestart;
 inline constexpr uint32_t kMenuMusicLoop = kMusicPressLoop;
 
-MenuInput MapMenuInput(const InputState& input, uint32_t previous_held);
+MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t previous_dirs = 0);
 
 class OptionsMenu {
 public:

@@ -24,6 +24,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace pt::nr_unlock {
@@ -349,6 +350,7 @@ std::string ApplyAddonSettings(std::string_view ini_text, const AddonSettings& s
         }
     }
     SetSectionKeys(lines, kAddonSection, wanted);
+    SetSectionKeys(lines, "ADDON", {{"AddonPath", settings.parked ? std::string(kParkedAddonPath) : std::string(".\\")}});
     SetSectionKeys(lines, "GENERAL", {{"EffectSearchPaths", ""}, {"TextureSearchPaths", ""}, {"PerformanceMode", "1"}, {"NoReloadOnInit", "1"},
                                       {"NoEffectCache", "1"}, {"PresetPath", ""}, {"StartupPresetPath", ""}, {"PresetShortcutKeys", ""},
                                       {"PresetShortcutPaths", ""}});
@@ -448,14 +450,57 @@ RouteReport ReadRouteReport(const std::filesystem::path& game_dir) {
     return ParseReShadeLog(ReadText(game_dir / "ReShade.log", 2 << 20));
 }
 
+bool SameFolder(const std::filesystem::path& a, const std::filesystem::path& b) {
+    auto key = [](const std::filesystem::path& p) {
+        std::string text = os::PathToUtf8(p.lexically_normal());
+        while (text.size() > 1 && (text.back() == '\\' || text.back() == '/')) text.pop_back();
+        for (char& c : text) {
+            if (c == '\\') c = '/';
+        }
+#ifdef _WIN32
+        text = AsciiLowerCopy(text);
+#endif
+        return text;
+    };
+    return !a.empty() && !b.empty() && key(a) == key(b);
+}
+
+#ifdef _WIN32
+namespace {
+std::string ForeignModules(const std::filesystem::path& game_dir) {
+    HMODULE modules[512] = {};
+    DWORD needed = 0;
+    if (!K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) return {};
+    wchar_t windows_dir[MAX_PATH] = {};
+    GetWindowsDirectoryW(windows_dir, MAX_PATH);
+    const std::string windows = AsciiLowerCopy(os::PathToUtf8(std::filesystem::path(windows_dir)));
+    std::string out;
+    const size_t count = std::min<size_t>(needed / sizeof(HMODULE), std::size(modules));
+    for (size_t i = 0; i < count; ++i) {
+        wchar_t name[MAX_PATH * 2] = {};
+        if (!GetModuleFileNameW(modules[i], name, MAX_PATH * 2)) continue;
+        const std::filesystem::path path(name);
+        const std::string lower = AsciiLowerCopy(os::PathToUtf8(path));
+        if (!windows.empty() && lower.starts_with(windows)) continue;
+        if (SameFolder(path.parent_path(), game_dir)) continue;
+        out += out.empty() ? "; modules from outside Windows and the game folder: " : ", ";
+        out += os::PathToUtf8(path);
+    }
+    return out;
+}
+}
+#endif
+
 bool LoadDxgiForRoute(const std::filesystem::path& game_dir, bool install_present, bool load) {
 #ifdef _WIN32
     if (!install_present) return false;
     if (HMODULE loaded = GetModuleHandleW(L"dxgi.dll")) {
         wchar_t name[MAX_PATH * 2] = {};
         GetModuleFileNameW(loaded, name, MAX_PATH * 2);
-        LogWarn("neural rendering: dxgi.dll was already loaded before the DLSS 5 route's choice ({})", os::PathToUtf8(name));
-        return std::filesystem::path(name).parent_path() == game_dir;
+        const bool reshade = SameFolder(std::filesystem::path(name).parent_path(), game_dir);
+        LogWarn("neural rendering: dxgi.dll was already loaded before the DLSS 5 route's choice ({}{}){}", os::PathToUtf8(name),
+                reshade ? ", the route's ReShade" : "", ForeignModules(game_dir));
+        return reshade;
     }
     if (load) {
         const std::filesystem::path reshade = game_dir / "dxgi.dll";

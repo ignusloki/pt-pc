@@ -51,6 +51,7 @@ public:
     };
     void AddStageRef(const std::string& path);
     void ReleaseStageRef(const std::string& path);
+    bool Holds(const GpuMesh* mesh) const;
     struct Released {
         uint32_t models = 0;
         uint32_t textures = 0;

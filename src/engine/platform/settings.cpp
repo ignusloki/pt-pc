@@ -3,6 +3,7 @@
 #include "engine/platform/settings.h"
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <cmath>
 #include <map>
@@ -106,6 +107,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.letterbox", out.display.letterbox);
     Read(v, "display.rendering_api", out.display.rendering_api);
     Read(v, "display.rendering_api_asked", out.display.rendering_api_asked);
+    Read(v, "display.d3d12_crashed", out.display.d3d12_crashed);
     Read(v, "input.mouse_sensitivity", out.input.mouse_sensitivity);
     Read(v, "input.gamepad_sensitivity", out.input.gamepad_sensitivity);
     Read(v, "input.gamepad_dead_zone", out.input.gamepad_dead_zone);
@@ -204,7 +206,20 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "accessibility.sound_captions", out.accessibility.sound_captions);
     Read(v, "accessibility.gyro", out.accessibility.gyro);
     Read(v, "accessibility.gyro_sensitivity", out.accessibility.gyro_sensitivity);
+    Read(v, "accessibility.gyro_tightening", out.accessibility.gyro_tightening);
     Read(v, "accessibility.field_of_view", out.accessibility.fov_offset);
+    out.accessibility.gyro_tightening =
+        std::isfinite(out.accessibility.gyro_tightening) ? std::clamp(out.accessibility.gyro_tightening, 0.0f, 10.0f) : 4.0f;
+    for (auto it = v.lower_bound("gyro_bias."); it != v.end() && it->first.starts_with("gyro_bias."); ++it) {
+        std::istringstream in(it->second);
+        std::array<float, 3> bias{};
+        if ((in >> bias[0] >> bias[1] >> bias[2]) && std::isfinite(bias[0]) && std::isfinite(bias[1]) && std::isfinite(bias[2]) &&
+            std::abs(bias[0]) < 0.35f && std::abs(bias[1]) < 0.35f && std::abs(bias[2]) < 0.35f) {
+            out.accessibility.gyro_bias[it->first.substr(10)] = bias;
+        } else {
+            LogWarn("settings: {} = '{}' is not a gyro offset", it->first, it->second);
+        }
+    }
     out.accessibility.fov_offset = std::clamp(out.accessibility.fov_offset, -20, 40);
     out.accessibility.gyro = std::clamp(out.accessibility.gyro, 0, 2);
     out.accessibility.gyro_sensitivity =
@@ -287,7 +302,10 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "letterbox = " << s.display.letterbox << "\n"
          << "; the graphics API the game draws with at the next start: vulkan, or d3d12 (DirectX 12, Windows)\n"
          << "rendering_api = " << s.display.rendering_api << "\n"
-         << "rendering_api_asked = " << (s.display.rendering_api_asked ? 1 : 0) << "\n\n"
+         << "rendering_api_asked = " << (s.display.rendering_api_asked ? 1 : 0) << "\n"
+         << "; an earlier start died while DirectX 12 was starting (1 its check, 2 its device, 3 its first frames): DirectX 12 stays\n"
+         << "; off until a start with --backend d3d12 draws its first frames; 0 never\n"
+         << "d3d12_crashed = " << s.display.d3d12_crashed << "\n\n"
          << "[input]\n"
          << "mouse_sensitivity = " << s.input.mouse_sensitivity << "\n"
          << "; gamepad turn speed after the original stick response, 1 keeps the original\n"
@@ -439,6 +457,9 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "gyro = " << s.accessibility.gyro << "\n"
          << "; 0.25 to 4, 1 turns the view or the light as far as the controller turns\n"
          << "gyro_sensitivity = " << s.accessibility.gyro_sensitivity << "\n"
+         << "; the gyro tightening, 0 to 10: a turn slower than this many degrees a second is scaled down by its share of it, so a resting\n"
+         << "; controller's last jitter fades out; 0 is off. The gyro also learns its resting offset by itself while the controller rests\n"
+         << "gyro_tightening = " << s.accessibility.gyro_tightening << "\n"
          << "; degrees added to the vertical angle of the view while you walk (the original's is 54.9, about 85 across at 16:9): -20 to 40;\n"
          << "; the menu offers -10, 0, 10, 20 and 30. The zoom, cutscenes, the peephole, photo mode, third person and VR keep their own view\n"
          << "field_of_view = " << s.accessibility.fov_offset << "\n";
@@ -452,6 +473,13 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "livesplit = " << (s.extras.livesplit ? 1 : 0) << "\n"
          << "livesplit_host = " << s.extras.livesplit_host << "\n"
          << "livesplit_port = " << s.extras.livesplit_port << "\n";
+    if (!s.accessibility.gyro_bias.empty()) {
+        text << "\n[gyro_bias]\n"
+             << "; the resting offset (rad/s, x y z) of each controller calibrated in Accessibility > Calibrate gyro, by SDL joystick GUID\n";
+        for (const auto& [guid, bias] : s.accessibility.gyro_bias) {
+            text << guid << " = " << bias[0] << " " << bias[1] << " " << bias[2] << "\n";
+        }
+    }
     if (!s.mods.empty()) {
         text << "\n[mods]\n"
              << "; a folder in mods/ = 1 on, 0 off; applies at the next start\n";

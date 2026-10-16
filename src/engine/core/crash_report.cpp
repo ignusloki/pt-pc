@@ -14,6 +14,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <dbghelp.h>
+#else
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
 #endif
 
 namespace pt {
@@ -63,10 +67,52 @@ bool SDLCALL OnWindowsMessage(void*, MSG* msg) {
 }
 #endif
 
+#ifndef _WIN32
+void OnFatalSignal(int sig, siginfo_t* info, void*) {
+    const char* name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE"
+                       : sig == SIGABRT ? "SIGABRT (abort)" : "signal";
+    if (g_dumping.fetch_add(1) == 0) {
+        LogError("crash: {} ({}) at address {}", name, sig, info ? info->si_addr : nullptr);
+        void* frames[64];
+        const int count = backtrace(frames, 64);
+        if (char** lines = backtrace_symbols(frames, count)) {
+            for (int i = 0; i < count; ++i) LogError("crash: #{} {}", i, lines[i]);
+        }
+        LogExit(128 + sig, "crash");
+    }
+    raise(sig);
+}
+
+void InstallFaultHandlers() {
+    static char alt_stack[64 * 1024];
+    stack_t ss{};
+    ss.ss_sp = alt_stack;
+    ss.ss_size = sizeof(alt_stack);
+    sigaltstack(&ss, nullptr);
+    struct sigaction action{};
+    action.sa_sigaction = OnFatalSignal;
+    action.sa_flags = SA_SIGINFO | SA_RESETHAND | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) sigaction(sig, &action, nullptr);
+}
+
+void RedirectStderr(const std::filesystem::path& dir) {
+    if (isatty(STDERR_FILENO)) return;
+    const std::filesystem::path path = (dir.empty() ? std::filesystem::path(".") : dir) / "pt-stderr.log";
+    if (FILE* file = std::fopen(path.c_str(), "w")) {
+        std::fflush(stderr);
+        dup2(fileno(file), STDERR_FILENO);
+        std::fclose(file);
+        setvbuf(stderr, nullptr, _IONBF, 0);
+        LogInfo("crash reporting: driver and library messages (stderr) go to {}", path.string());
+    }
+}
+#else
 void OnSignalAbort(int) {
     WriteCrashDump("abort()");
     LogExit(3, "abort");
 }
+#endif
 
 void OnAtExit() {
     LogExit(-1, "exit without a recorded code");
@@ -83,8 +129,11 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
     _set_invalid_parameter_handler(OnInvalidParameter);
     SetConsoleCtrlHandler(OnConsoleControl, TRUE);
     SDL_SetWindowsMessageHook(OnWindowsMessage, nullptr);
-#endif
     std::signal(SIGABRT, OnSignalAbort);
+#else
+    InstallFaultHandlers();
+    RedirectStderr(dump_dir);
+#endif
     std::atexit(OnAtExit);
     std::set_terminate([] {
         if (const std::exception_ptr error = std::current_exception()) {

@@ -83,6 +83,28 @@
 #include "engine/render/render_viewport.h"
 #include "engine/platform/os.h"
 #include "engine/platform/rendering_api.h"
+namespace {
+std::filesystem::path g_d3d12_marker;
+void ArmD3D12Marker(int stage) {
+    if (g_d3d12_marker.empty()) return;
+    std::ofstream(g_d3d12_marker) << stage << "\npt.exe is starting DirectX 12. If this file stays, the next start uses Vulkan.\n";
+}
+void ClearD3D12Marker() {
+    if (g_d3d12_marker.empty()) return;
+    std::error_code ec;
+    std::filesystem::remove(g_d3d12_marker, ec);
+}
+int ReadD3D12Marker() {
+    int stage = 0;
+    std::ifstream(g_d3d12_marker) >> stage;
+    return stage >= 1 && stage <= 3 ? stage : 1;
+}
+std::string D3D12CrashReason(int stage) {
+    return stage == 2 ? "DirectX 12 stopped the game while its device was starting at an earlier start"
+         : stage == 3 ? "DirectX 12 stopped the game in its first frames at an earlier start"
+                      : "DirectX 12 stopped the game while the game checked whether it runs here, at an earlier start";
+}
+}
 #ifdef PT_D3D12_GAME
 #include "engine/render/d3d12/backend/agility_exports.h"
 #include "engine/render/d3d12/backend/d3d12_backend.h"
@@ -94,13 +116,19 @@ bool ProbeD3D12(std::string& reason) {
     pt::gpu::d3d12::CreateOptions o;
     o.debug = std::getenv("PT_D3D12_DEBUG") != nullptr;
     o.dred = false;
-    std::unique_ptr<pt::gpu::d3d12::D3D12Device> device = pt::gpu::d3d12::Create(o, reason);
+    ArmD3D12Marker(1);
+    if (const char* test = std::getenv("PT_TEST_CRASH"); test && std::string_view(test) == "d3d12probe") {
+        pt::LogInfo("crash test: d3d12probe");
+        *static_cast<volatile int*>(nullptr) = 1;
+    }
+    const bool made = pt::gpu::d3d12::Create(o, reason) != nullptr;
+    ClearD3D12Marker();
     if (const char* fail = std::getenv("PT_D3D12_PROBE_FAIL"); fail && fail[0] == '1') {
         reason = "PT_D3D12_PROBE_FAIL is set";
         return false;
     }
-    pt::LogInfo("rendering api: DirectX 12 {}{}", device ? "can run here" : "cannot run here: ", device ? "" : reason);
-    return device != nullptr;
+    pt::LogInfo("rendering api: DirectX 12 {}{}", made ? "can run here" : "cannot run here: ", made ? "" : reason);
+    return made;
 }
 }
 #endif
@@ -650,6 +678,10 @@ struct App {
     uint32_t nr_job_serial = 0;
     int nr_job_request = 0;
     bool nr_reshade_loaded = false;
+    bool nr_marker_read = false;
+    bool nr_marker_at_start = false;
+    bool nr_prearmed = false;
+    bool nr_addon_parked = false;
     bool nr_addon_boot_on = false;
     int nr_hook_tries = 0;
     double nr_hook_try_time = -10.0;
@@ -681,6 +713,7 @@ struct App {
     pt::RenderingApi rendering_api = pt::RenderingApi::Vulkan;
     std::filesystem::path settings_path;
     std::filesystem::path streamline_marker;
+    bool d3d12_marker = false;
     SDL_Window* window = nullptr;
     bool microphone_test = false;
     int extras_request = 0;
@@ -1493,6 +1526,7 @@ void WriteNeuralRoute(App& app) {
     pt::ParseNeuralStyle(app.settings.upscaling.neural_style, style);
     pt::nr_unlock::AddonSettings addon;
     addon.on = kind == pt::NeuralRenderingKind::Dlss5;
+    addon.parked = app.nr_addon_parked;
     addon.style = static_cast<int>(style);
     addon.intensity = std::clamp(app.settings.upscaling.neural_intensity, 0.0f, 1.0f);
     if (const char* keys = std::getenv("PT_NR_ADDON_KEYS")) addon.extra = pt::nr_unlock::ParseAddonKeys(keys);
@@ -1529,6 +1563,7 @@ void DisableNeuralRoute(App& app, const char* note, const std::string& detail) {
     if (NeuralRouteActive(app) && app.nr_reshade_loaded && !NrTestInstall()) {
         pt::nr_unlock::AddonSettings off;
         off.on = false;
+        off.parked = app.nr_addon_parked;
         if (const char* keys = std::getenv("PT_NR_ADDON_KEYS")) off.extra = pt::nr_unlock::ParseAddonKeys(keys);
         pt::nr_unlock::WriteAddonSettings(pt::ExecutableDir(), off);
     }
@@ -2443,6 +2478,25 @@ public:
             sensitivity.wrap = false;
             sensitivity.enabled = a.gyro != 0;
             access.rows.push_back(std::move(sensitivity));
+            {
+                const auto state = input_.GyroCalibration();
+                const bool failed = gyro_calibrate_no_pad_ || state == pt::GyroTracker::Calibration::Failed;
+                const char* value = failed ? "pc_gyro_calibrate_failed" : state == pt::GyroTracker::Calibration::Running ? "pc_gyro_calibrating"
+                                    : state == pt::GyroTracker::Calibration::Done ? "pc_gyro_calibrated" : "pc_gyro_calibrate_value";
+                std::string note = failed ? "pc_note_gyro_calibrate_failed" : state == pt::GyroTracker::Calibration::Done ? "pc_note_gyro_calibrated"
+                                   : "pc_note_gyro_calibrate";
+                if (!failed && state == pt::GyroTracker::Calibration::Running) {
+                    note = std::format("pc_note_gyro_calibrating{}{}", pt::game::kPcNoteArgument,
+                                       static_cast<int>(std::lround(input_.GyroCalibrationProgress() * 100.0f)));
+                }
+                pt::game::PcSettingRow calibrate = Row(kGyroCalibrate, "pc_gyro_calibrate", {value}, 0, note);
+                calibrate.action = true;
+                calibrate.wrap = false;
+                calibrate.confirm_note = "pc_dlg_gyro_calibrate";
+                calibrate.confirm_default_yes = true;
+                calibrate.enabled = a.gyro != 0 && state != pt::GyroTracker::Calibration::Running;
+                access.rows.push_back(std::move(calibrate));
+            }
             pt::game::PcSettingRow fov = Row(kFieldOfView, "pc_fov", {}, FovStep(a.fov_offset), "pc_note_fov");
             for (const int step : kFovSteps) fov.values.push_back(step == 0 ? "pc_rumble_original" : std::format("{:+d}", step));
             fov.wrap = false;
@@ -3539,6 +3593,15 @@ public:
                 pt::LogWarn("frame generation: the community {} could not be started", what);
             }
         }
+        if (id == kGyroCalibrate && app_.settings.accessibility.gyro != 0) {
+            gyro_calibrate_no_pad_ = !input_.AnyGyroPad();
+            if (gyro_calibrate_no_pad_) {
+                pt::LogWarn("input: gyro calibration asked for, but no connected gamepad has a motion sensor");
+            } else {
+                input_.StartGyroCalibration();
+                pt::LogInfo("input: gyro calibration started");
+            }
+        }
         if (id == kSendLog) pt::SendLogReport(g_log_path, g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()));
         if (id == kReset && game_.SavesEnabled()) {
             pt::LogInfo("save: progress reset from the PC settings page ({})", game_.ResetProgress() ? "accepted" : "failed");
@@ -3576,8 +3639,19 @@ public:
         }
     }
 
+    void CollectGyroCalibration() {
+        std::string guid;
+        std::array<float, 3> offset{};
+        if (!input_.TakeGyroCalibrated(guid, offset)) return;
+        app_.settings.accessibility.gyro_bias[guid] = offset;
+        input_.settings.gyro_bias = app_.settings.accessibility.gyro_bias;
+        Save();
+    }
+
     void Opened() override {
         page_ = game_.StreetOfferPending() ? kStreetPage : last_tab_;
+        input_.ClearGyroCalibration();
+        gyro_calibrate_no_pad_ = false;
         app_.microphone_test = app_.microphone_monitor = false;
         archive_full_ = false;
         StopVoice();
@@ -3592,7 +3666,7 @@ public:
         if (game_.StreetOfferPending()) game_.AnswerStreetOffer(false);
     }
 
-    int RefreshEveryFrames() const override { return page_ == kMicrophonePage || voice_entry_ || music_.Playing() ? 3 : 15; }
+    int RefreshEveryFrames() const override { return page_ == kMicrophonePage || input_.GyroCalibration() == pt::GyroTracker::Calibration::Running || voice_entry_ || music_.Playing() ? 3 : 15; }
 
     bool Back() override {
         if (TabCount() > 0) {
@@ -3672,7 +3746,7 @@ private:
         kArchive, kArchiveLock,
         kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
         kFastWalk,
-        kAccessibility, kSoundCaptions, kGyro, kGyroSensitivity, kFieldOfView,
+        kAccessibility, kSoundCaptions, kGyro, kGyroSensitivity, kGyroCalibrate, kFieldOfView,
         kRenderingApi,
         kNeuralRendering, kNeuralStyle, kNeuralIntensity, kNeuralUnlock, kNeuralUninstall, kNeuralReinstall,
         kFgUnlock, kFgReinstall, kFgUninstall,
@@ -3689,6 +3763,7 @@ private:
     bool archive_full_ = false;
     int pending_cursor_ = -1;
     bool keep_cursor_ = false;
+    bool gyro_calibrate_no_pad_ = false;
     const pt::game::ArchiveEntry* voice_entry_ = nullptr;
     uint32_t voice_id_ = 0;
     uint64_t voice_start_ = 0;
@@ -4165,7 +4240,7 @@ private:
         const int ray_index=g.ray_quality>=4?3:g.ray_quality>=2?2:std::max(g.ray_quality,0);
         auto quality=Row(kRayQuality,"pc_ray_quality",std::move(ray_values),supported?ray_index:std::min(ray_index,2),"pc_note_ray_quality");
         quality.enabled=supported&&(rt_shadows>0||rt_ao||rt_reflections||path);lighting.rows.push_back(std::move(quality));
-        if(supported&&g.ray_quality>=4){
+        if(supported&&(g.ray_quality>=3||rt_shadows>0||rt_ao||rt_reflections||s.ray_tracing.contact_shadows)){
             const auto& u=app_.scene.upscale;
             std::string rr_reason;
             const bool rr=u.kind==pt::UpscalerKind::Dlss&&app_.scene.RayReconstructionAvailable(rr_reason);
@@ -4277,6 +4352,8 @@ private:
                 notes->emplace_back();
             } else if (kind == pt::UpscalerKind::Fsr4 && reason.starts_with("AMD releases FSR 4 for DirectX 12 only")) {
                 notes->emplace_back("pc_note_fsr4_vulkan");
+            } else if (reason.starts_with(ShortName(kind) + " ")) {
+                notes->push_back(Sentence(reason));
             } else {
                 notes->push_back(std::format("{}: {}", ShortName(kind), Sentence(reason)));
             }
@@ -4354,6 +4431,28 @@ private:
     pt::InputDevice& input_;
 };
 
+struct FocusTrace {
+    std::string last_event = "none";
+    uint64_t events = 0;
+};
+FocusTrace g_focus_trace;
+
+std::string DescribeForeground(const pt::os::ForegroundWindow& fg) {
+    if (!fg.handle) return "no foreground window";
+    return std::format("foreground window 0x{:x} \"{}\" class {} of {} (pid {}{})", fg.handle, fg.title, fg.window_class,
+                       fg.process.empty() ? "?" : fg.process, fg.pid, fg.pid == pt::os::ProcessId() ? ", this game" : "");
+}
+
+void* WindowHandle(SDL_Window* window) {
+    return window ? SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) : nullptr;
+}
+
+bool WindowActive(SDL_Window* window) {
+    if (!window) return false;
+    if (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) return true;
+    return pt::os::IsForegroundWindow(WindowHandle(window)) || pt::os::ForegroundIsOwnProcess();
+}
+
 bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
         return true;
@@ -4384,6 +4483,34 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             }
         } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
             app.renderer.Resize(static_cast<uint32_t>(event.window.data1), static_cast<uint32_t>(event.window.data2));
+        }
+        const char* focus_event = nullptr;
+        switch (event.type) {
+        case SDL_EVENT_WINDOW_FOCUS_LOST: focus_event = "FOCUS_LOST"; break;
+        case SDL_EVENT_WINDOW_FOCUS_GAINED: focus_event = "FOCUS_GAINED"; break;
+        case SDL_EVENT_WINDOW_MINIMIZED: focus_event = "MINIMIZED"; break;
+        case SDL_EVENT_WINDOW_RESTORED: focus_event = "RESTORED"; break;
+        case SDL_EVENT_WINDOW_HIDDEN: focus_event = "HIDDEN"; break;
+        case SDL_EVENT_WINDOW_SHOWN: focus_event = "SHOWN"; break;
+        case SDL_EVENT_WINDOW_OCCLUDED: focus_event = "OCCLUDED"; break;
+        case SDL_EVENT_WINDOW_EXPOSED: focus_event = "EXPOSED"; break;
+        case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: focus_event = "ENTER_FULLSCREEN"; break;
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: focus_event = "LEAVE_FULLSCREEN"; break;
+        default: break;
+        }
+        if (focus_event) {
+            const bool main_window = event.window.windowID == SDL_GetWindowID(app.window);
+            g_focus_trace.last_event =
+                std::format("{} of {} (SDL window {})", focus_event, main_window ? "the game window" : "another window", event.window.windowID);
+            ++g_focus_trace.events;
+            const bool loss = event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_HIDDEN;
+            if (loss) {
+                pt::LogInfo("focus: SDL {}; {}", g_focus_trace.last_event, DescribeForeground(pt::os::GetForegroundWindowInfo()));
+            } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED || event.type == SDL_EVENT_WINDOW_RESTORED) {
+                pt::LogInfo("focus: SDL {}", g_focus_trace.last_event);
+            } else {
+                pt::LogDebug("focus: SDL {}", g_focus_trace.last_event);
+            }
         }
     }
     if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) {
@@ -4606,6 +4733,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     pt::game::GameUi ui;
     bool hide_game_ui = false;
     pt::game::PhotoPanelView photo_view;
+    pt::LogInfo("startup: game UI");
     const bool ui_ready = ui.Init(app.renderer, app.textures, vfs);
     static constexpr const char* kDiscordClientId = "1559538474065993750";
     const char* discord_id_env = std::getenv("PT_DISCORD_CLIENT_ID");
@@ -4666,6 +4794,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
     input.settings.prompt_style = app.settings.input.prompt_style;
     input.settings.gyro = app.settings.accessibility.gyro;
     input.settings.gyro_sensitivity = app.settings.accessibility.gyro_sensitivity;
+    input.settings.gyro_tightening = app.settings.accessibility.gyro_tightening;
+    input.settings.gyro_bias = app.settings.accessibility.gyro_bias;
     PcSettings pc_settings(app, game, input);
     if (ui_ready) {
         ui.SetPcSettings(&pc_settings);
@@ -4738,6 +4868,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     app.scene.LoadResources(vfs);
     pt::VfxPass vfx_pass;
     pt::game::VfxScene vfx_scene;
+    pt::LogInfo("startup: effects pass");
     if (vfx_pass.Init(app.renderer, app.textures, vfs)) {
         app.scene.vfx_forward = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordForward(c); };
         app.scene.vfx_liquid_depth = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordLiquidDepth(c); };
@@ -5065,6 +5196,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool frozen = false;
     bool was_focused = false;
     bool ever_focused = false;
+    int activate_tries = 0;
+    uint64_t activate_next_ns = 0;
     bool boot_wait = true;
     uint64_t boot_wait_start = SDL_GetTicksNS();
     const uint64_t shader_screen_start = boot_wait_start;
@@ -5250,7 +5383,16 @@ int RunGame(App& app, pt::Vfs& vfs) {
         if (app.window || forced_focus || vr) {
             const bool focused = forced_focus ? *forced_focus
                                  : vr         ? !vr->Host().FocusLost()
-                                              : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
+                                              : visible && WindowActive(app.window);
+            if (app.window && !forced_focus && !vr && visible && !focused && !ever_focused && activate_tries < 4 &&
+                SDL_GetTicksNS() > activate_next_ns) {
+                ++activate_tries;
+                activate_next_ns = SDL_GetTicksNS() + 700000000ull;
+                SDL_RaiseWindow(app.window);
+                const bool in_front = pt::os::ActivateWindow(WindowHandle(app.window));
+                pt::LogInfo("focus: window not in front yet, raise {} of 4: {} ({})", activate_tries, in_front ? "in front" : "still behind",
+                            DescribeForeground(pt::os::GetForegroundWindowInfo()));
+            }
             const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
 #ifdef __APPLE__
             const bool startup_ticked = game.Controller().Step() >= 0;
@@ -5261,6 +5403,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 stop_freecam();
                 ui.OpenMenu(game, false);
                 pt::LogInfo("focus: window in the background, pause menu opened");
+            }
+            if (was_focused && !focused) {
+                pt::LogInfo("focus: lost at frame {}: {}; last SDL event {}", frame, DescribeForeground(pt::os::GetForegroundWindowInfo()),
+                            g_focus_trace.last_event);
             }
             was_focused = focused;
             ever_focused = ever_focused || focused;
@@ -5273,6 +5419,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
                 pt::LogInfo("focus: game {} at frame {}, audio clock {}", frozen ? "frozen in the background" : "resumed", frame,
                             sound.Ready() ? sound.System().RenderedFrames() : 0);
+                if (frozen) {
+                    pt::LogInfo("focus: frozen because {}; last SDL event {}; {}", !visible ? "the window is minimized" : "the window lost the focus",
+                                g_focus_trace.last_event, DescribeForeground(pt::os::GetForegroundWindowInfo()));
+                }
                 last_ticks = SDL_GetTicksNS();
             }
             const float volume = !focused && focus_rules && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
@@ -5379,7 +5529,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const bool photo_pointer = ((photo_mode && photo_overlay) || (theater && (theater->theater->ModelView() || theater->theater->FreeView()))) &&
                                        !(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
             const bool want_capture = !show_debug && !show_settings && !(ui_ready && ui.MenuOpen() && !theater) && !photo_pointer && !vr && !lisa_date &&
-                                      (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
+                                      WindowActive(app.window);
             if (want_capture != mouse_capture_requested) {
                 mouse_capture_requested = want_capture;
                 if (want_capture) {
@@ -5410,6 +5560,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        pc_settings.CollectGyroCalibration();
         if (app.window) {
             static bool cursor_hidden = false;
             static glm::vec2 cursor_last(-1.0f);
@@ -5477,6 +5628,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         prompt_textures.Update(polled.prompts);
         pending_input.click = pending_input.click || polled.click;
         pending_input.right_click = pending_input.right_click || polled.right_click;
+        pending_input.wheel += polled.wheel;
         pending_input.house_pressed = pending_input.house_pressed || polled.house_pressed;
         pending_input.pointer_valid = false;
         if (texture_screen == 2) {
@@ -5502,7 +5654,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             pending_input.pause = pending_input.confirm = pending_input.cancel = pending_input.any_button = false;
             pending_input.click = pending_input.right_click = pending_input.house_pressed = false;
+            pending_input.wheel = 0.0f;
             pending_input.menu_keys_pressed = 0;
+            pending_input.music_pressed = 0;
             pending_input.raw_pressed = 0;
             pending_input.pressed = 0;
         }
@@ -5594,6 +5748,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 stop_photo();
             }
         }
+        if (polled.capture_pose_pressed) {
+            game.LogCapturePose(game.ViewCamera());
+        }
         if (app.window) {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             static bool f6_was_down = false;
@@ -5601,11 +5758,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
             static bool h_was_down = false;
             static bool p_was_down = false;
             static bool f8_was_down = false;
-            static bool f9_was_down = false;
-            if (keys[SDL_SCANCODE_F9] && !f9_was_down && keyboard_free) {
-                game.LogCapturePose(game.ViewCamera());
-            }
-            f9_was_down = keys[SDL_SCANCODE_F9];
             static bool street_f_was_down = false;
             if (keys[SDL_SCANCODE_F] && !street_f_was_down && keyboard_free && !(ui_ready && ui.MenuOpen()) && !photo_mode) {
                 game.ToggleStreetFlashlight();
@@ -5793,7 +5945,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pending_input.raw_pressed = 0;
             pending_input.pause = pending_input.confirm = pending_input.cancel = pending_input.any_button = false;
             pending_input.click = pending_input.right_click = pending_input.house_pressed = false;
+            pending_input.wheel = 0.0f;
             pending_input.menu_keys_pressed = 0;
+            pending_input.music_pressed = 0;
             accumulator -= step;
             ++ticks;
         }
@@ -6215,6 +6369,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             camera = theater->theater->ViewCamera();
         } else {
+            game.SetTracedBody(app.scene.raytracing.path_traced);
             game.CollectDraws(draw_items);
         }
         float blend = 1.0f;
@@ -6757,6 +6912,22 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 if (frame - play_frame > 600) game.RequestQuit();
             }
         }
+        if (app.d3d12_marker && frame == 5) {
+            if (const char* test = std::getenv("PT_TEST_CRASH"); test && std::string_view(test) == "d3d12frames") {
+                pt::LogInfo("crash test: d3d12frames");
+                *static_cast<volatile int*>(nullptr) = 1;
+            }
+        }
+        if (app.d3d12_marker && frame >= 120) {
+            app.d3d12_marker = false;
+            ClearD3D12Marker();
+            pt::LogInfo("rendering api: DirectX 12 drew 120 frames, start marker removed");
+            if (app.settings.display.d3d12_crashed && !app.settings_path.empty()) {
+                app.settings.display.d3d12_crashed = 0;
+                pt::SaveAppSettings(app.settings_path, app.settings);
+                pt::LogInfo("rendering api: DirectX 12 ran, the earlier crash no longer keeps it off (pt.ini d3d12_crashed = 0)");
+            }
+        }
         if ((options.headless && frame >= static_cast<uint64_t>(options.frames)) || game.QuitRequested()) {
             const glm::vec3 feet = game.GetPlayer().Feet();
             pt::LogInfo("game: stopped at frame {}: step {}, floor {}, loop {}, feet ({:.2f} {:.2f} {:.2f})", frame, game.Controller().Step(),
@@ -6851,6 +7022,7 @@ int main(int argc, char** argv) {
         const bool route_usable = install && pt::nr_unlock::Usable(*install);
         bool route_on = false;
         bool route_load = false;
+        bool addon_written = false;
         if (install) {
             const std::filesystem::path ini = options.settings_path.empty() ? UserDataDir() / "pt.ini" : options.settings_path;
             pt::AppSettings peek;
@@ -6864,17 +7036,45 @@ int main(int argc, char** argv) {
                 else if (options.backend == "vulkan") api = pt::RenderingApi::Vulkan;
                 route_load = route_usable && api == pt::RenderingApi::D3D12 && !peek.upscaling.neural_route_armed;
                 route_on = route_load && kind == pt::NeuralRenderingKind::Dlss5;
-                if (route_usable && api == pt::RenderingApi::D3D12) {
+                app.nr_marker_read = true;
+                app.nr_marker_at_start = peek.upscaling.neural_route_armed;
+                if (route_on) {
+                    peek.upscaling.neural_route_armed = true;
+                    if (pt::SaveAppSettings(ini, peek)) {
+                        app.nr_prearmed = true;
+                        pt::LogInfo("neural rendering: route crash marker set before ReShade loads (DLSS 5 on at start)");
+                    }
+                }
+                if (route_usable) {
                     pt::NeuralStyle style = pt::NeuralStyle::Default;
                     pt::ParseNeuralStyle(peek.upscaling.neural_style, style);
                     pt::nr_unlock::AddonSettings addon;
                     addon.on = route_on;
                     addon.style = static_cast<int>(style);
                     addon.intensity = std::clamp(peek.upscaling.neural_intensity, 0.0f, 1.0f);
+                    addon.parked = !route_load;
+                    app.nr_addon_parked = addon.parked;
                     if (const char* keys = std::getenv("PT_NR_ADDON_KEYS")) addon.extra = pt::nr_unlock::ParseAddonKeys(keys);
-                    pt::nr_unlock::WriteAddonSettings(game_root, addon);
+                    addon_written = pt::nr_unlock::WriteAddonSettings(game_root, addon);
+                    if (addon_written && addon.parked) {
+                        pt::LogInfo("neural rendering: the route's add-on parked this start (no ReShade loads it)");
+                    }
                 }
             }
+        }
+        if (!route_load && !addon_written) {
+            std::error_code ec;
+            if (install || std::filesystem::exists(game_root / L"renodx-dlss5.addon64", ec)) {
+                pt::nr_unlock::AddonSettings addon;
+                addon.parked = true;
+                app.nr_addon_parked = true;
+                addon_written = pt::nr_unlock::WriteAddonSettings(game_root, addon);
+                if (addon_written) pt::LogInfo("neural rendering: the route's add-on parked this start (no ReShade loads it)");
+            }
+        }
+        if (!route_load && app.nr_addon_parked && !addon_written) {
+            SetEnvironmentVariableW(L"DISABLE_VK_LAYER_reshade_1", L"1");
+            pt::LogWarn("neural rendering: ReShade.ini could not be written; ReShade's Vulkan layer is kept out of this start");
         }
         app.nr_reshade_loaded = pt::nr_unlock::LoadDxgiForRoute(game_root, install.has_value(), route_load);
         app.nr_addon_boot_on = route_on;
@@ -7007,8 +7207,8 @@ int main(int argc, char** argv) {
     }
     pt::LogInfo("pt-port version {} ({}), Hallway Engine", pt::update::CurrentVersion(), pt::update::Platform());
     pt::boot::Phase("data folder");
-#ifdef _WIN32
     pt::InstallCrashReporting(g_output_dir, PT_BUILD_ID);
+#ifdef _WIN32
     if (std::getenv("PT_CRASH_UPLOAD_TEST")) {
         pt::OfferCrashUpload(g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()), false);
     }
@@ -7134,6 +7334,29 @@ int main(int argc, char** argv) {
 #ifdef PT_D3D12_GAME
     pt::SetD3D12RunsGame(true);
     pt::SetD3D12Probe(&ProbeD3D12);
+    g_d3d12_marker = app.settings_path.empty() ? std::filesystem::path() : app.settings_path.parent_path() / "d3d12-starting.txt";
+    if (std::error_code ec; !g_d3d12_marker.empty() && std::filesystem::exists(g_d3d12_marker, ec)) {
+        const int stage = ReadD3D12Marker();
+        ClearD3D12Marker();
+        app.settings.display.d3d12_crashed = stage;
+        app.settings.display.rendering_api = std::string(pt::RenderingApiKey(pt::RenderingApi::Vulkan));
+        app.settings.display.rendering_api_asked = true;
+        pt::SaveAppSettings(app.settings_path, app.settings);
+        pt::LogWarn("rendering api: {}: pt.ini is set to Vulkan, and DirectX 12 stays off until --backend d3d12 runs", D3D12CrashReason(stage));
+        app.pending_notices.push_back("pc_notice_d3d12_crashed");
+    }
+    {
+        pt::RenderingApi cli_api = pt::RenderingApi::Vulkan;
+        const bool cli_d3d12 = pt::ParseRenderingApi(options.backend, cli_api) && cli_api == pt::RenderingApi::D3D12;
+        if (app.settings.display.d3d12_crashed && !cli_d3d12) {
+            pt::BlockD3D12(D3D12CrashReason(app.settings.display.d3d12_crashed));
+            pt::LogInfo("rendering api: DirectX 12 off, pt.ini [display] d3d12_crashed = {}", app.settings.display.d3d12_crashed);
+        }
+    }
+    if (app.nr_reshade_loaded) {
+        pt::SkipD3D12Probe();
+        pt::LogInfo("rendering api: DirectX 12 probe skipped (the DLSS 5 route's ReShade is loaded; the game's own device is the check)");
+    }
 #endif
     std::string d3d12_reason;
     if (!options.headless && options.backend.empty() && pt::RenderingApiSelectable() && !app.settings.display.rendering_api_asked &&
@@ -7198,6 +7421,11 @@ int main(int argc, char** argv) {
             return 1;
         }
         ApplyFullscreen(app);
+        if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(app.window);
+        SDL_RaiseWindow(app.window);
+        const bool in_front = pt::os::ActivateWindow(WindowHandle(app.window));
+        pt::LogInfo("window: raised at start, {} ({})", in_front ? "in front" : "not the foreground window",
+                    DescribeForeground(pt::os::GetForegroundWindowInfo()));
         pt::boot::Phase("window");
     }
     MountMods(app);
@@ -7260,8 +7488,21 @@ int main(int argc, char** argv) {
     int result = 1;
     const bool test_device_lost = std::getenv("PT_TEST_CRASH") && std::string(std::getenv("PT_TEST_CRASH")) == "devicelost";
     pt::boot::Phase("mods and graphics settings");
+    if (d3d12) {
+        ArmD3D12Marker(2);
+        app.d3d12_marker = true;
+    }
     const bool renderer_ready = app.renderer.Init(app.window, settings);
+    if (d3d12 && renderer_ready) {
+        if (const char* test = std::getenv("PT_TEST_CRASH"); test && std::string_view(test) == "d3d12device") {
+            pt::LogInfo("crash test: d3d12device");
+            *static_cast<volatile int*>(nullptr) = 1;
+        }
+        ArmD3D12Marker(3);
+    }
     if (!renderer_ready) {
+        ClearD3D12Marker();
+        app.d3d12_marker = false;
         const bool back_to_vulkan = d3d12 && options.backend.empty() && !app.settings_path.empty();
         if (back_to_vulkan) {
             app.settings.display.rendering_api = std::string(pt::RenderingApiKey(pt::RenderingApi::Vulkan));
@@ -7274,7 +7515,8 @@ int main(int argc, char** argv) {
                         driver_advice);
     }
     pt::boot::Phase("graphics device");
-    if (renderer_ready) {
+    if (renderer_ready) try {
+        pt::LogInfo("startup: DLSS 5 and frame generation routes");
         const pt::gpu::DeviceInfo& info = app.renderer.Gpu().Info();
         app.nr_gpu = pt::nr_unlock::ClassifyGpu(info.vendor_id, info.device_id, info.adapter);
         app.nr_install = pt::nr_unlock::ReadInstall(pt::ExecutableDir());
@@ -7301,9 +7543,13 @@ int main(int argc, char** argv) {
         pt::NeuralRenderingKind wanted_kind = pt::NeuralRenderingKind::Off;
         pt::ParseNeuralRendering(app.settings.upscaling.neural_rendering, wanted_kind);
         if (const char* env = std::getenv("PT_NEURAL_RENDERING")) pt::ParseNeuralRendering(env, wanted_kind);
-        if (app.settings.upscaling.neural_route_armed && app.nr_install_usable && wanted_kind == pt::NeuralRenderingKind::Dlss5) {
+        const bool marker_at_start = app.nr_marker_read ? app.nr_marker_at_start : app.settings.upscaling.neural_route_armed;
+        if (app.nr_prearmed) app.nr_route_armed = true;
+        const bool prearmed_live = app.nr_prearmed && NeuralRouteActive(app) && app.nr_reshade_loaded && wanted_kind == pt::NeuralRenderingKind::Dlss5;
+        if (marker_at_start && app.nr_install_usable && wanted_kind == pt::NeuralRenderingKind::Dlss5) {
             DisableNeuralRoute(app, "pc_note_nr_crash", "the crash marker was set at start: the last run crashed or lost the device with neural rendering on");
-        } else if (app.settings.upscaling.neural_route_armed) {
+        } else if (prearmed_live) {
+        } else if (app.settings.upscaling.neural_route_armed && !(app.nr_prearmed && NeuralRouteActive(app) && wanted_kind == pt::NeuralRenderingKind::Dlss5)) {
             ArmNeuralRoute(app, false);
         } else if (NeuralRouteActive(app) && wanted_kind == pt::NeuralRenderingKind::Dlss5 && !app.nr_reshade_loaded) {
             DisableNeuralRoute(app, "pc_note_nr_addon", "ReShade (the route's dxgi.dll) did not load, so the add-on is not in the game");
@@ -7418,6 +7664,12 @@ int main(int argc, char** argv) {
         } else if (FgRouteActive(app)) {
             ArmFgRoute(app, true);
         }
+    } catch (const std::exception& e) {
+        pt::LogWarn("startup: the DLSS 5 and frame generation route checks failed ({}); they stay off this start", e.what());
+        app.nr_install.reset();
+        app.nr_install_usable = false;
+        app.fg_install.reset();
+        app.fg_install_usable = false;
     }
     if (renderer_ready && app.window && !pt::devices::GamepadsReady()) {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
@@ -7425,7 +7677,9 @@ int main(int argc, char** argv) {
     if (renderer_ready && test_device_lost && !d3d12) {
         app.renderer.Context().CheckDeviceLost(VK_ERROR_DEVICE_LOST, "PT_TEST_CRASH");
     }
+    if (renderer_ready) pt::LogInfo("startup: texture manager and scene renderer");
     if (renderer_ready && app.textures.Init(app.renderer.Gpu()) && app.scene.Init(app.renderer, app.textures)) {
+        pt::LogInfo("startup: scene renderer ready");
         app.textures.SetAnisotropy(AnisotropyFromApp(app.settings));
         app.vfs = &vfs;
         app.texture_runtime = pt::ExecutableDir() / "texture-tools";
@@ -7452,6 +7706,7 @@ int main(int argc, char** argv) {
             imgui_ini = pt::os::PathToUtf8((g_output_dir / "pt_imgui.ini"));
             if (ImGui::GetCurrentContext()) ImGui::GetIO().IniFilename = imgui_ini.c_str();
         }
+        pt::LogInfo("startup: model cache");
         app.models = std::make_unique<pt::ModelCache>(vfs, app.scene, app.textures);
         bool xr_started = true;
 #ifdef PT_D3D12_GAME
@@ -7473,6 +7728,7 @@ int main(int argc, char** argv) {
         if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
             pt::RequestMacMicrophoneAccess();
 #endif
+        pt::LogInfo("startup: {}", viewer ? "viewer" : "game");
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
         app.texture_job.Cancel();
         app.renderer.Gpu().WaitIdle();
@@ -7485,6 +7741,9 @@ int main(int argc, char** argv) {
         app.textures.Shutdown();
     }
     app.renderer.Shutdown();
+    if (app.d3d12_marker) {
+        ClearD3D12Marker();
+    }
     if (!app.streamline_marker.empty()) {
         std::error_code ec;
         std::filesystem::remove(app.streamline_marker, ec);

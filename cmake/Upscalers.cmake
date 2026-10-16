@@ -59,6 +59,16 @@ set(PT_FFX_FILES
   "ffx-api/include/ffx_api/dx12/ffx_api_dx12.h|215804fba316acb81d2c463b6bbce36c53cc63465c15b8c9858554c8111fae24"
   "PrebuiltSignedDLL/amd_fidelityfx_dx12.dll|12a5081257ec95b0b53ad51b4a87fb3c03f97fe0bbb59f9496968f8d50ef93a6")
 
+# AMD FSR SDK 2.3.0 (DirectX 12 only): FSR 4 exists only in its amd_fidelityfx_upscaler_dx12.dll (upscaler 4.1.1, which falls back
+# to FSR 3.1.5 on other GPUs). amd_fidelityfx_loader_dx12.dll is the interface-compatible successor of amd_fidelityfx_dx12.dll and
+# loads the upscaler DLL from its own folder; the D3D12 upscalers use it (d3d12_upscale.cpp). Frame generation on DirectX 12 keeps
+# v1.1.4's amd_fidelityfx_dx12.dll. The FSR 4 network itself runs in AMD's driver (amdxcffx64.dll), which the port does not ship.
+set(PT_FFX2_DIR "${PT_UPSCALER_SDK_DIR}/fsr-sdk-v2.3.0")
+set(PT_FFX2_FILES
+  "docs/license.md|6757f2fec461238da6f84f83536ec195e8c036b1773a06f6f34301b9ed8c0963"
+  "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll|e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa"
+  "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll|d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46")
+
 set(PT_DLSS_DIR "${PT_UPSCALER_SDK_DIR}/dlss-v310.9.1")
 set(PT_DLSS_FILES
   "LICENSE.txt|d4216e39ebef5f9b50a6712ebb37beeb5379862a67733a9999c651f21592aaf0"
@@ -201,6 +211,7 @@ endfunction()
 set(PT_UPSCALER_RUNTIME_FILES)
 set(PT_UPSCALER_NOTICES)
 set(pt_ffx_ok FALSE)
+set(pt_ffx2_ok FALSE)
 set(pt_dlss_ok FALSE)
 set(pt_xess_ok FALSE)
 set(pt_xefg_ok FALSE)
@@ -217,6 +228,14 @@ elseif(PT_UPSCALERS)
     target_compile_definitions(pt_engine PRIVATE PT_WITH_FSR=1)
     list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_FFX_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll")
     list(APPEND PT_UPSCALER_NOTICES "${PT_FFX_DIR}/LICENSE.txt|AMD_FidelityFX_SDK_LICENSE.txt")
+    pt_sdk_files(pt_ffx2_ok "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.3.0" "${PT_FFX2_DIR}" ${PT_FFX2_FILES})
+    if(pt_ffx2_ok)
+      list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll"
+        "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll")
+      list(APPEND PT_UPSCALER_NOTICES "${PT_FFX2_DIR}/docs/license.md|AMD_FSR_SDK_2_LICENSE.txt")
+    elseif(PT_REQUIRE_UPSCALERS)
+      message(FATAL_ERROR "Strict Windows release requires the AMD FSR SDK 2.3.0 DirectX 12 DLLs (FSR 4); see download/hash errors above")
+    endif()
   endif()
   pt_sdk_files(pt_dlss_ok "https://raw.githubusercontent.com/NVIDIA/DLSS/v310.9.1" "${PT_DLSS_DIR}" ${PT_DLSS_FILES})
   if(pt_dlss_ok)

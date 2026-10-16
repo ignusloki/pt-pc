@@ -35,6 +35,11 @@ uint32_t Subresource(const ImageRecord& img, uint32_t mip, uint32_t layer) {
 
 }
 
+void CommandListImpl::Barriers(UINT count, const D3D12_RESOURCE_BARRIER* barriers) {
+    device_.Count().barriers += count;
+    list_->ResourceBarrier(count, barriers);
+}
+
 CommandListImpl::CommandListImpl(DeviceImpl& device, ID3D12GraphicsCommandList* list) : device_(device), list_(list) {
     list_->QueryInterface(IID_PPV_ARGS(&list1_));
     list_->QueryInterface(IID_PPV_ARGS(&list9_));
@@ -72,12 +77,12 @@ void CommandListImpl::Transition(ImageRecord& image, D3D12_RESOURCE_STATES state
     if (image.state == state) {
         if (state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
             const D3D12_RESOURCE_BARRIER uav = CD3DX12_RESOURCE_BARRIER::UAV(image.resource.Get());
-            list_->ResourceBarrier(1, &uav);
+            Barriers(1, &uav);
         }
         return;
     }
     const D3D12_RESOURCE_BARRIER b = CD3DX12_RESOURCE_BARRIER::Transition(image.resource.Get(), image.state, state);
-    list_->ResourceBarrier(1, &b);
+    Barriers(1, &b);
     image.state = state;
 }
 
@@ -88,7 +93,7 @@ void CommandListImpl::Transition(BufferRecord& buffer, D3D12_RESOURCE_STATES sta
     if (buffer.state == state) {
         if (state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
             const D3D12_RESOURCE_BARRIER uav = CD3DX12_RESOURCE_BARRIER::UAV(buffer.resource.Get());
-            list_->ResourceBarrier(1, &uav);
+            Barriers(1, &uav);
         }
         return;
     }
@@ -98,7 +103,7 @@ void CommandListImpl::Transition(BufferRecord& buffer, D3D12_RESOURCE_STATES sta
         return;
     }
     const D3D12_RESOURCE_BARRIER b = CD3DX12_RESOURCE_BARRIER::Transition(buffer.resource.Get(), buffer.state, state);
-    list_->ResourceBarrier(1, &b);
+    Barriers(1, &b);
     buffer.state = state;
 }
 
@@ -125,7 +130,7 @@ void CommandListImpl::UseTargets(std::span<const TargetUse> uses) {
         img->state = state;
     }
     if (count) {
-        list_->ResourceBarrier(count, barriers);
+        Barriers(count, barriers);
     }
 }
 
@@ -146,7 +151,7 @@ void CommandListImpl::GlobalBarrier(PipelineStage, uint64_t, PipelineStage, uint
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     b.UAV.pResource = nullptr;
-    list_->ResourceBarrier(1, &b);
+    Barriers(1, &b);
 }
 
 void CommandListImpl::BeginPass(Rect2D area, std::span<const ColorOutput> colors, RenderTarget* depth, bool depth_read_only, bool clear_depth) {
@@ -435,7 +440,7 @@ void CommandListImpl::CopyFootprint(bool to_image, const BufferRecord& buffer, I
                 }
                 const D3D12_RESOURCE_BARRIER b = CD3DX12_RESOURCE_BARRIER::Transition(temp.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                                                                                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-                list_->ResourceBarrier(1, &b);
+                Barriers(1, &b);
             }
         }
         const UINT sub = Subresource(image, r.image.mip, r.image.base_layer + layer);
@@ -452,7 +457,7 @@ void CommandListImpl::CopyFootprint(bool to_image, const BufferRecord& buffer, I
             if (temp) {
                 const D3D12_RESOURCE_BARRIER b = CD3DX12_RESOURCE_BARRIER::Transition(temp.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                                                                                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-                list_->ResourceBarrier(1, &b);
+                Barriers(1, &b);
                 for (uint32_t z = 0; z < depth; ++z) {
                     for (uint32_t y = 0; y < rows; ++y) {
                         list_->CopyBufferRegion(buffer.resource.Get(), layer_offset + (static_cast<uint64_t>(z) * slice_rows + y) * row_bytes, temp.Get(),

@@ -320,6 +320,7 @@ void MergeFrameButtons(InputState& pending, const InputState& polled) {
     pending.pressed |= polled.pressed;
     pending.music_pressed |= polled.music_pressed;
     pending.menu_keys_pressed |= polled.menu_keys_pressed;
+    pending.capture_pose_pressed |= polled.capture_pose_pressed;
     pending.raw_pressed |= polled.raw_pressed;
     pending.held = polled.held | (pending.pressed & (kPadGouge - 1u));
     pending.raw_held = polled.raw_held | pending.raw_pressed;
@@ -491,6 +492,11 @@ void InputDevice::Open(uint32_t id) {
     pad.style = StyleOf(handle);
     pad.trigger_rumble_supported = Describe(handle).trigger_rumble;
     pad.has_gyro = SDL_GamepadHasSensor(handle, SDL_SENSOR_GYRO);
+    {
+        char guid[64] = {};
+        SDL_GUIDToString(SDL_GetJoystickGUID(SDL_GetGamepadJoystick(handle)), guid, sizeof(guid));
+        pad.guid = guid;
+    }
     pads_.push_back(std::move(pad));
     LogInfo("input: gamepad opened: {} ({} connected)", DescribeGamepad(Describe(handle)), pads_.size());
 }
@@ -583,6 +589,7 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         UsePrompts(PromptStyle{}, 0);
+        wheel_ += event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
         break;
     case SDL_EVENT_KEY_DOWN:
         if (event.key.repeat) {
@@ -591,6 +598,7 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         any_edge_ = true;
         last_from_gamepad_ = false;
         key_pressed_since_poll_ = true;
+        if (event.key.scancode == SDL_SCANCODE_F9) capture_pose_edge_ = true;
         UsePrompts(PromptStyle{}, 0);
         for (const KeyBinding& binding : kKeyBindings) {
             if (binding.scancode == 0 || binding.scancode != event.key.scancode) {
@@ -637,13 +645,29 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         if (event.gsensor.sensor == SDL_SENSOR_GYRO && settings.gyro != 0) {
             Pad* pad = Find(event.gsensor.which);
             if (pad && (gyro_pad_ == 0 || gyro_pad_ == pad->id)) {
+                if (gyro_pad_ != pad->id) {
+                    const auto stored = settings.gyro_bias.find(pad->guid);
+                    if (stored != settings.gyro_bias.end()) {
+                        gyro_.SetOffset({stored->second[0], stored->second[1], stored->second[2]});
+                    } else {
+                        gyro_.ClearOffset();
+                    }
+                }
                 gyro_pad_ = pad->id;
+                gyro_.SetTightening(settings.gyro_tightening * 0.0174532925f);
                 const uint64_t time = event.gsensor.sensor_timestamp;
                 const float dt = pad->gyro_time != 0 && time > pad->gyro_time ? static_cast<float>(time - pad->gyro_time) * 1.0e-9f : 0.0f;
                 pad->gyro_time = time;
                 if (dt > 0.0f && dt <= 0.05f) {
                     gyro_.Add(glm::vec3(event.gsensor.data[0], event.gsensor.data[1], event.gsensor.data[2]), dt,
                               std::clamp(settings.gyro_sensitivity, 0.25f, 4.0f));
+                    glm::vec3 offset;
+                    if (gyro_.TakeCalibrated(offset)) {
+                        calibrated_guid_ = pad->guid;
+                        calibrated_offset_ = {offset.x, offset.y, offset.z};
+                        calibrated_ready_ = true;
+                        LogInfo("input: gyro of gamepad {} calibrated, offset {:.4f} {:.4f} {:.4f} rad/s", pad->id, offset.x, offset.y, offset.z);
+                    }
                 }
             }
         }
@@ -772,6 +796,8 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     state.menu_keys_pressed = menu_keys & ~previous_menu_keys_;
     if (!(state.menu_keys_pressed & kMenuKeyTabNext)) state.menu_keys_pressed &= ~kMenuKeyFromE;
     previous_menu_keys_ = menu_keys;
+    state.capture_pose_pressed = capture_pose_edge_;
+    capture_pose_edge_ = false;
     if (injected_motion_polls_ > 0) {
         --injected_motion_polls_;
         mouse_dx_ += injected_motion_.x;
@@ -880,12 +906,26 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     state.cancel = cancel_edge_;
     state.click = click_edge_;
     state.right_click = right_click_edge_;
+    state.wheel = wheel_;
+    wheel_ = 0.0f;
     state.pc_settings = settings_edge_;
     state.any_button = any_edge_;
     state.from_gamepad = state.from_gamepad || last_from_gamepad_;
     state.prompts = ShownPrompts();
     pause_edge_ = confirm_edge_ = cancel_edge_ = click_edge_ = right_click_edge_ = settings_edge_ = any_edge_ = false;
     return state;
+}
+
+bool InputDevice::AnyGyroPad() const {
+    return std::any_of(pads_.begin(), pads_.end(), [](const Pad& pad) { return pad.has_gyro; });
+}
+
+bool InputDevice::TakeGyroCalibrated(std::string& guid, std::array<float, 3>& offset) {
+    if (!calibrated_ready_) return false;
+    calibrated_ready_ = false;
+    guid = calibrated_guid_;
+    offset = calibrated_offset_;
+    return true;
 }
 
 void InputDevice::UpdateGyroSensors() {

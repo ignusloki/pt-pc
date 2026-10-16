@@ -1,2 +1,10 @@
-# Game+: the bathtub Lisa is drawn (the baby is in a loaded sink)
+# Game+: the bathtub Lisa is drawn (the baby is in a loaded sink) with a mesh the model cache holds, and a view of her from above
+# (scamera tub)
 sexpect gameplus 1
+scamera tub
+sev 4
+swait 60
+sshot {shots}/{floor}_gameplus_tub.png
+swait 30
+sev auto
+scamera off

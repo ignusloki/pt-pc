@@ -42,7 +42,7 @@ void main() {
             t_min = max(t_min, l.range.y / max(along, 1.0e-3));
         }
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, kRtFullMask, l.position.xyz, t_min, dir, t_min + 0.5);
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, RtFullCasters(l), l.position.xyz, t_min, dir, t_min + 0.5);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
                 RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),

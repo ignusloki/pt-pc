@@ -70,6 +70,8 @@ void SceneRenderer::CreatePathPipelines(gpu::Format light_format) {
     guides.fragment = "pt_rr_guides.frag";
     guides.colors = {kRrGuideFormat, kRrGuideFormat, kRrGuideFormat, kRrHitFormat};
     pt_rr_guides_ = gpu_->CreateGraphicsPipeline(guides);
+    guides.fragment = "rt_rr_guides.frag";
+    rt_rr_guides_ = gpu_->CreateGraphicsPipeline(guides);
     pt_indirect_rr_ = gpu_->CreateComputePipeline({rt_->Layout(), "pt_indirect_rr.comp"});
     resolve.fragment = "pt_resolve_rr.frag";
     resolve.blends = {gpu::BlendMode::Additive, gpu::BlendMode::Additive};
@@ -91,7 +93,7 @@ void SceneRenderer::CreatePathPipelines(gpu::Format light_format) {
 
 void SceneRenderer::DestroyPathPipelines() {
     for (gpu::PipelineHandle* p : {&pt_direct_, &pt_indirect_, &pt_filter_, &pt_layer_, &pt_resolve_, &pt_resolve_multiply_, &pt_layer_out_, &pt_reference_, &pt_reference_out_, &pt_gbuffer_, &pt_decal_,
-                          &pt_rr_guides_, &pt_indirect_rr_, &pt_resolve_rr_}) {
+                          &pt_rr_guides_, &pt_indirect_rr_, &pt_resolve_rr_, &rt_rr_guides_}) {
         if (*p) {
             gpu_->DestroyPipeline(*p);
             *p = {};
@@ -400,6 +402,24 @@ void SceneRenderer::RecordRrGuides(gpu::CommandList& cmd, const ViewSetup& view)
     gpu::PassPush push;
     push.ids = glm::uvec4(view.index, 0u, 0u, 0u);
     Fullscreen(cmd, pt_rr_guides_, push);
+    cmd.EndPass();
+    cmd.UseTargets({{&rr_diffuse_albedo_, gpu::Layout::ShaderReadOnly}, {&rr_specular_albedo_, gpu::Layout::ShaderReadOnly},
+                     {&rr_normal_roughness_, gpu::Layout::ShaderReadOnly}, {&rr_hit_distance_, gpu::Layout::ShaderReadOnly}});
+}
+
+void SceneRenderer::RecordRasterRrGuides(gpu::CommandList& cmd, const ViewSetup& view) {
+    cmd.UseTargets({{&depth_, gpu::Layout::DepthReadOnly}, {&normal_, gpu::Layout::ShaderReadOnly}, {&material_, gpu::Layout::ShaderReadOnly},
+                     {&albedo_, gpu::Layout::ShaderReadOnly}, {&rr_diffuse_albedo_, gpu::Layout::ColorAttachment},
+                     {&rr_specular_albedo_, gpu::Layout::ColorAttachment}, {&rr_normal_roughness_, gpu::Layout::ColorAttachment},
+                     {&rr_hit_distance_, gpu::Layout::ColorAttachment}});
+    BindSets(cmd, gpu::BindPoint::Graphics);
+    cmd.BeginPass(extent_, {{&rr_diffuse_albedo_, false, {}}, {&rr_specular_albedo_, false, {}}, {&rr_normal_roughness_, false, {}},
+                             {&rr_hit_distance_, false, {}}});
+    const gpu::BindingSetHandle rt_set = rt_->Set(renderer_->FrameIndex());
+    cmd.BindSets(gpu::BindPoint::Graphics, rt_->Layout(), 2, {&rt_set, 1});
+    gpu::PassPush push;
+    push.ids = glm::uvec4(view.index, 0u, 0u, 0u);
+    Fullscreen(cmd, rt_rr_guides_, push);
     cmd.EndPass();
     cmd.UseTargets({{&rr_diffuse_albedo_, gpu::Layout::ShaderReadOnly}, {&rr_specular_albedo_, gpu::Layout::ShaderReadOnly},
                      {&rr_normal_roughness_, gpu::Layout::ShaderReadOnly}, {&rr_hit_distance_, gpu::Layout::ShaderReadOnly}});

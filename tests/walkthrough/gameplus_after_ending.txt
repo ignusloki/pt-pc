@@ -1,0 +1,6 @@
+# after a finish (Game+ on, tier 1 from the save's count): the ending's restart reaches StartGame; Game::ReleaseUnusedAssets
+# released the models nothing held on the way (the ending's load and the restart)
+sstep 28
+sstep 15
+swait 60
+slog

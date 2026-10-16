@@ -2,10 +2,16 @@ Upscaler and frame generation runtimes shipped next to pt.exe
 
 The full licence texts are the other files in this folder. What each one lets the port ship:
 
-AMD FidelityFX SDK v1.1.4 (amd_fidelityfx_vk.dll: FSR 3.1 upscaler and frame generation)
-  MIT licence (AMD_FidelityFX_SDK_LICENSE.txt). AMD's prebuilt signed DLL, unmodified.
-  AMD FSR 4 is listed in the menu but not shipped: AMD releases it for DirectX 12 only
-  (FSR SDK 2.x), and this game renders with Vulkan.
+AMD FidelityFX SDK v1.1.4 (amd_fidelityfx_vk.dll: FSR 3.1 upscaler and frame generation on
+Vulkan; amd_fidelityfx_dx12.dll: FSR 3.1 frame generation on DirectX 12)
+  MIT licence (AMD_FidelityFX_SDK_LICENSE.txt). AMD's prebuilt signed DLLs, unmodified.
+
+AMD FSR SDK 2.3.0 (amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll: FSR 4
+and FSR 3.1 upscalers on DirectX 12)
+  AMD FSR SDK licence (AMD_FSR_SDK_2_LICENSE.txt): the signed binaries may be distributed
+  in binary form with the licence's notices; no reverse engineering. AMD releases FSR 4 for
+  DirectX 12 only, so on Vulkan the menu lists it greyed. It runs on AMD Radeon RX 9000
+  and RX 7000 GPUs through AMD's driver.
 
 NVIDIA DLSS SDK 310.9.1 (nvngx_dlss.dll: DLSS Super Resolution; nvngx_dlssd.dll: DLSS Ray
 Reconstruction, the denoiser of the Path traced ray quality)

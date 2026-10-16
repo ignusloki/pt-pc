@@ -124,19 +124,22 @@ bool PtCasterOpaque(uint record, uint primitive, vec2 bary, float u) {
     return textureLod(PT_TEX2D(m.albedo), uv, 0.0).a >= max(m.params.x, 0.0) * reference;
 }
 
+const float kPtFittingReach = 0.3;
+
 float PtLightReach(Light l, vec3 origin, vec3 dir, float dist) {
     float t_max = dist - min(0.05, 0.5 * dist);
     if (l.position.w > 0.5) {
         vec3 axis = normalize(l.direction.xyz);
+        float ahead = dot(origin - l.position.xyz, axis) - l.range.y;
         float rate = -dot(dir, axis);
-        if (rate > 1.0e-6) {
-            t_max = min(t_max, (dot(origin - l.position.xyz, axis) - l.range.y) / rate);
-        }
+        float t_plane = ahead > 0.0 ? (rate > 1.0e-6 ? ahead / rate : t_max) : 0.0;
+        t_max = min(t_max, max(t_plane, dist - kPtFittingReach));
     }
     return t_max;
 }
 
-const float kPtFittingReach = 0.3;
+const float kPtSkinSelfReach = 0.3;
+bool g_pt_origin_skinned = false;
 
 bool PtOccluded(Light l, vec3 origin, vec3 target, inout uint rng) {
     vec3 to_light = target - origin;
@@ -150,12 +153,20 @@ bool PtOccluded(Light l, vec3 origin, vec3 target, inout uint rng) {
         return false;
     }
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsTerminateOnFirstHitEXT, kPtOccluderMask, origin, 0.0, dir, t_max);
+    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | (g_pt_origin_skinned ? gl_RayFlagsNoOpaqueEXT : 0u);
+    rayQueryInitializeEXT(rq, rt_casters, flags, RtFullCasters(l), origin, 0.0, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
             continue;
         }
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+        if (g_pt_origin_skinned && (rt_records[record].flags & 4u) != 0u && rayQueryGetIntersectionTEXT(rq, false) < kPtSkinSelfReach) {
+            continue;
+        }
+        if ((rt_records[record].flags & 9u) == 0u) {
+            rayQueryConfirmIntersectionEXT(rq);
+            continue;
+        }
         if ((rt_records[record].flags & 1u) != 0u) {
             vec3 hit = origin + dir * rayQueryGetIntersectionTEXT(rq, false);
             if (distance(hit, l.position.xyz) < kPtFittingReach) {
@@ -307,7 +318,7 @@ PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
     return s;
 }
 
-bool PtLayers(vec3 origin, vec3 dir, float t_end, inout vec3 radiance, inout vec3 throughput, inout uint rng, out vec3 glass_point,
+bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3 radiance, inout vec3 throughput, inout uint rng, out vec3 glass_point,
             out vec3 glass_normal) {
     float t_start = 0.0;
     glass_point = vec3(0.0);
@@ -331,7 +342,7 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, inout vec3 radiance, inout vec
         if (m.kind == KIND_CONSTANT || m.kind == KIND_SKY) {
             vec4 tex = textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0);
             float a = Saturate(m.albedo_factor.a * tex.a);
-            radiance += throughput * min(vec3(32.0), m.albedo_factor.rgb * tex.rgb * m.params.y) * a;
+            radiance += throughput * min(vec3(emissive_cap), m.albedo_factor.rgb * tex.rgb * m.params.y) * a;
             throughput *= 1.0 - a;
         } else if (m.kind == KIND_GLASS) {
             vec3 I = dir;
@@ -360,6 +371,10 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, inout vec3 radiance, inout vec
 }
 
 uint g_pt_first_mask = kPtSurfaceMask;
+bool g_pt_seen_emissive = false;
+float PtEmissiveCap(uint bounce, float cutoff) {
+    return bounce == 0u && g_pt_seen_emissive ? 32.0 * cutoff * 1.0e4 : 32.0;
+}
 uint g_pt_first_lights = 1u;
 
 vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float reach, float lod, uint light_count, float cutoff, inout uint rng,
@@ -386,7 +401,7 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         }
         vec3 glass_point;
         vec3 glass_normal;
-        if (PtLayers(origin, dir, t, radiance, throughput, rng, glass_point, glass_normal)) {
+        if (PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng, glass_point, glass_normal)) {
             origin = glass_point + glass_normal * 0.002;
             dir = reflect(dir, glass_normal);
             continue;
@@ -408,7 +423,9 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         vec3 V = -dir;
         vec3 next = p + N * 0.002;
         uint lights = bounce == 0u ? max(g_pt_first_lights, 1u) : 1u;
+        g_pt_origin_skinned = (rt_records[record].flags & 4u) != 0u;
         radiance += throughput * PtNextEventN(p, N, V, s, next, light_count, cutoff, lights, rng);
+        g_pt_origin_skinned = false;
         if (bounce + 1u >= bounces) {
             break;
         }

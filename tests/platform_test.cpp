@@ -1,3 +1,4 @@
+// The platform layer and both JSON parsers share this executable to catch symbol/layout collisions.
 #include "engine/core/json.h"
 #include "engine/platform/json_value.h"
 #include "engine/platform/ed25519.h"
@@ -38,6 +39,43 @@ int main(int argc, char** argv) {
     const char* manifest = R"({"version": "0.2.0", "notes": "Linux build", "url": "https://example.org/releases/latest",
         "platforms": {"windows": {"url": "https://example.org/setup.exe", "sha256": "00"}, "linux": {"url": "https://example.org/pt-linux.tar.gz"}},
         "published": 1791278700, "prerelease": false, "assets": [1, "two", {"three": 3}]})";
+    {
+        // 1.0.4 issue 83: engine/core/json.h and json_value.h both defined pt::json::Value, and the linker kept json.h's ~Value
+        // for the update check's too: ParseManifest crashed on its first value. The mods' model is used here first, so this
+        // object holds json.h's Value functions, as the game did; then the update check's reader runs on a release API answer
+        // shaped like GitHub's, every truncation of it, garbage and deep nesting. None may crash; the whole one parses.
+        json::Value mods;
+        check(json::Parse(R"({"a": [1, 2, {"b": "c"}], "d": {"e": null}})", mods) && mods.IsObject(), "mods JSON beside the update JSON");
+        std::string body = R"({"url": "https://api.github.com/repos/o/r/releases/1", "html_url": "https://github.com/o/r/releases/tag/v1.0.9",
+            "tag_name": "v1.0.9", "name": "1.0.9", "draft": false, "prerelease": false, "body": "Fixes
+more é \"q\"",
+            "author": {"login": "x", "id": 1, "site_admin": false}, "assets": [)";
+        for (int i = 0; i < 6; ++i) {
+            body += std::string(i ? "," : "") + R"({"url": "https://api.github.com/a/)" + std::to_string(i) + R"(", "name": ")" +
+                    (i == 2 ? "P.T.PC.Port.Setup-linux" : "file" + std::to_string(i)) + R"(", "size": 123456789, "uploader": {"login": "x", "id": 2},
+                    "browser_download_url": "https://github.com/o/r/releases/download/v1.0.9/)" + (i == 2 ? "P.T.PC.Port.Setup-linux" : "f") + R"("})";
+        }
+        body += R"(], "reactions": {"+1": 3, "heart": 1}})";
+        const auto whole = update::ParseManifest(body, "linux");
+        check(whole && whole->version == "v1.0.9" && whole->package_size == 123456789 && whole->package_url.ends_with("Setup-linux"),
+              "release API answer parses beside the mods JSON");
+        int parsed = 0;
+        for (size_t n = 0; n < body.size(); ++n) parsed += update::ParseManifest(std::string_view(body).substr(0, n), "linux").has_value();
+        check(parsed == 0, "every truncated release answer is no update info");
+        std::string garbage = body;
+        uint32_t seed = 12345;
+        for (int round = 0; round < 2000; ++round) {
+            garbage = body;
+            for (int k = 0; k < 4; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                garbage[seed % garbage.size()] = char(seed >> 24);
+            }
+            update::ParseManifest(garbage, "linux");
+        }
+        check(true, "2000 corrupted release answers parsed or refused without a crash");
+        check(!update::ParseManifest(std::string(100000, '['), "linux") && !update::ParseManifest(std::string(100000, '{'), "linux"),
+              "deep nesting is refused");
+    }
     const auto windows = update::ParseManifest(manifest, "windows");
     const auto lin = update::ParseManifest(manifest, "linux");
     const auto other = update::ParseManifest(manifest, "macos");
@@ -99,6 +137,7 @@ int main(int argc, char** argv) {
         "assets":[{"name":"P.T.PC.Port.Setup.exe","browser_download_url":"http://example.org/setup.exe"}]})", "windows");
     check(unsafe_asset && unsafe_asset->url == "https://example.org/r", "non-HTTPS asset is ignored");
 
+    // ---- the signed update manifest (docs/updates.md, "Signed update manifest") ----
     {
         auto bytes = [](const char* hex, size_t n) { return *ed25519::FromHex(hex, n); };
         const std::string seed = bytes("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 32);
@@ -114,6 +153,7 @@ int main(int argc, char** argv) {
         ed25519::Sha512(reinterpret_cast<const uint8_t*>("abc"), 3, sha);
         check(ed25519::ToHex(sha, 64) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
               "SHA-512 of abc");
+        // a 200-byte message crosses SHA-512's block boundary
         const std::string longer(200, 'x');
         ed25519::Sign(u8(seed), u8(longer), longer.size(), sig);
         check(ed25519::Verify(sig, u8(longer), longer.size(), pk), "Ed25519 sign and verify a longer message");
@@ -146,6 +186,7 @@ int main(int argc, char** argv) {
         check(!update::VerifyManifest(manifest, good, rfc_public), "signed manifest: another key's verification fails (wrong key)");
         check(!update::VerifyManifest(manifest, "not a signature", public_key), "signed manifest: a signature file of text is refused");
         check(!update::VerifyManifest(manifest, good, public_key.substr(0, 31)), "signed manifest: a short key is refused");
+        // S + L is the same point equation but not the canonical encoding: refused
         {
             auto raw = *ed25519::FromHex(good, 64);
             static const uint8_t L[32] = {0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
@@ -165,6 +206,7 @@ int main(int argc, char** argv) {
         const std::string other_format = R"({"format":2,"version":"1.0.4","packages":{}})";
         check(!update::VerifyManifest(other_format, sign(other_format), public_key), "signed manifest: an unknown format is refused");
         check(update::ReleasePublicKey().size() == 32, "the embedded release public key is 32 bytes");
+        // the files' places in the package (the ranged download): read, and refused outside the package or alone
         auto files_manifest = [&](const std::string& extra) {
             return R"({"format":1,"version":"1.0.5","packages":{"windows":{"name":"P.T.PC.Port.Setup.exe","size":1000,"sha256":")" + std::string(64, 'a') +
                    R"("}},"files":{"windows":[{"path":"pt.exe","size":30,"sha256":")" + std::string(64, 'b') + "\"" + extra +
@@ -178,6 +220,7 @@ int main(int argc, char** argv) {
         check(!update::VerifyManifest(outside, sign(outside), public_key), "signed manifest: a file outside its package is refused");
         const std::string half = files_manifest(R"(,"offset":100)");
         check(!update::VerifyManifest(half, sign(half), public_key), "signed manifest: an offset without its packed size is refused");
+        // what the update would download, from the install's manifest: the changed file only, or the whole package above 70%
         if (with_ranges) {
             const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("pt-estimate-" + std::to_string(pt::os::ProcessId()));
             std::filesystem::create_directories(dir / "shaders");
@@ -195,6 +238,7 @@ int main(int argc, char** argv) {
             std::filesystem::remove_all(dir, ec);
         }
     }
+    // ---- the signed manifest at the end of a setup (signed_trailer.h) ----
     {
         auto footer = [](uint64_t mo, uint64_t ml, uint64_t so, uint64_t sl, const char* magic = "PTSIGND1", uint32_t version = 1) {
             std::string f(48, '\0');
@@ -204,6 +248,7 @@ int main(int argc, char** argv) {
             return f;
         };
         auto parse = [](const std::string& f, uint64_t size) { return trailer::Parse(reinterpret_cast<const unsigned char*>(f.data()), size); };
+        // body 1000 bytes, manifest 200, signature 64, footer 48: 1312 bytes
         const auto good = parse(footer(1000, 200, 1200, 64), 1312);
         check(good && good->body() == 1000 && good->manifest_length == 200, "trailer: a footer is read");
         check(!parse(footer(1000, 200, 1200, 64), 1313), "trailer: a footer that does not end the file is refused");
@@ -223,6 +268,7 @@ int main(int argc, char** argv) {
               "trailer: the body size, the manifest and the signature of a file on disk");
         std::filesystem::remove(file);
     }
+    // ---- the update's address allow-list ----
     {
         check(update::AllowedAssetUrl("https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.4/P.T.PC.Port.Setup.exe"), "allow github.com");
         check(update::AllowedAssetUrl("https://objects.githubusercontent.com/github-production-release-asset/1"), "allow objects.githubusercontent.com");
@@ -292,6 +338,8 @@ int main(int argc, char** argv) {
         else setenv("PT_UPDATE_MANIFEST_URL", saved_url.c_str(), 1);
 #endif
     }
+    // a placeholder address (the reserved .invalid domain) sends nothing and is done at once; the built-in address (the GitHub
+    // release manifest, docs/updates.md) is asked for real, and the answer, or none when offline, comes within the timeout
     if (os::GetEnv("PT_UPDATE_MANIFEST_URL").empty()) {
 #ifdef _WIN32
         _putenv_s("PT_UPDATE_MANIFEST_URL", "https://releases.invalid/pt-port/latest.json");
@@ -313,6 +361,8 @@ int main(int argc, char** argv) {
         std::printf("update check at %s: %s\n", update::ManifestUrl().c_str(), newer ? (newer->version + " " + newer->url).c_str() : "nothing newer");
         check(built_in.Done(), "the built-in manifest address answers or times out");
     }
+    // --network: the real HTTPS path (WinHTTP, or libcurl loaded at run time) against a public endpoint, and the update check
+    // against PT_UPDATE_MANIFEST_URL when it is set
     if (argc >= 2 && std::string_view(argv[1]) == "--network") {
         http::Request request;
         request.url = "https://www.google.com/generate_204";
@@ -361,6 +411,7 @@ int main(int argc, char** argv) {
         if (f) std::fclose(f);
     }
     std::atomic<bool> cancel{false};
+    // the test runs itself as the child: no shell, the same on both platforms
     const std::filesystem::path self = std::filesystem::absolute(argv[0]);
     const auto exit3 = os::RunProcess(self, {"--child-exit", "3"}, dir, dir / "out.log", cancel, std::chrono::seconds(10));
     const auto slow = os::RunProcess(self, {"--child-sleep", "30"}, dir, dir / "slow.log", cancel, std::chrono::milliseconds(500));

@@ -52,9 +52,11 @@ inline Started StartGame(const Args& args, bool elevated) {
         PROCESS_INFORMATION process{};
         const wchar_t* folder = args.install.native().size() < MAX_PATH - 2 ? args.install.c_str() : nullptr;
         if (!CreateProcessW(pt::os::ExtendedLengthPath(exe).c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, folder, &startup, &process)) return {};
+        pt::os::AllowForeground(process.dwProcessId);
         CloseHandle(process.hThread);
         return {true, process.hProcess};
     }
+    pt::os::AllowForeground(0);
     bool ok = false;
     const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
     IShellWindows* windows = nullptr;

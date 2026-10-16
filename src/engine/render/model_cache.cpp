@@ -475,6 +475,14 @@ void ModelCache::ReleaseStageRef(const std::string& path) {
     if (auto it = entries_.find(path); it != entries_.end() && it->second.stage_refs > 0) --it->second.stage_refs;
 }
 
+bool ModelCache::Holds(const GpuMesh* mesh) const {
+    if (!mesh) return false;
+    for (const auto& [path, entry] : entries_) {
+        if (entry.mesh.get() == mesh) return true;
+    }
+    return false;
+}
+
 ModelCache::Released ModelCache::ReleaseUnused() {
     Released released;
     bool waited = false;

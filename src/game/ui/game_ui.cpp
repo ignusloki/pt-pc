@@ -132,6 +132,12 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         }
     } else if (op == "streetlight") {
         game.ToggleStreetFlashlight();
+    } else if (op == "menuwheel") {
+        MenuInput input;
+        input.wheel = arg(0);
+        if (ui) {
+            ui->QueueMenuInput(input);
+        }
     } else if (op == "menuclick" || op == "menupoint") {
         MenuInput input;
         input.pointer_valid = true;
@@ -246,6 +252,7 @@ void GameUi::QueueMenuInput(const MenuInput& input) {
     q.music |= input.music;
     q.click |= input.click;
     q.right_click |= input.right_click;
+    q.wheel += input.wheel;
     if (input.pointer_valid) {
         q.pointer_valid = true;
         q.pointer = input.pointer;
@@ -353,8 +360,9 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
 
     menu_.SetPromptStyle(input.prompts);
     prompts_ = input.prompts;
-    MenuInput menu_input = MapMenuInput(input, previous_held_);
+    MenuInput menu_input = MapMenuInput(input, previous_held_, previous_dirs_);
     previous_held_ = input.held;
+    previous_dirs_ = menu_input.held_dirs;
     if (input.pointer_valid && canvas_ready_) {
         const glm::vec2 virtual_px = (input.pointer - canvas_.origin) / canvas_.scale;
         menu_input.pointer_valid = true;

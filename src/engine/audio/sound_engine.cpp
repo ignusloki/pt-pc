@@ -1675,6 +1675,12 @@ void SoundEngine::SequencerStartItem(Sequencer& seq, uint64_t time) {
         SequencerCheckDone(seq);
         return;
     }
+    if (seq.paused) {
+        seq.item_scheduled = true;
+        seq.scheduled_time = std::max(time, now_);
+        ScheduleTimer(seq.scheduled_time, false, seq.serial);
+        return;
+    }
     const RanSeqObject& container = *seq.container;
     if (seq.items_left_in_pass == 0) {
         if (seq.loops_left > 0) {
@@ -2117,6 +2123,22 @@ void SoundEngine::PauseMatching(const ActionObject& action, GameObjectId object,
                 player->next_time += time - player->paused_at;
                 ScheduleTimer(player->next_time, true, player->serial);
             }
+        }
+    }
+    for (auto& pending : pending_) {
+        if ((pause && pending.cancelled) || (pending.action->Category() != 0x04 && pending.action->Category() != 0x05)) {
+            continue;
+        }
+        const NodeInfo* target = Info(pending.action->target_id);
+        if (!target || !ActionMatches(action, pending.object, target, target->bus_id, object)) {
+            continue;
+        }
+        if (pause && !pending.paused) {
+            pending.paused = true;
+            pending.paused_at = time;
+        } else if (!pause && pending.paused) {
+            pending.paused = false;
+            if (time > pending.paused_at) pending.time += time - pending.paused_at;
         }
     }
     for (auto& seq : sequencers_) {
@@ -3363,7 +3385,7 @@ void SoundEngine::ProcessDue(uint64_t block_end) {
         std::vector<PendingAction>& due = due_actions_;
         due.clear();
         for (size_t i = 0; i < pending_.size();) {
-            if (pending_[i].time < block_end) {
+            if (!pending_[i].paused && pending_[i].time < block_end) {
                 due.push_back(std::move(pending_[i]));
                 pending_[i] = std::move(pending_.back());
                 pending_.pop_back();

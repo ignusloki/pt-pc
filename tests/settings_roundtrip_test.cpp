@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -120,6 +121,12 @@ int main(int argc, char** argv) {
         {"accessibility.sound_captions", [](auto& s) { s.accessibility.sound_captions = true; }},
         {"accessibility.gyro camera", [](auto& s) { s.accessibility.gyro = 1; }},
         {"accessibility.gyro flashlight", [](auto& s) { s.accessibility.gyro = 2; s.accessibility.gyro_sensitivity = 2.0f; }},
+        {"accessibility.gyro_tightening", [](auto& s) { s.accessibility.gyro_tightening = 7.5f; }},
+        {"accessibility.gyro_tightening off", [](auto& s) { s.accessibility.gyro_tightening = 0.0f; }},
+        {"gyro_bias", [](auto& s) {
+             s.accessibility.gyro_bias["030000007e0500000920000000006800"] = {0.125f, -0.0625f, 0.03125f};
+             s.accessibility.gyro_bias["030000004c050000e60c000000006800"] = {0.0f, 0.25f, -0.015625f};
+         }},
         {"accessibility.field_of_view wider", [](auto& s) { s.accessibility.fov_offset = 30; }},
         {"accessibility.field_of_view narrower", [](auto& s) { s.accessibility.fov_offset = -10; }},
         {"mods", [](auto& s) { s.mods["a mod"] = false; s.mods["other"] = true; }},
@@ -143,7 +150,8 @@ int main(int argc, char** argv) {
         "[display]\nletterbox = 7\nfullscreen = -3\nwidth = 99999\n[graphics]\nanisotropy = 5\nfilm_grain = nan\nclarity = 3\n"
         "shadow_quality = 9\ntexture_detail = -1\nray_quality = 7\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"
         "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n"
-        "[accessibility]\ngyro = 7\ngyro_sensitivity = nan\nsound_captions = yes\nfield_of_view = 90\n");
+        "[accessibility]\ngyro = 7\ngyro_sensitivity = nan\ngyro_tightening = nan\nsound_captions = yes\nfield_of_view = 90\n"
+        "[gyro_bias]\nfine = 0.125 -0.0625 0.03125\ntoo_big = 9 0 0\nshort = 0.1\nnot_a_number = a b c\n");
     Check("letterbox clamped", odd.display.letterbox == 2);
     Check("fullscreen clamped", odd.display.fullscreen == 0);
     Check("width clamped", odd.display.width == 16384);
@@ -177,6 +185,10 @@ int main(int argc, char** argv) {
     Check("game plus off reads", !LoadText(ini, "[game]\ngame_plus = 0\n").game.game_plus);
     Check("gyro clamped", odd.accessibility.gyro == 2);
     Check("gyro sensitivity nan is the default", odd.accessibility.gyro_sensitivity == 1.0f);
+    Check("gyro tightening nan is the default", odd.accessibility.gyro_tightening == 4.0f);
+    Check("a malformed or implausible gyro offset is dropped, a good one kept",
+          odd.accessibility.gyro_bias.size() == 1 && odd.accessibility.gyro_bias.count("fine") == 1 &&
+              odd.accessibility.gyro_bias.at("fine") == std::array<float, 3>{0.125f, -0.0625f, 0.03125f});
     Check("captions read yes as on", odd.accessibility.sound_captions);
     Check("field of view clamped", odd.accessibility.fov_offset == 40);
     Check("field of view is the original's by default", pt::AppSettings{}.accessibility.fov_offset == 0);

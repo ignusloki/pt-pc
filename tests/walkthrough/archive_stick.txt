@@ -1,0 +1,284 @@
+# the Museum's music hall with a pad's stick: a stick only slightly deflected plays no selection sound, one drifting about the move
+# threshold counts as one held press (the first move, then ten a second after 0.4 s) instead of a sound every other frame
+pattach 0 ps5
+swait 4
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sui menukey down
+swait 4
+sui menukey accept
+swait 20
+sui menukey down
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_music
+sui menukey accept
+swait 20
+# the menu's own steps played 5 selection sounds
+sexpect pccursor 5 5
+# J (seek back) pressed once: it counts once, not again on every frame after it (the key press stayed in the pending input)
+sktap J 2
+swait 60
+sexpect pccursor 5 7
+# a small deflection (under the move threshold) does nothing
+saxis 0 lx 0.3
+swait 60
+saxis 0 lx 0
+swait 10
+sexpect pccursor 5 7
+# drifting between 0.55 and 0.45 for 2 s: one held press (21 sounds in all; 65 when every crossing counted as a press)
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0.55
+swait 2
+saxis 0 lx 0.45
+swait 2
+saxis 0 lx 0
+swait 10
+sexpect pccursor 16 28
+# held right for 1.5 s: the first move, then ten a second after 0.4 s
+saxis 0 lx 0.9
+swait 90
+saxis 0 lx 0
+swait 10
+sexpect pccursor 27 42

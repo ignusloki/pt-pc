@@ -73,6 +73,36 @@ int main() {
     Expect(defaults.display.rendering_api == "vulkan" && !defaults.display.rendering_api_asked, "defaults: vulkan, not asked");
     std::filesystem::remove(ini_path);
 
+    pt::AppSettings crashed;
+    crashed.display.d3d12_crashed = 3;
+    pt::AppSettings crashed_loaded;
+    Expect(defaults.display.d3d12_crashed == 0 && pt::SaveAppSettings(ini_path, crashed) && pt::LoadAppSettings(ini_path, crashed_loaded) &&
+               crashed_loaded.display.d3d12_crashed == 3,
+           "pt.ini keeps d3d12_crashed, default 0");
+    std::filesystem::remove(ini_path);
+    {
+        static int probes = 0;
+        pt::SetD3D12RunsGame(true);
+        pt::SetD3D12Probe([](std::string&) { ++probes; return true; });
+        pt::BlockD3D12("blocked for the test");
+        std::string reason;
+        Expect(!pt::D3D12Usable(reason) && reason == "blocked for the test" && probes == 0, "BlockD3D12: not usable, with its reason, no probe");
+        const RenderingApi blocked = pt::ChooseRenderingApi("", "d3d12", note);
+        Expect(blocked == RenderingApi::Vulkan && note.find("blocked for the test") != std::string::npos,
+               "BlockD3D12: pt.ini d3d12 starts on Vulkan: " + note);
+        pt::SetD3D12Probe([](std::string& r) { ++probes; r = "lacks shader model 6.6"; return false; });
+        Expect(!pt::D3D12Usable(reason) && reason == "lacks shader model 6.6" && probes == 1, "failed probe: not usable, with its reason");
+        pt::SetD3D12Probe([](std::string&) { ++probes; return false; });
+        pt::SkipD3D12Probe();
+        Expect(pt::D3D12Usable(reason) && reason.empty() && probes == 1, "SkipD3D12Probe: usable without running the probe");
+        pt::SetD3D12Probe([](std::string&) { ++probes; return true; });
+        pt::BlockD3D12("blocked before the skip");
+        pt::SkipD3D12Probe();
+        Expect(!pt::D3D12Usable(reason) && reason == "blocked before the skip" && probes == 1, "SkipD3D12Probe: a block set first stays");
+        pt::SetD3D12Probe(nullptr);
+        pt::SetD3D12RunsGame(runs);
+    }
+
     for (const char* key : {"pc_rendering_api", "pc_note_rendering_api", "pc_rendering_api_prompt"}) {
         int missing = 0;
         for (int language = 0; language < 14; ++language) {

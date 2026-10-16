@@ -1246,6 +1246,11 @@ void SceneRenderer::RecordRayTracing(gpu::CommandList& cmd) {
             continue;
         }
         uint32_t mask = 0;
+        if (rt_path_ && (d.hidden_views & 3u) == 1u && d.sub->kind != gpu::kKindShadowOnly &&
+            ((d.sub->pass == RenderPass::Opaque && d.sub->kind == gpu::kKindDeferred) || d.sub->pass == RenderPass::Unlit ||
+             d.sub->pass == RenderPass::Transparent)) {
+            mask |= 2u;
+        }
         if (d.sub->shadow) {
             mask |= ((d.hidden_views & 1u) == 0 ? 1u : 0u) | ((d.hidden_views & 2u) == 0 ? 2u : 0u);
             if ((d.hidden_views & 2u) == 0 && !MirrorLightSkips(*d.mesh, static_cast<int>(d.sub - d.mesh->submeshes.data()))) {
@@ -2755,6 +2760,9 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     if (rr_frame_ && (!rt_path_ || !EnsureRrTargets())) {
         rr_frame_ = false;
     }
+    const bool traced_any = rt_active_ || rt_reflections_ || rt_contact_active_ || rt_ao_active_ || RtFullAny();
+    rr_raster_ = !rt_path_ && traced_any && up_.enabled && up_.backend && up_.ray_reconstruction && rt_rr_guides_ && vr_eye_ < 0 &&
+                 EnsureRrTargets();
     if (rt_path_) {
         rt_contact_active_ = false;
         rt_ao_active_ = false;

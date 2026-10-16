@@ -73,6 +73,16 @@ int main() {
     Expect(pt::NeuralRenderingVendorSupported(0x10DE), "NVIDIA is the NGX vendor");
     Expect(!pt::NeuralRenderingVendorSupported(0x1002), "AMD has no NGX");
     Expect(!pt::NeuralRenderingVendorSupported(0x8086), "Intel has no NGX");
+    Expect(pt::nr_unlock::SameFolder(std::filesystem::path("C:/Games/P.T. PC Port"), std::filesystem::path("C:/Games/P.T. PC Port/")),
+           "a trailing separator names the same folder");
+#ifdef _WIN32
+    Expect(pt::nr_unlock::SameFolder(std::filesystem::path(L"C:\\Games\\P.T. PC Port"), std::filesystem::path(L"c:\\games\\p.t. pc port\\")),
+           "backslashes and letter case name the same folder");
+#endif
+    Expect(!pt::nr_unlock::SameFolder(std::filesystem::path("C:/Games/P.T. PC Port"), std::filesystem::path("C:/Windows/System32")),
+           "System32 is not the game folder");
+    Expect(!pt::nr_unlock::SameFolder(std::filesystem::path("C:/Games/P.T. PC Port/reshade"), std::filesystem::path("C:/Games/P.T. PC Port/")),
+           "the reshade subfolder is not the game folder");
     using pt::nr_unlock::GpuClass;
     Expect(pt::nr_unlock::ClassifyGpu(0x10DE, 0x2204, "NVIDIA GeForce RTX 3090") == GpuClass::NeedsUnlock, "RTX 3090 needs the unlock");
     Expect(pt::nr_unlock::ClassifyGpu(0x10DE, 0x1E87, "NVIDIA GeForce RTX 2080") == GpuClass::NeedsUnlock, "RTX 2080 needs the unlock");
@@ -107,6 +117,14 @@ int main() {
     addon.extra = pt::nr_unlock::ParseAddonKeys("NRPaperWhiteScale=4;NRNew=3");
     const std::string extra = pt::nr_unlock::ApplyAddonSettings("", addon);
     Expect(extra.find("NRPaperWhiteScale=4\n") != std::string::npos && extra.find("NRNew=3") != std::string::npos, "test keys override and add");
+    pt::nr_unlock::AddonSettings parked;
+    parked.parked = true;
+    const std::string parked_ini = pt::nr_unlock::ApplyAddonSettings("[ADDON]\nAddonPath=.\\\n\n[RenoDX.DLSS5]\nNeuralUplift=1\n", parked);
+    Expect(parked_ini.find("AddonPath=.\\pt-addons-parked\\\n") != std::string::npos && parked_ini.find("AddonPath=.\\\n") == std::string::npos &&
+               parked_ini.find("NeuralUplift=0") != std::string::npos,
+           "a start without the route parks the add-on");
+    parked.parked = false;
+    Expect(pt::nr_unlock::ApplyAddonSettings(parked_ini, parked).find("AddonPath=.\\\n") != std::string::npos, "a start with the route unparks it");
     using State = pt::nr_unlock::RouteReport::State;
     const auto ran = pt::nr_unlock::ParseReShadeLog(
         "10:27:44 | INFO | [DLSS 5 Neural Rendering] DLSS5 Generic: feature 18 created via the signed snippet\n"

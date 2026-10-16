@@ -192,11 +192,14 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     frame_ = new gpu::FrameData();
     CreateBuiltinResources();
     if (!EnsureShadowTarget()) return false;
+    LogInfo("startup: scene pipelines");
     if (!CreatePipelines()) {
         return false;
     }
+    LogInfo("startup: subsurface scattering pass");
     sss_ready_ = sss_.Init(*gpu_, textures.BindingLayout(), frame_layout_, kLightFormat, samplers_[gpu::kSmpPointClamp]);
     if (gpu_->Info().ray_query && (gpu_->Info().backend == gpu::Backend::Vulkan || D3D12RayTracingAvailable())) {
+        LogInfo("startup: ray tracing structures and shadow pass");
         rt_ = CreateRayTracing(*gpu_);
         gpu::GraphicsPipelineDesc volume;
         volume.vertex = "volume.vert";
@@ -212,7 +215,9 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
             light_rt_ = gpu_->CreateGraphicsPipeline(volume);
             volume.fragment = "light_contact.frag";
             light_contact_ = gpu_->CreateGraphicsPipeline(volume);
+            LogInfo("startup: ray tracing Full tier passes");
             CreateFullPipelines(kLightFormat, light_depth_bounds_);
+            LogInfo("startup: path traced lighting passes");
             CreatePathPipelines(kLightFormat);
             if (pt_direct_) {
                 gpu::GraphicsPipelineDesc desc;
@@ -232,6 +237,7 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
                 desc.write_masks = {rgb, rgb, gpu::ColorComponent::R | gpu::ColorComponent::G};
                 pt_decal_ = gpu_->CreateGraphicsPipeline(desc);
             }
+            LogInfo("startup: ray traced reflection and ambient occlusion passes");
             gpu::GraphicsPipelineDesc reflect;
             reflect.layout = rt_->Layout();
             reflect.fragment = "reflect_make_rt.frag";
@@ -532,6 +538,7 @@ bool SceneRenderer::CreatePipelines() {
             return false;
         }
     }
+    LogInfo("startup: upscaler input passes");
     return CreateUpscalePipelines();
 }
 
@@ -1563,11 +1570,12 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
             std::ofstream lights(prefix + ".rt_lights.txt");
             for (uint32_t i = 0; i < light_count_ && i < light_sources_.size(); ++i) {
                 const gpu::Light& g = frame_->lights[i];
-                lights << std::format("{} back {:.3f} blocked {:.3f} light {:.5f} factor {:.3f} strength {:.3f} bounce {:.2f} rays {} cast {} at {:.2f} {:.2f} {:.2f} {}\n",
+                lights << std::format("{} back {:.3f} blocked {:.3f} light {:.5f} factor {:.3f} strength {:.3f} bounce {:.2f} rays {} cast {} at {:.2f} {:.2f} {:.2f} {} "
+                                      "axis {:.2f} {:.2f} {:.2f} inner {:.3f} cone {:.3f}\n",
                                       light_sources_[i]->name.empty() ? "(effect)" : light_sources_[i]->name, values[i].x, values[i].y,
                                       values[i].z, values[i].w, g.shadow_cone.z, g.shadow_cone.w, g.info.x >= 0 ? (g.info.x >> 16) & 0xFF : 0,
                                       light_sources_[i]->cast_shadow ? 1 : 0, g.position.x, g.position.y, g.position.z,
-                                      g.position.w > 0.5f ? "spot" : "point");
+                                      g.position.w > 0.5f ? "spot" : "point", g.direction.x, g.direction.y, g.direction.z, g.range.y, g.cone.x);
             }
             gpu_->DestroyBuffer(buffer);
         }

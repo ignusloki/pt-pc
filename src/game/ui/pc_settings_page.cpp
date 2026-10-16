@@ -93,9 +93,16 @@ void PcSettingsPage::Build(ui::UifModel& model, int icon_atlas, int icon_glow) {
     }
     bar_group_ = Clone(model, kCameraBarGroup, root_, glm::vec2(0.0f), "bar_group");
     bar_ = Clone(model, kCameraBar, bar_group_, glm::vec2(0.0f), "bar");
-    for (int column = 0; column < 2; ++column) {
-        more_above_[column] = Clone(model, kEntryText, root_, glm::vec2(0.0f), std::format("more_above_{}", column));
-        more_below_[column] = Clone(model, kEntryText, root_, glm::vec2(0.0f), std::format("more_below_{}", column));
+    for (const auto [node, name] : {std::pair{&arrow_up_, "arrow_up"}, std::pair{&arrow_down_, "arrow_down"}, std::pair{&bar_track_, "bar_track"},
+                                    std::pair{&bar_thumb_, "bar_thumb"}}) {
+        *node = Clone(model, kCameraBar, root_, glm::vec2(0.0f), name);
+        ui::UifNode& shape = *model.FindById(*node);
+        shape.size = glm::vec2(1.0f);
+        shape.scale = glm::vec2(1.0f);
+        shape.positions = {{0.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}};
+        shape.uvs = shape.positions;
+        shape.indices = {0, 1, 2, 0, 2, 3};
+        shape.points.clear();
     }
     help_ = Clone(model, kTipText, root_, kHelpAt, "help");
     model.FindById(help_)->size = kHelpSize;
@@ -502,7 +509,7 @@ void PcSettingsPage::Move(Game& game, int delta) {
         if (row && row->enabled && panel.music && !panel.locked && !panel.music_playing) source_->Music(row->id, PcMusicCommand::Restart, 0.0f);
     }
     if (game.Audio()) {
-        game.Audio()->PostEvent(kCursorSound, nullptr);
+        PlayCursor(game);
     }
 }
 
@@ -536,7 +543,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
                     source_->Set(row->id, value);
                     Refresh();
                     if (game.Audio()) {
-                        game.Audio()->PostEvent(kCursorSound, nullptr);
+                        PlayCursor(game);
                     }
                 }
             }
@@ -546,7 +553,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
         dialog_nav_.Open(row->confirm_default_yes ? 0 : 1, held_dirs_);
         flash_frame_ = 0.0f;
         if (game.Audio()) {
-            game.Audio()->PostEvent(kCursorSound, nullptr);
+            PlayCursor(game);
         }
         return;
     }
@@ -571,7 +578,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
         }
     }
     if (game.Audio()) {
-        game.Audio()->PostEvent(kCursorSound, nullptr);
+        PlayCursor(game);
     }
 }
 
@@ -613,8 +620,13 @@ bool PcSettingsPage::MusicControl(Game& game, int button, float value) {
     case L::kMusicButtons: source_->Music(row->id, PcMusicCommand::SeekTo, value); break;
     default: return false;
     }
-    if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+    if (game.Audio()) PlayCursor(game);
     return true;
+}
+
+void PcSettingsPage::PlayCursor(Game& game) {
+    ++cursor_sounds_;
+    if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
 }
 
 PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input, float dt) {
@@ -628,14 +640,14 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
             flash_frame_ = 0.0f;
             Scroll();
             source_->CursorMoved();
-            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+            if (game.Audio()) PlayCursor(game);
         } else if (input.back || input.close || input.accept || input.click || input.right_click) {
             const int keep = cursor_;
             source_->Back();
             Refresh();
             cursor_ = std::clamp(keep, 0, static_cast<int>(rows_.size()));
             Scroll();
-            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+            if (game.Audio()) PlayCursor(game);
         }
         return Result::None;
     }
@@ -650,6 +662,27 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         held_dirs_ = input.held_dirs;
         SwitchTab(game, input.tab_prev ? -1 : 1);
         return Result::None;
+    }
+    if (const ScrollBar bar = Bar(); bar.scrollable) {
+        const auto inside = [&](glm::vec4 box, float grow) {
+            const float x = input.pointer.x + kCenterX;
+            return input.pointer_valid && x >= box.x - grow && x <= box.z + grow && input.pointer.y >= box.y - grow && input.pointer.y <= box.w + grow;
+        };
+        arrow_up_hover_ = bar.above && inside(bar.up, 0.8f);
+        arrow_down_hover_ = bar.below && inside(bar.down, 0.8f);
+        const float page = std::max(row_step_, kTop - WindowBottom() - row_step_);
+        float dy = 0.0f;
+        if (input.wheel != 0.0f) dy = -input.wheel * row_step_;
+        else if (input.click && arrow_up_hover_) dy = -row_step_ * 2.0f;
+        else if (input.click && arrow_down_hover_) dy = row_step_ * 2.0f;
+        else if (input.click && inside(bar.track, 0.8f)) dy = (input.pointer.y > (bar.thumb.y + bar.thumb.w) * 0.5f) ? -page : page;
+        if (dy != 0.0f) {
+            ScrollBy(game, dy);
+            last_pointer_ = input.pointer;
+            return Result::None;
+        }
+    } else {
+        arrow_up_hover_ = arrow_down_hover_ = false;
     }
     if (input.pointer_valid && Tabbed()) {
         donate_hover_ = DonateAt(input.pointer);
@@ -699,7 +732,7 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
             flash_frame_ = 0.0f;
             if (source_) source_->CursorMoved();
             if (game.Audio()) {
-                game.Audio()->PostEvent(kCursorSound, nullptr);
+                PlayCursor(game);
             }
         }
         last_pointer_ = input.pointer;
@@ -718,7 +751,7 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
                 if (source_ && source_->Back()) {
                     SourceChanged();
                     if (game.Audio()) {
-                        game.Audio()->PostEvent(kCursorSound, nullptr);
+                        PlayCursor(game);
                     }
                     return Result::None;
                 }
@@ -730,7 +763,7 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         if (source_ && source_->Back()) {
             SourceChanged();
             if (game.Audio()) {
-                game.Audio()->PostEvent(kCursorSound, nullptr);
+                PlayCursor(game);
             }
             return Result::None;
         }
@@ -794,7 +827,7 @@ PcSettingsPage::Result PcSettingsPage::UpdateDialog(Game& game, const MenuInput&
     const dialog::Result result = dialog_nav_.Update(input, 2, language_, true);
     if (dialog_nav_.Moved()) {
         flash_frame_ = 0.0f;
-        if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+        if (game.Audio()) PlayCursor(game);
     }
     if (result == dialog::Result::None) return Result::None;
     const int id = row->id;
@@ -819,12 +852,12 @@ PcSettingsPage::Result PcSettingsPage::UpdateQuestion(Game& game, const MenuInpu
         cursor_ = dialog_nav_.Focus();
         flash_frame_ = 0.0f;
         if (source_) source_->CursorMoved();
-        if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+        if (game.Audio()) PlayCursor(game);
     }
     if (result == dialog::Result::Cancelled) {
         if (source_ && source_->Back()) {
             SourceChanged();
-            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+            if (game.Audio()) PlayCursor(game);
             return Result::None;
         }
         return Result::Back;
@@ -921,8 +954,12 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         state.font_type = UiFontType::PcSystem;
         const std::optional<glm::vec4> drawn = view.TextRect(donate_text_);
         if (drawn) donate_rect_ = *drawn;
-        const float width = drawn ? (drawn->z - drawn->x) / UiCanvas::kUnit : donate_width_;
-        state.offset = glm::vec2(kStripRight - 1.0f - width, -31.0f);
+        if (drawn && donate_latch_language_ != language) {
+            donate_latched_ = (drawn->z - drawn->x) / UiCanvas::kUnit;
+            donate_latch_language_ = language;
+        }
+        const float width = donate_latch_language_ == language ? donate_latched_ : donate_width_;
+        state.offset = glm::vec2(std::round((kStripRight - 1.0f - width) * 10.0f) * 0.1f, -31.0f);
         state.color = glm::vec4(1.0f, 1.0f, 1.0f, donate_hover_ ? 1.0f : 0.8f);
     }
     text(back_text_, "pc_back");
@@ -1032,24 +1069,23 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
             if (color) color->a *= 0.45f;
         }
     }
-    for (int column = 0; column < 2; ++column) {
-        bool above = false;
-        bool below = false;
-        for (const Placed& p : rows_) {
-            if (p.column != column || Browser() || gallery != PcGallery::None) continue;
-            const float y = p.label.y + scroll_y_;
-            above |= y > kTop + 0.01f;
-            below |= RowBottom(p) + scroll_y_ < WindowBottom() - 0.01f;
-        }
-        const float x = LabelX(column) + 1.5f;
-        for (const auto [node, shown, y] : {std::tuple{more_above_[column], above, kTop + 2.4f}, std::tuple{more_below_[column], below, WindowBottom() - line_ * 0.5f - 0.6f}}) {
+    {
+        const ScrollBar bar = Bar();
+        const auto shape = [&](uint16_t node, bool shown, glm::vec4 box, bool triangle_up, bool triangle_down, float alpha) {
             auto& state = view.State(node);
             state.visible = shown;
-            state.text = "...";
-            state.font_type = UiFontType::PcSystem;
-            state.offset = glm::vec2(x, y);
-            state.color = glm::vec4(1.0f, 1.0f, 1.0f, 0.65f);
-        }
+            state.texture = -1;
+            state.color = glm::vec4(1.0f, 1.0f, 1.0f, alpha);
+            const glm::vec2 lo(box.x, box.y), hi(box.z, box.w);
+            const float mid = (box.x + box.z) * 0.5f;
+            if (triangle_up) state.positions = std::vector<glm::vec2>{{mid, hi.y}, {lo.x, lo.y}, {hi.x, lo.y}, {hi.x, lo.y}};
+            else if (triangle_down) state.positions = std::vector<glm::vec2>{{mid, lo.y}, {hi.x, hi.y}, {lo.x, hi.y}, {lo.x, hi.y}};
+            else state.positions = std::vector<glm::vec2>{{lo.x, hi.y}, {lo.x, lo.y}, {hi.x, lo.y}, {hi.x, hi.y}};
+        };
+        shape(arrow_up_, bar.scrollable && bar.above, bar.up, true, false, arrow_up_hover_ ? 1.0f : 0.95f);
+        shape(arrow_down_, bar.scrollable && bar.below, bar.down, false, true, arrow_down_hover_ ? 1.0f : 0.95f);
+        shape(bar_track_, bar.scrollable, bar.track, false, false, 0.22f);
+        shape(bar_thumb_, bar.scrollable, bar.thumb, false, false, 0.75f);
     }
     const PcSettingRow* current = CurrentRow();
     view.State(bar_group_).visible = (current != nullptr || (tabbed && cursor_ < 0)) && gallery == PcGallery::None;
@@ -1164,6 +1200,66 @@ bool PcSettingsPage::DonateAt(glm::vec2 units) const {
     return px.x >= donate_rect_.x - 4.0f && px.x <= donate_rect_.z + 4.0f && px.y >= donate_rect_.y - 6.0f && px.y <= donate_rect_.w + 6.0f;
 }
 
+PcSettingsPage::ScrollBar PcSettingsPage::Bar() const {
+    ScrollBar bar;
+    if (Browser() || Gallery() != PcGallery::None || rows_.empty() || lowest_ >= Floor() - 0.01f) return bar;
+    bar.scrollable = true;
+    const float most = std::max(0.0f, WindowBottom() - lowest_);
+    bar.above = scroll_y_ > 0.01f;
+    bar.below = scroll_y_ < most - 0.01f;
+    const float centre = 6.5f;
+    const float half_width = 3.6f;
+    const float low = WindowBottom() + 0.2f;
+    bar.up = glm::vec4(centre - half_width, kTop + 1.3f, centre + half_width, kTop + 3.5f);
+    bar.down = glm::vec4(centre - half_width, low, centre + half_width, low + 2.4f);
+    const float x = kStripRight + 2.0f;
+    const float top = kTop + 0.5f;
+    const float bottom = low;
+    bar.track = glm::vec4(x, bottom, x + 0.9f, top);
+    const float window = kTop - WindowBottom();
+    const float total = window + most;
+    const float height = top - bottom;
+    const float thumb = std::clamp(height * window / std::max(window, total), 3.0f, height);
+    const float travel = height - thumb;
+    const float at = most > 0.0f ? scroll_y_ / most : 0.0f;
+    bar.thumb = glm::vec4(x - 0.15f, top - travel * at - thumb, x + 1.05f, top - travel * at);
+    return bar;
+}
+
+void PcSettingsPage::ScrollBy(Game& game, float dy) {
+    const ScrollBar bar = Bar();
+    if (!bar.scrollable) return;
+    const float most = std::max(0.0f, WindowBottom() - lowest_);
+    const float before = scroll_y_;
+    scroll_y_ = std::clamp(scroll_y_ + dy, 0.0f, most);
+    if (scroll_y_ == before) return;
+    const int n = static_cast<int>(rows_.size());
+    const auto shown = [&](int i) {
+        const Placed& p = rows_[i];
+        const float top = p.first ? p.label.y + header_gap_ : p.label.y + row_step_ * 0.5f;
+        return top + scroll_y_ <= kTop + 0.01f && RowBottom(p) + scroll_y_ >= WindowBottom() - 0.01f;
+    };
+    if (cursor_ >= 0 && cursor_ < n && shown(cursor_)) return;
+    int target = -1;
+    if (dy > 0.0f) {
+        for (int i = 0; i < n && target < 0; ++i) {
+            if (shown(i)) target = i;
+        }
+    } else {
+        for (int i = n - 1; i >= 0 && target < 0; --i) {
+            if (shown(i)) target = i;
+        }
+    }
+    if (target >= 0 && target != cursor_) {
+        cursor_ = target;
+        confirming_ = false;
+        preview_id_ = -1;
+        flash_frame_ = 0.0f;
+        if (source_) source_->CursorMoved();
+        if (game.Audio()) PlayCursor(game);
+    }
+}
+
 void PcSettingsPage::Donate(Game& game) {
     if (!source_) return;
     source_->Donate();
@@ -1179,7 +1275,7 @@ void PcSettingsPage::ShowTab(Game& game, int tab) {
     SourceChanged();
     if (strip) cursor_ = -1;
     source_->CursorMoved();
-    if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+    if (game.Audio()) PlayCursor(game);
 }
 
 void PcSettingsPage::SwitchTab(Game& game, int visual) {
@@ -1223,6 +1319,10 @@ void PcSettingsPage::LogLayout(const UifView& view) const {
         out += std::format("pc-layout strip prev {} next {} room {:.1f} {:.1f}\n", rect(tab_prev_text_), rect(tab_next_text_),
                            640.0f + UiCanvas::kUnit * (strip_left_ - kCenterX), 640.0f + UiCanvas::kUnit * (kStripRight + 1.0f - kCenterX));
         out += std::format("pc-layout donate {}\n", rect(donate_text_));
+    }
+    if (const ScrollBar bar = Bar(); bar.scrollable) {
+        const auto box = [&](glm::vec4 b) { return std::format("{:.1f} {:.1f} {:.1f} {:.1f}", px(b.x), 360.0f - UiCanvas::kUnit * b.w, px(b.z), 360.0f - UiCanvas::kUnit * b.y); };
+        out += std::format("pc-layout scroll flags {} up {} down {} bar {}\n", ScrollFlags(), box(bar.up), box(bar.down), box(bar.track));
     }
     out += std::format("pc-layout help {} box 90 540 1190 626\n", rect(help_));
     out += std::format("pc-layout nav {} back {}\n", rect(navigation_text_), rect(back_text_));

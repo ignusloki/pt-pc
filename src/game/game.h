@@ -54,6 +54,7 @@ public:
     virtual uint32_t PostEventId(uint32_t id, const glm::vec3* position) = 0;
     virtual bool IsEventPlaying(std::string_view name) const = 0;
     virtual bool IsPlaying(uint32_t playing_id) const = 0;
+    virtual bool IsEventIdPlaying(uint32_t) const { return false; }
     virtual void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up) = 0;
     virtual void Update(float dt) = 0;
     virtual void OnStageLoaded(Stage&) {}
@@ -147,6 +148,7 @@ public:
     void CollectDraws(std::vector<DrawItem>& out);
     Camera GetCamera() const;
     void SetShowBody(bool on) { show_body_ = on; }
+    void SetTracedBody(bool on) { traced_body_ = on; }
     bool ShowBody() const { return show_body_; }
     bool BodyShown() const { return show_body_ || (third_person_shown_ && !camera_override_); }
     void SetDetachedView(bool on) { detached_view_ = on; }
@@ -371,6 +373,7 @@ public:
     int IntercomShown() const;
     bool IntercomActive() const { return intercom_.phase != intercom::Play::Phase::Idle; }
     bool GamePlusTubShown() const;
+    bool GamePlusTubView(glm::vec3& eye, glm::vec3& target) const;
     void OnLisaRush(std::string_view how);
     void LisaDateFloorEntered(std::string_view from, std::string_view floor);
     int LisaRushes() const { return lisa_rushes_; }
@@ -481,6 +484,7 @@ private:
     std::optional<glm::vec4> photo_camera_request_;
     std::optional<std::pair<glm::vec3, glm::vec3>> photo_view_request_;
     std::vector<int> photo_settings_request_;
+    bool traced_body_ = false;
     glm::vec2 photo_target_{0.0f};
 
     Vfs& vfs_;

@@ -24,6 +24,8 @@ FULL = (["start", "walk", "exit", "f005", "exit"] + HALLWAY + ["f030", "exit"] +
 # at 0x70 and the finish count 3 at 0x74 (save_data.cpp), slot sequence 1; no museum key anywhere
 ARCHIVE_BACKFILL_SAVE = ((0x6E69777470).to_bytes(8, "little") + (3).to_bytes(4, "little") + bytes(0x2C) + bytes([0x07]) + bytes(7) + b"f000"
                          + bytes(0x2C) + (0x3150474E).to_bytes(4, "little") + (3).to_bytes(4, "little") + (1).to_bytes(4, "little") + bytes(4))
+# a 1.0.3 save finished once (Game+ tier 1): ARCHIVE_BACKFILL_SAVE with the finish count 1
+GAMEPLUS_103_SAVE = ARCHIVE_BACKFILL_SAVE[:0x74] + (1).to_bytes(4, "little") + ARCHIVE_BACKFILL_SAVE[0x78:]
 # a save as Endf120 writes it (gameplay.md 3): brightness 5, floor f120, XMark, Hello and Peephole cleared, slot sequence 1; its start
 # room door leads into f160, the last loop (the state of the shadPS4 save sv_x_f120)
 F120_SAVE = ((0x6E69777470).to_bytes(8, "little") + (3).to_bytes(4, "little") + bytes(0x2C) + bytes([0x05]) + bytes(7) + b"f120"
@@ -117,6 +119,17 @@ SCENARIOS = {
             r"ocho: look back armed",
             r"demo: gc_p07_030 playing",
             r"controller: step 15 -> 16",
+        ],
+    },
+    # Lisa's steps and the pause menu (OchoLogic::UpdateChase): the menu held at several points of her walk, the steps gone once he stands
+    "lisa_pause": {
+        "pad": True,
+        "start_floor": "f080",
+        "frames": 14000,
+        "args": ["--audio-offline"],
+        "route": ["start", "lisa_pause"],
+        "expect": [
+            r"input script: \d+ expectations, 0 failed",
         ],
     },
     "photo": {
@@ -888,6 +901,29 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
+    "pc_scroll": {
+        "start_floor": "f010",
+        "frames": 1500,
+        "route": ["start", "pc_scroll"],
+        "expect": [
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
+    # the Museum's music hall with a pad's stick: a stick held, drifting about the move threshold or slightly deflected plays the
+    # selection sound once per move (the repeat is ten a second after 0.4 s), not once every other frame
+    "archive_stick": {
+        "pad": True,
+        "start_floor": "f005",
+        "frames": 3000,
+        "save": True,
+        "work_files": {"pt.ini": b"[progress]\ngame_finished = 1\narchive_backfill = 1\narchive = event:Play_bg_startroom01,"
+                                 b"event:Play_bg_passage01,event:Play_bgm_corridor_f110,demo:gc_p06_010_final,demo:gc_p01_090\n"},
+        "args": ["--release-locks", "--audio-offline"],
+        "route": ["start", "archive_stick"],
+        "expect": [
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
     "speech": {
         "start_floor": "f060",
         "frames": 12000,
@@ -952,6 +988,27 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
+    # the real New Game+ flow (no forced tier): a finish from f120 counts (tier 1), the ending's load and its restart release the
+    # models nothing holds (Game::ReleaseUnusedAssets), and the hallway after the restart still shows the bathtub Lisa (1.0.4: the
+    # released hallway mesh she borrowed was left dangling and she was gone)
+    "gameplus_restart_tub": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f120",
+        "frames": 40000,
+        "save": True,
+        "args": ["--street-offer", "restart"],
+        "route": ["f120", "start", "f160", "exit", "gameplus_after_ending", "start", "walk", "gameplus_check_tub"],
+        "expect": [
+            r"models: ending load: released",
+            r"game\+: finish 1 counted",
+            r"models: reset after the ending: released",
+            r"controller: ChangeGameStep\(StartGame\)",
+            r"game\+: tub Lisa in \S+ \(f0\d\d\), baby in its sink",
+            r"expect ok frame \d+: game\+ tub lisa shown",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
     # Game+ in maze B (f110) after a finish (the marker set by the input script): the bathtub Lisa sits in the tub of the
     # bathroom where the baby talks
     "gameplus_mazeb": {
@@ -1000,6 +1057,24 @@ SCENARIOS = {
     },
     # one scenario per Game+ tier (PT_GAMEPLUS_TIER forces the tier; each checks its tier's content and the lower tiers'):
     # tier 1, the hallway: the bathtub Lisa in the tub of the bathroom whose sink holds the baby
+    # a profile upgraded from 1.0.3: its save finished once (the tag 'NGP1' and the plain finish count 1 at 0x74, as 1.0.3 wrote it)
+    # and a pt.ini without the 1.0.4 Game+ setting; the hallway after the start room shows the bathtub Lisa (tier 1, no forced tier)
+    "gameplus_save103": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": None,
+        "frames": 6000,
+        "save": True,
+        "save_files": {"PT_Save_Data0": GAMEPLUS_103_SAVE},
+        "work_files": {"pt.ini": b"[camera]\nroll = 1\n"},
+        "route": ["gameplus_save_loaded", "start", "walk", "gameplus_check_tub"],
+        "expect": [
+            r"expect ok frame \d+: game\+ tier 1",
+            r"game\+: tub Lisa in \S+ \(f010\), baby in its sink",
+            r"expect ok frame \d+: game\+ tub lisa shown",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
     "gameplus_tier1": {
         "optional": True,
         "gameplus": True,
@@ -1031,6 +1106,24 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
+    # the bathtub Lisa after a reset that releases the unused models (PT_TEST_VRAM_TIGHT, as on a card short of video memory or
+    # after the ending): 1.0.4 kept her mesh pointer, put the freed mesh into the next stage and crashed in PrepareFrame (Sentry,
+    # RTX 2060 and RTX 3080, 2026-10-15); she must be drawn again after Lisa's kill and the respawn
+    "gameplus_tub_release": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f080",
+        "frames": 20000,
+        "env": {"PT_GAMEPLUS_TIER": "1", "PT_TEST_VRAM_TIGHT": "1"},
+        "route": ["start", "gameplus_check_tub", "lisa", "start", "gameplus_check_tub"],
+        "expect": [
+            r"game\+: tub Lisa in",
+            r"demo: gc_p07_030 playing",
+            r"game\+: tub Lisa taken out of the stages before the unused models are released",
+            r"models: reset with the video memory short: released",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
     # tier 2, the intercom in place of the painting (game_plus_intercom_play.cpp): every ring forced, f060 to f050 with the captions on;
     # walking up to it on f050's first pass gives Lisa's tell (her chase comes on the next loop), then the chime, the screen sputtering
     # on and off again; leaving into f050's second pass logs her chase starting after the tell
@@ -1058,6 +1151,130 @@ SCENARIOS = {
             r"floor: NextFloor f050 -> f050 \(loop 2\)",
             r"game\+: intercom: Lisa's chase \(state 3\) began \d+\.\d+ s after the tell",
             r"input script: \d+ expectations, 0 failed",
+        ],
+    },
+    # the same walk in the turned or moved stage copies (f010 and f160 at (-31.58 0.20 16.14), f005 at (-20.62 -1.20 -5.99)), also
+    # with every ring forced
+    "gameplus_intercom_wall_f010_t0": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f000",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "0"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_f010_t2": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f000",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "2"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_f010_t2ring": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f000",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "2", "PT_INTERCOM_RING": "1"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_f005_t0": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f005",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "0"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_f005_t2": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f005",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "2"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_f005_t2ring": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f005",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "2", "PT_INTERCOM_RING": "1"},
+        "args": ["--audio-offline"],
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    # F9 logs the capture pose (and the route lines) as a key press through the input device, headless as with a window
+    "pose_f9": {
+        "optional": True,
+        "frames": 3000,
+        "args": ["--virtual-pads"],
+        "route": ["start", "f9_pose"],
+        "expect": [
+            r"capture pose: floor f\d+ loop \d+ step \d+, camera",
+            r"capture route: goto ",
+            r"capture route: lookat ",
+        ],
+    },
+    # walking straight into the wall where the intercom (tier 2) or the painting (tiers 0 and 1) hangs: the closest the feet get
+    # ("gave up" in the log) must be the same in all three
+    "gameplus_intercom_wall_t0": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f060",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "0"},
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"floor: NextFloor f060 -> f050",
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_t1": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f060",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "1"},
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"floor: NextFloor f060 -> f050",
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
+        ],
+    },
+    "gameplus_intercom_wall_t2": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f060",
+        "frames": 9000,
+        "env": {"PT_GAMEPLUS_TIER": "2"},
+        "route": ["start", "intercom_wall"],
+        "expect": [
+            r"floor: NextFloor f060 -> f050",
+            r"input script: gave up on \(\S+ \S+ \S+\) at \(\S+ \S+ \S+\), frame \d+",
         ],
     },
     # tier 2 on the HELLO loop (f090, its second pass): no ring; at the corridor's end the intercom crackles a few seconds before

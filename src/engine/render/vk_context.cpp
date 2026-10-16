@@ -424,7 +424,8 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             add("VK_EXT_metal_objects");
         }
 #endif
-        if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+        static const bool no_budget = [] { const char* v = std::getenv("PT_VK_NO_MEMORY_BUDGET"); return v && *v == '1'; }();
+        if (!no_budget && has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;
         }

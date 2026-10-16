@@ -37,6 +37,8 @@ public:
     std::string_view ShownTab() const { return Tabbed() ? source_->TabLabel(source_->Tab()) : std::string_view(); }
     bool StripFocused() const { return Tabbed() && cursor_ < 0; }
     int Donations() const { return donations_; }
+    int CursorSounds() const { return cursor_sounds_; }
+    int ScrollFlags() const { const ScrollBar bar = Bar(); return (bar.scrollable ? 1 : 0) | (bar.above ? 2 : 0) | (bar.below ? 4 : 0); }
     void SetFlash(const ui::UiaAnimation* animation) { flash_animation_ = animation; }
     void Open(PcSettingsSource* source);
     void Refresh();
@@ -125,12 +127,24 @@ private:
     float ValueRoom() const { return 2.0f * (ArrowX() - 1.5f); }
     void SourceChanged();
     void Move(Game& game, int delta);
+    void PlayCursor(Game& game);
     void SwitchColumn(Game& game);
     void SwitchTab(Game& game, int visual);
     void ShowTab(Game& game, int tab);
     void LayoutTabs();
     int TabAt(glm::vec2 units) const;
     bool DonateAt(glm::vec2 units) const;
+    struct ScrollBar {
+        bool scrollable = false;
+        bool above = false;
+        bool below = false;
+        glm::vec4 up{0.0f};
+        glm::vec4 down{0.0f};
+        glm::vec4 track{0.0f};
+        glm::vec4 thumb{0.0f};
+    };
+    ScrollBar Bar() const;
+    void ScrollBy(Game& game, float dy);
     void Donate(Game& game);
     void Change(Game& game, int delta, bool accept);
     Result UpdateDialog(Game& game, const MenuInput& input);
@@ -156,6 +170,7 @@ private:
     float line_centre_ = 16.0f;
     float open_time_ = 0.0f;
     int donations_ = 0;
+    int cursor_sounds_ = 0;
     mutable glm::vec4 donate_rect_{0.0f};
     float donate_width_ = 24.0f;
     mutable bool donate_hover_ = false;
@@ -198,8 +213,14 @@ private:
     uint16_t donate_text_ = 0;
     uint16_t bar_group_ = 0;
     uint16_t bar_ = 0;
-    std::array<uint16_t, 2> more_above_{};
-    std::array<uint16_t, 2> more_below_{};
+    uint16_t arrow_up_ = 0;
+    uint16_t arrow_down_ = 0;
+    uint16_t bar_track_ = 0;
+    uint16_t bar_thumb_ = 0;
+    mutable float donate_latched_ = 0.0f;
+    mutable int donate_latch_language_ = -1;
+    mutable bool arrow_up_hover_ = false;
+    mutable bool arrow_down_hover_ = false;
     std::array<RowNodes, kMaxRows> row_nodes_{};
     std::array<SectionNodes, kMaxSections> section_nodes_{};
     const ui::UiaAnimation* flash_animation_ = nullptr;

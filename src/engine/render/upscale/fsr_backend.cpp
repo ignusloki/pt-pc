@@ -140,7 +140,7 @@ public:
             module_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
             if (module_) {
                 LogInfo("fsr: loaded {}", path.string());
-            } else if (std::filesystem::exists(path)) {
+            } else if (std::error_code ec; std::filesystem::exists(path, ec)) {
                 const char* error = dlerror();
                 LogWarn("fsr: cannot load {}: {}", path.string(), error ? error : "unknown error");
                 reason = std::format("{} could not be loaded ({})", kFfxLibrary, error ? error : "unknown error");

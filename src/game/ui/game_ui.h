@@ -168,6 +168,7 @@ private:
     std::vector<std::pair<std::string, float>> queued_subtitles_;
     MenuInput queued_menu_input_;
     uint32_t previous_held_ = 0;
+    uint32_t previous_dirs_ = 0;
     bool pause_owner_ = false;
 
     int language_ = 0;

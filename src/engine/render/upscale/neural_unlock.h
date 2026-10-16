@@ -33,6 +33,7 @@ struct ToolSource {
 inline constexpr std::string_view kRoute = "native";
 inline constexpr std::string_view kManifest = "dlss5-autopilot.json";
 inline constexpr std::string_view kAddonSection = "RenoDX.DLSS5";
+inline constexpr std::string_view kParkedAddonPath = ".\\pt-addons-parked\\";
 inline constexpr std::string_view kOwnReShadeDir = "reshade";
 inline constexpr std::string_view kOwnReShadeFile = "dxgi.dll";
 inline constexpr float kPaperWhite = 1.0f;
@@ -58,6 +59,7 @@ struct AddonSettings {
     bool on = false;
     int style = 0;
     float intensity = 1.0f;
+    bool parked = false;
     std::vector<std::pair<std::string, std::string>> extra;
 };
 std::vector<std::pair<std::string, std::string>> ParseAddonKeys(std::string_view text);
@@ -73,6 +75,7 @@ RouteReport ParseReShadeLog(std::string_view text);
 RouteReport ReadRouteReport(const std::filesystem::path& game_dir);
 
 bool LoadDxgiForRoute(const std::filesystem::path& game_dir, bool install_present, bool load);
+bool SameFolder(const std::filesystem::path& a, const std::filesystem::path& b);
 
 inline constexpr int kNrToggleVk = 0x0B;
 inline constexpr int kNrScreenshotVk = 0x0A;

@@ -1,0 +1,35 @@
+# walks into the wall where the hallway intercom (Game+ tier 2) or the river painting (below) hangs, straight at the screen's
+# middle (the file space point the other intercom routes face), then along the wall at other heights of the corridor's end:
+# "gave up" logs the closest the feet get, which must be the same with Game+ on and off
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -6.6 -1.4 8.0
+gfile -9.49 -1.4 9.0 600
+swait 30
+slog wall at the screen
+gfile -6.6 -1.4 7.0 300
+gfile -9.6 -1.4 7.0 400
+swait 20
+slog wall at z 7.0
+gfile -6.6 -1.4 7.8 300
+gfile -9.6 -1.4 7.8 400
+swait 20
+slog wall at z 7.8
+gfile -6.6 -1.4 8.4 300
+gfile -9.6 -1.4 8.4 400
+swait 20
+slog wall at z 8.4
+gfile -6.6 -1.4 9.6 300
+gfile -9.6 -1.4 9.6 400
+swait 20
+slog wall at z 9.6
+gfile -6.6 -1.4 10.2 300
+gfile -9.6 -1.4 10.2 400
+swait 20
+slog wall at z 10.2
+gfile -6.6 -1.4 10.8 300
+gfile -9.6 -1.4 10.8 400
+swait 20
+slog wall at z 10.8

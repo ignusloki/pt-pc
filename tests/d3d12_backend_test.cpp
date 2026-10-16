@@ -1632,6 +1632,14 @@ int main(int argc, char** argv) {
     std::string error;
     gpu::d3d12::CreateOptions options;
     options.debug = std::getenv("PT_D3D12_DEBUG") != nullptr;
+    {
+        _putenv_s("PT_D3D12_TEST_LACK", "sm66,typeduav");
+        std::string lack_error;
+        const bool refused = gpu::d3d12::Create(options, lack_error) == nullptr;
+        _putenv_s("PT_D3D12_TEST_LACK", "");
+        Check(refused && lack_error.find("shader model 6.6") != std::string::npos && lack_error.find("typed UAV loads") != std::string::npos,
+              "a device lacking shader model 6.6 and typed UAV loads is refused without a crash: " + lack_error);
+    }
     std::unique_ptr<gpu::d3d12::D3D12Device> device = gpu::d3d12::Create(options, error);
     Check(device != nullptr, "D3D12 device" + (device ? " on " + device->Info().adapter + ", " + device->RuntimeDescription() : ": " + error));
     if (!device) {

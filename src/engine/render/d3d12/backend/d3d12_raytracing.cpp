@@ -715,7 +715,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
         rec.first_index = sub.first_index;
         rec.vertex_offset = sub.vertex_offset;
         rec.material = c.material;
-        rec.flags = c.fitting ? 1u | (c.alpha_test ? 2u : 0u) : 0u;
+        rec.flags = (c.fitting ? 1u | (c.alpha_test ? 2u : 0u) : 0u) | (c.skin_base != gpu::kInvalid ? 4u : 0u) | (c.alpha_test ? 8u : 0u);
         MeshRead(cl, *c.mesh);
         ++used;
     }

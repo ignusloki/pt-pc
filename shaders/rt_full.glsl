@@ -1,5 +1,9 @@
 
 const uint kRtFullMask = 128u;
+const uint kRtMirrorLightMask = 32u;
+uint RtFullCasters(Light l) {
+    return (uint(l.info.x) & 0xFFu) == kRtMirrorLightMask ? kRtMirrorLightMask : kRtFullMask;
+}
 const uint kRtFullOriginalShadow = 1u << 24u;
 const uint kRtSurfaceMask = 8u;
 const uint kRtReflectMask = 4u;
@@ -52,7 +56,7 @@ bool RtFullOccluded(Light l, vec3 origin, vec3 target) {
         return false;
     }
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsTerminateOnFirstHitEXT, kRtFullMask, origin, 0.0, dir, t_max);
+    rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsTerminateOnFirstHitEXT, RtFullCasters(l), origin, 0.0, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
             RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),

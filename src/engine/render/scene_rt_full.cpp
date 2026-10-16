@@ -177,7 +177,8 @@ void SceneRenderer::SetupFullLights() {
             g.shadow_cone.y = 1.0f;
         }
         if (rt_full_shadows_) {
-            g.info.x = static_cast<int>(128u | (samples << 16) | (l.cast_shadow ? 1u << 24 : 0u));
+            const uint32_t casters = l.id == kMirrorLightId ? 32u : 128u;
+            g.info.x = static_cast<int>(casters | (samples << 16) | (l.cast_shadow ? 1u << 24 : 0u));
         }
     }
 }

@@ -751,8 +751,16 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             }
             game.RequestScreenshot(path);
         } else if (item.op == "camera") {
+            glm::vec3 eye(0.0f);
+            glm::vec3 target(0.0f);
             if (item.text == "off") {
                 game.SetCameraOverride(std::nullopt);
+            } else if (item.text == "tub") {
+                if (game.GamePlusTubView(eye, target)) {
+                    SetScriptCamera(game, eye, glm::vec4(target - eye, 80.0f), glm::vec3(0.0f));
+                } else {
+                    LogWarn("input script: scamera tub: the bathtub Lisa is not shown");
+                }
             } else {
                 SetScriptCamera(game, item.point, item.extra, item.up);
             }
@@ -1270,6 +1278,19 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const int n = GameUi::Active() ? GameUi::Active()->Menu().PcPage().Donations() : -1;
         ok = n == static_cast<int>(arg(0));
         got = std::format("PC settings donations {}", n);
+    } else if (what == "eventid") {
+        const uint32_t id = static_cast<uint32_t>(std::stoul(word(1), nullptr, 16));
+        const bool alive = game.Audio() && game.Audio()->IsEventIdPlaying(id);
+        ok = alive == (arg(0) != 0.0f);
+        got = std::format("event {:#x} {}", id, alive ? "alive" : "not alive");
+    } else if (what == "pccursor") {
+        const int n = GameUi::Active() ? GameUi::Active()->Menu().PcPage().CursorSounds() : -1;
+        ok = n >= static_cast<int>(arg(0)) && n <= static_cast<int>(arg(1));
+        got = std::format("PC settings selection sounds {}", n);
+    } else if (what == "pcscroll") {
+        const int flags = GameUi::Active() ? GameUi::Active()->Menu().PcPage().ScrollFlags() : -1;
+        ok = flags == static_cast<int>(arg(0));
+        got = std::format("PC settings scroll flags {}", flags);
     } else if (what == "pctab") {
         const PcSettingsPage* page = GameUi::Active() ? &GameUi::Active()->Menu().PcPage() : nullptr;
         const std::string shown = page ? std::string(page->ShownTab()) : std::string();

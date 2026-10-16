@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -115,6 +116,7 @@ struct InputState {
     bool fast_walk = false;
     bool click = false;
     bool right_click = false;
+    float wheel = 0.0f;
     bool gouge_pressed = false;
     bool voice_keyword_pressed = false;
     bool house_pressed = false;
@@ -122,6 +124,7 @@ struct InputState {
     bool date_skip_pressed = false;
     uint32_t music_pressed = 0;
     uint32_t menu_keys_pressed = 0;
+    bool capture_pose_pressed = false;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     PromptStyle prompts;
@@ -143,6 +146,8 @@ struct InputSettings {
     int prompt_style = 0;
     int gyro = 0;
     float gyro_sensitivity = 1.0f;
+    float gyro_tightening = 4.0f;
+    std::map<std::string, std::array<float, 3>> gyro_bias;
 };
 
 struct GamepadInfo {
@@ -200,6 +205,12 @@ public:
     void InjectMouseButton(uint8_t button, bool down);
     void InjectMouseMotion(float dx, float dy, int polls);
     const GyroTracker& Gyro() const { return gyro_; }
+    void StartGyroCalibration() { gyro_.StartCalibration(); }
+    void ClearGyroCalibration() { gyro_.ClearCalibration(); }
+    GyroTracker::Calibration GyroCalibration() const { return gyro_.CalibrationState(); }
+    float GyroCalibrationProgress() const { return gyro_.CalibrationProgress(); }
+    bool AnyGyroPad() const;
+    bool TakeGyroCalibrated(std::string& guid, std::array<float, 3>& offset);
 
     InputSettings settings;
 
@@ -215,6 +226,7 @@ private:
         bool trigger_rumble_supported = false;
         bool has_gyro = false;
         bool gyro_on = false;
+        std::string guid;
         uint64_t gyro_time = 0;
     };
 
@@ -232,6 +244,9 @@ private:
     GyroTracker gyro_;
     uint32_t gyro_pad_ = 0;
     bool gyro_missing_logged_ = false;
+    std::string calibrated_guid_;
+    std::array<float, 3> calibrated_offset_{};
+    bool calibrated_ready_ = false;
     uint64_t use_counter_ = 0;
     float mouse_dx_ = 0.0f;
     float mouse_dy_ = 0.0f;
@@ -243,12 +258,14 @@ private:
     bool pad_back_edge_ = false;
     bool previous_date_auto_key_ = false;
     bool previous_date_skip_key_ = false;
+    bool capture_pose_edge_ = false;
     uint32_t previous_music_keys_ = 0;
     bool pause_edge_ = false;
     bool confirm_edge_ = false;
     bool cancel_edge_ = false;
     bool click_edge_ = false;
     bool right_click_edge_ = false;
+    float wheel_ = 0.0f;
     bool settings_edge_ = false;
     bool any_edge_ = false;
     bool last_from_gamepad_ = false;

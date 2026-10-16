@@ -78,7 +78,7 @@ static_assert(std::size(kNativeLanguageNames) == std::size(kLanguageKeys));
 
 }
 
-MenuInput MapMenuInput(const InputState& input, uint32_t previous_held) {
+MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t previous_dirs) {
     MenuInput out;
     out.subtitle_up = (input.raw_pressed & kRawUp) != 0;
     out.subtitle_down = (input.raw_pressed & kRawDown) != 0;
@@ -99,18 +99,17 @@ MenuInput MapMenuInput(const InputState& input, uint32_t previous_held) {
     out.donate = (input.menu_keys_pressed & kMenuKeyDonate) != 0;
     out.street_return = (input.raw_pressed & kRawL1) != 0 || input.house_pressed;
     out.held_dirs = input.raw_held & (kRawUp | kRawDown | kRawLeft | kRawRight);
-    if (input.left_stick.y > 0.5f) {
-        out.held_dirs |= kRawUp;
-    } else if (input.left_stick.y < -0.5f) {
-        out.held_dirs |= kRawDown;
-    }
-    if (input.left_stick.x > 0.5f) {
-        out.held_dirs |= kRawRight;
-    } else if (input.left_stick.x < -0.5f) {
-        out.held_dirs |= kRawLeft;
-    }
+    const auto stick = [&](float v, uint32_t positive, uint32_t negative) {
+        const float on = 0.5f;
+        const float off = 0.35f;
+        if (v > on || (v > off && (previous_dirs & positive))) out.held_dirs |= positive;
+        else if (v < -on || (v < -off && (previous_dirs & negative))) out.held_dirs |= negative;
+    };
+    stick(input.left_stick.y, kRawUp, kRawDown);
+    stick(input.left_stick.x, kRawRight, kRawLeft);
     out.click = input.click;
     out.right_click = input.right_click;
+    out.wheel = input.wheel;
     out.music = input.music_pressed;
     return out;
 }

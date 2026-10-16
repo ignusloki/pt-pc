@@ -113,7 +113,7 @@ vec3 CameraPath(vec2 frag, inout uint rng) {
         float t = hit ? rayQueryGetIntersectionTEXT(rq, true) : 200.0;
         vec3 glass_point;
         vec3 glass_normal;
-        if (PtLayers(origin, dir, t, radiance, throughput, rng, glass_point, glass_normal)) {
+        if (PtLayers(origin, dir, t, 32.0, radiance, throughput, rng, glass_point, glass_normal)) {
             origin = glass_point + glass_normal * 0.002;
             dir = reflect(dir, glass_normal);
             continue;

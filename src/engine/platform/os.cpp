@@ -43,13 +43,16 @@ bool IsLinkReparseTag(uint32_t tag) { return IsReparseTagNameSurrogate(tag) != 0
 bool IsLink(const std::filesystem::path& path) {
     WIN32_FIND_DATAW data{};
     std::filesystem::path query = path;
+    // FindFirstFileW names the entry itself only without a trailing separator
     while (query.has_relative_path() && !query.has_filename()) query = query.parent_path();
     const HANDLE find = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
     if (find == INVALID_HANDLE_VALUE) {
+        // a drive root or an entry that cannot be listed: fall back to the attributes (no tag known, a reparse point counts)
         const DWORD attributes = GetFileAttributesW(path.c_str());
         return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && query.has_relative_path();
     }
     FindClose(find);
+    // dwReserved0 holds the reparse tag when FILE_ATTRIBUTE_REPARSE_POINT is set (WIN32_FIND_DATAW)
     return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && IsLinkReparseTag(data.dwReserved0);
 }
 
@@ -80,11 +83,78 @@ std::string GetEnv(const char* name) {
 }
 
 uint32_t ProcessId() { return GetCurrentProcessId(); }
+
+namespace {
+std::string WideToUtf8(const wchar_t* text, int length) {
+    if (length <= 0) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
+    std::string out(size > 0 ? size : 0, '\0');
+    if (size > 0) WideCharToMultiByte(CP_UTF8, 0, text, length, out.data(), size, nullptr, nullptr);
+    return out;
+}
+}  // namespace
+
+ForegroundWindow GetForegroundWindowInfo(bool details) {
+    ForegroundWindow info;
+    HWND window = GetForegroundWindow();
+    if (!window) return info;
+    info.handle = reinterpret_cast<uint64_t>(window);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    info.pid = pid;
+    if (!details) return info;
+    wchar_t text[256]{};
+    info.title = WideToUtf8(text, GetWindowTextW(window, text, 256));
+    info.window_class = WideToUtf8(text, GetClassNameW(window, text, 256));
+    if (HANDLE process = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr) {
+        std::wstring path(1024, L'\0');
+        DWORD size = static_cast<DWORD>(path.size());
+        if (QueryFullProcessImageNameW(process, 0, path.data(), &size)) {
+            path.resize(size);
+            const size_t slash = path.find_last_of(L"\\/");
+            const std::wstring name = slash == std::wstring::npos ? path : path.substr(slash + 1);
+            info.process = WideToUtf8(name.c_str(), static_cast<int>(name.size()));
+        }
+        CloseHandle(process);
+    }
+    return info;
+}
+
+bool IsForegroundWindow(void* window) { return window && GetForegroundWindow() == static_cast<HWND>(window); }
+
+bool ForegroundIsOwnProcess() {
+    HWND window = GetForegroundWindow();
+    DWORD pid = 0;
+    if (window) GetWindowThreadProcessId(window, &pid);
+    return pid != 0 && pid == GetCurrentProcessId();
+}
+
+bool ActivateWindow(void* handle) {
+    HWND window = static_cast<HWND>(handle);
+    if (!window) return false;
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+    if (GetForegroundWindow() == window) return true;
+    if (!SetForegroundWindow(window)) {
+        // Windows lets only the foreground thread's process (or one it allowed) take the foreground: join that thread's input
+        // queue for the call
+        HWND front = GetForegroundWindow();
+        const DWORD front_thread = front ? GetWindowThreadProcessId(front, nullptr) : 0;
+        const DWORD this_thread = GetCurrentThreadId();
+        const bool attached = front_thread && front_thread != this_thread && AttachThreadInput(this_thread, front_thread, TRUE);
+        BringWindowToTop(window);
+        SetForegroundWindow(window);
+        if (attached) AttachThreadInput(this_thread, front_thread, FALSE);
+    }
+    return GetForegroundWindow() == window;
+}
+
+void AllowForeground(uint32_t pid) { AllowSetForegroundWindow(pid ? pid : ASFW_ANY); }
 void LowerCurrentThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 
 std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) {
     const std::wstring& native = path.native();
     if (native.size() < MAX_PATH || native.starts_with(L"\\\\?\\")) return path;
+    // the prefix turns off the path parsing: absolute, normalized, backslashes only
     std::error_code ec;
     std::filesystem::path full = std::filesystem::absolute(path, ec);
     if (ec) return path;
@@ -96,6 +166,8 @@ std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) {
 }
 
 namespace {
+// CreateProcessW's working folder: it must be shorter than MAX_PATH (even prefixed, ERROR_DIRECTORY); a longer one is left out
+// and the child starts in this process's folder. Every program started here is given absolute paths.
 const wchar_t* ChildWorkingDir(const std::filesystem::path& dir) {
     return dir.empty() || dir.native().size() >= MAX_PATH - 2 ? nullptr : dir.c_str();
 }
@@ -104,6 +176,8 @@ const wchar_t* ChildWorkingDir(const std::filesystem::path& dir) {
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
     ProcessResult result;
+    // no shell or command interpreter is involved; each argument is quoted so that the child's CommandLineToArgvW (or its C
+    // runtime) gives it back unchanged, a folder ending in a backslash or an argument with a quote included
     std::wstring command = QuoteWindowsArgument(program.wstring());
     for (const auto& arg : args) command += L" " + QuoteWindowsArgument(PathFromUtf8(arg).wstring());
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
@@ -117,6 +191,7 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     startup.hStdError = log_file;
     startup.hStdInput = input_handle;
     PROCESS_INFORMATION process{};
+    // the program at any length (ExtendedLengthPath) and its folder when CreateProcessW takes it (ChildWorkingDir)
     result.started = CreateProcessW(ExtendedLengthPath(program).c_str(), command.data(), nullptr, nullptr, TRUE,
                                     CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, ChildWorkingDir(working_dir), &startup, &process);
     CloseHandle(log_file);
@@ -269,8 +344,15 @@ std::string GetEnv(const char* name) {
 }
 
 uint32_t ProcessId() { return static_cast<uint32_t>(getpid()); }
+
+ForegroundWindow GetForegroundWindowInfo(bool) { return {}; }
+bool IsForegroundWindow(void*) { return false; }
+bool ForegroundIsOwnProcess() { return false; }
+bool ActivateWindow(void*) { return false; }
+void AllowForeground(uint32_t) {}
 void LowerCurrentThreadPriority() {
 #ifdef __linux__
+    // who = 0 is the calling thread on Linux
     setpriority(PRIO_PROCESS, 0, 5);
 #endif
 }
@@ -327,6 +409,7 @@ bool StartDetached(const std::filesystem::path& program, const std::vector<std::
     const pid_t pid = fork();
     if (pid < 0) return false;
     if (pid == 0) {
+        // the child: its own session (it outlives the game), then the program; a second fork is not needed, init adopts it
         setsid();
         if (!working_dir.empty() && chdir(working_dir.c_str()) != 0) _exit(127);
         execv(program.c_str(), argv.data());
@@ -390,6 +473,8 @@ FileLock::~FileLock() {
 #ifdef _WIN32
 std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
     if (!hwnd) return std::nullopt;
+    // DXGI by hand (no import library): CreateDXGIFactory1, the adapters' outputs, IDXGIOutput6::GetDesc1's colour space for
+    // the output whose monitor holds the window
     HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
     if (!dxgi) return std::nullopt;
     using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
@@ -403,6 +488,7 @@ std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
         virtual ULONG __stdcall AddRef() = 0;
         virtual ULONG __stdcall Release() = 0;
     };
+    // the vtable slots used: IDXGIFactory1::EnumAdapters1 (12), IDXGIAdapter::EnumOutputs (7), IDXGIOutput6::GetDesc1 (27)
     struct OutputDesc1 {
         WCHAR name[32];
         RECT coordinates;
@@ -432,8 +518,10 @@ std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
                 OutputDesc1 desc{};
                 using GetDesc1 = HRESULT(__stdcall*)(void*, OutputDesc1*);
                 if (SUCCEEDED(reinterpret_cast<GetDesc1>(call(output6, 27))(output6, &desc)) && desc.monitor == monitor) {
+                    // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 (12): the display runs in HDR
                     DisplayHdrInfo info;
                     info.hdr = desc.color_space == 12;
+                    // the luminance range the display reports (its EDID or the HDR calibration); a nonsense value is no value
                     if (desc.max_luminance >= 80.0f && desc.max_luminance <= 10000.0f) info.max_luminance = desc.max_luminance;
                     if (desc.min_luminance >= 0.0f && desc.min_luminance < 10.0f) info.min_luminance = desc.min_luminance;
                     result = info;

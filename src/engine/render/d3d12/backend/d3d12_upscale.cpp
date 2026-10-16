@@ -578,6 +578,9 @@ void FsrMessage(uint32_t type, const wchar_t* message) {
 }
 
 constexpr uint32_t kAmdVendorId = 0x1002;
+constexpr const wchar_t* kFsrLoader = L"amd_fidelityfx_loader_dx12.dll";
+constexpr const wchar_t* kFsrUpscaler = L"amd_fidelityfx_upscaler_dx12.dll";
+constexpr const char* kFsr4Gpu = "FSR 4 needs an AMD Radeon RX 9000 or RX 7000 series GPU";
 
 uint32_t FfxState(D3D12_RESOURCE_STATES state) {
     if (state & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
@@ -623,13 +626,15 @@ public:
     UpscalerKind Kind() const override { return generation_ == 4 ? UpscalerKind::Fsr4 : UpscalerKind::Fsr; }
 
     bool Supported(std::string& reason) override {
-        if (!std::filesystem::exists(ExecutableDir() / L"amd_fidelityfx_dx12.dll")) {
-            reason = "amd_fidelityfx_dx12.dll is missing next to pt.exe";
+        if (generation_ == 4 && device_.Info().vendor_id != kAmdVendorId) {
+            reason = kFsr4Gpu;
             return false;
         }
-        if (generation_ == 4 && device_.Info().vendor_id != kAmdVendorId) {
-            reason = "needs an AMD Radeon RX 9000 series GPU";
-            return false;
+        for (const wchar_t* file : {kFsrLoader, kFsrUpscaler}) {
+            if (!std::filesystem::exists(ExecutableDir() / file)) {
+                reason = NarrowText(file) + " is missing next to pt.exe";
+                return false;
+            }
         }
         if (probed_ && !version_id_) {
             reason = reason_;
@@ -674,6 +679,10 @@ public:
         if (result != FFX_API_RETURN_OK) {
             LogError("fsr d3d12: ffxCreateContext failed ({}) for FSR {}", result, version_name_);
             context_ = nullptr;
+            if (generation_ == 4) {
+                reason_ = kFsr4Gpu;
+                version_id_ = 0;
+            }
             return false;
         }
         ffxQueryGetProviderVersion version{};
@@ -736,15 +745,15 @@ public:
 
 private:
     bool Probe(std::string& reason) {
-        const std::filesystem::path path = ExecutableDir() / L"amd_fidelityfx_dx12.dll";
-        module_ = module_ ? module_ : LoadLibraryW(path.c_str());
+        const std::filesystem::path path = ExecutableDir() / kFsrLoader;
+        module_ = module_ ? module_ : LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!module_) {
-            reason = "amd_fidelityfx_dx12.dll is missing next to pt.exe";
+            reason = std::format("{} cannot be loaded (error {})", NarrowText(kFsrLoader), GetLastError());
             return false;
         }
         ffxLoadFunctions(&fn_, module_);
         if (!fn_.CreateContext || !fn_.DestroyContext || !fn_.Dispatch || !fn_.Query || !fn_.Configure) {
-            reason = "amd_fidelityfx_dx12.dll has no FidelityFX API exports";
+            reason = NarrowText(kFsrLoader) + " has no FidelityFX API exports";
             return false;
         }
         uint64_t count = 0;
@@ -754,7 +763,7 @@ private:
         versions.device = NativeDevice(device_);
         versions.outputCount = &count;
         if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0) {
-            reason = "no FSR upscaler in amd_fidelityfx_dx12.dll";
+            reason = generation_ == 4 ? kFsr4Gpu : "the AMD FSR API lists no upscaler for this GPU";
             return false;
         }
         std::vector<uint64_t> ids(count);
@@ -762,7 +771,7 @@ private:
         versions.versionIds = ids.data();
         versions.versionNames = names.data();
         if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK) {
-            reason = "no FSR upscaler in amd_fidelityfx_dx12.dll";
+            reason = generation_ == 4 ? kFsr4Gpu : "the AMD FSR API lists no upscaler for this GPU";
             return false;
         }
         std::string listed;
@@ -784,9 +793,9 @@ private:
                 version_name_ = name;
             }
         }
-        LogInfo("fsr d3d12: amd_fidelityfx_dx12.dll upscalers: {}", listed);
+        LogInfo("fsr d3d12: amd_fidelityfx_upscaler_dx12.dll upscalers for this GPU: {}", listed);
         if (!version_id_) {
-            reason = std::format("no FSR {} upscaler in amd_fidelityfx_dx12.dll", generation_);
+            reason = generation_ == 4 ? std::string(kFsr4Gpu) : "the AMD FSR API lists no FSR 3 upscaler for this GPU";
             return false;
         }
         reason.clear();

@@ -1,0 +1,132 @@
+# Lisa's steps (her KillChase sequence, posted with a delay) and the pause menu: the pad's stick stays held through the pause at twelve
+# points of the walk (before the steps start, between two of them, inside one), the menu closes, the stick is let go and the steps must
+# end; a loop left over would still be alive. PT_AUDIO_TRACE=1 shows no sequence item or step voice starting between Pause_All and Resume_All
+pattach 0 ps5
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 3.0
+ffile 0 -0.2 7.5
+slisa 7200
+glisa 600
+sexpect ocho 3
+saxis 0 ly 1
+swait 3
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 8
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly 1
+swait 14
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 20
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly 1
+swait 26
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 33
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly 1
+swait 40
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 47
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly 1
+swait 55
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 63
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly 1
+swait 72
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+saxis 0 ly -1
+swait 85
+sui menu
+swait 45
+sui menukey close
+swait 20
+saxis 0 ly 0
+swait 120
+sexpect eventid 7b136101 0
+sexpect ocho 3
+slog

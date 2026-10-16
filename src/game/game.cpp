@@ -432,8 +432,8 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     }();
     const bool third_person_transition = third_person_ && !FreeView() && third_person_weight_ > 0.0f && player_.handy_light.enable;
     if (floor_.CurrentFloorName() == "ending" && !street_walk_) return;
-    if (body_off || !player_.spawned || (!BodyShown() && !third_person_transition && (!effects_.mirror_capture || mirror_viewport_bits_ == 0 || demos_.ControlsPlayer() ||
-        nazo_.IsPeepholeTheaterActive()))) {
+    if (body_off || !player_.spawned || (!BodyShown() && !third_person_transition && ((!traced_body_ && (!effects_.mirror_capture || mirror_viewport_bits_ == 0)) ||
+        demos_.ControlsPlayer() || nazo_.IsPeepholeTheaterActive()))) {
         static const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
         if (trace) {
             LogInfo("mirror trace: body skipped spawned {} capture {} bits {:#x} demo_controls {} peephole {}", player_.spawned,
@@ -1661,7 +1661,26 @@ bool Game::GamePlusTubShown() const {
         if (!stage.active) return;
         for (const Stage::Draw& d : stage.draws) shown = shown || (d.entity == nullptr && d.mesh && d.mesh == tub_lisa_mesh_);
     });
-    return shown;
+    return shown && models_.Holds(tub_lisa_mesh_);
+}
+
+bool Game::GamePlusTubView(glm::vec3& eye, glm::vec3& target) const {
+    bool found = false;
+    const_cast<StageManager&>(stages_).ForEachStage([&](Stage& stage) {
+        if (found || !stage.active) return;
+        for (const Stage::Draw& d : stage.draws) {
+            if (d.entity != nullptr || !d.mesh || d.mesh != tub_lisa_mesh_) continue;
+            target = glm::vec3(stage.file_to_world * d.file_transform * kTubLisaMiddle);
+            found = true;
+            break;
+        }
+    });
+    if (!found) return false;
+    const glm::vec3 baby(objects_.Gimmicks()[static_cast<size_t>(GimmickType::Baby)].world[3]);
+    glm::vec3 side(baby.x - target.x, 0.0f, baby.z - target.z);
+    side = glm::length(side) > 0.01f ? glm::normalize(side) : glm::vec3(0.0f);
+    eye = target + glm::vec3(0.0f, 1.45f, 0.0f) + side * 0.25f;
+    return true;
 }
 
 void Game::StopGamePlusSound(uint32_t& id, float fade) {
@@ -1868,6 +1887,14 @@ void Game::ReleaseUnusedAssets(std::string_view why) {
     double before = 0.0;
     double budget = 0.0;
     ctx.DeviceLocalUsage(before, budget);
+    if (tub_lisa_mesh_) {
+        stages_.ForEachStage([&](Stage& stage) {
+            std::erase_if(stage.draws, [&](const Stage::Draw& d) { return d.entity == nullptr && d.mesh == tub_lisa_mesh_; });
+        });
+        stages_.MarkVisualsDirty();
+        tub_lisa_mesh_ = nullptr;
+        LogInfo("game+: tub Lisa taken out of the stages before the unused models are released");
+    }
     const ModelCache::Released released = models_.ReleaseUnused();
     double after = 0.0;
     ctx.DeviceLocalUsage(after, budget);
@@ -1906,6 +1933,8 @@ void Game::UpdateEndingSkip(bool pressed, bool held, float dt, bool blocked) {
 }
 
 bool Game::VideoMemoryTight() {
+    static const bool test_tight = std::getenv("PT_TEST_VRAM_TIGHT") != nullptr;
+    if (test_tight) return true;
     double used = 0.0;
     double budget = 0.0;
     models_.Scene().Gpu().DeviceLocalUsage(used, budget);

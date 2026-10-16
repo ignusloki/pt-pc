@@ -414,6 +414,8 @@ private:
         const ActionObject* action = nullptr;
         std::shared_ptr<const Media> external;
         bool cancelled = false;
+        bool paused = false;
+        uint64_t paused_at = 0;
     };
 
     struct Timer {

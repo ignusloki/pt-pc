@@ -1,9 +1,9 @@
 # P.T. PC Port for macOS 1.0.8
 
-Apple silicon and Intel release, synchronized with upstream 1.0.4.
+Unpublished Apple silicon and Intel release, synchronized with upstream 1.0.5.
 
-This update synchronizes the Mac fork with [LoreanXavier/pt-pc 1.0.4](https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.4),
-including the subsequent installer/release-tool fixes through `d46b7c4`. The fork's version remains independent of upstream:
+This update synchronizes the Mac fork with [LoreanXavier/pt-pc 1.0.5](https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.5),
+including upstream main through `d0a9b8f`. The fork's version remains independent of upstream:
 Mac 1.0.8 follows Mac 1.0.7. We are continuing to reconcile the Mac changes for a future upstream pull request.
 
 ## Changes available on Mac
@@ -17,6 +17,9 @@ Mac 1.0.8 follows Mac 1.0.7. We are continuing to reconcile the Mac changes for 
 - The Museum adds halls, clearer unlock hints, counters, music playback, unused content and retroactive guaranteed unlocks for completed saves.
 - Game+ can be switched off while retaining its saved tier. Additional gameplay, Lisa, ending and photo-mode fixes follow upstream.
 - Upstream's bonus Game+ content and its script, translations and music are included in the Mac app.
+- Upstream 1.0.5 adds automatic gyro drift correction and manual calibration, mouse-wheel scrolling and scrollbars in PC Settings,
+  quieter menu navigation, a fix for Lisa's footsteps during pause, and a Game+ bathtub Lisa fix after the ending.
+- Unix crash diagnostics now record the signal and stack; nonterminal launches preserve stderr in `pt-stderr.log`. F9 records the camera pose.
 
 ## Mac compatibility
 
@@ -46,7 +49,7 @@ mean completion or previously earned progress was lost.
 
 See the [integration and release checklist](integration/upstream-1.0.4.md) for verified checks and remaining hardware regression.
 
-The Apple silicon candidate was accepted after testing the settings, and automated packaged-game tests passed first-boot settings,
-PC tabs, gameplay startup, pause and resume in windowed/fullscreen modes with update checks enabled. Final packages for both CPUs
-are built on native Mac runners, including 36 regression suites, packaged voice loading, installer self-tests and signature checks.
-Intel gameplay for this upstream update has not been repeated on physical user hardware; performance depends on the Mac's GPU.
+The earlier Apple silicon candidate containing upstream 1.0.4 was accepted. Publication is paused while the new `1.0.8-rc3` candidate
+containing upstream 1.0.5 is built and tested. See the [latest integration record](integration/upstream-1.0.5.md) for its actual validation
+status. Final packages for both CPUs must pass native builds before publication. Intel gameplay for this upstream update has not been
+repeated on physical user hardware; performance depends on the Mac's GPU.

@@ -7,6 +7,7 @@
 #include <cctype>
 #include <format>
 #include <string>
+#include <utility>
 
 #include "engine/platform/os.h"
 
@@ -74,6 +75,18 @@ void SetD3D12Probe(bool (*probe)(std::string& reason)) {
     g_d3d12_usable = -1;
 }
 
+void BlockD3D12(std::string reason) {
+    g_d3d12_usable = 0;
+    g_d3d12_reason = std::move(reason);
+}
+
+void SkipD3D12Probe() {
+    if (g_d3d12_usable < 0) {
+        g_d3d12_usable = 1;
+        g_d3d12_reason.clear();
+    }
+}
+
 bool D3D12Usable(std::string& reason) {
     if (!D3D12RunsGame()) {
         reason = "this build draws the game with Vulkan only";
@@ -125,8 +138,8 @@ AskAnswer AskRenderingApi(std::string_view title, std::string_view message, Rend
     const std::string t(title);
     const std::string m(message);
     const SDL_MessageBoxButtonData buttons[] = {
-        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "DirectX 12"},
-        {0, 2, "Vulkan"},
+        {0, 1, "DirectX 12"},
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 2, "Vulkan"},
     };
     SDL_MessageBoxData data{};
     data.flags = SDL_MESSAGEBOX_INFORMATION | SDL_MESSAGEBOX_BUTTONS_LEFT_TO_RIGHT;

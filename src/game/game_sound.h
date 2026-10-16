@@ -82,6 +82,7 @@ public:
     uint32_t PostEventId(uint32_t id, const glm::vec3* position) override;
     uint32_t PostEventMedia(std::string_view name, std::vector<uint32_t> media_ids, const glm::vec3* position) override;
     bool IsEventPlaying(std::string_view name) const override;
+    bool IsEventIdPlaying(uint32_t id) const override { return ready_ && system_.IsEventIdPlaying(id); }
     bool IsPlaying(uint32_t playing_id) const override;
     void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up) override;
     void Update(float dt) override;

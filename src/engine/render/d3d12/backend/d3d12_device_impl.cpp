@@ -5,6 +5,7 @@
 #include <d3dx12/d3dx12.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -254,18 +255,36 @@ bool DeviceImpl::Init(std::string& error) {
         return false;
     }
     ID3D12Device* device = bridge_.Get();
-    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device2_)))) {
-        error = "the D3D12 runtime has no ID3D12Device2 (pipeline state streams)";
-        return false;
+    const std::string lack = os::GetEnv("PT_D3D12_TEST_LACK");
+    auto lacks = [&lack](std::string_view what) {
+        return (',' + lack + ',').find(',' + std::string(what) + ',') != std::string::npos;
+    };
+    std::vector<std::string> missing;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device2_))) || lacks("device2")) {
+        device2_.Reset();
+        missing.push_back("ID3D12Device2 (pipeline state streams)");
     }
-    if (!bridge_.ShaderModel(D3D_SHADER_MODEL_6_6)) {
-        error = "the GPU or its driver does not run shader model 6.6 (the backend's DXIL)";
-        return false;
+    if (!bridge_.ShaderModel(D3D_SHADER_MODEL_6_6) || lacks("sm66")) {
+        missing.push_back("shader model 6.6 (the backend's DXIL)");
     }
     D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
-    device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
-    if (options.ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_2) {
-        error = "resource binding tier 2 is needed (unbounded descriptor tables)";
+    const bool has_options = SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
+    if (!has_options || options.ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_2 || lacks("binding")) {
+        missing.push_back("resource binding tier 2 (unbounded descriptor tables)");
+    }
+    if (!has_options || !options.TypedUAVLoadAdditionalFormats || lacks("typeduav")) {
+        missing.push_back("typed UAV loads of the additional formats");
+    }
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE root_version{D3D_ROOT_SIGNATURE_VERSION_1_1};
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &root_version, sizeof(root_version))) ||
+        root_version.HighestVersion < D3D_ROOT_SIGNATURE_VERSION_1_1 || lacks("rootsig")) {
+        missing.push_back("root signature version 1.1");
+    }
+    if (!missing.empty()) {
+        error = "the GPU or its driver lacks ";
+        for (size_t i = 0; i < missing.size(); ++i) {
+            error += (i ? (i + 1 == missing.size() ? " and " : ", ") : "") + missing[i];
+        }
         return false;
     }
     D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2{};
@@ -287,6 +306,10 @@ bool DeviceImpl::Init(std::string& error) {
     info_.ray_query = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
     info_.depth_bounds = options2.DepthBoundsTestSupported != FALSE;
     info_.dynamic_depth_bias = has16 && options16.DynamicDepthBiasSupported;
+    {
+        const char* env = std::getenv("PT_D3D12_GPU_UPLOAD");
+        gpu_upload_ = has16 && options16.GPUUploadHeapSupported && env && env[0] == '1';
+    }
     UINT64 frequency = 0;
     if (SUCCEEDED(bridge_.Queue()->GetTimestampFrequency(&frequency)) && frequency) {
         info_.timestamp_period_ns = 1.0e9 / static_cast<double>(frequency);
@@ -322,6 +345,10 @@ bool DeviceImpl::Init(std::string& error) {
         return false;
     }
     event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!event_) {
+        error = "the frame fence's event could not be created";
+        return false;
+    }
     frames_.resize(options_.frames_in_flight);
     for (Frame& f : frames_) {
         if (!NewFrame(f, L"pt frame")) {
@@ -329,9 +356,9 @@ bool DeviceImpl::Init(std::string& error) {
             return false;
         }
     }
-    LogInfo("d3d12 backend: {} ({}), shader model 6.6, binding tier {}, ray tracing tier {:#x}, depth bounds {}, dynamic depth bias {}, {} MB",
+    LogInfo("d3d12 backend: {} ({}), shader model 6.6, binding tier {}, ray tracing tier {:#x}, depth bounds {}, dynamic depth bias {}, GPU upload heap {}, {} MB",
             info_.adapter, RuntimeDescription(), static_cast<int>(options.ResourceBindingTier), static_cast<int>(options5.RaytracingTier),
-            info_.depth_bounds ? "yes" : "no", info_.dynamic_depth_bias ? "yes" : "no", info_.dedicated_video_memory >> 20);
+            info_.depth_bounds ? "yes" : "no", info_.dynamic_depth_bias ? "yes" : "no", gpu_upload_ ? "yes" : "no", info_.dedicated_video_memory >> 20);
     return true;
 }
 
@@ -467,6 +494,34 @@ bool DeviceImpl::CheckRootSignature(const std::string& shader_dir, std::string& 
     return shaders > 0 && misses == 0;
 }
 
+void DeviceImpl::ReportCounters() {
+    ++counters_.frames;
+    const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (!counters_start_ns_) {
+        counters_start_ns_ = now;
+    }
+    const double seconds = static_cast<double>(now - counters_start_ns_) * 1e-9;
+    if (seconds < 10.0) {
+        return;
+    }
+    const double n = static_cast<double>(counters_.frames);
+    LogInfo("d3d12 backend: {} frames in {:.1f} s, per frame: {:.2f} pipeline states made, {:.2f} fence waits ({:.2f} ms), {:.2f} blocking "
+            "submissions, {:.2f} command lists executed, {:.1f} barriers",
+            counters_.frames, seconds, counters_.pso_creates / n, counters_.fence_waits / n, counters_.fence_wait_ms / n, counters_.submits / n,
+            counters_.executes / n, counters_.barriers / n);
+    if (allocator_) {
+        D3D12MA::Budget local{};
+        D3D12MA::Budget system{};
+        allocator_->GetBudget(&local, &system);
+        LogInfo("d3d12 backend: video memory {} MB used of {} MB budget ({} MB allocated), system memory {} MB used ({} MB allocated)",
+                local.UsageBytes >> 20, local.BudgetBytes >> 20, local.Stats.BlockBytes >> 20, system.UsageBytes >> 20,
+                system.Stats.BlockBytes >> 20);
+    }
+    counters_ = {};
+    counters_start_ns_ = now;
+}
+
 bool DeviceImpl::NewFrame(Frame& frame, const wchar_t* name) {
     if (FAILED(bridge_.Get()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&frame.allocator))) ||
         FAILED(bridge_.Get()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frame.allocator.Get(), nullptr, IID_PPV_ARGS(&frame.list)))) {
@@ -484,6 +539,7 @@ uint64_t DeviceImpl::Execute(Frame& frame) {
     ID3D12CommandList* lists[] = {frame.list.Get()};
     bridge_.Queue()->ExecuteCommandLists(1, lists);
     std::lock_guard lock(mutex_);
+    ++counters_.executes;
     ++submitted_;
     bridge_.Queue()->Signal(fence_.Get(), submitted_);
     frame.value = submitted_;
@@ -498,11 +554,18 @@ uint64_t DeviceImpl::Execute(Frame& frame) {
 }
 
 void DeviceImpl::WaitValue(uint64_t value) {
-    if (fence_->GetCompletedValue() >= value) {
+    if (!fence_) {
         return;
     }
+    if (fence_->GetCompletedValue() >= value || !event_) {
+        return;
+    }
+    const auto wait_started = std::chrono::steady_clock::now();
     fence_->SetEventOnCompletion(value, event_);
-    if (WaitForSingleObject(event_, 10000) != WAIT_OBJECT_0 && fence_->GetCompletedValue() < value) {
+    const DWORD waited = WaitForSingleObject(event_, 10000);
+    ++counters_.fence_waits;
+    counters_.fence_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_started).count();
+    if (waited != WAIT_OBJECT_0 && fence_->GetCompletedValue() < value) {
         std::string reason;
         if (bridge_.Removed(&reason)) {
             LogError("d3d12 backend: {}", reason);
@@ -604,6 +667,7 @@ void DeviceImpl::Submit(const std::function<void(CommandList&)>& record) {
     frame.list->Reset(frame.allocator.Get(), nullptr);
     frame.recorder->Begin();
     record(*frame.recorder);
+    ++counters_.submits;
     WaitValue(Execute(frame));
     Collect();
     std::lock_guard lock(mutex_);
@@ -632,7 +696,7 @@ void DeviceImpl::ReapDeferred(bool wait) {
         if (wait) {
             WaitValue(d.value);
         }
-        if (fence_->GetCompletedValue() >= d.value) {
+        if (!fence_ || fence_->GetCompletedValue() >= d.value) {
             DestroyBuffer(d.staging);
         } else {
             keep.push_back(std::move(d));
@@ -708,6 +772,7 @@ bool DeviceImpl::EndFrame(uint32_t slot, RenderTarget* final_image) {
     }
     fg_inputs_set_ = false;
     const uint64_t value = Execute(f);
+    ReportCounters();
     if (!present) {
         return true;
     }
@@ -954,9 +1019,13 @@ bool DeviceImpl::CreateBuffer(const BufferDesc& desc, BufferResource& out) {
     HRESULT hr;
     if (rec->heap == HeapKind::HostStorage) {
         D3D12_HEAP_PROPERTIES heap{};
-        heap.Type = D3D12_HEAP_TYPE_CUSTOM;
-        heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
-        heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+        if (gpu_upload_) {
+            heap.Type = D3D12_HEAP_TYPE_GPU_UPLOAD;
+        } else {
+            heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+            heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+            heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+        }
         hr = bridge_.Get()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr, IID_PPV_ARGS(&rec->resource));
     } else {
         if (test_budget_bytes_ && a.HeapType == D3D12_HEAP_TYPE_DEFAULT && OverTestBudget(rec->size, desc.name)) {
@@ -1375,6 +1444,7 @@ ID3D12PipelineState* DeviceImpl::Variant(PipelineRecord& p, CullMode cull, Front
     s.sample = DXGI_SAMPLE_DESC{1, 0};
     D3D12_PIPELINE_STATE_STREAM_DESC stream{sizeof(s), &s};
     ComPtr<ID3D12PipelineState> state;
+    ++counters_.pso_creates;
     const HRESULT hr = device2_->CreatePipelineState(&stream, IID_PPV_ARGS(&state));
     bridge_.DrainDebugMessages();
     if (FAILED(hr)) {
@@ -1397,6 +1467,7 @@ PipelineHandle DeviceImpl::CreateComputePipeline(const ComputePipelineDesc& desc
     D3D12_COMPUTE_PIPELINE_STATE_DESC d{};
     d.pRootSignature = root_.Get();
     d.CS = {rec->vs.data(), rec->vs.size()};
+    ++counters_.pso_creates;
     const HRESULT hr = bridge_.Get()->CreateComputePipelineState(&d, IID_PPV_ARGS(&rec->compute_state));
     bridge_.DrainDebugMessages();
     if (FAILED(hr)) {

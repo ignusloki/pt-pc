@@ -190,6 +190,7 @@ class DeviceImpl;
 class CommandListImpl final : public gpu::CommandList {
 public:
     CommandListImpl(DeviceImpl& device, ID3D12GraphicsCommandList* list);
+    void Barriers(UINT count, const D3D12_RESOURCE_BARRIER* barriers);
 
     gpu::Backend GetBackend() const override { return gpu::Backend::D3D12; }
     void UseTargets(std::span<const TargetUse> uses) override;
@@ -335,6 +336,16 @@ public:
     DescriptorHeap& Rtvs() { return rtvs_; }
     DescriptorHeap& Dsvs() { return dsvs_; }
     DescriptorHeap& CpuViews() { return cpu_views_; }
+    struct Counters {
+        uint64_t frames = 0;
+        uint64_t pso_creates = 0;
+        uint64_t fence_waits = 0;
+        double fence_wait_ms = 0.0;
+        uint64_t submits = 0;
+        uint64_t executes = 0;
+        uint64_t barriers = 0;
+    };
+    Counters& Count() { return counters_; }
     ID3D12PipelineState* Variant(PipelineRecord& p, CullMode cull, FrontFace front, const float bias[3]);
     bool CreateTempBuffer(uint64_t size, ComPtr<ID3D12Resource>& out, D3D12MA::Allocation*& allocation);
     bool CreateRawBuffer(uint64_t size, D3D12_RESOURCE_STATES state, bool uav, ComPtr<ID3D12Resource>& out, D3D12MA::Allocation*& allocation,
@@ -411,6 +422,10 @@ private:
     Extent2D swapchain_extent_{};
     uint32_t frame_id_ = 0;
     bool imgui_ = false;
+    bool gpu_upload_ = false;
+    Counters counters_;
+    uint64_t counters_start_ns_ = 0;
+    void ReportCounters();
 };
 
 }

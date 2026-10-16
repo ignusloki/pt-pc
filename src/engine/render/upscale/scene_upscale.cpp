@@ -400,7 +400,9 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
         key_settings.dlss_model = DlssModel::Auto;
     }
     std::string rr_reason;
-    const bool ray_reconstruction = kind == UpscalerKind::Dlss && upscale.ray_reconstruction && raytracing.path_traced && rt_ != nullptr &&
+    const bool traced = raytracing.path_traced || raytracing.full || raytracing.shadows || raytracing.contact_shadows ||
+                        raytracing.ambient_occlusion || raytracing.reflections;
+    const bool ray_reconstruction = kind == UpscalerKind::Dlss && upscale.ray_reconstruction && traced && rt_ != nullptr &&
                                     toggles.lights && vr_eye_ < 0 && RayReconstructionAvailable(rr_reason);
     key_settings.ray_reconstruction = ray_reconstruction;
     const bool changed = !up_.created || up_.kind != kind || !(up_.created_settings == key_settings) || up_.created_render.width != render.width ||
@@ -685,6 +687,9 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
     if (!up_.backend) {
         return;
     }
+    if (rr_raster_) {
+        RecordRasterRrGuides(cmd, main_view_);
+    }
     cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly},
                      {&depth_, gpu::Layout::ShaderReadOnly},
                      {&motion_, gpu::Layout::ShaderReadOnly},
@@ -713,7 +718,7 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
     d.frame_index = frame_counter_;
     upscale_stats_.ray_reconstruction = false;
     if (up_.ray_reconstruction) {
-        if (!rr_frame_) {
+        if (!rr_frame_ && !rr_raster_) {
             return;
         }
         d.diffuse_albedo = Wrap(on_vulkan, rr_diffuse_albedo_);

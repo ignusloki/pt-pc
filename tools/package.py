@@ -31,7 +31,10 @@ def backend_files(name):
 # DirectX 12 (docs/rhi.md): an executable that exports D3D12SDKVersion (the Agility SDK's, agility_exports.h) loads the D3D12
 # runtime from D3D12/ next to it and the DXIL shaders from shaders/
 D3D12_EXPORT_MARK = b"D3D12SDKVersion"
-D3D12_RUNTIME_FILES = ("D3D12/D3D12Core.dll",)
+# and AMD's DX12 DLLs (cmake/Upscalers.cmake): the FSR SDK 2.3.0 loader and upscaler (FSR 3.1 and FSR 4 on DirectX 12) and v1.1.4's
+# amd_fidelityfx_dx12.dll (FSR frame generation on DirectX 12)
+D3D12_RUNTIME_FILES = ("D3D12/D3D12Core.dll", "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll",
+                       "amd_fidelityfx_dx12.dll")
 
 
 def d3d12_capable(executable_bytes):

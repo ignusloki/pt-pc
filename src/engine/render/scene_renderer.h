@@ -675,6 +675,9 @@ private:
     bool pt_history_ = false;
     bool pt_indirect_on_ = true;
     bool rr_frame_ = false;
+    bool rr_raster_ = false;
+    gpu::PipelineHandle rt_rr_guides_;
+    void RecordRasterRrGuides(gpu::CommandList& cmd, const ViewSetup& view);
     bool rt_full_render_size_ = false;
     gpu::PipelineHandle pt_rr_guides_;
     gpu::PipelineHandle pt_indirect_rr_;

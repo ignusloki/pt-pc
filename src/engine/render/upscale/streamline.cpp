@@ -61,6 +61,7 @@ bool g_frame_gen = false;
 bool g_vsync_off = false;
 std::string g_frame_gen_reason = "Streamline is not loaded";
 uint32_t g_frame_limit = UINT32_MAX;
+bool g_reflex_d3d12 = false;
 std::wstring g_log_dir;
 bool g_verbose = false;
 std::wstring g_plugin_dir;
@@ -260,6 +261,8 @@ void Shutdown() {
     g_active = false;
     g_token = nullptr;
     g_dlss = g_frame_gen = g_rr = false;
+    g_reflex_d3d12 = false;
+    g_frame_limit = UINT32_MAX;
 }
 
 bool DlssSupported() {
@@ -355,6 +358,9 @@ void SetFrameLimit(uint32_t microseconds) {
     if (!g_active || microseconds == g_frame_limit) {
         return;
     }
+    if (g_kind == Api::D3D12 && !g_reflex_d3d12) {
+        return;
+    }
     sl::ReflexOptions options{};
     options.mode = sl::ReflexMode::eLowLatency;
     options.frameLimitUs = microseconds;
@@ -435,6 +441,7 @@ void D3D12SetReflex(bool on) {
     options.frameLimitUs = 0;
     const sl::Result r = slReflexSetOptions(options);
     g_frame_limit = 0;
+    g_reflex_d3d12 = on;
     LogInfo("streamline: Reflex {} for DLSS Frame Generation on DirectX 12 ({})", on ? "low latency" : "off", ResultName(r));
 }
 

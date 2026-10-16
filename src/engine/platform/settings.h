@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -24,6 +25,7 @@ struct AppSettings {
         int letterbox = 0;
         std::string rendering_api = "vulkan";
         bool rendering_api_asked = false;
+        int d3d12_crashed = 0;
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
@@ -116,6 +118,8 @@ struct AppSettings {
         bool sound_captions = false;
         int gyro = 0;
         float gyro_sensitivity = 1.0f;
+        float gyro_tightening = 4.0f;
+        std::map<std::string, std::array<float, 3>> gyro_bias;
         int fov_offset = 0;
         bool operator==(const Accessibility&) const = default;
     } accessibility;

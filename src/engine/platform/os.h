@@ -41,6 +41,19 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
 bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir);
 bool ProcessAlive(uint64_t pid);
 
+struct ForegroundWindow {
+    uint64_t handle = 0;
+    uint32_t pid = 0;
+    std::string title;
+    std::string window_class;
+    std::string process;
+};
+ForegroundWindow GetForegroundWindowInfo(bool details = true);
+bool IsForegroundWindow(void* window);
+bool ForegroundIsOwnProcess();
+bool ActivateWindow(void* window);
+void AllowForeground(uint32_t pid);
+
 class ChildProcess {
 public:
     ChildProcess() = default;
