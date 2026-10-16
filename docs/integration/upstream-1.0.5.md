@@ -18,6 +18,8 @@ live profiles/backups, and the separate Android worktree remain intact. Reusable
   escaped literals so this source remains reviewable as text.
 - Retain Fast Walk alongside the new gyro calibration row, and retain the startup microphone request alongside upstream's startup diagnostic.
 - Existing Mac fullscreen pointer, MetalFX handoff/composition, icons, microphone setting and signed whole-bundle installer behavior remain.
+- The first clean native run exposed five upstream rendering-API test assertions that assume DirectX can be enabled on every OS. Keep those
+  assertions Windows-only and verify the Vulkan-only fallback on Mac/Linux instead; no rendering behavior is changed to satisfy the test.
 
 ## Relevant upstream changes
 

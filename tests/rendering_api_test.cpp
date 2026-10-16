@@ -80,6 +80,7 @@ int main() {
                crashed_loaded.display.d3d12_crashed == 3,
            "pt.ini keeps d3d12_crashed, default 0");
     std::filesystem::remove(ini_path);
+#ifdef _WIN32
     {
         static int probes = 0;
         pt::SetD3D12RunsGame(true);
@@ -102,6 +103,23 @@ int main() {
         pt::SetD3D12Probe(nullptr);
         pt::SetD3D12RunsGame(runs);
     }
+#else
+    {
+        static int probes = 0;
+        pt::SetD3D12RunsGame(true);
+        pt::SetD3D12Probe([](std::string&) { ++probes; return true; });
+        pt::SkipD3D12Probe();
+        std::string reason;
+        Expect(!pt::D3D12RunsGame() && !pt::D3D12Usable(reason) && !reason.empty() && probes == 0,
+               "DirectX remains unavailable outside Windows even when its probe is skipped");
+        pt::BlockD3D12("blocked for the test");
+        const RenderingApi blocked = pt::ChooseRenderingApi("", "d3d12", note);
+        Expect(blocked == RenderingApi::Vulkan && note.find("Windows only") != std::string::npos && probes == 0,
+               "non-Windows builds retain Vulkan without running the DirectX probe");
+        pt::SetD3D12Probe(nullptr);
+        pt::SetD3D12RunsGame(runs);
+    }
+#endif
 
     for (const char* key : {"pc_rendering_api", "pc_note_rendering_api", "pc_rendering_api_prompt"}) {
         int missing = 0;
