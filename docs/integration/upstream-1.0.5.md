@@ -82,3 +82,8 @@ the hard-coded local log path are removed for the stable release; the rendering 
 Stable Mac 1.0.8 retains upstream through `d0a9b8f`. The native build helper now runs 39 suites, plus extractor, packaged voice,
 installer and bundle checks. Release packages for both architectures are produced by the Mac workflow before publication. The
 earlier Intel gameplay acceptance remains useful, but physical Intel gameplay has not been repeated for the latest upstream sync.
+
+The first final-release CI attempt compiled both architectures and passed the Apple silicon package, but the new native HDR test
+aborted inside Vulkan initialization on the hosted Intel machine. The test now probes Metal availability before starting MoltenVK
+and reports an explicit skip when no Metal device is present. Supported Intel hardware still runs all presentation assertions;
+other Vulkan initialization failures remain test failures. This prerequisite check changes only the test, not the game renderer.

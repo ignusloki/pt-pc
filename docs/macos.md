@@ -48,6 +48,8 @@ Mac backend restores the compositor's colour/gain representation afterward; it d
 custom alpha. SDR follows its existing path. The real MetalFX GPU regression checks static highlights, colour, dark
 areas and fades after interpolation warm-up, including brightness changes and output resize. This check skips devices
 and SDKs without the macOS 26 frame interpolator.
+The native HDR-presentation check also skips hosts without a Metal device, such as GPU-less build machines; a physical
+Intel Mac with a supported Metal GPU still runs the full check.
 
 Fast Walk is also Off by default. PC Settings → Extras enables a 1.5× walking boost while Shift or the controller's
 bottom face button is held; normal interactions and game timing are retained. See [Fast Walk](fast-walk.md).

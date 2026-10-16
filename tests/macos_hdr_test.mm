@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
@@ -81,6 +82,13 @@ bool Create(pt::vk::Context& ctx, bool hdr, const char* label) {
 }
 
 int Run() {
+    id<MTLDevice> metal = MTLCreateSystemDefaultDevice();
+    if (!metal) {
+        std::puts("SKIP macOS HDR presentation: no Metal device (GPU-less host)");
+        return 0;
+    }
+    std::printf("macOS HDR presentation: Metal device %s\n", metal.name.UTF8String);
+    std::fflush(stdout);
     SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::printf("FAIL SDL video: %s\n", SDL_GetError());

@@ -58,7 +58,7 @@ target_link_libraries(pt_engine PUBLIC "-framework AppKit" "-framework QuartzCor
 
 add_executable(pt_macos_hdr_test tests/macos_hdr_test.mm)
 target_compile_options(pt_macos_hdr_test PRIVATE "-fobjc-arc")
-target_link_libraries(pt_macos_hdr_test PRIVATE pt_engine)
+target_link_libraries(pt_macos_hdr_test PRIVATE pt_engine "-framework Metal")
 add_custom_command(TARGET pt_macos_hdr_test POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:pt_macos_hdr_test>/libMoltenVK.dylib" VERBATIM)
 
