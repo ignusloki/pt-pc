@@ -600,8 +600,8 @@ inline std::vector<PayloadEntry> ReadFileList(const fs::path& file) {
     if (!fs::is_regular_file(file, error) || fs::file_size(file, error) > 16 * 1024 * 1024) return {};
     std::ifstream in(file, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), {});
-    json::Value root;
-    if (!json::Reader(text).Parse(root) || !root.object) return {};
+    metadata_json::Value root;
+    if (!metadata_json::Reader(text).Parse(root) || !root.object) return {};
     const auto list = root.members.find("files");
     if (list == root.members.end()) return {};
     std::vector<PayloadEntry> entries;
@@ -626,8 +626,8 @@ inline std::set<std::string> UnlockFiles(const fs::path& install) {
     keys.insert(PathKey("dlss5-autopilot.json"));
     std::ifstream in(record, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), {});
-    json::Value root;
-    if (!json::Reader(text).Parse(root) || !root.object) return keys;
+    metadata_json::Value root;
+    if (!metadata_json::Reader(text).Parse(root) || !root.object) return keys;
     if (const auto files = root.members.find("files"); files != root.members.end())
         for (const auto& item : files->second.items)
             if (item.is_string && !item.text.empty()) keys.insert(PathKey(item.text));

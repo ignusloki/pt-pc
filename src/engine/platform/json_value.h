@@ -7,7 +7,8 @@
 #include <string_view>
 #include <vector>
 
-namespace pt::json {
+// Keep metadata types distinct from engine/core/json.h: shared template symbols must not mix their different layouts.
+namespace pt::metadata_json {
 
 struct Value {
     std::string text;

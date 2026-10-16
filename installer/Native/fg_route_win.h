@@ -37,7 +37,7 @@ inline void WriteResult(const Args& a, int code, const std::string& detail) {
     out << "kind " << KindName(a) << "\nexit " << code << "\ndetail " << detail << "\n";
 }
 
-inline std::string JsonText(const pt::json::Value& v, const char* name) {
+inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) {
     const auto it = v.members.find(name);
     return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
 }
@@ -60,8 +60,8 @@ inline std::string PreviousProxy(const fs::path& game) {
     std::ifstream in(game / Wide(pt::fg_unlock::kManifest), std::ios::binary);
     if (!in) return {};
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    pt::json::Value root;
-    return pt::json::Reader(text).Parse(root) && root.object ? JsonText(root, "proxy") : std::string();
+    pt::metadata_json::Value root;
+    return pt::metadata_json::Reader(text).Parse(root) && root.object ? JsonText(root, "proxy") : std::string();
 }
 
 inline int Tar(const fs::path& zip, const fs::path& dir, const std::string& member, const fs::path& log) {
@@ -131,12 +131,12 @@ inline int DoInstall(const Args& a, std::string& detail) {
     }
     fs::remove(a.work / L"manifest.json", ec);
     Tar(zip, a.work, std::string(pt::fg_unlock::kPackageManifest), a.work / L"tar.log");
-    pt::json::Value pkg;
+    pt::metadata_json::Value pkg;
     std::string runtime;
     {
         std::ifstream in(a.work / L"manifest.json", std::ios::binary);
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (pt::json::Reader(text).Parse(pkg) && pkg.object)
+        if (pt::metadata_json::Reader(text).Parse(pkg) && pkg.object)
             if (const auto b = pkg.members.find("bundle"); b != pkg.members.end()) runtime = JsonText(b->second, "runtime_model");
     }
     const std::string proxy = ChooseProxy(a.install, PreviousProxy(a.install));

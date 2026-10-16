@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include "engine/core/log.h"
 #include "engine/platform/boot_timing.h"
@@ -52,7 +53,10 @@ int main() {
     Check(pt::boot::PhaseText("controllers", 5.4, "on its own thread, 1 gamepad connected") ==
               "controllers 5.400 s (on its own thread, 1 gamepad connected)",
           "a boot line with a note");
-    Check(pt::boot::SinceProcessStart() > 0.0, "the process's age is known");
+    const double initial_age = pt::boot::SinceProcessStart();
+    Check(initial_age >= 0.0, "the startup clock begins at a nonnegative time");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    Check(pt::boot::SinceProcessStart() > initial_age, "the startup clock advances");
 
     const std::filesystem::path log = std::filesystem::temp_directory_path() / "pt_device_start_test.log";
     pt::LogSetFile(log);

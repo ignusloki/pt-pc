@@ -87,7 +87,7 @@ inline int RunInstaller(const Args& a, const fs::path& tool, bool remove, const 
     return run.started && !run.timed_out ? run.exit_code : -1;
 }
 
-inline std::string JsonText(const pt::json::Value& v, const char* name) {
+inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) {
     const auto it = v.members.find(name);
     return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
 }
@@ -124,8 +124,8 @@ inline std::string RecordedOwnReShade(const Args& a) {
     std::ifstream in(a.install / L"pt-dlss5-route.json", std::ios::binary);
     if (!in) return {};
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    pt::json::Value root;
-    if (!pt::json::Reader(text).Parse(root) || !root.object) return {};
+    pt::metadata_json::Value root;
+    if (!pt::metadata_json::Reader(text).Parse(root) || !root.object) return {};
     return JsonText(root, "pt_reshade_sha256");
 }
 
@@ -133,8 +133,8 @@ inline void RecordComponents(const Args& a, const std::string& own_reshade) {
     std::ifstream in(a.install / std::wstring(nr_unlock::kManifest.begin(), nr_unlock::kManifest.end()), std::ios::binary);
     if (!in) return;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    pt::json::Value root;
-    if (!pt::json::Reader(text).Parse(root) || !root.object) return;
+    pt::metadata_json::Value root;
+    if (!pt::metadata_json::Reader(text).Parse(root) || !root.object) return;
     const std::string route = JsonText(root, "path");
     std::string reshade, renodx, dlssnr;
     if (const auto c = root.members.find("components"); c != root.members.end() && c->second.object) {

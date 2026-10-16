@@ -3,7 +3,9 @@
 #include <cctype>
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <map>
 #include <thread>
@@ -34,9 +36,9 @@
 
 namespace pt::update {
 namespace {
-using json::Value;
-using json::Reader;
-using json::Text;
+using metadata_json::Value;
+using metadata_json::Reader;
+using metadata_json::Text;
 bool Placeholder(std::string_view url) {
     const auto scheme = url.find("://");
     const auto host_start = scheme == std::string_view::npos ? 0 : scheme + 3;
@@ -372,7 +374,7 @@ uint64_t EstimateDownload(const UpdateManifest& manifest, std::string_view platf
     return double(needed) > kRangeShare * double(package->second.size) ? package->second.size : needed;
 }
 
-void Checker::Start(const std::filesystem::path& install) {
+void Checker::Start(const std::filesystem::path& install, Fetch fetch) {
     if (state_) return;
     state_ = std::make_shared<State>();
     const std::string url = ManifestUrl();
@@ -380,28 +382,42 @@ void Checker::Start(const std::filesystem::path& install) {
         state_->done = true;
         return;
     }
-    std::thread([state = state_, url, install] {
-        http::Request request;
-        request.url = url;
-        request.timeout_ms = 5000;
-        request.follow_redirects = true;
-        request.max_body = 512 * 1024;
-        if (const auto response = http::Get(request); response && response->status == 200) {
-            if (auto release = ParseManifest(response->body, Platform()); release && CompareVersions(release->version, CurrentVersion()) > 0) {
-                if (!release->package_url.empty() && release->package_size) {
-                    std::string error;
-                    bool range_ignored = false;
-                    const auto manifest = FetchSignedManifest(*release, &error, &range_ignored);
-                    release->signed_update = manifest.has_value() || range_ignored;
-                    if (manifest && !install.empty()) release->download_bytes = EstimateDownload(*manifest, Platform(), install);
-                    else if (range_ignored) release->download_bytes = release->package_size;
+    try {
+        std::thread([state = state_, url, install, fetch] {
+            try {
+                http::Request request;
+                request.url = url;
+                request.timeout_ms = 5000;
+                request.follow_redirects = true;
+                request.max_body = 512 * 1024;
+                if (const auto response = (fetch ? fetch : http::Get)(request); response && response->status == 200) {
+                    if (auto release = ParseManifest(response->body, Platform()); release && CompareVersions(release->version, CurrentVersion()) > 0) {
+                        if (!release->package_url.empty() && release->package_size) {
+                            std::string error;
+                            bool range_ignored = false;
+                            const auto manifest = FetchSignedManifest(*release, &error, &range_ignored);
+                            release->signed_update = manifest.has_value() || range_ignored;
+                            if (manifest && !install.empty()) release->download_bytes = EstimateDownload(*manifest, Platform(), install);
+                            else if (range_ignored) release->download_bytes = release->package_size;
+                        }
+                        std::lock_guard lock(state->mutex);
+                        state->newer = std::move(release);
+                    }
                 }
-                std::lock_guard lock(state->mutex);
-                state->newer = std::move(release);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "update: check failed: %s\n", e.what());
+            } catch (...) {
+                std::fputs("update: check failed with an unknown exception\n", stderr);
             }
-        }
-        state->done = true;
-    }).detach();
+            state->done = true;
+        }).detach();
+    } catch (const std::exception& e) {
+        state_->done = true;
+        std::fprintf(stderr, "update: could not start check: %s\n", e.what());
+    } catch (...) {
+        state_->done = true;
+        std::fputs("update: could not start check\n", stderr);
+    }
 }
 
 void Checker::Fake(std::string_view version) {

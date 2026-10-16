@@ -60,7 +60,7 @@ std::string EnvOr(const char* name, std::string_view fallback) {
     return value.empty() ? std::string(fallback) : value;
 }
 
-std::string MemberText(const json::Value& v, const char* name) {
+std::string MemberText(const metadata_json::Value& v, const char* name) {
     const auto it = v.members.find(name);
     return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
 }
@@ -84,10 +84,10 @@ std::optional<std::string> HttpGetText(const std::string& url, bool metadata) {
     return response->body;
 }
 
-std::pair<std::string, std::string> AssetUrlDigest(const json::Value& release, std::string_view suffix) {
+std::pair<std::string, std::string> AssetUrlDigest(const metadata_json::Value& release, std::string_view suffix) {
     const auto it = release.members.find("assets");
     if (it == release.members.end()) return {};
-    for (const json::Value& a : it->second.items) {
+    for (const metadata_json::Value& a : it->second.items) {
         const std::string low = AsciiLowerCopy(MemberText(a, "name"));
         if (low.size() >= suffix.size() && low.compare(low.size() - suffix.size(), suffix.size(), AsciiLowerCopy(std::string(suffix))) == 0) {
             std::string digest = MemberText(a, "digest");
@@ -165,15 +165,15 @@ std::string FileSha256(const std::filesystem::path& path) { return FileSha256Imp
 bool Applicable(uint32_t vendor_id, std::string_view dlssg_note) { return vendor_id == kNvidia && dlssg_note == "pc_note_dlssg_gpu"; }
 
 std::optional<Install> ParseInstall(std::string_view text) {
-    json::Value root;
-    if (!json::Reader(text).Parse(root) || !root.object) return std::nullopt;
+    metadata_json::Value root;
+    if (!metadata_json::Reader(text).Parse(root) || !root.object) return std::nullopt;
     Install install;
     install.complete = MemberText(root, "complete") == "true";
     install.tool_tag = MemberText(root, "tool_tag");
     install.runtime = MemberText(root, "runtime");
     install.proxy = MemberText(root, "proxy");
     if (const auto f = root.members.find("files"); f != root.members.end())
-        for (const json::Value& e : f->second.items) {
+        for (const metadata_json::Value& e : f->second.items) {
             if (e.is_string && !e.text.empty()) install.files.push_back(e.text);
             else if (e.object) { const std::string name = MemberText(e, "name"); if (!name.empty()) install.files.push_back(name); }
         }
@@ -295,8 +295,8 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
         LogWarn("fg unlock: {}; trying the latest release", pinned_fail);
         const std::string api = EnvOr("PT_FG_TOOL_API", kToolLatestApi);
         const auto meta = HttpGetText(api, true);
-        json::Value release;
-        if (!meta || !json::Reader(*meta).Parse(release) || !release.object) {
+        metadata_json::Value release;
+        if (!meta || !metadata_json::Reader(*meta).Parse(release) || !release.object) {
             return fail("pc_note_fg_unlock_download", std::format("neither the pinned asset nor the latest release could be read ({}; the release metadata at {} failed)",
                                                                   pinned_fail, api));
         }

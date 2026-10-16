@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/platform/http.h"
+
 namespace pt::update {
 
 std::string ManifestUrl();
@@ -62,7 +64,9 @@ uint64_t EstimateDownload(const UpdateManifest& manifest, std::string_view platf
 
 class Checker {
 public:
-    void Start(const std::filesystem::path& install = {});
+    using Fetch = std::optional<http::Response> (*)(const http::Request&);
+    // The default uses HTTPS; an injected fetch lets regressions exercise failures without a network connection.
+    void Start(const std::filesystem::path& install = {}, Fetch fetch = http::Get);
     void Fake(std::string_view version);
     std::optional<Release> Newer() const;
     bool Done() const;

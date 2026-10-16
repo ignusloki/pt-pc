@@ -1,3 +1,5 @@
+#include "engine/core/json.h"
+#include "engine/platform/json_value.h"
 #include "engine/platform/ed25519.h"
 #include "engine/platform/http.h"
 #include "engine/platform/os.h"
@@ -9,7 +11,9 @@
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+#include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <cstdlib>
 
 int main(int argc, char** argv) {
@@ -56,6 +60,25 @@ int main(int argc, char** argv) {
     const auto gh_linux = update::ParseManifest(github, "linux");
     const auto gh_arm = update::ParseManifest(github, "macos-arm64");
     const auto gh_intel = update::ParseManifest(github, "macos-x64");
+    {
+        static_assert(!std::is_same_v<json::Value, metadata_json::Value>);
+        // Link and exercise both parsers: the old standalone updater test did not pull the asset parser into its executable.
+        constexpr std::string_view model = R"({"nodes":[{"mesh":0,"translation":[1,2,3]},{"mesh":1}],"extras":{"enabled":true}})";
+        bool coexist = true;
+        for (int i = 0; i < 32; ++i) {
+            json::Value scene;
+            metadata_json::Value metadata;
+            const bool scene_ok = json::Parse(model, scene);
+            const json::Value* nodes = scene.Find("nodes");
+            const bool metadata_ok = metadata_json::Reader(github).Parse(metadata);
+            const auto assets = metadata.members.find("assets");
+            const auto release = update::ParseManifest(github, "macos-arm64");
+            coexist &= scene_ok && nodes && nodes->Size() == 2 && nodes->At(0)->Number("mesh", -1) == 0 &&
+                       metadata_ok && assets != metadata.members.end() && assets->second.items.size() == 5 &&
+                       release && release->url == "https://example.org/apple.zip";
+        }
+        check(coexist, "engine and update JSON parsers coexist with nested arrays and repeated destruction");
+    }
     check(gh_windows && gh_windows->version == "v1.0.2" && gh_windows->url == "https://example.org/windows.exe",
           "GitHub release selects Windows installer instead of portable ZIP");
     check(gh_linux && gh_linux->url == "https://example.org/linux", "GitHub release selects Linux installer");
@@ -228,6 +251,46 @@ int main(int argc, char** argv) {
         check(http::UrlHost("https://Release-Assets.githubusercontent.com:443/a") == "release-assets.githubusercontent.com" &&
                   http::UrlScheme("ftp://github.com/") .empty(),
               "URL host and scheme");
+    }
+    {
+        const std::string saved_url = os::GetEnv("PT_UPDATE_MANIFEST_URL");
+#ifdef _WIN32
+        _putenv_s("PT_UPDATE_MANIFEST_URL", "https://example.org/test-release");
+#else
+        setenv("PT_UPDATE_MANIFEST_URL", "https://example.org/test-release", 1);
+#endif
+        auto wait = [](update::Checker& checker) {
+            for (int i = 0; i < 400 && !checker.Done(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        };
+        update::Checker success;
+        success.Start({}, [](const http::Request&) -> std::optional<http::Response> {
+            return http::Response{200, R"({"version":"999.0.0","url":"https://example.org/release"})"};
+        });
+        wait(success);
+        const auto newer = success.Newer();
+        check(success.Done() && newer && newer->version == "999.0.0", "background update check publishes a valid newer release");
+        auto failed_check = [&](update::Checker::Fetch fetch, const char* label) {
+            update::Checker checker;
+            checker.Start({}, fetch);
+            wait(checker);
+            check(checker.Done() && !checker.Newer(), label);
+        };
+        failed_check([](const http::Request&) -> std::optional<http::Response> { return std::nullopt; },
+                     "background update check completes when the network is unavailable");
+        failed_check([](const http::Request&) -> std::optional<http::Response> { return http::Response{503, "unavailable"}; },
+                     "background update check ignores an HTTP failure");
+        failed_check([](const http::Request&) -> std::optional<http::Response> { return http::Response{200, "{broken"}; },
+                     "background update check ignores malformed metadata");
+        failed_check([](const http::Request&) -> std::optional<http::Response> { throw std::length_error("injected parser failure"); },
+                     "background update exception completes without terminating the process");
+        failed_check([](const http::Request&) -> std::optional<http::Response> { throw 42; },
+                     "unknown background update exception completes without terminating the process");
+#ifdef _WIN32
+        _putenv_s("PT_UPDATE_MANIFEST_URL", saved_url.c_str());
+#else
+        if (saved_url.empty()) unsetenv("PT_UPDATE_MANIFEST_URL");
+        else setenv("PT_UPDATE_MANIFEST_URL", saved_url.c_str(), 1);
+#endif
     }
     if (os::GetEnv("PT_UPDATE_MANIFEST_URL").empty()) {
 #ifdef _WIN32

@@ -46,13 +46,13 @@ std::string ReadText(const std::filesystem::path& path, size_t max_bytes) {
     return text;
 }
 
-const json::Value* Member(const json::Value& v, const char* name) {
+const metadata_json::Value* Member(const metadata_json::Value& v, const char* name) {
     const auto it = v.members.find(name);
     return it == v.members.end() ? nullptr : &it->second;
 }
 
-std::string MemberText(const json::Value& v, const char* name) {
-    const json::Value* m = Member(v, name);
+std::string MemberText(const metadata_json::Value& v, const char* name) {
+    const metadata_json::Value* m = Member(v, name);
     return m && !m->object && m->items.empty() ? m->text : std::string();
 }
 
@@ -152,10 +152,10 @@ std::string ShaFromSums(std::string_view sums, std::string_view suffix) {
     return {};
 }
 
-std::string AssetUrl(const json::Value& release, std::string_view suffix) {
+std::string AssetUrl(const metadata_json::Value& release, std::string_view suffix) {
     const auto it = release.members.find("assets");
     if (it == release.members.end()) return {};
-    for (const json::Value& a : it->second.items) {
+    for (const metadata_json::Value& a : it->second.items) {
         const std::string name = MemberText(a, "name");
         const std::string low = AsciiLowerCopy(name);
         if (low.size() >= suffix.size() && low.compare(low.size() - suffix.size(), suffix.size(), AsciiLowerCopy(std::string(suffix))) == 0) {
@@ -241,19 +241,19 @@ GpuClass ClassifyGpu(uint32_t vendor_id, uint32_t device_id, std::string_view ad
 }
 
 std::optional<Install> ParseInstall(std::string_view text) {
-    json::Value root;
-    if (!json::Reader(text).Parse(root) || !root.object) return std::nullopt;
+    metadata_json::Value root;
+    if (!metadata_json::Reader(text).Parse(root) || !root.object) return std::nullopt;
     Install install;
     install.complete = MemberText(root, "complete") == "true";
     install.route = MemberText(root, "path");
     install.tool = MemberText(root, "tool");
-    if (const json::Value* components = Member(root, "components"); components && components->object) {
+    if (const metadata_json::Value* components = Member(root, "components"); components && components->object) {
         install.reshade = MemberText(*components, "reshade");
         install.addon = MemberText(*components, "renodx");
         install.runtime = MemberText(*components, "dlssnr");
     }
-    if (const json::Value* files = Member(root, "files")) {
-        for (const json::Value& f : files->items) {
+    if (const metadata_json::Value* files = Member(root, "files")) {
+        for (const metadata_json::Value& f : files->items) {
             if (f.is_string && !f.text.empty()) install.files.push_back(f.text);
         }
     }
@@ -555,8 +555,8 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
             LogWarn("dlss5 unlock: {}; trying the latest release", pinned_fail);
             const std::string api = EnvOr("PT_NR_TOOL_API", kToolLatestApi);
             const auto meta = HttpGetText(api, true);
-            json::Value release;
-            if (!meta || !json::Reader(*meta).Parse(release) || !release.object) {
+            metadata_json::Value release;
+            if (!meta || !metadata_json::Reader(*meta).Parse(release) || !release.object) {
                 return fail("pc_note_nr_unlock_download", std::format("neither the pinned asset nor the latest release could be read ({}; the release metadata at {} failed)",
                                                                       pinned_fail, api));
             }
