@@ -1,6 +1,6 @@
 # P.T. PC Port for macOS 1.0.8
 
-Unpublished Apple silicon and Intel release, synchronized with upstream 1.0.5.
+Apple silicon and Intel release, synchronized with upstream 1.0.5.
 
 This update synchronizes the Mac fork with [LoreanXavier/pt-pc 1.0.5](https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.5),
 including upstream main through `d0a9b8f`. The fork's version remains independent of upstream:
@@ -22,6 +22,14 @@ Mac 1.0.8 follows Mac 1.0.7. We are continuing to reconcile the Mac changes for 
 - Unix crash diagnostics now record the signal and stack; nonterminal launches preserve stderr in `pt-stderr.log`. F9 records the camera pose.
 
 ## Mac compatibility
+
+HDR brightness on macOS is corrected by matching the native display metadata to the renderer's scRGB brightness scale.
+The correction is retained across window resizing, brightness-level changes and switching HDR Off/On.
+
+MetalFX frame generation now preserves HDR highlight brightness through interpolation, fixing alternating brightness
+on the hallway lamp and other bright surfaces. Dark colours, the in-game brightness control and fades retain their
+precision. Frame generation remains experimental and Off by default, and requires supported Apple silicon with macOS
+26 or newer. Intel builds retain their existing supported rendering and upscaling options.
 
 Startup update checks no longer crash the game because of conflicting JSON parser types. A failed background update check now allows
 normal startup to continue. Regression tests exercise the asset and update parsers together and simulate failed update requests.
@@ -49,7 +57,10 @@ mean completion or previously earned progress was lost.
 
 See the [integration and release checklist](integration/upstream-1.0.4.md) for verified checks and remaining hardware regression.
 
-The earlier Apple silicon candidate containing upstream 1.0.4 was accepted. Publication is paused while the new `1.0.8-rc3` candidate
-containing upstream 1.0.5 is built and tested. See the [latest integration record](integration/upstream-1.0.5.md) for its actual validation
-status. Final packages for both CPUs must pass native builds before publication. Intel gameplay for this upstream update has not been
-repeated on physical user hardware; performance depends on the Mac's GPU.
+Apple silicon gameplay, the upstream synchronization and the HDR/frame-generation corrections were accepted in local regression.
+The Mac build includes native HDR-presentation checks and 144 GPU checks through the real MetalFX frame interpolator on supported
+hardware; devices without frame interpolation skip that test. Final packages are built and checked on native Apple silicon and Intel
+runners before publication. The release excludes the temporary per-frame lighting diagnostics and local log paths.
+
+See the [latest integration record](integration/upstream-1.0.5.md) for the reconciliation and regression history. Intel gameplay for
+this upstream update has not been repeated on physical user hardware; performance depends on the Mac's GPU.

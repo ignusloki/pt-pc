@@ -793,6 +793,7 @@ void SceneRenderer::PrepareFrameGeneration(const UpscaleDispatch& d, bool upscal
     prepare.frame_ms = d.frame_ms;
     prepare.near_plane = d.near_plane;
     prepare.fov_y = d.fov_y;
+    prepare.output_brightness = renderer_->OutputBrightness();
     prepare.position = camera_.position;
     prepare.forward = camera_.Forward();
     prepare.up = camera_.Up();

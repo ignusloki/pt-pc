@@ -28,7 +28,7 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_archive_unlock_test", "pt_device_start_test", "pt_dialog_nav_test", "pt_notice_queue_test", "pt_gyro_test",
          "pt_sound_captions_test", "pt_lisa_date_test", "pt_camera_blend_test", "pt_rendering_api_test",
          "pt_enhanced_manifest_test", "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test",
-         "pt_key_layout_test")
+         "pt_key_layout_test", "pt_hdr_output_test", "pt_macos_hdr_test", "pt_metalfx_hdr_test")
 
 
 def run(*args):

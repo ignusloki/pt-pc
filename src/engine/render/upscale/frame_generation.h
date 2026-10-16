@@ -32,6 +32,7 @@ struct FrameGenPrepare {
     float frame_ms = 16.6f;
     float near_plane = 0.05f;
     float fov_y = 1.0f;
+    float output_brightness = 1.0f; // MetalFX HDR transport applies and reverses the final brightness curve.
     glm::vec3 position{0.0f};
     glm::vec3 up{0.0f, 1.0f, 0.0f};
     glm::vec3 right{1.0f, 0.0f, 0.0f};

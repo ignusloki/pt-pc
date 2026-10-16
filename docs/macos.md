@@ -32,10 +32,22 @@ in `mods/` in that folder (docs/modding.md), since the app bundle is no place fo
 
 ## Optional features
 
+HDR uses floating point scRGB through MoltenVK. The Mac presentation layer keeps the shader's 80-nits-per-unit scale in
+Core Animation's HDR metadata, reapplies it after a resize or HDR-level change, and clears it on return to SDR. This avoids
+MoltenVK 1.4.2's default metadata scale of one nit per unit dimming the image. PC Settings → Display → HDR paper white
+controls ordinary whites and menus (200 nits by default); HDR peak brightness controls highlights (Auto falls back to
+1000 nits when the display peak is unknown). Screen capability and room lighting still affect the visible result.
+
 MetalFX temporal upscaling is available when the Mac GPU supports it. It uses the existing render inputs and ordered
 Vulkan/Metal timeline handoff, and remains Off by default. The menu explains unavailable choices; choosing an
 unsupported scaler does not remove the native rendering path. See [upscaling](upscaling.md). MetalFX frame generation
 is experimental, Off by default, and available only on supported Apple silicon with macOS 26 or newer.
+For scRGB HDR, the frame interpolator receives RGB with the highlight gain and brightness curve included. Keeping the
+display transfer in these half-float intermediates preserves dark channels at low brightness. The
+Mac backend restores the compositor's colour/gain representation afterward; it does not rely on MetalFX preserving
+custom alpha. SDR follows its existing path. The real MetalFX GPU regression checks static highlights, colour, dark
+areas and fades after interpolation warm-up, including brightness changes and output resize. This check skips devices
+and SDKs without the macOS 26 frame interpolator.
 
 Fast Walk is also Off by default. PC Settings → Extras enables a 1.5× walking boost while Shift or the controller's
 bottom face button is held; normal interactions and game timing are retained. See [Fast Walk](fast-walk.md).
@@ -113,7 +125,7 @@ For a complete game and installer build, install the .NET 10 SDK as well, then r
 
 Players use the ready graphical installer from [the fork's Releases page](https://github.com/ignusloki/pt-pc/releases); they do not compile it. The [native Intel build guide](integration/intel-native-build.md) records the earlier source handoff and development prerequisites.
 
-The helper builds `pt_release`, its resources, the in-app PKG helper and the native installer, runs the CPU and installer regressions, publishes the self-contained extractor, and calls `make_app.py` followed by `make_setup.py`. It preserves upstream's three voice models and the target architecture's ggml CPU modules. The matching patched LibOrbisPkg and wrapper source and LGPL notices are embedded in the installer. Users do not need the .NET SDK installed. The build helper uses Microsoft's official runtime packs, including with a Homebrew SDK. The package audit checks that every Mach-O dependency is contained and targets macOS 14 or earlier. Custom extractors that reference external Brotli libraries can bundle those libraries and their MIT license, but host-only bottles requiring a newer macOS are rejected.
+The helper builds `pt_release`, its resources, the in-app PKG helper and the native installer, runs the CPU and installer regressions, publishes the self-contained extractor, and calls `make_app.py` followed by `make_setup.py`. It also runs `pt_hdr_output_test` for HDR calculations, `pt_macos_hdr_test` against the actual SDL/MoltenVK window to check brightness metadata, level changes, resize and HDR/SDR transitions, and `pt_metalfx_hdr_test` through the real MetalFX frame interpolator to check highlight brightness after warm-up. These checks do not measure physical screen luminance; final appearance still needs a display comparison. It preserves upstream's three voice models and the target architecture's ggml CPU modules. The matching patched LibOrbisPkg and wrapper source and LGPL notices are embedded in the installer. Users do not need the .NET SDK installed. The build helper uses Microsoft's official runtime packs, including with a Homebrew SDK. The package audit checks that every Mach-O dependency is contained and targets macOS 14 or earlier. Custom extractors that reference external Brotli libraries can bundle those libraries and their MIT license, but host-only bottles requiring a newer macOS are rejected.
 
 `--liborbis <checkout>` uses an existing source checkout; otherwise the pinned revision is downloaded. `--build <folder>` changes the build/output cache. `--identity <Developer ID Application identity>` signs using that identity; the default is ad hoc. Signing with an identity does not perform notarization.
 

@@ -59,3 +59,26 @@ an ending/restart. Test HDR/frame generation separately after the baseline. A fu
 
 The live save slots and settings were copied to ignored `.local-backups/player-profile-20261015-before-upstream-1.0.5/` before automated testing.
 Automated gameplay uses private settings/save directories with saving disabled.
+
+## HDR corrections and release acceptance (2026-10-16)
+
+The user accepted the upstream synchronization, then reported dim HDR output and a hallway highlight flickering only with MetalFX
+frame generation. Native presentation investigation identified a mismatch between the renderer's 80-nits-per-linear-unit scRGB
+output and MoltenVK's default Core Animation metadata scale. A Mac presentation adapter now restores the correct scale, retains the
+HDR10 metadata values, reapplies it on resize/level changes, and clears it on return to SDR. Native SDL/MoltenVK checks pass 28
+assertions, alongside 20 HDR calculation assertions.
+
+Game captures and an isolated native MetalFX probe identified loss of the custom HDR-gain alpha after interpolation warms up.
+The Mac frame-generation backend now carries brightness-adjusted HDR colour in display-encoded RGB, then restores the compositor's
+colour/gain representation. This preserves dark-channel precision in half-float intermediates. The production transport passes
+144 GPU checks through the actual frame interpolator, covering highlights, colour, shadows, fades, brightness changes and resizing.
+The test skips unsupported SDKs, macOS versions and GPUs; Intel does not gain frame-generation support from this change.
+
+The user accepted `1.0.8-lighting.2` on Apple silicon. Its final game capture records 138 paired GPU summaries (125 HDR, 13 SDR),
+retained highlight gain in all 28 summaries containing native highlights, and a normal exit with no error-level entries. Gameplay
+with HDR and frame generation independently enabled/disabled was captured. Temporary lighting/exposure/GPU instrumentation and
+the hard-coded local log path are removed for the stable release; the rendering corrections and regression tests remain.
+
+Stable Mac 1.0.8 retains upstream through `d0a9b8f`. The native build helper now runs 39 suites, plus extractor, packaged voice,
+installer and bundle checks. Release packages for both architectures are produced by the Mac workflow before publication. The
+earlier Intel gameplay acceptance remains useful, but physical Intel gameplay has not been repeated for the latest upstream sync.

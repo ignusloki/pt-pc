@@ -21,6 +21,7 @@
 #include <filesystem>
 
 #include "engine/core/resource_path.h"
+#include "engine/render/macos_hdr.h"
 #endif
 
 #include "engine/core/crash_report.h"
@@ -788,9 +789,18 @@ float Context::HdrPeakNits() const {
 void Context::SetHdrMetadata() {
     const bool scrgb = swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
     const bool hdr10 = swapchain.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT;
-    if (!hdr_metadata || !vkSetHdrMetadataEXT || !swapchain.handle || swapchain_owner_ || !(scrgb || hdr10)) {
+    if (!swapchain.handle) return;
+    if (!(scrgb || hdr10)) {
+#ifdef __APPLE__
+        if (window_ && !SetMacHdrMetadata(window_, swapchain.color_space, nullptr))
+            LogWarn("macOS: could not clear HDR metadata on the SDR window");
+#endif
         return;
     }
+    if (swapchain_owner_) return;
+#ifndef __APPLE__
+    if (!hdr_metadata || !vkSetHdrMetadataEXT) return;
+#endif
     VkHdrMetadataEXT metadata{VK_STRUCTURE_TYPE_HDR_METADATA_EXT};
     if (hdr10) {
         metadata.displayPrimaryRed = {0.708f, 0.292f};
@@ -807,7 +817,17 @@ void Context::SetHdrMetadata() {
     metadata.minLuminance = hdr_min_nits;
     metadata.maxContentLightLevel = peak;
     metadata.maxFrameAverageLightLevel = hdr_paper_nits;
-    vkSetHdrMetadataEXT(device, 1, &swapchain.handle, &metadata);
+    if (hdr_metadata && vkSetHdrMetadataEXT) vkSetHdrMetadataEXT(device, 1, &swapchain.handle, &metadata);
+#ifdef __APPLE__
+    // Reapply after MoltenVK on every swapchain creation or HDR-level change, including when the extension is absent.
+    if (scrgb && window_) {
+        if (SetMacHdrMetadata(window_, swapchain.color_space, &metadata)) {
+            LogInfo("macOS: scRGB HDR metadata uses 80 nits per linear unit (paper white {:.0f}, peak {:.0f} nits)", hdr_paper_nits, peak);
+        } else {
+            LogWarn("macOS: could not set the scRGB HDR brightness scale on the window");
+        }
+    }
+#endif
     LogInfo("vulkan: HDR metadata set: peak {:.0f} nits (display reports {:.0f}), paper white {:.0f} nits ({})", peak, display_peak_nits,
             hdr_paper_nits, hdr10 ? "HDR10" : "scRGB");
 }
