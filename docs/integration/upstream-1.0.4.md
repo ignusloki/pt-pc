@@ -42,6 +42,9 @@ candidate is prepared as `1.0.8-rc2`; the Intel installer must be rebuilt and te
 
 ## Replacement Apple silicon candidate (rc2)
 
+This candidate is superseded by [rc3 with upstream 1.0.5](upstream-1.0.5.md). The old local build/packages were removed at the user's request;
+their small validation records were preserved in ignored `.deps/upstream-1.0.4-review/rc2-validation/`. Mac 1.0.8 remains unpublished.
+
 - Output: `dist/macos-1.0.8-rc2/arm64/`, including the graphical `P.T. PC Port Setup.app`, Setup ZIP and portable app/ZIP.
   The base source is `96435a8` plus the local, uncommitted fix. `BUILD.json` records the source patch hash, package hashes and validation;
   the exact patch is retained in ignored `build/upstream-1.0.4/arm64/rc2-validation/source.patch`.

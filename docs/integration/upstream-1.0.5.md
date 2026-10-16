@@ -29,9 +29,26 @@ and camera-pose diagnostics. DirectX/Windows-specific ray tracing, neural render
 
 ## Validation and player checks
 
-Packaging regressions (19) and signed payload indexing (4) passed before the native rebuild. The clean ARM build, native suites, packaged voice,
-installer self-test, signatures, and update-enabled first-boot/gameplay checks are pending. This file will record the completed results.
-Windows/Linux troubleshooting is outside the user-authorized scope. Intel gameplay and publication remain pending.
+The Apple silicon candidate was built from `46aad796ad39821b2e3e7b278af9fe0d44582705`:
+
+- Clean native build and all 36 common native regression suites passed, including the combined JSON/parser stress tests, background update
+  failures, gyro calibration, settings/save persistence, microphone controls, Fast Walk and fullscreen mouse mapping.
+- Packaging regressions (19), signed payload indexing (4) and extractor scenarios (10) passed. Packaged voice loading and the graphical
+  installer's self-test passed. Both app signatures, CPU/dependency audits and forest-icon hashes passed.
+- Packaged game startup with online update checks enabled passed in windowed and fullscreen modes: 15 expectations each, zero failures and
+  normal exits. The route covers fresh-profile options, PC tabs, wheel scrolling to both ends of Graphics, entering the start room,
+  pause and resume. First-boot and scrolling screenshots were visually checked. No GPU validation error or update-check failure was reported.
+- Both live save slots and `pt.ini` still match the pretest backup hashes. ZIP audits found no original PKG/game archives, player files or
+  private logs. SHA-256 checks confirmed the installer's embedded payload matched its staging payload before duplicate staging was removed.
+- The fork's `main` now matches upstream `d0a9b8f`, and the Mac branch contains the reconciled merge. Native Apple silicon/Intel CI for the
+  source commit is [run 38836253600](https://github.com/ignusloki/pt-pc/actions/runs/38836253600); it was still running at this local validation.
+  Windows/Linux troubleshooting is outside the user-authorized scope. Intel gameplay and publication remain pending.
+
+Local output: `dist/macos-1.0.8-rc3/arm64/P.T. PC Port Setup.app` and `pt-port-1.0.8-rc3-setup-macos-arm64.zip` (approximately 331 MiB each).
+The ZIP SHA-256 is `7a61fcbd1fa7d1107529fceb983dd6404ec6d7dab7f361bb6dd2984c089f06c9`.
+`BUILD.json` and `SHA256SUMS` accompany the installer. The compiler/test/.NET staging files and duplicate portable app/ZIP were removed after
+validation. Vendor downloads and small diagnostic records remain in ignored `.deps/`. Only this new graphical installer and its ZIP remain
+under `dist/`; no release or tag was created. Player acceptance of this new candidate is still required before publication.
 
 Use the graphical Setup app with the existing PKG/folder and normal destination. Start with Original graphics, 1280 × 720, 30 FPS, HDR Off,
 Enhanced textures Off and Frame generation Off. Then compare MetalFX Quality with Reflections On. Keep the completed profile for loop selection.
