@@ -91,7 +91,7 @@ jobs:
               shutil.copy2(report, pathlib.Path("gpu-test-failure") / report.name)
           PY
           if test -x build/macos/pt_macos_hdr_test; then
-            MVK_CONFIG_LOG_LEVEL=4 xcrun lldb --batch -o run -o 'thread backtrace all' -o quit -- build/macos/pt_macos_hdr_test > gpu-test-failure/backtrace.txt 2>&1
+            MVK_CONFIG_LOG_LEVEL=4 xcrun lldb --batch -o run -k 'thread backtrace all' -k 'image list' -k quit -- build/macos/pt_macos_hdr_test > gpu-test-failure/backtrace.txt 2>&1
           fi
 
       - name: Upload native GPU failure evidence

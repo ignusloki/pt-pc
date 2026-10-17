@@ -84,6 +84,8 @@ installer and bundle checks. Release packages for both architectures are produce
 earlier Intel gameplay acceptance remains useful, but physical Intel gameplay has not been repeated for the latest upstream sync.
 
 The first final-release CI attempt compiled both architectures and passed the Apple silicon package, but the new native HDR test
-aborted inside Vulkan initialization on the hosted Intel machine. The test now probes Metal availability before starting MoltenVK
-and reports an explicit skip when no Metal device is present. Supported Intel hardware still runs all presentation assertions;
-other Vulkan initialization failures remain test failures. This prerequisite check changes only the test, not the game renderer.
+aborted inside Vulkan initialization on the hosted Intel machine. Its report identifies an Apple Paravirtual device with Metal 2
+and 64 MB VRAM, so absence of a Metal device was not the cause. The test now probes Metal availability and the renderer's required
+argument buffers tier 2 before starting MoltenVK, checking every GPU so dual-GPU Intel Macs can use their discrete device.
+Unsupported hosts report an explicit skip; supported hardware still runs all presentation assertions. Other Vulkan initialization
+failures remain failures and collect a debugger crash stack. These checks change only the test/CI, not the game renderer.

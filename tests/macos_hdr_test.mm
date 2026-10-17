@@ -82,13 +82,25 @@ bool Create(pt::vk::Context& ctx, bool hdr, const char* label) {
 }
 
 int Run() {
-    id<MTLDevice> metal = MTLCreateSystemDefaultDevice();
-    if (!metal) {
+    NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
+    if (devices.count == 0) {
         std::puts("SKIP macOS HDR presentation: no Metal device (GPU-less host)");
         return 0;
     }
-    std::printf("macOS HDR presentation: Metal device %s\n", metal.name.UTF8String);
+    bool has_argument_buffers_tier2 = false;
+    for (id<MTLDevice> device in devices) {
+        const auto tier = device.argumentBuffersSupport;
+        std::printf("macOS HDR presentation: Metal device %s, argument buffers tier %u\n",
+                    device.name.UTF8String, static_cast<unsigned>(tier) + 1);
+        has_argument_buffers_tier2 |= tier >= MTLArgumentBuffersTier2;
+    }
     std::fflush(stdout);
+    // The Vulkan context needs descriptor indexing through Metal argument buffers tier 2.
+    // Check every GPU: a dual-GPU Intel Mac can default to an unsupported integrated device.
+    if (!has_argument_buffers_tier2) {
+        std::puts("SKIP macOS HDR presentation: no argument buffers tier 2 device (required by the renderer)");
+        return 0;
+    }
     SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::printf("FAIL SDL video: %s\n", SDL_GetError());
