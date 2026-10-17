@@ -76,6 +76,32 @@ jobs:
           mv "dist/pt-port-${{ steps.version.outputs.version }}-setup-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
           lipo -archs "dist/P.T. PC Port.app/Contents/MacOS/pt"
 
+      - name: Diagnose native HDR test failure
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          mkdir -p gpu-test-failure
+          system_profiler SPDisplaysDataType > gpu-test-failure/displays.txt
+          python3 - <<'PY'
+          import pathlib
+          import shutil
+          reports = pathlib.Path.home() / "Library/Logs/DiagnosticReports"
+          for report in reports.glob("pt_macos_hdr_test*.ips"):
+              shutil.copy2(report, pathlib.Path("gpu-test-failure") / report.name)
+          PY
+          if test -x build/macos/pt_macos_hdr_test; then
+            MVK_CONFIG_LOG_LEVEL=4 xcrun lldb --batch -o run -o 'thread backtrace all' -o quit -- build/macos/pt_macos_hdr_test > gpu-test-failure/backtrace.txt 2>&1
+          fi
+
+      - name: Upload native GPU failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-GPU-failure-${{ matrix.arch }}
+          path: gpu-test-failure/
+          if-no-files-found: ignore
+
       # the installer: a disk image with the app and a link to Applications to drag it onto (the zip is the portable app)
       - name: Disk image
         run: |
