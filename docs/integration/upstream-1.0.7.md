@@ -44,6 +44,9 @@ retain their platform gates; this sync does not enable them on Mac.
   optional publication from a later source commit is not enabled in this fork's publishing workflow.
 - Add the new linked-folder, SBC audio, composite-output, point-shadow and settings-refresh checks
   to the Mac build helper alongside the existing Mac HDR and MetalFX GPU checks.
+- Dispatch upstream's new `--voice-cpu-probe` mode in the existing voice-test executable before
+  running its cases, matching the game's entry point. Without that dispatch, the CPU safety probe
+  reruns the test recursively instead of checking a backend. The runtime guard itself is retained.
 
 ## Validation plan
 

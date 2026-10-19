@@ -7,7 +7,8 @@
 #include "engine/voice/voice_recognizer.h"
 #include "engine/core/resource_path.h"
 
-int main() {
+int main(int argc, char** argv) {
+    if (const int probe = pt::VoiceCpuProbe(argc, argv); probe >= 0) return probe;
     struct Case {
         std::string_view text;
         bool expected;
