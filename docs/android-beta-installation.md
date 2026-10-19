@@ -1,9 +1,14 @@
-# P.T. Android Beta 1 — installation and testing
+# P.T. Android Beta 3 — installation and testing
 
-Version **1.0.7-android-beta.1**, released as an experimental GitHub prerelease.
-[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.7-android-beta.1).
-The file is **PT-1.0.7-android-beta.1-arm64.apk**. This is a separate Android app;
-the stable macOS release remains 1.0.7.
+Version **1.0.8-android-beta.3**, an experimental GitHub prerelease.
+[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.8-android-beta.3).
+The file is **PT-1.0.8-android-beta.3-arm64.apk**. Android releases are separate
+from the desktop releases.
+
+Existing beta users: install this signed APK over **P.T. Android Beta** to retain
+imported files, settings and progress. Do not uninstall or clear storage. Version
+code **11** also updates the local synchronization test builds (codes 8–10).
+The older prototype remains a separate app and keeps its own profile.
 
 The APK includes the port, fonts, shaders and speech-recognition models. **It does
 not include P.T.** You must supply your own compatible game package.
@@ -27,7 +32,7 @@ GPU and has not been verified. Other Galaxy models and other manufacturers are
 also unverified. Neither installation success nor an advertised Vulkan version
 guarantees that a phone will render the game correctly.
 
-Short S22 samples showed approximately **1.2 GiB process PSS** in the starting
+Earlier short S22 samples showed approximately **1.2 GiB process PSS** in the starting
 room and **1.6 GiB** during the microphone test. These are snapshots, not peak
 memory measurements. The graphics allocations use shared phone memory and must
 not be added to those figures as a separate VRAM requirement.
@@ -78,7 +83,7 @@ before experimenting with other graphics options or reflections.
 | --- | --- |
 | Gameplay | Left stick: move. Right stick: look. **OK / Use**: interact. **Zoom**: hold to zoom. **Menu**: open settings. |
 | Original settings | **PC Settings** opens the port's options directly. **Language ▲/▼**, **Bright −/+**, **Flip Y** and **Flip X** adjust the original options. **Back** or **Resume** starts/resumes play. |
-| PC Settings | **Up/Down** selects rows. **Left/Right** changes values. **Column** moves between columns. **OK** opens/confirms an option. **Back** returns one page; **Resume** returns to gameplay. |
+| PC Settings | **Up/Down** selects rows. **Left/Right** changes values. **Tab** cycles the new settings tabs; on other pages, **Column** moves between columns. **OK** opens/confirms an option. **Back** returns one page; **Resume** returns to gameplay. |
 
 The two sticks hide while menus are open. Navigation buttons and **Back** hide
 during gameplay. The beta intentionally leaves the **loop browser unlocked** so
@@ -120,7 +125,7 @@ you want to preserve that progress.
 
 ## Help us test
 
-Check the first settings screen, both sticks, interactions, menu columns and
+Check the first settings screen, both sticks, interactions, settings tabs/columns and
 Back/Resume. Revisit the hallway/radio, bathroom/mirror, Lisa scenes, maze and
 loop transitions. Test microphone On/Off and recognition, quit/reopen, and
 20–30 minutes of play. Controller reconnect, headphones, rotation and
