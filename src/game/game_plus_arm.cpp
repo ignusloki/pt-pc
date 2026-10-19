@@ -5,10 +5,15 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <format>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string_view>
 
 #include "engine/core/log.h"
@@ -21,12 +26,13 @@ namespace {
 constexpr const char* kLisa = "/Assets/sh/chara/och/Scenes/och0_main0_def.fmdl";
 constexpr const char* kCreature = "/Assets/sh/chara/hsh/Scenes/hsh0_main0_def.fmdl";
 constexpr const char* kStaticLisa = "/Assets/sh/environ/object/shsb/house/shsb_hous001/scenes/shsb_hous001_ocho001.fmdl";
-// the arm's length over hsh0's own: 2.33 m from its upper arm joint to the fingertips becomes 1.35 m (hers with the hand is
-// 1.0 m), so hanging from her shoulder (1.35 m up) the fingertips reach the floor instead of passing a metre through it
-constexpr float kArmLength = 0.58f;
 constexpr float kSkinGain = 1.5f;
+constexpr float kShoulderCap = 0.11f;
+constexpr float kShoulderBand = 0.20f;
+constexpr float kShiftInner = 0.08f;
+constexpr float kShiftOuter = 0.22f;
+constexpr int kDonors = 6;
 
-// a bone name's part after SKL_nnn_ (LUARM, CHEST, LF10, RHMRS_HLP)
 std::string_view Part(std::string_view name) {
     const size_t a = name.find('_');
     const size_t b = a == std::string_view::npos ? a : name.find('_', a + 1);
@@ -45,14 +51,29 @@ bool RightSide(std::string_view part) {
     return part.starts_with('R');
 }
 
-// the arm chain from the upper arm down: arm bones, fingers and the arm's helpers
 bool ArmChain(std::string_view part) {
-    // the fingers are LF10 to LF53 (LFOOT is the leg's)
     if (part.size() > 2 && part.starts_with("LF") && part[2] >= '0' && part[2] <= '9') return true;
     for (std::string_view p : {"LUARM", "LFARM", "LHAND", "LHMRS", "LUARL", "LELBW", "LFARL", "LTNB", "LTOW"}) {
         if (part.starts_with(p)) return true;
     }
     return false;
+}
+
+bool NeckOrHead(std::string_view part) {
+    for (std::string_view p : {"NECK", "HEAD", "EYE", "FACE", "MOUTH"}) {
+        if (part.starts_with(p)) return true;
+    }
+    return false;
+}
+
+int ArmRegion(std::string_view part) {
+    for (std::string_view p : {"LUARM", "LHMRS", "LUARL"}) {
+        if (part.starts_with(p)) return 1;
+    }
+    for (std::string_view p : {"LFARM", "LELBW", "LFARL", "LTNB"}) {
+        if (part.starts_with(p)) return 2;
+    }
+    return 3;
 }
 
 int Dominant(const Vertex& v) {
@@ -63,9 +84,6 @@ int Dominant(const Vertex& v) {
     return v.joints[best];
 }
 
-// hsh0's bind space to Lisa's: its torso leans to its left (its chest joint at x 0.131, z 0.015 over its waist, hers straight
-// above hers), so the lean is taken out up to its chest height, then the whole is scaled to her size about the waists (both at
-// the origin)
 glm::vec3 Retarget(const glm::vec3& v, float scale) {
     const float t = std::clamp(v.y / 0.374f, 0.0f, 1.0f);
     return scale * (v - glm::vec3(0.131f * t, 0.0f, 0.015f * t));
@@ -76,19 +94,19 @@ float Smooth01(float t) {
     return t * t * (3.0f - 2.0f * t);
 }
 
-// How far inside the creature's part of her a point of her bind space is (metres; negative outside): all round her left side (she
-// faces +z), a torn, rib-following boundary: a wavering line a few centimetres either side of 3.5 cm from her sternum in front
-// (her left breast and chest are the creature's) and 7 cm from her spine behind, and a lower edge that runs from her hip in front
-// and her waist behind at the flank up her ribs toward her middle, with ragged waves; the upper edge is her shoulder line (y 0.47).
 float CreatureSide(const glm::vec3& p) {
-    // 1 on her front, 0 on her back, blended over her sides
     const float front = Smooth01((p.z + 0.02f) / 0.06f);
-    const float phase = 1.7f * (1.0f - front);  // the front's waves are not the back's mirror
+    const float phase = 1.7f * (1.0f - front);
     const float middle = 0.07f - 0.035f * front + 0.045f * std::sin(p.y * 17.0f + 1.0f + phase) +
                          0.02f * std::sin(p.y * 43.0f + 2.0f + phase) + 0.01f * std::sin(p.y * 97.0f);
     const float bottom = 0.02f - 0.08f * front + (0.13f - 0.03f * front) * Smooth01((0.20f - p.x) / 0.16f) +
                          0.025f * std::sin(p.x * 55.0f + p.z * 9.0f) + 0.012f * std::sin(p.x * 131.0f);
     return std::min(std::min(p.x - middle, p.y - bottom), 0.47f - p.y);
+}
+
+float CreatureSkin(const glm::vec3& p) {
+    const float edge = 0.125f + 0.012f * std::sin(p.z * 70.0f + 0.5f) + 0.008f * std::sin(p.y * 110.0f);
+    return std::max(CreatureSide(p), std::min(p.x - edge, p.y - 0.38f));
 }
 
 int Find(const std::vector<std::string>& names, std::string_view name) {
@@ -98,8 +116,6 @@ int Find(const std::vector<std::string>& names, std::string_view name) {
     return -1;
 }
 
-// the rigid motion that best takes the points a onto b (Horn's quaternion method: the largest eigenvector of his 4 x 4 matrix,
-// by Jacobi rotations)
 glm::mat4 FitRigid(const std::vector<glm::vec3>& a, const std::vector<glm::vec3>& b) {
     glm::dvec3 ca(0.0), cb(0.0);
     for (size_t i = 0; i < a.size(); ++i) {
@@ -164,8 +180,6 @@ glm::mat4 FitRigid(const std::vector<glm::vec3>& a, const std::vector<glm::vec3>
 
 bool GamePlusArm::Prepare(ModelCache& models) {
     if (tried_) {
-        // the static Lisa's model is in the hallway's package, which may come in after her own: its pose is fitted once the
-        // model cache holds it (checked every two seconds or so)
         if (ready_ && !static_fitted_ && ++static_probe_ % 120 == 0 && models.Paths().contains(kStaticLisa)) {
             static_fitted_ = true;
             FitStaticPose(models);
@@ -183,36 +197,44 @@ bool GamePlusArm::Prepare(ModelCache& models) {
     for (const std::string& n : lisa->bone_names) lisa_parts.push_back(Part(n));
     std::vector<std::string_view> side_parts;
     for (const std::string& n : full->bone_names) side_parts.push_back(Part(n));
-    // her size: waist to neck, over hsh0's
     const int lisa_neck = Find(lisa->bone_names, "SKL_003_NECK");
     const int side_neck = Find(full->bone_names, "SKL_003_NECK");
     if (lisa_neck >= 0 && side_neck >= 0 && full->bone_bind_world[static_cast<size_t>(side_neck)].y > 0.0f) {
         scale_ = lisa->bone_bind_world[static_cast<size_t>(lisa_neck)].y / full->bone_bind_world[static_cast<size_t>(side_neck)].y;
     }
-    // hsh0's: left of its middle line (x 0 at the waist to 0.131 at its chest, which leans left), between its hip and neck; its
-    // vertices retargeted into her bind space, so its torso is skinned by her own skin matrices with its own weights
     const float scale = scale_;
-    // her own skinning of her left side, for hsh0's torso: each of its torso vertices takes the joints and weights of her nearest
-    // vertex (bind space), offset past hsh0's bones (the draw's skin has hsh0's bones, then hers), so it moves exactly as her
-    // body there does; its arm keeps its own weights on the arm chain
     struct Donor {
         glm::vec3 position;
         glm::vec3 normal;
         glm::u8vec4 joints;
         glm::u8vec4 weights;
     };
+    const int lisa_upper_arm = Find(lisa->bone_names, "SKL_011_LUARM");
+    const float shoulder_cap = lisa_upper_arm >= 0 ? lisa->bone_bind_world[static_cast<size_t>(lisa_upper_arm)].x + kShoulderCap : -1e9f;
+    const auto lisa_part = [lisa_parts](const Vertex& v) {
+        const int d = Dominant(v);
+        return d < static_cast<int>(lisa_parts.size()) ? lisa_parts[static_cast<size_t>(d)] : std::string_view();
+    };
+    const auto lisa_kept = [lisa_part, shoulder_cap](const Vertex& v) {
+        const std::string_view part = lisa_part(v);
+        const bool cap = (part.starts_with("LUARM") || part.starts_with("LHMRS") || part.starts_with("LUARL")) && v.position.x < shoulder_cap;
+        return !ArmChain(part) || cap;
+    };
     std::vector<Donor> donors;
     MeshData lisa_data;
     if (models.ReadMesh(kLisa, lisa_data)) {
         for (const Vertex& v : lisa_data.vertices) {
-            if (v.position.x > -0.05f && v.position.y > -0.25f && v.position.y < 0.75f && v.position.x < 0.6f) donors.push_back({v.position, glm::normalize(v.normal), v.joints, v.weights});
+            if (v.position.x > -0.05f && v.position.y > -0.25f && v.position.y < 0.75f && v.position.x < 0.6f && lisa_kept(v) && !NeckOrHead(lisa_part(v))) {
+                donors.push_back({v.position, glm::normalize(v.normal), v.joints, v.weights});
+            }
         }
     }
     const int side_bones = static_cast<int>(full->bone_names.size());
-    // around its shoulder (20 cm of its upper arm joint) its arm vertices take her weights too: there her skin and the arm chain
-    // meet without the shoulder cap tearing
     const int side_upper_arm = Find(full->bone_names, "SKL_011_LUARM");
-    const glm::vec3 shoulder = side_upper_arm >= 0 ? Retarget(full->bone_bind_world[static_cast<size_t>(side_upper_arm)], scale) : glm::vec3(1e9f);
+    const glm::vec3 side_shoulder = side_upper_arm >= 0 ? Retarget(full->bone_bind_world[static_cast<size_t>(side_upper_arm)], scale) : glm::vec3(1e9f);
+    shift_ = side_upper_arm >= 0 && lisa_upper_arm >= 0 ? lisa->bone_bind_world[static_cast<size_t>(lisa_upper_arm)] - side_shoulder : glm::vec3(0.0f);
+    const glm::vec3 shoulder = side_shoulder + shift_;
+    const glm::vec3 shift = shift_;
     if (donors.empty() || side_bones + static_cast<int>(lisa->bone_names.size()) > 255) {
         LogWarn("game+: Lisa's hsh0 side: no weights to transfer");
         return false;
@@ -221,54 +243,83 @@ bool GamePlusArm::Prepare(ModelCache& models) {
         const int d = Dominant(v);
         const std::string_view part = d < static_cast<int>(side_parts.size()) ? side_parts[static_cast<size_t>(d)] : std::string_view();
         const float middle = 0.131f * std::clamp(v.position.y / 0.374f, 0.0f, 1.0f);
-        // its thigh's top (to 25 cm below its hip) stays: under her front cut, which reaches her hip
         const bool thigh_top = (part.starts_with("LTHIGH") || part.starts_with("LBUD") || part.starts_with("LMRF") || part.starts_with("LPTL")) &&
                                v.position.y > -0.25f;
-        return v.position.x > middle - 0.06f && v.position.y > -0.30f && v.position.y < 0.90f && (!LegOrHead(part) || thigh_top) &&
+        return v.position.x > middle - 0.06f && v.position.y > -0.30f && (ArmChain(part) || v.position.y < 0.90f) && (!LegOrHead(part) || thigh_top) &&
                !RightSide(part);
     };
-    // hsh0's kept vertices as placed in her bind space, with their texture coordinates: her own surface over its part takes
-    // the creature's skin at the nearest one's coordinates
-    struct SkinPoint {
-        glm::vec3 position;
-        glm::vec2 uv;
-    };
-    std::vector<SkinPoint> cover;
     const ModelEntry* side = models.GetSubset(
         kCreature, std::string(kCreature) + "#left_side_on_lisa",
         side_keep,
-        [scale, side_parts, &donors, side_bones, shoulder, &cover, &side_keep](Vertex& v) {
+        [scale, side_parts, &donors, side_bones, side_shoulder, shoulder, shift](Vertex& v) {
             const int d = Dominant(v);
             const std::string_view part = d < static_cast<int>(side_parts.size()) ? side_parts[static_cast<size_t>(d)] : std::string_view();
-            const bool covers = side_keep(v) && !ArmChain(part);
+            const bool arm = ArmChain(part);
             v.position = Retarget(v.position, scale);
-            if (ArmChain(part) && glm::distance(v.position, shoulder) > 0.2f) return;
-            const Donor* best = nullptr;
-            float best_d = 1e30f;
+            const float moved = arm ? 1.0f : 1.0f - Smooth01((glm::distance(v.position, side_shoulder) - kShiftInner) / (kShiftOuter - kShiftInner));
+            v.position += shift * moved;
+            const float t = arm ? Smooth01((v.position.x - shoulder.x) / kShoulderBand) : 0.0f;
+            if (t >= 1.0f) return;
+            std::array<const Donor*, kDonors> nearest{};
+            std::array<float, kDonors> nearest_d;
+            nearest_d.fill(1e30f);
             for (const Donor& n : donors) {
                 const glm::vec3 e = n.position - v.position;
                 const float dist = glm::dot(e, e);
-                if (dist < best_d) {
-                    best_d = dist;
-                    best = &n;
+                if (dist >= nearest_d[kDonors - 1]) continue;
+                int k = kDonors - 1;
+                for (; k > 0 && nearest_d[k - 1] > dist; --k) {
+                    nearest_d[k] = nearest_d[k - 1];
+                    nearest[k] = nearest[k - 1];
+                }
+                nearest_d[k] = dist;
+                nearest[k] = &n;
+            }
+            if (!nearest[0]) return;
+            const Donor& best = *nearest[0];
+            {
+                const float depth = glm::dot(best.position - v.position, best.normal);
+                const float side = CreatureSide(v.position);
+                const float want = side < 0.0f ? depth : std::max(depth, 0.012f);
+                if (want > 0.012f || side < 0.0f) v.position += best.normal * ((want - 0.012f) * (1.0f - t));
+            }
+            std::array<float, 256> acc{};
+            float total = 0.0f;
+            std::array<float, kDonors> share{};
+            for (int k = 0; k < kDonors && nearest[k]; ++k) {
+                const float dist = std::max(std::sqrt(nearest_d[k]), 0.004f);
+                share[k] = 1.0f / (dist * dist);
+                total += share[k];
+            }
+            for (int k = 0; k < kDonors && nearest[k]; ++k) {
+                for (int j = 0; j < 4; ++j) {
+                    acc[static_cast<size_t>(nearest[k]->joints[j] + side_bones)] += share[k] / total * (1.0f - t) * nearest[k]->weights[j];
                 }
             }
-            if (!best) return;
-            // its torso is slimmer than hers: no deeper than 1.2 cm below her surface (her nearest vertex's plane), so it fills
-            // her shape where her body is cut away; under her cloth (outside the cut) exactly 1.2 cm below, so the cloth lies
-            // over it and a tear shows it
-            {
-                const float depth = glm::dot(best->position - v.position, best->normal);
-                const float want = CreatureSide(v.position) < 0.0f ? depth : std::max(depth, 0.012f);
-                if (want > 0.012f || CreatureSide(v.position) < 0.0f) v.position += best->normal * (want - 0.012f);
+            for (int j = 0; j < 4; ++j) acc[v.joints[j]] += t * v.weights[j];
+            std::array<int, 4> top{0, 0, 0, 0};
+            std::array<float, 4> top_w{0.0f, 0.0f, 0.0f, 0.0f};
+            for (int j = 0; j < 256; ++j) {
+                const float w = acc[static_cast<size_t>(j)];
+                if (w <= top_w[3]) continue;
+                int k = 3;
+                for (; k > 0 && top_w[k - 1] < w; --k) {
+                    top_w[k] = top_w[k - 1];
+                    top[k] = top[k - 1];
+                }
+                top_w[k] = w;
+                top[k] = j;
             }
-            if (covers) cover.push_back({v.position, v.uv0});
+            const float sum = top_w[0] + top_w[1] + top_w[2] + top_w[3];
+            int given = 0;
             for (int k = 0; k < 4; ++k) {
-                v.joints[k] = static_cast<uint8_t>(best->joints[k] + side_bones);
-                v.weights[k] = best->weights[k];
+                const int w = sum > 0.0f ? static_cast<int>(255.0f * top_w[k] / sum) : 0;
+                v.joints[k] = static_cast<uint8_t>(top[k]);
+                v.weights[k] = static_cast<uint8_t>(w);
+                given += w;
             }
+            v.weights[0] = static_cast<uint8_t>(v.weights[0] + (255 - given));
         });
-    // the creature's skin material: its part's largest submesh
     uint32_t skin_material = 0;
     if (side) {
         uint32_t most = 0;
@@ -279,52 +330,74 @@ bool GamePlusArm::Prepare(ModelCache& models) {
             }
         }
     }
-    // her surface is never cut (only her left arm, replaced by hsh0's), so no gap ever opens onto the room. Over her left side
-    // (CreatureSide) it sinks 2.5 cm, under hsh0's part (no deeper than 1.2 cm below her surface), and is drawn with the
-    // creature's skin; her cloth within 9 cm of it tears to the creature's skin by a ragged noise (gbuffer.frag TearNoise). The
-    // vertex colour carries it: r the creature's skin material, g and b its texture coordinates at the nearest hsh0 vertex,
-    // a 1 in her cloth falling to 0 at the cut, negative over the cut
-    constexpr float kShoulderCap = 0.07f;
-    const int lisa_upper_arm = Find(lisa->bone_names, "SKL_011_LUARM");
-    const float shoulder_cap = lisa_upper_arm >= 0 ? lisa->bone_bind_world[static_cast<size_t>(lisa_upper_arm)].x + kShoulderCap : -1e9f;
-    const ModelEntry* cut = models.GetSubset(
-        kLisa, std::string(kLisa) + "#creature_left_side",
-        [lisa_parts, shoulder_cap](const Vertex& v) {
-            const int d = Dominant(v);
-            const std::string_view part = d < static_cast<int>(lisa_parts.size()) ? lisa_parts[static_cast<size_t>(d)] : std::string_view();
-            // her shoulder's cap stays: the upper arm's and its helpers' vertices up to kShoulderCap past her upper arm joint. Cut
-            // with the arm, it left a hole on top of her shoulder that hsh0's narrower shoulder did not cover, open onto the room
-            // (most of all with her arm hanging, the corridor's standing Lisa; the user's shot of 11 October); kept, it bends with
-            // her own skin and closes the joint the long arm hangs from
-            const bool cap = (part.starts_with("LUARM") || part.starts_with("LHMRS") || part.starts_with("LUARL")) && v.position.x < shoulder_cap;
-            return !ArmChain(part) || cap;
-        },
-        [&cover, lisa_parts, skin_material](Vertex& v) {
-            const float d = CreatureSide(v.position);
-            v.color = glm::vec4(static_cast<float>(skin_material), 0.0f, 0.0f, 1.0f);
-            if (d <= -0.12f) return;
-            const SkinPoint* nearest = nullptr;
-            float nearest_d = 1e30f;
-            for (const SkinPoint& c : cover) {
-                const float e = glm::dot(c.position - v.position, c.position - v.position);
-                if (e < nearest_d) {
-                    nearest_d = e;
-                    nearest = &c;
+    const auto key = [](const Vertex& v) {
+        uint32_t bits[5];
+        std::memcpy(bits, &v.position, sizeof(float) * 3);
+        std::memcpy(bits + 3, &v.uv0, sizeof(float) * 2);
+        uint64_t h = 1469598103934665603ull;
+        for (uint32_t b : bits) h = (h ^ b) * 1099511628211ull;
+        return h;
+    };
+    std::unordered_map<uint64_t, float> uv_scale;
+    {
+        const auto areas = [](const Vertex& a, const Vertex& b, const Vertex& c, double& uv, double& space, float size) {
+            space += glm::length(glm::cross(b.position - a.position, c.position - a.position)) * size * size;
+            const glm::vec2 e = b.uv0 - a.uv0, f = c.uv0 - a.uv0;
+            uv += std::abs(e.x * f.y - e.y * f.x);
+        };
+        const auto triangles = [](const MeshData& m, const std::function<void(const SubMesh&, const Vertex&, const Vertex&, const Vertex&)>& each) {
+            for (const SubMesh& sub : m.submeshes) {
+                for (uint32_t i = 0; i + 2 < sub.index_count; i += 3) {
+                    const auto at = [&](uint32_t k) -> const Vertex& {
+                        return m.vertices[static_cast<size_t>(static_cast<int64_t>(m.indices[sub.first_index + i + k]) + sub.vertex_offset)];
+                    };
+                    each(sub, at(0), at(1), at(2));
                 }
             }
-            if (nearest) {
-                v.color.g = nearest->uv.x;
-                v.color.b = nearest->uv.y;
+        };
+        double side_uv = 0.0, side_space = 0.0;
+        MeshData side_data;
+        if (models.ReadMesh(kCreature, side_data)) {
+            triangles(side_data, [&](const SubMesh&, const Vertex& a, const Vertex& b, const Vertex& c) {
+                if (side_keep(a) && side_keep(b) && side_keep(c)) areas(a, b, c, side_uv, side_space, scale);
+            });
+        }
+        std::map<uint32_t, std::pair<double, double>> hers;
+        triangles(lisa_data, [&](const SubMesh& sub, const Vertex& a, const Vertex& b, const Vertex& c) {
+            if (std::max({CreatureSkin(a.position), CreatureSkin(b.position), CreatureSkin(c.position)}) > -0.15f) {
+                auto& [uv, space] = hers[sub.material];
+                areas(a, b, c, uv, space, 1.0f);
             }
-            if (d <= -0.09f) return;
+        });
+        const double side_density = side_space > 0.0 ? std::sqrt(side_uv / side_space) : 0.0;
+        for (const SubMesh& sub : lisa_data.submeshes) {
+            const auto it = hers.find(sub.material);
+            const double density = it != hers.end() && it->second.second > 0.0 ? std::sqrt(it->second.first / it->second.second) : 0.0;
+            const float factor = density > 0.0 && side_density > 0.0 ? static_cast<float>(side_density / density) : 1.0f;
+            for (uint32_t i = 0; i < sub.index_count; ++i) {
+                uv_scale.emplace(key(lisa_data.vertices[static_cast<size_t>(static_cast<int64_t>(lisa_data.indices[sub.first_index + i]) + sub.vertex_offset)]),
+                                 factor);
+            }
+        }
+        LogInfo("game+: Lisa's creature skin: hsh0's texture at {:.3f} per metre on her", side_density);
+    }
+    const ModelEntry* cut = models.GetSubset(
+        kLisa, std::string(kLisa) + "#creature_left_side", lisa_kept,
+        [lisa_parts, skin_material, &uv_scale, &key](Vertex& v) {
+            const auto scaled = uv_scale.find(key(v));
+            const glm::vec2 uv = v.uv0 * (scaled != uv_scale.end() ? scaled->second : 1.0f) / glm::vec2(0.46f, 0.48f);
+            v.color = glm::vec4(static_cast<float>(skin_material), uv.x, uv.y, 1.0f);
             const int bone = Dominant(v);
             const std::string_view part = bone < static_cast<int>(lisa_parts.size()) ? lisa_parts[static_cast<size_t>(bone)] : std::string_view();
-            if (d > 0.0f && !LegOrHead(part)) {
+            const bool head = LegOrHead(part);
+            const float d = CreatureSide(v.position);
+            if (d > 0.0f && !head) {
                 v.position -= glm::normalize(v.normal) * 0.025f;
                 v.color.a = -1.0f;
                 return;
             }
-            v.color.a = std::clamp(-d / 0.09f, 0.0f, 1.0f);
+            const float skin = head ? d : CreatureSkin(v.position);
+            v.color.a = std::clamp(-skin / 0.09f, 0.0f, 1.0f);
         });
     if (!cut || !side) return false;
     lisa_mesh_ = lisa->mesh.get();
@@ -344,33 +417,46 @@ bool GamePlusArm::Prepare(ModelCache& models) {
         side_arm_[i] = ArmChain(side_parts[i]);
     }
     side_retarget_.resize(side_bind_.size());
-    for (size_t i = 0; i < side_bind_.size(); ++i) side_retarget_[i] = Retarget(side_bind_[i], scale_);
+    for (size_t i = 0; i < side_bind_.size(); ++i) side_retarget_[i] = Retarget(side_bind_[i], scale_) + (side_arm_[i] ? shift_ : glm::vec3(0.0f));
+    const auto segment = [&](const char* a, const char* b) {
+        const int la = Find(lisa->bone_names, a), lb = Find(lisa->bone_names, b);
+        const int ha = Find(full->bone_names, a), hb = Find(full->bone_names, b);
+        if (la < 0 || lb < 0 || ha < 0 || hb < 0) return 0.0f;
+        const float theirs = glm::distance(full->bone_bind_world[static_cast<size_t>(ha)], full->bone_bind_world[static_cast<size_t>(hb)]);
+        return theirs > 0.0f ? glm::distance(lisa->bone_bind_world[static_cast<size_t>(la)], lisa->bone_bind_world[static_cast<size_t>(lb)]) / theirs : 0.0f;
+    };
+    const float lengths[3] = {segment("SKL_011_LUARM", "SKL_012_LFARM"), segment("SKL_012_LFARM", "SKL_013_LHAND"),
+                              segment("SKL_013_LHAND", "SKL_109_LF33")};
+    if (lengths[0] <= 0.0f || lengths[1] <= 0.0f || lengths[2] <= 0.0f) {
+        LogWarn("game+: Lisa's hsh0 side: arm bones missing");
+        return false;
+    }
+    side_region_.assign(full->bone_names.size(), 0);
+    for (size_t i = 0; i < full->bone_names.size(); ++i) {
+        if (side_arm_[i]) side_region_[i] = ArmRegion(side_parts[i]);
+    }
+    std::copy(std::begin(lengths), std::end(lengths), arm_lengths_);
     ready_ = lisa_mesh_ && lisa_cut_ && side_mesh_;
-    LogInfo("game+: Lisa's hsh0 left side ready ({} of hsh0's bones mapped, torso scale {:.2f})", side_source_.size(), scale_);
+    LogInfo("game+: Lisa's hsh0 left side ready ({} of hsh0's bones mapped, torso scale {:.2f}, arm {:.3f} {:.3f} {:.3f} of hsh0's)", side_source_.size(),
+            scale_, lengths[0], lengths[1], lengths[2]);
     return ready_;
 }
 
-// The static Lisa's vertices are her model's in one pose (the same triangles, material by material: her fabric's 7325, her
-// skin's 5094, her face's 4096, her hair's 1440), merged into 7 meshes in another order. Each of her vertices is found there by
-// its texture coordinate within the same material; her left and right halves share coordinates, so of the vertices there a
-// bone takes the one nearest to where its parent's motion puts it, bones in parent order from her waist and spine (fitted on
-// the vertices whose coordinate is unique), each refined over four rounds. Her skin matrices of that pose are the bones'
-// rigid fits (offline check: 3.8 mm mean, 15 mm at the 95th percentile from the baked vertices)
-void GamePlusArm::FitStaticPose(ModelCache& models) {
+LisaPoseFit FitLisaStaticPose(ModelCache& models, std::string_view baked_path,
+                              std::span<const std::pair<std::string_view, std::string_view>> materials, double min_share, double max_mean,
+                              std::string_view what) {
+    LisaPoseFit result;
+    const std::string still_path(baked_path);
     const ModelEntry* lisa = models.Get(kLisa);
-    const ModelEntry* still = models.Get(kStaticLisa);
+    const ModelEntry* still = models.Get(still_path);
     MeshData lisa_data, still_data;
-    if (!lisa || !still || !still->mesh || !models.ReadMesh(kLisa, lisa_data) || !models.ReadMesh(kStaticLisa, still_data)) {
-        LogWarn("game+: the static Lisa's pose: {} not readable", kStaticLisa);
-        return;
+    if (!lisa || !still || !still->mesh || !models.ReadMesh(kLisa, lisa_data) || !models.ReadMesh(still_path, still_data)) {
+        LogWarn("game+: {}'s pose: {} not readable", what, still_path);
+        return result;
     }
-    static constexpr std::pair<std::string_view, std::string_view> kMaterials[] = {
-        {"heel", "urethane_coat_a_nr"}, {"fabric_mid_glossy", "fabric_mid_glossy2"}, {"hair", "skin_white_male2"}, {"mout", "skin_white_male3"},
-        {"ANIME_EYE", "eye_lens_a1"},   {"ocho_body", "skin_white_male"},           {"ocho_face", "skin_white_male1"}};
     const auto material_name = [](const ModelEntry& e, const SubMesh& s) -> std::string_view {
         return s.material < e.materials.size() ? std::string_view(e.materials[s.material].name) : std::string_view();
     };
-    // the static model's vertices by material, keyed by their coordinate on a 1/1024 grid
     std::map<std::string_view, std::multimap<std::pair<int, int>, uint32_t>> grid;
     for (const SubMesh& s : still_data.submeshes) {
         auto& cells = grid[material_name(*still, s)];
@@ -383,14 +469,41 @@ void GamePlusArm::FitStaticPose(ModelCache& models) {
             cells.emplace(std::make_pair(static_cast<int>(std::lround(uv.x)), static_cast<int>(std::lround(uv.y))), v);
         }
     }
-    // per vertex of hers: the static vertices at its coordinate
     const size_t count = lisa_data.vertices.size();
     std::vector<std::vector<glm::vec3>> candidates(count);
     for (const SubMesh& s : lisa_data.submeshes) {
         const std::string_view mine = material_name(*lisa, s);
         std::string_view theirs;
-        for (const auto& [a, b] : kMaterials) {
+        for (const auto& [a, b] : materials) {
             if (a == mine) theirs = b;
+        }
+        if (materials.empty()) {
+            size_t best = 0;
+            for (const auto& [name, cells] : grid) {
+                size_t hits = 0;
+                for (uint32_t i = 0; i < s.index_count; i += 3) {
+                    const uint32_t v = lisa_data.indices[s.first_index + i] + static_cast<uint32_t>(s.vertex_offset);
+                    if (v >= count) continue;
+                    const glm::vec2 uv = lisa_data.vertices[v].uv0 * 1024.0f;
+                    const auto [lo, hi] = cells.equal_range({static_cast<int>(std::lround(uv.x)), static_cast<int>(std::lround(uv.y))});
+                    for (auto it = lo; it != hi; ++it) {
+                        if (glm::distance(still_data.vertices[it->second].uv0, lisa_data.vertices[v].uv0) < 6.0e-4f) {
+                            ++hits;
+                            break;
+                        }
+                    }
+                }
+                if (hits > best) {
+                    best = hits;
+                    theirs = name;
+                }
+            }
+            static thread_local std::string logged;
+            const std::string line = std::format("{}/{}/{}", what, mine, theirs);
+            if (!theirs.empty() && logged.find(line) == std::string::npos) {
+                logged += line + ";";
+                LogInfo("game+: {}'s pose: her material {} pairs with {}", what, mine, theirs);
+            }
         }
         const auto cells = grid.find(theirs);
         if (cells == grid.end()) continue;
@@ -422,7 +535,6 @@ void GamePlusArm::FitStaticPose(ModelCache& models) {
     }
     std::vector<glm::mat4> fit(bones, glm::mat4(1.0f));
     std::vector<bool> done(bones, false);
-    // her waist and spine: the vertices with one candidate
     {
         std::vector<glm::vec3> a, b;
         for (size_t root : {size_t{0}, size_t{1}}) {
@@ -433,8 +545,8 @@ void GamePlusArm::FitStaticPose(ModelCache& models) {
             }
         }
         if (a.size() < 20 || bones < 2) {
-            LogWarn("game+: the static Lisa's pose: {} trunk points", a.size());
-            return;
+            LogWarn("game+: {}'s pose: {} trunk points", what, a.size());
+            return result;
         }
         fit[0] = fit[1] = FitRigid(a, b);
         done[0] = done[1] = true;
@@ -482,16 +594,29 @@ void GamePlusArm::FitStaticPose(ModelCache& models) {
         ++matched;
     }
     const double mean = matched ? error / static_cast<double>(matched) : 1.0;
-    LogInfo("game+: the static Lisa's pose fitted: {} of {} vertices matched, {:.1f} mm mean", matched, count, mean * 1000.0);
-    if (matched < count * 9 / 10 || mean > 0.01) return;
-    static_mesh_ = still->mesh.get();
-    static_skin_ = std::move(fit);
+    LogInfo("game+: {}'s pose fitted: {} of {} vertices matched, {:.1f} mm mean", what, matched, count, mean * 1000.0);
+    result.matched = matched;
+    result.count = count;
+    result.mean = mean;
+    if (static_cast<double>(matched) < static_cast<double>(count) * min_share || mean > max_mean) return result;
+    result.skin = std::move(fit);
+    result.ok = true;
+    return result;
+}
+
+void GamePlusArm::FitStaticPose(ModelCache& models) {
+    static constexpr std::pair<std::string_view, std::string_view> kMaterials[] = {
+        {"heel", "urethane_coat_a_nr"}, {"fabric_mid_glossy", "fabric_mid_glossy2"}, {"hair", "skin_white_male2"}, {"mout", "skin_white_male3"},
+        {"ANIME_EYE", "eye_lens_a1"},   {"ocho_body", "skin_white_male"},           {"ocho_face", "skin_white_male1"}};
+    LisaPoseFit fit = FitLisaStaticPose(models, kStaticLisa, kMaterials, 0.9, 0.01, "the static Lisa");
+    if (!fit.ok) return;
+    static_mesh_ = models.Get(kStaticLisa)->mesh.get();
+    static_skin_ = std::move(fit.skin);
 }
 
 void GamePlusArm::Apply(std::vector<DrawItem>& out) {
     skins_.clear();
     if (!ready_) return;
-    // the static Lisa as her skinned model in its pose, so the loop below gives it the side too
     if (static_mesh_) {
         for (DrawItem& item : out) {
             if (item.mesh != static_mesh_) continue;
@@ -510,37 +635,31 @@ void GamePlusArm::Apply(std::vector<DrawItem>& out) {
     for (size_t n = 0; n < count; ++n) {
         if (out[n].mesh != lisa_mesh_ || out[n].skin.size() < lisa_bind_.size()) continue;
         const std::span<const glm::mat4> skin = out[n].skin;
-        // her bones' world matrices in model space: skin = world * T(-bind)
         auto lisa_world = [&](int i) { return skin[static_cast<size_t>(i)] * glm::translate(glm::mat4(1.0f), lisa_bind_[static_cast<size_t>(i)]); };
         std::vector<glm::mat4> world(side_bind_.size(), glm::mat4(1.0f));
-        // hsh0's bones, then hers (its torso vertices carry her joints, offset past its bones)
         std::vector<glm::mat4>& side_skin = skins_.emplace_back(side_bind_.size() + lisa_bind_.size());
         for (size_t j = 0; j < lisa_bind_.size(); ++j) side_skin[side_bind_.size() + j] = skin[j];
-        // the arm's vertices are in her bind space scaled by s; along the arm they take kArmLength of hsh0's length
-        const glm::mat4 arm_scale = glm::scale(glm::mat4(1.0f), glm::vec3(kArmLength / scale_, 1.0f, 1.0f));
         for (size_t i = 0; i < side_bind_.size(); ++i) {
             const int source = side_source_[i];
             const int p = side_parent_[i];
             if (side_arm_[i] && p >= 0) {
-                // the arm chain: her rotation; from her upper arm joint, then hsh0's offsets at kArmLength
                 const glm::mat4 lisa = source >= 0 ? lisa_world(source) : glm::mat4(1.0f);
                 world[i] = glm::mat4(glm::mat3(lisa));
                 if (side_arm_[static_cast<size_t>(p)]) {
                     const glm::mat4& parent = world[static_cast<size_t>(p)];
-                    world[i][3] = glm::vec4(glm::vec3(parent[3]) + glm::mat3(parent) * (kArmLength * (side_bind_[i] - side_bind_[static_cast<size_t>(p)])), 1.0f);
+                    const float length = arm_lengths_[side_region_[static_cast<size_t>(p)] - 1];
+                    world[i][3] = glm::vec4(glm::vec3(parent[3]) + glm::mat3(parent) * (length * (side_bind_[i] - side_bind_[static_cast<size_t>(p)])), 1.0f);
                 } else {
-                    // the chain's root where her own skin puts hsh0's upper arm joint: the arm and her skinning of the shoulder
-                    // around it agree, so the shoulder does not tear when her arm moves
                     world[i][3] = skin[static_cast<size_t>(source)] * glm::vec4(side_retarget_[i], 1.0f);
                 }
-                side_skin[i] = world[i] * arm_scale * glm::translate(glm::mat4(1.0f), -side_retarget_[i]);
+                const float length = arm_lengths_[side_region_[i] - 1] / scale_;
+                const glm::vec3 arm_scale = side_region_[i] == 3 ? glm::vec3(length) : glm::vec3(length, 1.0f, 1.0f);
+                side_skin[i] = world[i] * glm::scale(glm::mat4(1.0f), arm_scale) * glm::translate(glm::mat4(1.0f), -side_retarget_[i]);
             } else {
-                // a torso bone: her own skin matrix (the vertices are in her bind space)
                 world[i] = source >= 0 ? lisa_world(source) : glm::mat4(1.0f);
                 side_skin[i] = source >= 0 ? glm::mat4(skin[static_cast<size_t>(source)]) : glm::mat4(1.0f);
             }
         }
-        // PT_GAMEPLUS_SKIN_DUMP=<file>: her skin matrices of this frame, appended (the offline check, research/proto_side.py)
         static const char* dump = std::getenv("PT_GAMEPLUS_SKIN_DUMP");
         if (dump && *dump) {
             if (FILE* file = std::fopen(dump, "ab")) {
@@ -551,14 +670,12 @@ void GamePlusArm::Apply(std::vector<DrawItem>& out) {
             }
         }
         out[n].mesh = lisa_cut_;
-        // her cut's cloth tears near the cut (gbuffer.frag): tint.a above 1.5 turns the tear on, the fade stays 1
         const glm::vec4 lisa_tint = out[n].tint;
         out[n].tint.a = 2.0f;
         DrawItem side = out[n];
         side.mesh = side_mesh_;
         side.skin = side_skin;
         side.hidden_meshes = {};
-        // hsh0's skin texture is far darker than hers (median sRGB 0.27 against her skin's 0.68): brightened to read as one body
         side.tint = glm::vec4(glm::vec3(lisa_tint) * kSkinGain, lisa_tint.a);
         out.push_back(side);
     }

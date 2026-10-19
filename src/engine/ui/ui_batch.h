@@ -8,7 +8,7 @@
 #include <span>
 #include <vector>
 
-#include "engine/render/vk.h"
+#include "engine/render/gpu/gpu_device.h"
 
 namespace pt {
 class Renderer;
@@ -49,15 +49,17 @@ public:
     bool Init(Renderer& renderer, TextureManager& textures);
     void Shutdown();
 
-    void Begin(VkExtent2D extent);
+    void Begin(gpu::Extent2D extent);
+    void MarkTop() { top_first_ = static_cast<uint32_t>(commands_.size()); }
+    bool HasTop() const { return top_first_ < commands_.size(); }
     void Draw(std::span<const UiVertex> triangles, const UiDrawParams& params, UiShade shade, UiBlend blend);
     void Quad(glm::vec2 min, glm::vec2 max, glm::vec2 uv_min, glm::vec2 uv_max, glm::vec4 color, const UiDrawParams& params, UiShade shade,
               UiBlend blend);
-    void Record(VkCommandBuffer cmd, VkExtent2D extent);
+    void Record(gpu::CommandList& cmd, gpu::Extent2D extent);
+    void RecordBelow(gpu::CommandList& cmd, gpu::Extent2D extent);
+    void RecordTop(gpu::CommandList& cmd, gpu::Extent2D extent);
 
-    VkExtent2D Extent() const { return extent_; }
-    // VR's HUD (docs/vr.md): the next Record draws on a transparent image and builds its coverage in alpha (alpha blend: one,
-    // one minus source alpha), so the image is premultiplied; off (the default) leaves the target's alpha as it is
+    gpu::Extent2D Extent() const { return extent_; }
     void SetCoverageAlpha(bool enabled) { coverage_ = enabled; }
     void SetScreenArea(glm::vec2 origin, float height) { screen_ = glm::vec4(origin, 1.0f / std::max(height, 1.0f), 0.0f); }
 
@@ -69,32 +71,34 @@ private:
         UiBlend blend = UiBlend::Alpha;
     };
     struct FrameData {
-        vk::Buffer vertices;
-        vk::Buffer draws;
-        VkDescriptorSet set = VK_NULL_HANDLE;
-        VkImageView scene_view = VK_NULL_HANDLE;
+        gpu::BufferResource vertices;
+        gpu::BufferResource draws;
+        gpu::BindingSetHandle set;
+        gpu::ImageViewHandle scene_view;
     };
 
-    VkFormat TargetFormat() const;
-    bool CreatePipelines(VkFormat format);
+    void RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t first, uint32_t last, bool coverage);
+    gpu::Format TargetFormat() const;
+    bool CreatePipelines(gpu::Format format);
     void DestroyPipelines();
 
     Renderer* renderer_ = nullptr;
     TextureManager* textures_ = nullptr;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkSampler clamp_sampler_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool pool_ = VK_NULL_HANDLE;
-    VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    // 0 alpha, 1 additive; 2 and 3 the same with the coverage in alpha (SetCoverageAlpha)
-    VkPipeline pipelines_[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    gpu::Device* gpu_ = nullptr;
+    gpu::SamplerHandle clamp_sampler_;
+    gpu::BindingLayoutHandle set_layout_;
+    gpu::BindingPoolHandle pool_;
+    gpu::PipelineLayoutHandle layout_;
+    gpu::PipelineHandle pipelines_[4] = {};
     bool coverage_ = false;
-    VkFormat pipeline_format_ = VK_FORMAT_UNDEFINED;
+    uint32_t top_first_ = UINT32_MAX;
+    bool uploaded_ = false;
+    gpu::Format pipeline_format_ = gpu::Format::Undefined;
     std::vector<FrameData> frames_;
     std::vector<UiVertex> vertices_;
     std::vector<UiDrawParams> draws_;
     std::vector<Command> commands_;
-    VkExtent2D extent_{};
+    gpu::Extent2D extent_{};
     glm::vec4 screen_{0.0f};
 };
 

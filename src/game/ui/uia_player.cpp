@@ -90,6 +90,15 @@ bool UiaPlayers::Playing(const ui::UiaAnimation* animation) const {
     return false;
 }
 
+float UiaPlayers::PlayingFrame(const ui::UiaAnimation* animation) const {
+    for (const Player& p : players_) {
+        if (p.animation == animation) {
+            return Playing(animation) ? Frame(p) : -1.0f;
+        }
+    }
+    return -1.0f;
+}
+
 bool UiaPlayers::AnyPlaying() const {
     for (const Player& p : players_) {
         if (Playing(p.animation)) {

@@ -1,0 +1,5 @@
+# the start room: control given, a moment to settle
+goto 0 0 12.5
+swait 10
+sfree
+swait 30

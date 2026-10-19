@@ -1,8 +1,8 @@
-// level.json of the mods (docs/modding.md, Levels): the entries mods::Load collects for the stages (game/stage_data.cpp)
 #include <algorithm>
 #include <cctype>
 #include <format>
 
+#include "engine/core/ascii.h"
 #include "engine/core/json.h"
 #include "engine/fs/mods.h"
 
@@ -11,11 +11,10 @@ namespace {
 
 std::string Lower(std::string_view text) {
     std::string out(text);
-    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : out) c = static_cast<char>(pt::AsciiLower(c));
     return out;
 }
 
-// [x, y, z], or one number for all three (a scale)
 bool Vec3(const json::Value& entry, const char* key, std::array<float, 3>& out, std::string& warning) {
     const json::Value* v = entry.Find(key);
     if (!v) return true;
@@ -39,7 +38,6 @@ bool LevelStageMatches(std::string_view pattern, std::string_view package_path) 
 
 bool LevelNameMatches(std::string_view pattern, std::string_view name) {
     if (pattern.empty()) return false;
-    // the full "stage|group|entity" name, or its last part alone when the pattern has no '|'
     const std::string p = Lower(pattern);
     std::string n = Lower(name);
     if (p.find('|') == std::string::npos) {

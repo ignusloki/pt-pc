@@ -1,0 +1,42 @@
+# Coffee with Lisa in the system's language (lisadate_lang_*): a title card, a choice, a long line, the corrupted lines and the
+# true ending's card, captured for the text's fit
+sshot {shots}/lang_00.png
+swait 2
+slisadate
+swait 300
+sshot {shots}/lang_01_title.png
+swait 2
+slisaadvance
+swait 240
+sshot {shots}/lang_02_choice.png
+swait 2
+slisachoice 3
+slisachoice 1
+slisachoice 1
+slisaline s1_07
+swait 200
+sshot {shots}/lang_03_line.png
+swait 2
+slisachoice 1
+slisachoice 1
+slisachoice 2
+slisachoice 1
+slisachoice 1
+slisachoice 3
+slisachoice 1
+slisachoice 3
+slisachoice 1
+slisaline true_04
+swait 260
+sshot {shots}/lang_04_long_line.png
+swait 2
+slisaline true_08
+swait 200
+sshot {shots}/lang_05_line.png
+swait 2
+slisaadvance
+swait 140
+sshot {shots}/lang_06_ending.png
+swait 2
+slisawait
+sexpect lisadate 0

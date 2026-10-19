@@ -1,0 +1,27 @@
+# The Lisa photo piece with the right mouse button (the zoom): the trap arms the action on the press while the piece is in view
+# (0x917F30 with 0x9179B0), and 0x1264B90 commits it only after more than 2 s of hold; a shorter hold, a click whose down and up come in
+# one frame, or a release at 2 s disarms it without effect (the PS4 rule, "armed and never committed")
+sanchor
+gfile 0 -1.4 -4.0
+gfile -0.5 -1.4 1.4
+fent shsb_labl001_mapc004_lisa
+swait 10
+smquick right
+swait 40
+smbutton right 1
+swait 6
+smbutton right 0
+swait 40
+smbutton right 1
+swait 60
+smbutton right 0
+swait 40
+smbutton right 1
+swait 120
+smbutton right 0
+swait 40
+smbutton right 1
+swait 180
+smbutton right 0
+swait 40
+slog

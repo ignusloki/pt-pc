@@ -1,0 +1,13 @@
+# The option screen's photo part held with the right mouse button for 3 s: zoom_in plays during the hold (about 2 s), PhotoOption is
+# sent at the release, not before (0x1285F80)
+swait 30
+sktap Escape
+smenu 1
+swait 60
+smbutton right 1
+swait 180
+smbutton right 0
+swait 60
+sktap Escape
+smenu 0
+slog

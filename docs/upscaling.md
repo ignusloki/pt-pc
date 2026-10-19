@@ -1,64 +1,133 @@
-# Upscaling and frame generation (PC option)
+# Upscaling and frame generation
 
-The original renders at 1920x1080 with FXAA. The port can render the 3D scene at a lower internal resolution and reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS, Apple MetalFX on macOS; AMD FSR 4 is listed but has no Vulkan release, see below), or keep the display resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the upscaler off the frame is the one described in `rendering.md` section 12, bit for bit.
+The original renders at 1920x1080 with FXAA. The port can render the scene at a lower internal resolution and
+reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS, or Apple MetalFX on macOS), or keep the display
+resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the
+upscaler off the frame is the same as without this feature.
 
 ## Settings
 
-`pt.ini`, section `[upscaling]`, and the Upscaling rows of the PC settings page in the pause menu (`formats/ui.md`):
+`pt.ini`, section `[upscaling]`, and the Upscaling rows of the PC settings page (F10):
 
 | key | values | meaning |
 | --- | --- | --- |
-| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess`, `metalfx` | backend (`fsr`, written by the builds before FSR 4 was listed, reads as `fsr3`); the page lists every backend and shows the ones this machine or this build cannot run greyed, with the reason on its help line |
+| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess`, `metalfx` | backend. MetalFX is the Mac backend; the page greys choices this machine or build cannot run, with the reason on the help line |
 | `quality` | `native`, `quality`, `balanced`, `performance`, `ultra_performance`, `custom` | render scale 1/1.0, 1/1.5, 1/1.7, 1/2.0, 1/3.0 per axis (the FSR ratios, used for every backend), or `scale` |
 | `scale` | 0.25 to 1.0 | render scale per axis for `custom` |
-| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler (DLSS and MetalFX have no sharpening) |
-| `dlss_model` | `auto`, `k`, `l`, `m` | the DLSS Super Resolution model (NGX render preset) for every quality; `auto` is NVIDIA's default per quality; on the PC settings page the row takes the Sharpness row's place while DLSS is the upscaler |
-| `frame_generation` | `off`, `fsr3`, `dlss`, `metalfx` | one generated frame between two rendered frames: AMD FSR 3, NVIDIA DLSS Frame Generation or Apple MetalFX Frame Interpolation (macOS 26+, Apple silicon); needs a window and an upscaler (any backend and quality, native AA included). MetalFX forces FIFO/v-sync while on. `0` and `1` from older builds read as `off` and `fsr3` |
+| `sharpness` | 0 to 1 | FSR: RCAS after the upscaler. DLSS has no sharpening |
+| `dlss_model` | `auto`, `k`, `l`, `m` | the DLSS Super Resolution model. `auto` is NVIDIA's default per quality (K for DLAA, quality and balanced, M for performance, L for ultra performance). L and M run in FP8, which RTX 20 and 30 cards lack, so they cost about twice as much there |
+| `frame_generation` | `off`, `fsr3`, `dlss`, `metalfx`, `xess` | one generated frame between two rendered frames. Needs a window and an upscaler. MetalFX interpolation requires supported Apple silicon, macOS 26 or newer and the MetalFX upscaler |
 
-Test overrides (read on the first rendered frame): `PT_UPSCALER=off|fsr3|fsr4|dlss|xess|metalfx|spatial`, `PT_DLSS_MODEL=auto|k|l|m`, `PT_UPSCALE_QUALITY=<quality key>`, `PT_FRAME_GENERATION=off|fsr3|dlss|metalfx` (`0` and `1` as in pt.ini), `PT_UPSCALE_SCALE=<scale>` (implies custom), `PT_UPSCALE_SHARPNESS=<0..1>`, `PT_UPSCALE_MIP_BIAS=<bias>`, `PT_UPSCALE_FIXED_DITHER=1` (the native fixed dither and shadow tap patterns under the upscaler, Frame 2, for A/B runs), `PT_HANDY_DEMOD=0` (the handy light left in the upscaler's colour, Frame 7), `PT_DLSS_AUTO_EXPOSURE=0` (DLSS gets the frame's exposure instead of computing its own). `spatial` is a test backend: a bilinear resample of the jittered internal image, used to check the jitter, targets and post chain without an SDK; with `PT_UPSCALE_WARP=1` and the `native` quality it shows the previous frame warped by the current motion vectors instead (compare with the native frame to check the vectors). `PT_UPSCALE_DEBUG=1` draws the FSR debug view, `PT_UPSCALE_CHECK=1` enables the FSR API input checker (warnings in pt.log) and the NGX log.
+## What the port does per frame
 
-Headless tests: `--render-all` renders every tick (the motion reference is then the previous rendered frame, scripted cameras included), `--shot-warmup N` renders N extra frames of the same state before each screenshot so the temporal history converges on a static pose. `--display-rate R` paces the loop as a window refreshing at R Hz: 1/R seconds a loop, the ticks from the accumulator, the camera, the draws, the moving lights and the effects blended between the last two ticks (rendering.md 12.2) and the motion reference of a window (input script frames then count loops, so routes with frame budgets run differently); with it `--audio-period N` renders the offline audio in blocks of N frames whenever the paced clock reaches them, as an output device takes its periods (demo.md, Playback), and `PT_RENDER_TRACE` logs per loop the ticks run, the blend weight, the camera, each playing demo's frame and the head of every drawn skinned demo model as drawn and as the last tick left it, and per rendered frame (`--render-all`) the moving lights within 20 m (the handy light, demo lights, effect lights) and the effects whose transform changed in the last tick, as the frame places them. `PT_TICK_BLEND=camera` blends only the camera between ticks, `0` nothing, for A/B runs.
+With an upscaler active the render extent is `output / ratio`, the projection is jittered with the Halton(2,3)
+sequence, and material textures are sampled with a mip bias of `log2(render / output)` so the mips are those of a
+native frame. The scene passes (G-buffer, SSAO, lighting, forward, effects, reflections) run at the render extent.
+Then:
 
-## Frame
+- a reactive mask is written from what the effects pass blended over the opaque scene (particles, glass, blood);
+- motion vectors are drawn for the whole frame, and again for objects whose transform or skin changed;
+- the flashlight's contribution is divided out of the colour the upscaler sees and multiplied back in after it.
+  Without this, the spot moving over still surfaces (whose motion vectors are those of the surface) left dark echo
+  rings in the upscaler's history;
+- the two fixed per-pixel patterns the original draws (the 8x8 Bayer dither of alpha-tested hair and the 2x2 offset of
+  the shadow taps) are cycled frame by frame, because a temporal upscaler keeps a fixed pattern as texture. The history
+  averages them into the coverage they stand for;
+- the backend writes an output-sized image; the post chain (bloom, tonemap, depth of field, motion blur, colour LUT,
+  grain) runs at the output resolution as before. FXAA is skipped: the upscaler is the anti-aliasing.
 
-With an upscaler active, per frame:
-
-1. The render extent is `round(output / ratio)`. The jitter is Halton(2,3) at index `n mod phases + 1`, minus 0.5, with `phases = floor(8 (output width / render width)^2)` (the FSR sequence; DLSS and XeSS take the same). The projection of the main view gets `P[2][0] -= jx`, `P[2][1] -= jy` with `j = 2 jitter / render size`, so the image content moves by `+jitter` pixels (x right, y down). `View::jitter` carries `j` and the texture mip bias; `PixelNdc` subtracts `j`, so every depth-based position (lights, probes, fog, motion) is the unjittered surface point.
-2. Screen-fixed patterns move with the frame (`View::temporal`, main view only, and the mirror capture while its history runs). The original draws two fixed per-pixel patterns that FXAA softens: the 8x8 Bayer dither of `g_tex_mesh` (rendering.md 3: the vertex alpha fade and the dithered alpha test of MASK_PASS meshes such as the player's and Lisa's hair cards) and the 2x2 offset `d` of the four shadow taps (rendering.md 4.5). A temporal upscaler keeps a fixed pattern as texture: the hair of the photo mode came out dotted, and the hand's shadow on the floor in the wake-up (gc_p00_020), where one shadow map texel covers many pixels, showed its penumbra as a 2x2 checker of the full penumbra contrast at the render resolution, resampled into stripes and shown raw wherever the moving shadow drops the history. With an upscaler each pixel's Bayer rank steps by 39 a frame (mod 64, about 64 / phi and odd, so all 64 references come round), and all pixels take one shadow offset `d`, cycled (1,1) (-1,-1) (1,-1) (-1,1) frame by frame; the history averages them into the coverage and the 16-tap filter the fixed patterns stand for. The G-buffer and both velocity passes read the same dither. Measured (1280x720 to 1920x1080, DLSS quality, `dump/phase2/dlss`): the 2x2 checker component of the raw frame along the hand's shadow edge falls from 0.039 to 0.013 levels (the rest is the floor's texture), the dots in the hair go (DLSS, DLAA, FSR and XeSS), and a still photo mode view flickers in 0.20 % of the hair pixels by more than 2 levels against 0.06 % before (DLAA 0.023 % against 0.002 %).
-3. Scene passes run at the render extent: G-buffer, SSAO, lighting, composition, forward, VFX, reflections and luminance. The mirror capture renders its own 512x512 or 128x128 square (rendering.md 12.20) without jitter or mip bias. Material textures in `gbuffer.frag`, `forward.frag` and the upscaler velocity pass are sampled with the bias `log2(render / output)`, which picks the mips of a native output-resolution frame. FSR and DLSS suggest one more mip (`- 1`); the DLSS guide (3.5) allows up to `log2(render / output)` when the art was tuned for the native bias, as here: with the extra mip the normal-mapped asphalt of the ending street turns flatter and darker under the flashlight (ending_09 at 1280x720 to 1920x1080, FSR: 23.3 dB and 9 levels darker than native with `PT_UPSCALE_MIP_BIAS=-1.585`, 32.7 dB and 1.8 levels with `-0.585`; DLSS 24.3 dB against 34.4 dB).
-4. After the forward materials and before the VFX pass the HDR target is copied (`opaque`). After the VFX pass `upscale_reactive.frag` writes the reactive mask: the largest channel difference of the two colours after `c / (1 + max(c))`, times 3, capped at 0.9. Particles and anything else the VFX pass blends get it; lens flares are drawn after the post chain and never reach the upscaler.
-5. Motion vectors (`RG16F`, render extent, UV units, previous minus current, no jitter): `upscale_motion.frag` reprojects every pixel's depth with the previous unjittered view projection (sky pixels as directions); `upscale_velocity.vert/.frag` then draws the draws whose transform or skin changed (the motion blur history of 12.18) with the same depth test and alpha test as the G-buffer, using the previous model and skin matrices and the unjittered current view projection.
-6. Exposure: a 1x1 `R32F` image cleared to the frame's exposure; the colour is pre-exposed, so the upscalers get pre-exposure = exposure = that value (DLSS computes its own, see DLSS below).
-7. The handy light beam is normalized before temporal reconstruction (`upscale_demod.frag`, `PT_HANDY_DEMOD=0` disables it). The moving beam has no surface motion vector, so ordinary temporal accumulation can leave echo rings behind it. The factor is `F = 1 + Y(B) / e`, where `B` is the incident flashlight radiance, including distance attenuation, cone and mask but excluding surface normals and shadows, `Y` is Rec. 709 luma and `e` is 0.02 in pre-exposed light (`PT_HANDY_DEMOD_FLOOR`; invalid or smaller-than-0.0001 overrides use the default). `EvaluateLight` computes this radiance with a normal facing the light and translucency zero. The pass writes HDR divided by `F` into the temporary opaque target and stores `F` in an R16F target, capped at 65504. The resolve multiplies the reconstructed colour by the factor. Shadow visibility and surface detail remain in the backend input so soft-ray noise and changing shadow-map taps receive temporal accumulation; including them in the restored factor had reintroduced raw noise and outlined shadow edges. This scalar normalization also scales ambient and specular contributions before reconstruction. Pixels outside the beam keep `F = 1`. Effects keep the `F` of the surface under them, since the upscaler mixes each pixel with its neighbours and a pixel whose `F` differs from theirs comes back from the resolve as a rim (with `F = 1` on every effect pixel the rain drops on the windows and the f070 glass shards under the flashlight had white outlines, wider at lower render scales; a step of `F` inside the f060 bathtub water drew a white rectangle on it). Only inside a large opaque effect (HDR alpha at least 1) does `F` ease toward 1, by the share of opaque effect pixels 4, 8, 16 and 32 away (smoothstep from a half to all of them), so the `F` edges of the geometry under the Freezer's refracting view blood do not show through it.
-8. The backend dispatch reads colour (the demodulated copy, or the HDR target, with its bloom alpha), depth (reverse-Z, infinite), motion, reactive mask and exposure, and writes an output-extent `RGBA16F` image.
-9. `upscale_resolve.frag` writes three output-extent targets: the upscaled colour times `F` (bilinear at the output pixel's render position) with the scene alpha resampled from the render extent at the jitter-compensated position (the alpha only feeds the bloom bright pass), the depth and the motion blur object velocity (nearest render texel to the unjittered position).
-10. The post chain runs at the output extent with a second descriptor set whose `IMG_HDR`, `IMG_DEPTH` and object velocity slots point to those targets, and a post view with the output viewport and no jitter. Bloom, tonemap, DOF, motion blur, colour LUT, blur, distortion and grain are unchanged. FXAA is skipped: the temporal upscaler is the anti-aliasing (as a TAA would replace it). The fade and UI draw at the output resolution as before.
-
-A camera cut (3 m or 45 degrees, 12.18) or a missing previous frame resets the upscaler history. Debug views (`PT_DEBUG_VIEW`) render natively.
+A camera cut or a missing previous frame resets the upscaler history.
 
 ## Backends
 
 ### AMD FSR 3.1
 
-FidelityFX SDK v1.1.4 through the FidelityFX API (`ffx_api`, Vulkan backend), using AMD's signed `amd_fidelityfx_vk.dll` (MIT), loaded at run time from the executable's folder; without the DLL FSR is unavailable. Provider: FSR 3.1.4 upscaler. The DLL lists two upscaler providers, `3.1.4` and `2.3.3` (`ffxQueryDescGetVersions`); the backend takes the newest of its generation and creates the context with `ffxOverrideVersion`, so a DLL with a newer default provider would not change what FSR 3 means. Context flags: HDR, depth inverted, depth infinite (camera near FLT_MAX, far = near plane 0.05 as the API expects for reverse-Z). `jitterOffset` is `+jitter` (the FSR shaders take a sample's unjittered position as `pixel + 0.5 - jitter`; checked against a 4x supersampled render, where the other three signs score 0.2 to 1.6 dB lower), `motionVectorScale` is the render size. Sharpness drives RCAS.
+FidelityFX SDK 1.1.4 through the FidelityFX API, using AMD's signed `amd_fidelityfx_vk.dll` (MIT),
+loaded at run time from the executable's folder; without the DLL FSR is unavailable. Sharpness drives RCAS.
 
 ### AMD FSR 4
 
-The menu offers FSR 4 as its own choice and shows it greyed: AMD has released FSR 4 for DirectX 12 only. Checked 2026-10-06 against AMD's sources: the newest SDK is FSR SDK 2.3.0 (June 2026: upscaler 4.1.1, frame generation 4.0.1, ray regeneration 1.2.0), and every 2.x release ships DirectX 12 DLLs only (`amd_fidelityfx_upscaler_dx12.dll` and the others in `Kits/FidelityFX/signedbin`). Its readme says "Vulkan is currently not supported in AMD FSR SDK 2.3". The newest release with a Vulkan backend is still v1.1.4, which has no FSR 4 provider. FSR 4.1.1 itself needs an AMD Radeon RX 9000 or RX 7000 GPU. On other hardware the FSR API falls back to FSR 3.1.5. The second FSR backend (`CreateFsrBackend(ctx, 4)`) looks for a `4.x` upscaler provider in `amd_fidelityfx_vk.dll`. If a later Vulkan DLL from AMD carries one, it is created through the same API with `ffxOverrideVersion`, and a GPU the provider refuses reports the creation failure. With v1.1.4 it finds none, so the row shows FSR 4 greyed with that reason (`pc_note_fsr4_vulkan`). A `pt.ini` with `upscaler = fsr4` renders without an upscaler and the row shows FSR 4 greyed. An FSR 4 path on Vulkan today would need a DirectX 12 device beside the Vulkan one, with the inputs and the output shared between the two APIs (as OptiScaler does). That is not an AMD-supported path, and it could only be tested on an RX 7000 or 9000.
-
-The FidelityFX Vulkan backend picks paths from the device extensions it finds, not the ones enabled, and calls `vkGetBufferMemoryRequirements2KHR` when `VK_KHR_dedicated_allocation` exists; the device therefore enables `VK_KHR_get_memory_requirements2` and `VK_KHR_dedicated_allocation`, and the features `shaderFloat16`, `shaderStorageBufferArrayNonUniformIndexing`, `subgroupSizeControl` and `computeFullSubgroups` when supported (`UpscaleHost::DeviceSetup`). None of them changes the native output.
+listed and greyed. AMD has released FSR 4 for DirectX 12 only; the newest FidelityFX release with a
+Vulkan backend is 1.1.4, which has no FSR 4 provider. The row looks for a `4.x` upscaler provider in
+`amd_fidelityfx_vk.dll`, so a later Vulkan DLL from AMD that carries one would be picked up. A `pt.ini` with
+`upscaler = fsr4` renders without an upscaler until then.
 
 ### NVIDIA DLSS
 
-DLSS Super Resolution from the DLSS SDK 310.9.1 (github.com/NVIDIA/DLSS, NVIDIA RTX SDKs license; the newest release on 2026-10-06, 8 September 2026, the SDK of DLSS 4.5): the NGX headers and `nvsdk_ngx_s.lib` at build time, `nvngx_dlss.dll` next to `pt.exe` at run time (the NGX feature path is the executable's folder). NGX runs with a project ID (`3c9e5a1b-7d24-4f68-b0e3-5a2c8d91f47e`, custom engine) and `%TEMP%\pt-port-ngx` as its data folder. The qualities map to DLAA (`native`), MaxQuality, Balanced, MaxPerf and UltraPerformance at the render sizes of the quality table (`custom` uses MaxQuality). The model is `upscaling.dlss_model`: `auto` leaves NGX's render preset at Default, which is NVIDIA's model per quality (K for DLAA, quality and balanced, M for performance, L for ultra performance). `k`, `l` and `m` set `NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_*` of every quality to preset K, L or M before the feature is created, and a change recreates the feature. K is the first transformer model. L and M are the second generation (DLSS 4.5, SDK 310.5.0) and run in FP8, which RTX 20 and 30 GPUs lack, so they cost about twice as much there (see Measurements). The SDK has no newer Super Resolution model: N and O are reserved ("reverts to default"), and A to D, E and F are removed or deprecated. Checked with the corridor poses of `render_check.py` (960x540, DLSS performance, `PT_DLSS_MODEL`): `auto` and `m` give bit-identical frames (mean difference 0.000), while `k` differs from them by 0.23 to 0.25 levels and `l` by 0.16, so the hint reaches the network. Create flags: HDR, low-resolution motion vectors, inverted depth. Evaluate: `InJitterOffset` = `+jitter` (checked against the 4x supersampled render as for FSR), motion vector scale = render size, `InPreExposure` at the frame's exposure (the HDR target is pre-exposed and the tonemapper applies no further exposure), the reactive mask as `pInBiasCurrentColorMask`. The feature is created with `NVSDK_NGX_DLSS_Feature_Flags_AutoExposure` (`PT_DLSS_AUTO_EXPOSURE=0` passes the exposure image at the frame's exposure instead): the guide (3.9) defines the exposure value as `MidGray / (AverageLuma * (1 - MidGray))` over the frame, and P.T.'s frames, far darker than mid grey, gave model K a slow history on lighting changes; with its own exposure K trails the moving flashlight spot less (before step 7 existed: mean |DLSS - native| over the moving spot 1.88 to 1.14 levels) and compare_ref --replay --match-ev with DLAA comes closer to the native frames in four of five sets (ceillamp_f100 0.69 to 0.47, boot_dof 0.57 to 0.44, floor_f020 0.46 to 0.39, floor_f160 0.86 to 0.79, ending_street unchanged) and stays within 0.1 of the captures. L and M ignore the flag (bit-identical output). The reactive mask has no effect on the current models: the guide (3.15) says the Bias Current Color mask is not to be used with them (only the deprecated preset F reads it), and output with the whole frame reactive (`PT_REACTIVE_ALL=1`), with the flashlight term at gain 8 and cap 0.9, and with the mask at 0 is identical; FSR and XeSS read it.
-
-The upscaler list checks the vendor, `nvngx_dlss.dll` and the Vulkan extensions without loading NGX; NGX is loaded once DLSS is selected, and its capability query then names the reason on GPUs or drivers without DLSS. Loading NGX starts the driver's `nvngx_update.exe` (the model updater every DLSS game starts); with DLSS off the port never loads NGX. NGX needs `VK_KHR_get_physical_device_properties2` on the instance and `VK_NVX_binary_import`, `VK_NVX_image_view_handle`, `VK_KHR_buffer_device_address` and `VK_KHR_push_descriptor` on the device (driver 617.14). On NVIDIA GPUs the device gets them at start, from the NGX query when `pt.ini` selects DLSS and from that list otherwise, so DLSS can be switched on in the pause menu; if a driver asks for more, selecting DLSS reports that a restart is needed (the choice is saved and the next start queries NGX). Ray reconstruction (preset F in 310.9.1) is not used: it replaces the denoiser of a ray traced frame, which this renderer does not have.
+DLSS SDK 310.9.1, `nvngx_dlss.dll` next to `pt.exe`. The qualities map to DLAA, MaxQuality, Balanced,
+MaxPerf and UltraPerformance. NGX is loaded only once DLSS is selected; loading it starts the driver's `nvngx_update.exe`,
+the model updater every DLSS game starts. DLSS computes its own exposure, which handles P.T.'s dark frames better than the
+frame's exposure value. If the driver asks for Vulkan extensions the device was not created with, selecting DLSS reports
+that a restart is needed.
 
 ### Intel XeSS
 
-XeSS Super Resolution from the XeSS SDK 3.0.2 (github.com/intel/xess, Intel Simplified Software License): the headers at build time, `libxess.dll` next to `pt.exe` at run time (loaded when XeSS is selected; it reports XeSS SR 2.0.2). GPUs other than Intel Arc run its DP4a model. The qualities keep the render sizes of the quality table and use the XeSS preset with the same ratio: native AA uses AA, quality (1.5) Ultra Quality, balanced (1.7) Quality, performance (2.0) Balanced, ultra performance (3.0) Ultra Performance; `custom` takes the preset with the nearest ratio. Init flags: inverted depth and the responsive pixel mask (the reactive mask). Execute: jitter `+jitter` (checked against the 4x supersampled render: 37.0 dB on the f020 corridor at performance, the other signs 32.3 to 34.9 dB), velocity scale = render size (the vectors are UV units from the current to the previous frame), exposure scale 1 (the colour is pre-exposed). XeSS's own mip bias formula is `log2(render / output)`, the bias used for every backend here.
+XeSS SDK 3.0.2, `libxess.dll` next to `pt.exe`, loaded when XeSS is selected. GPUs other than Intel Arc
+run its DP4a model. The qualities use the XeSS preset with the same ratio; `custom` takes the nearest.
 
-XeSS needs `VK_EXT_mutable_descriptor_type` with `mutableDescriptorType`, and `shaderStorageImageWriteWithoutFormat`, `shaderInt8`, `scalarBlockLayout` and `shaderIntegerDotProduct` (its query on driver 617.14). When `libxess.dll` is present the device enables them at start where supported: from the XeSS query when `pt.ini` selects XeSS, from that list otherwise. Selecting XeSS runs the query again and asks for a restart if something is missing.
+The three SDKs are Windows binaries, so the upscalers are left out of the Linux build (docs/linux.md).
+
+## Frame generation
+
+### FSR 3
+
+AMD FSR 3.1 frame generation from the same DLL, with the Vulkan frame interpolation swapchain. It needs an
+active upscaler (FSR, DLSS or XeSS; the interpolation reads the upscaler's depth and motion vectors). While it is on the
+swapchain presents with v-sync whatever the v-sync setting: with v-sync off the driver's present call blocked within
+seconds in every test run here. Each rendered frame and its generated frame take whole refreshes, so a frame that does
+not fit two refreshes takes three; at 2560x1440 DLAA on a 260 Hz display this showed 176 frames a second but rendered 88
+instead of 162. The UI is drawn into the rendered frames only and is not interpolated. AMD lists the Radeon RX 5000
+series as the minimum, and the port checks for it: on a GCN card (RX 400 and 500, Vega) the row is greyed, and a
+`pt.ini` asking for it renders without. A tester's RX 580 lost the Vulkan device repeatedly with it on.
+
+### DLSS Frame Generation
+
+through NVIDIA Streamline 2.14.1. It needs a GeForce RTX 40 or newer, a driver with DLSS
+Frame Generation, and hardware-accelerated GPU scheduling turned on in Windows graphics settings; the row names which
+of these is missing. It is experimental: I have no RTX 40 or 50, so the generated frames themselves have never run on
+hardware here. Streamline loads only for a start whose `pt.ini` has `frame_generation = dlss` and a window; choosing
+DLSS in the menu takes effect at the next start. If a start with Streamline crashes or hangs, the next start leaves it
+out, sets `frame_generation = off` and greys the row for that session. On Vulkan Streamline cannot present with
+v-sync, so the swapchain runs without it while frame generation is on, and the fps limit goes to Reflex's frame
+limiter. In menus and the paused game frame generation is off. A build configured with `-DPT_STREAMLINE=OFF` leaves the
+code and the DLLs out. Not covered: the UI alpha tag (the HUD-less copy alone separates the UI), the distortion field,
+multi frame generation (RTX 50).
+
+If you have an RTX 40 or 50: set `frame_generation = dlss` with DLSS or FSR in `pt.ini`, start in a window, and check
+`pt.log` for `streamline: DLSS ok, DLSS Frame Generation ok` and the summary `presented N frames for M rendered` at
+exit (N about 2 M). The Streamline log is `streamline/sl.log` next to `pt.ini`. An issue with that log is welcome
+either way.
+
+Licences in `licenses/` next to `pt.exe`: Streamline's (MIT), the NVIDIA RTX SDKs licence (DLSS and `nvngx_dlssg.dll`)
+and Reflex's. Only the signed production DLLs ship.
+
+## DLSS 5
+
+DLSS 5 neural rendering is not in the port. NVIDIA's public SDKs (DLSS 310.9.1, Streamline 2.14.1) carry no plugin,
+header or runtime for it, and the community route runs through an unsigned DLL taken from a game, which the NVIDIA RTX
+SDKs licence forbids using. If NVIDIA publishes it for Vulkan, the port has the inputs it takes (the tonemapped frame
+before the UI, depth, motion vectors, the G-buffer).
+
+## What to expect
+
+Measured on an RTX 3090 at fixed poses against a 4x supersampled render: DLAA and DLSS quality score at or above the
+native frame on still views, the other modes come within 1 to 4 dB of it (the lower the render resolution, the
+further), and all three upscalers follow thin geometry in motion (window mullions, picture frames) more steadily than
+the original's FXAA. GPU time at 1920x1080 in the corridor, native with
+FXAA 3.1 ms: FSR quality 2.7 ms, DLSS quality 3.0 ms, XeSS quality 3.2 ms; at 3840x2160, native 10.3 ms against 7.7, 8.5
+and 8.2 ms. The native AA modes cost 0.8 to 1.1 ms more than native at 1080p. On RTX 20 and 30 the DLSS models M and L
+cost about twice K, so DLSS performance can take more GPU time than DLSS quality there.
+
+Known differences: under FSR the wet asphalt of the ending street comes out a few levels darker under the flashlight
+(its accumulation loses some of the sparkle); the eye adaptation is a little behind native for the first second after
+a cut in every mode.
+
+## DLSS Frame Generation on RTX 20 and 30
+
+DLSS Frame Generation needs an RTX 40 or newer card. On an RTX 20 or 30 the row is greyed out, unless RTX30MFG-Unlock
+(github.com/mcsoderh/RTX30MFG-Unlock) sits next to pt.exe: `RTX40MFGCore.dll`, `RTX40MFG.asi` and the Ultimate ASI Loader as
+`version.dll` with its `global.ini` values in `version.ini`. The game then lets Streamline decide, and Streamline accepts the
+card. Tested once on an RTX 3090: it generates frames. It is third-party and experimental; nothing of it ships with the game.
 
 ### Apple MetalFX
 

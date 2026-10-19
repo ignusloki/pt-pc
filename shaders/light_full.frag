@@ -1,0 +1,8 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#endif
+#define PT_RT_FULL 1
+#include "light_main.glsl"

@@ -1,0 +1,23 @@
+Upscaler runtimes shipped next to pt (Linux build)
+
+The full licence texts are the other files in this folder. What each one lets the port ship:
+
+NVIDIA DLSS SDK 310.9.1 (libnvidia-ngx-dlss.so.310.9.1: DLSS Super Resolution;
+libnvidia-ngx-dlssd.so.310.9.1: DLSS Ray Reconstruction, the denoiser of the Path traced ray
+quality; libnvsdk_ngx.a, linked into pt)
+  NVIDIA RTX SDKs licence (NVIDIA_RTX_SDKs_LICENSE.txt): the SDK's binaries may be
+  distributed in object code inside an application with material additional functionality,
+  only for systems with NVIDIA GPUs, under terms at least as protective as NVIDIA's. The
+  files are the SDK's lib/Linux_x86_64/rel builds, unmodified. NGX itself
+  (libnvidia-ngx.so.1) is part of the NVIDIA driver and is not shipped.
+
+AMD FidelityFX SDK v1.1.4 (libamd_fidelityfx_vk.so: FSR 3.1 upscaler)
+  MIT licence (AMD_FidelityFX_SDK_LICENSE.txt). AMD ships the FidelityFX API as Windows
+  DLLs only; this library is built by the port from AMD's unmodified v1.1.4 sources (the
+  FidelityFX API, the FSR 3.1.4 upscaler and the Vulkan backend) with a small Linux
+  compatibility layer. It is not an AMD binary. FSR 3 frame generation is not included.
+
+Intel XeSS: not shipped. The XeSS SDK has Windows libraries only.
+
+NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation; AMD and FidelityFX are
+trademarks of Advanced Micro Devices. P.T. port is not endorsed by NVIDIA or AMD.

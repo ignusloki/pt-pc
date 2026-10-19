@@ -19,7 +19,6 @@
 
 namespace pt::vfx {
 
-// strength of the lens flares' full screen ghosts (0 leaves them out); set from the graphics preset
 void SetFlareGhostScale(float scale);
 
 struct ViewInfo {
@@ -79,9 +78,7 @@ struct Draw {
     float depth = 0.0f;
     int32_t priority = 0;
     bool cull = false;
-    // liquid material (Primitive_Liquid2Final): samples a copy of the scene taken before it is drawn
     bool refract = false;
-    // a liquid with the alpha test (`opaque`): drawn at full resolution on the scene, where the others go to the effect pass
     bool opaque = false;
 };
 
@@ -100,7 +97,6 @@ struct LightOut {
     bool spot = false;
     glm::vec3 position{0.0f};
     glm::vec3 direction{0.0f, -1.0f, 0.0f};
-    // a spot light's own +Y, the v axis of its shadow map and mask
     glm::vec3 up{0.0f, 0.0f, 1.0f};
     glm::vec3 color{1.0f};
     float lumen = 0.0f;
@@ -118,7 +114,6 @@ struct LightOut {
     float shadow_penumbra = 30.0f;
     int32_t mask = -1;
     uint64_t id = 0;
-    // the light area: area_world maps [-1, 1] on each axis to the box in world space
     bool area = false;
     glm::mat4 area_world{1.0f};
 };
@@ -140,11 +135,6 @@ using FileReader = std::function<std::optional<std::vector<uint8_t>>(const std::
 using ModelReader = std::function<std::shared_ptr<const ModelMesh>(uint64_t code)>;
 using LightingProbe = std::function<LightingSample(const glm::vec3&, bool ambient)>;
 
-// The light block of one effect draw object, as the forward light block job (0xD6BB90, 0xCC3530, 0xCC4FE0, 0xDB6C10;
-// rendering.md 12) builds it from the draw's world box: the hemisphere terms of its probes (m_lightParams[0] + [1] is the upper
-// hemisphere, sky), up to three point or spot lights ranked at the box centre (m_lightParams[2 + 2i] position and 1/R^4,
-// [3 + 2i] colour over pi, a spot's scaled by its cone at the centre) and the directional term (m_localParam[1], 0xD4D500).
-// The Prim_Poly_LitDP shaders light each pixel with them (formats/vfx.md 4)
 struct LightBlock {
     glm::vec3 sky{0.0f};
     glm::vec3 directional{0.0f};
@@ -154,6 +144,7 @@ struct LightBlock {
     float inv_r4[3]{};
 };
 using LightBlockProbe = std::function<LightBlock(const glm::vec3& center, const glm::vec3& half)>;
+using LightsReady = std::function<void(const std::vector<LightOut>& lights)>;
 
 struct InstanceKey {
     uint64_t owner = 0;
@@ -172,8 +163,6 @@ public:
     void SetWind(const glm::vec3& velocity) { wind_ = velocity; }
     std::shared_ptr<const EffectDef> Load(const std::string& path);
     const LensFlareDef* LoadFlare(const std::string& name);
-    // loads the effect and resolves every texture its shapes and lens flares can draw with, so the first frame that shows it does
-    // not read them from disk
     void Preload(const std::string& path, const TextureResolver& textures, const TextureResolver& cubes);
     void ClearCache();
 
@@ -181,9 +170,7 @@ public:
     bool IsPlaying(const InstanceKey& key) const;
     bool Spawn(const InstanceKey& key, const std::string& path, const glm::mat4& world, std::optional<uint32_t> seed = std::nullopt);
     void SetTransform(const InstanceKey& key, const glm::mat4& world);
-    // keeps every instance's transform as the one before the next tick, which Build blends from
     void SnapshotWorlds();
-    // the instances whose transform changed in the last tick, at `blend` (as Build places them)
     template <typename F>
     void ForEachMoving(float blend, F&& f) const {
         for (const auto& [key, inst] : instances_) {
@@ -195,9 +182,6 @@ public:
     void SetParameter(const InstanceKey& key, uint32_t name, const glm::vec4& value);
     void SetParameterLow16(const InstanceKey& key, uint32_t low16, const glm::vec4& value);
     void Remove(const InstanceKey& key);
-    // A demo effect's section end (0x7760E0 phase 2 queues the instance with mode 2, 0xB08B30): its emitters stop and its
-    // particles live out their lives; particles of infinite life and the lens flares go at once. The instance is removed when
-    // its last particle has died
     void Stop(const InstanceKey& key);
     bool IsStopped(const InstanceKey& key) const;
     void RemoveOwner(uint64_t owner);
@@ -210,15 +194,12 @@ public:
     }
 
     void Update(float dt, const ViewInfo& view);
-    // `cubes` gives the cube slot of a liquid's reflection cube (kNoTexture when it is not one); `blend` places each instance between
-    // its transform before the last tick (SnapshotWorlds) and its current one, for a frame drawn between ticks (1: the current one)
-    // lit particles (FxLightInfluenceMaterialNode) take their light from this per draw block when it is set
     void SetLightBlockProbe(LightBlockProbe probe) { light_block_ = std::move(probe); }
+    void SetLightsReady(LightsReady ready) { lights_ready_ = std::move(ready); }
     void Build(const ViewInfo& view, const TextureResolver& textures, const TextureResolver& cubes, const LightingProbe& lighting,
                RenderList& out, std::vector<LightOut>& lights, float blend = 1.0f);
 
     size_t InstanceCount() const { return instances_.size(); }
-    // a live, unfinished instance whose effect name contains `part`
     bool AnyLive(std::string_view part) const {
         for (const auto& [key, inst] : instances_) {
             if (inst.def && !inst.finished && inst.def->name.find(part) != std::string::npos) return true;
@@ -237,6 +218,7 @@ private:
         uint32_t count = 1;
         uint16_t random = 0;
         glm::mat4 spawn_world{1.0f};
+        glm::mat4 spawn_camera{1.0f};
     };
 
     struct EmitState {
@@ -297,7 +279,6 @@ private:
         std::vector<ShapeState> shapes;
         std::vector<FlareState> flares;
         std::vector<uint32_t> slot_rng;
-        // a spread with even angles (0xD8F07EBD): the length drawn for the batch being spawned, per slot
         std::vector<float> slot_batch;
         std::unordered_map<uint32_t, glm::vec4> params;
         std::vector<std::pair<uint32_t, glm::vec4>> params_low16;
@@ -316,6 +297,7 @@ private:
         float effect_ratio = 0.0f;
         glm::mat4 world{1.0f};
         glm::vec3 position{0.0f};
+        bool follow_spawn = false;
     };
 
     int Emit(Instance& inst, ShapeState& state, const EffectDef& def, int32_t emit, float dframes, const ViewInfo& view);
@@ -330,7 +312,6 @@ private:
                     std::vector<LightOut>& lights) const;
     FlareLight Light(const glm::mat4& world, const FlareDef& flare, const ViewInfo& view) const;
     void UpdateFlare(const Instance& inst, const FlareDef& flare, FlareState& state, float dt, const ViewInfo& view, bool cut);
-    // the effect whose flares BuildFlare draws, for PT_FLARE_LOG
     const std::string* flare_effect_ = nullptr;
     void BuildFlare(const glm::mat4& world, const FlareDef& flare, const FlareState& state, const ViewInfo& view, const TextureResolver& textures,
                     RenderList& out);
@@ -347,10 +328,7 @@ private:
     std::optional<ViewInfo> last_view_;
     glm::vec3 wind_{0.0f};
     LightBlockProbe light_block_;
-    // BuildShape's per shape work lists, kept between frames so a frame allocates nothing once they have grown: built afresh per
-    // shape they were the largest allocations of the frame (the f005 glass rain's 3000 particles, about 0.6 MB of quads per
-    // frame), which the C runtime takes from and gives back to the system each time, so every frame faulted fresh pages in
-    // (window_tests t2_fsr_up_fgoff 132-140 s, a loaded machine: "vfx: prepare took 21-290 ms" on 41 frames)
+    LightsReady lights_ready_;
     struct BuildItem {
         float depth;
         Quad quad;

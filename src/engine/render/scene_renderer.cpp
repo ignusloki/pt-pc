@@ -8,7 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
+#include <map>
 
 #include "engine/assets/ftex.h"
 #include "engine/core/log.h"
@@ -17,19 +19,16 @@
 namespace pt {
 namespace {
 
-constexpr VkFormat kAlbedoFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kNormalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kDepthFormat = SceneRenderer::kDepthTargetFormat;
-constexpr VkFormat kLightFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kHdrFormat = SceneRenderer::kHdrTargetFormat;
-constexpr VkFormat kAoFormat = VK_FORMAT_R8_UNORM;
-constexpr VkFormat kRefMapFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kPostFormat = SceneRenderer::kPostTargetFormat;
-// 0xDD0D40's bloom chain renders 8-bit sRGB targets and samples them through sRGB textures (liquid_trace_f010 ops 925-985)
-constexpr VkFormat kBloomFormat = VK_FORMAT_R8G8B8A8_SRGB;
-// Screen velocity and its tile maxima only carry two channels.
-constexpr VkFormat kMotionFormat = VK_FORMAT_R16G16_SFLOAT;
+constexpr gpu::Format kAlbedoFormat = gpu::Format::R8G8B8A8Unorm;
+constexpr gpu::Format kNormalFormat = gpu::Format::R16G16B16A16Sfloat;
+constexpr gpu::Format kMaterialFormat = gpu::Format::R8G8B8A8Unorm;
+constexpr gpu::Format kDepthFormat = SceneRenderer::kDepthTargetFormat;
+constexpr gpu::Format kLightFormat = gpu::Format::R16G16B16A16Sfloat;
+constexpr gpu::Format kHdrFormat = SceneRenderer::kHdrTargetFormat;
+constexpr gpu::Format kAoFormat = gpu::Format::R8Unorm;
+constexpr gpu::Format kRefMapFormat = gpu::Format::R16G16B16A16Sfloat;
+constexpr gpu::Format kPostFormat = SceneRenderer::kPostTargetFormat;
+constexpr gpu::Format kBloomFormat = gpu::Format::R8G8B8A8Srgb;
 constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 
 const char* const kDebugViewNames =
@@ -87,20 +86,26 @@ const char* DebugViewNames() {
 }
 
 bool SceneRenderer::EnsureShadowTarget() {
-    const uint32_t tile = graphics.shadow_quality<=1?512u:graphics.shadow_quality==2?1024u:2048u;
-    const uint32_t size=tile*4;
+    const vk::AllocTag tag("shadow atlas");
+    uint32_t tile = graphics.shadow_quality<=1?512u:graphics.shadow_quality==2?1024u:2048u;
+    tile = std::min(tile, shadow_tile_cap_);
+    uint32_t size=tile*4;
     if(shadow_.Valid() && shadow_.Extent().width==size) return true;
     RenderTarget replacement;
-    if(!CreateTarget(replacement,kDepthFormat,{size,size},VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT))
-        return shadow_.Valid();
-    auto& ctx=renderer_->Context();
-    vkDeviceWaitIdle(device_);
-    ctx.Submit([&](VkCommandBuffer cmd){
-        UseTargets(cmd,{{&replacement,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd,{size,size},{},&replacement,false,true);vkCmdEndRendering(cmd);
-        UseTargets(cmd,{{&replacement,VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
+    while(!CreateTarget(replacement,kDepthFormat,{size,size},gpu::ImageUsage::DepthStencilAttachment|gpu::ImageUsage::Sampled,gpu::Aspect::Depth)) {
+        if(shadow_.Valid() || tile<=512u) return shadow_.Valid();
+        tile/=2;
+        size=tile*4;
+        shadow_tile_cap_=tile;
+        LogWarn("graphics: shadow atlas tile lowered to {} px: out of video memory",tile);
+    }
+    gpu_->WaitIdle();
+    gpu_->Submit([&](gpu::CommandList& cmd){
+        cmd.UseTargets({{&replacement,gpu::Layout::DepthAttachment}});
+        cmd.BeginPass({size,size},{},&replacement,false,true);cmd.EndPass();
+        cmd.UseTargets({{&replacement,gpu::Layout::DepthReadOnly}});
     });
-    ctx.DestroyImage(shadow_.image);shadow_=replacement;
+    gpu_->DestroyImage(shadow_.image);shadow_=replacement;
     if(extent_.width>0) WriteImageDescriptors();
     LogInfo("graphics: shadow atlas {}x{}, tile {} px",size,size,tile);
     return true;
@@ -108,110 +113,154 @@ bool SceneRenderer::EnsureShadowTarget() {
 
 bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
-    ldr_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    ldr_format_ = gpu::Format::R8G8B8A8Unorm;
     textures_ = &textures;
-    vk::Context& ctx = renderer.Context();
-    device_ = ctx.device;
+    gpu_ = &renderer.Gpu();
 
-    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler.maxLod = VK_LOD_CLAMP_NONE;
-    const VkFilter filters[4] = {VK_FILTER_NEAREST, VK_FILTER_LINEAR, VK_FILTER_NEAREST, VK_FILTER_LINEAR};
-    const VkSamplerAddressMode clamp = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    const VkSamplerAddressMode repeat = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    const VkSamplerAddressMode modes[4] = {clamp, clamp, repeat, repeat};
+    gpu::SamplerDesc sampler;
+    sampler.max_anisotropy = 0.0f;
+    const gpu::Filter filters[4] = {gpu::Filter::Nearest, gpu::Filter::Linear, gpu::Filter::Nearest, gpu::Filter::Linear};
+    const gpu::AddressMode clamp = gpu::AddressMode::ClampToEdge;
+    const gpu::AddressMode repeat = gpu::AddressMode::Repeat;
+    const gpu::AddressMode modes[4] = {clamp, clamp, repeat, repeat};
     for (int i = 0; i < 4; ++i) {
-        sampler.magFilter = sampler.minFilter = filters[i];
-        sampler.mipmapMode = filters[i] == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = modes[i];
-        vkCreateSampler(device_, &sampler, nullptr, &samplers_[i]);
+        sampler.mag = sampler.min = filters[i];
+        sampler.mipmap = filters[i] == gpu::Filter::Linear ? gpu::MipmapMode::Linear : gpu::MipmapMode::Nearest;
+        sampler.address_u = sampler.address_v = sampler.address_w = modes[i];
+        samplers_[i] = gpu_->CreateSampler(sampler);
     }
-    sampler.magFilter = sampler.minFilter = VK_FILTER_LINEAR;
-    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler.compareEnable = VK_TRUE;
-    sampler.compareOp = VK_COMPARE_OP_LESS;
-    vkCreateSampler(device_, &sampler, nullptr, &samplers_[gpu::kSmpShadow]);
+    sampler.mag = sampler.min = gpu::Filter::Linear;
+    sampler.address_u = sampler.address_v = sampler.address_w = gpu::AddressMode::ClampToEdge;
+    sampler.compare = true;
+    sampler.compare_op = gpu::CompareOp::Less;
+    samplers_[gpu::kSmpShadow] = gpu_->CreateSampler(sampler);
 
+#ifdef __APPLE__
+    const auto& ctx = renderer.Context();
     VkFormatProperties3 bloom_features{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
     VkFormatProperties2 bloom_format{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &bloom_features};
-    vkGetPhysicalDeviceFormatProperties2(ctx.physical, kBloomFormat, &bloom_format);
-    constexpr VkFormatFeatureFlags2 kBloomStorage = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
-                                                    VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
-    static const bool bloom_passes = [] {
-        const char* v = std::getenv("PT_BLOOM_COMPUTE");
-        return v && v[0] == '0';
-    }();
-    bloom_compute_ = ctx.storage_without_format && (bloom_features.optimalTilingFeatures & kBloomStorage) == kBloomStorage && !bloom_passes;
+    vkGetPhysicalDeviceFormatProperties2(ctx.physical, gpu::vk::Native(kBloomFormat), &bloom_format);
+    constexpr VkFormatFeatureFlags2 storage = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+        VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT | VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+    const char* bloom_override = std::getenv("PT_BLOOM_COMPUTE");
+    bloom_compute_ = ctx.storage_without_format && (bloom_features.optimalTilingFeatures & storage) == storage &&
+                     !(bloom_override && bloom_override[0] == '0');
+#endif
     if (!CreateDescriptors()) {
         return false;
     }
-    VkDescriptorSetLayout sets[2] = {textures.SetLayout(), frame_layout_};
-    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};
-    VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_info.setLayoutCount = 2;
-    layout_info.pSetLayouts = sets;
-    layout_info.pushConstantRangeCount = 1;
-    layout_info.pPushConstantRanges = &push;
-    if (!vk::Check(vkCreatePipelineLayout(device_, &layout_info, nullptr, &layout_), "scene pipeline layout")) {
+    gpu::PipelineLayoutDesc layout_desc;
+    layout_desc.sets = {textures.BindingLayout(), frame_layout_};
+    layout_desc.push_bytes = 128;
+    layout_ = gpu_->CreatePipelineLayout(layout_desc);
+    if (!layout_) {
+        LogError("scene renderer: scene pipeline layout failed");
         return false;
     }
+    if (gpu_->Info().backend == gpu::Backend::D3D12) {
+        UpscaleHost::Get().SetD3D12Device(gpu_);
+        gpu::BindingLayoutDesc dispatch;
+        dispatch.bindings = {{0, gpu::BindingType::UniformBuffer, 1, gpu::ShaderStage::Compute}};
+        dispatch_layout_ = gpu_->CreateBindingLayout(dispatch);
+        gpu::BindingPoolDesc pool;
+        pool.sizes = {{gpu::BindingType::UniformBuffer, Renderer::kFramesInFlight}};
+        pool.max_sets = Renderer::kFramesInFlight;
+        dispatch_pool_ = gpu_->CreateBindingPool(pool);
+        for (FrameSlot& slot : slots_) {
+            slot.dispatch_set = gpu_->AllocateBindingSet(dispatch_pool_, dispatch_layout_);
+            if (!slot.dispatch_set || !gpu_->CreateBuffer({256, gpu::BufferUsage::UniformBuffer, true}, slot.dispatch)) {
+                LogError("scene renderer: DispatchInfo set failed");
+                return false;
+            }
+            const gpu::BufferBinding info{slot.dispatch.buffer, 0, 16};
+            const gpu::BindingWrite write{slot.dispatch_set, 0, 0, gpu::BindingType::UniformBuffer, {}, {&info, 1}};
+            gpu_->WriteBindings({&write, 1});
+        }
+    }
     for (FrameSlot& slot : slots_) {
-        ctx.CreateBuffer(slot.frame_data, sizeof(gpu::FrameData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        ctx.CreateBuffer(slot.skin, sizeof(glm::mat4) * gpu::kMaxSkinMatrices, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        ctx.CreateBuffer(slot.luminance, sizeof(glm::vec2) * gpu::kLuminanceEntries, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        VkQueryPoolCreateInfo query{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-        query.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        query.queryCount = kTimestamps;
-        vkCreateQueryPool(device_, &query, nullptr, &slot.queries);
-        query.queryCount = 4;
-        vkCreateQueryPool(device_, &query, nullptr, &slot.upscale_queries);
+        if (!gpu_->CreateBuffer({sizeof(gpu::FrameData), gpu::BufferUsage::StorageBuffer, true}, slot.frame_data) ||
+            !gpu_->CreateBuffer({sizeof(glm::mat4) * gpu::kMaxSkinMatrices, gpu::BufferUsage::StorageBuffer, true}, slot.skin) ||
+            !gpu_->CreateBuffer({sizeof(glm::vec2) * gpu::kLuminanceEntries, gpu::BufferUsage::StorageBuffer, true}, slot.luminance)) {
+            return false;
+        }
+        slot.queries = gpu_->CreateTimestampPool(kTimestamps);
+        slot.upscale_queries = gpu_->CreateTimestampPool(4);
+        if (std::getenv("PT_LIGHT_TIMING")) {
+            slot.light_queries = gpu_->CreateTimestampPool(2 * gpu::kMaxLights);
+        }
     }
     frame_ = new gpu::FrameData();
     CreateBuiltinResources();
     if (!EnsureShadowTarget()) return false;
+    LogInfo("startup: scene pipelines");
     if (!CreatePipelines()) {
         return false;
     }
-    sss_ready_ = sss_.Init(ctx, textures.SetLayout(), frame_layout_, kLightFormat, samplers_[gpu::kSmpPointClamp]);
-    if (ctx.ray_query) {
-        rt_ = std::make_unique<RayTracing>();
-        PipelineDesc volume;
+    LogInfo("startup: subsurface scattering pass");
+    sss_ready_ = sss_.Init(*gpu_, textures.BindingLayout(), frame_layout_, kLightFormat, samplers_[gpu::kSmpPointClamp]);
+    if (gpu_->Info().ray_query && (gpu_->Info().backend == gpu::Backend::Vulkan || D3D12RayTracingAvailable())) {
+        LogInfo("startup: ray tracing structures and shadow pass");
+        rt_ = CreateRayTracing(*gpu_);
+        gpu::GraphicsPipelineDesc volume;
         volume.vertex = "volume.vert";
         volume.fragment = "light_rt.frag";
         volume.colors = {kLightFormat, kLightFormat};
         volume.depth = kDepthFormat;
         volume.depth_test = true;
-        volume.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
-        volume.blend = BlendMode::Additive;
-        if (rt_->Init(ctx, textures.SetLayout(), frame_layout_)) {
+        volume.depth_compare = gpu::CompareOp::LessOrEqual;
+        volume.blend = gpu::BlendMode::Additive;
+        volume.depth_bounds = light_depth_bounds_;
+        if (rt_->Init(*gpu_, textures.BindingLayout(), frame_layout_)) {
             volume.layout = rt_->Layout();
-            light_rt_ = CreateGraphicsPipeline(device_, volume);
+            light_rt_ = gpu_->CreateGraphicsPipeline(volume);
             volume.fragment = "light_contact.frag";
-            light_contact_ = CreateGraphicsPipeline(device_, volume);
-            PipelineDesc reflect;
+            light_contact_ = gpu_->CreateGraphicsPipeline(volume);
+            LogInfo("startup: ray tracing Full tier passes");
+            CreateFullPipelines(kLightFormat, light_depth_bounds_);
+            LogInfo("startup: path traced lighting passes");
+            CreatePathPipelines(kLightFormat);
+            if (pt_direct_) {
+                gpu::GraphicsPipelineDesc desc;
+                desc.layout = layout_;
+                desc.vertex = "mesh.vert";
+                desc.fragment = "gbuffer_pt.frag";
+                desc.mesh_input = true;
+                desc.colors = {kAlbedoFormat, kNormalFormat, kMaterialFormat};
+                desc.depth = kDepthFormat;
+                desc.depth_test = true;
+                desc.depth_write = true;
+                pt_gbuffer_ = gpu_->CreateGraphicsPipeline(desc);
+                desc.depth_write = false;
+                desc.depth_bias = true;
+                desc.blend = gpu::BlendMode::Alpha;
+                const gpu::ColorMask rgb = gpu::ColorComponent::R | gpu::ColorComponent::G | gpu::ColorComponent::B;
+                desc.write_masks = {rgb, rgb, gpu::ColorComponent::R | gpu::ColorComponent::G};
+                pt_decal_ = gpu_->CreateGraphicsPipeline(desc);
+            }
+            LogInfo("startup: ray traced reflection and ambient occlusion passes");
+            gpu::GraphicsPipelineDesc reflect;
             reflect.layout = rt_->Layout();
             reflect.fragment = "reflect_make_rt.frag";
             reflect.colors = {kRefMapFormat, kRefMapFormat};
-            reflect_make_rt_ = CreateGraphicsPipeline(device_, reflect);
+            reflect_make_rt_ = gpu_->CreateGraphicsPipeline(reflect);
             reflect.fragment = "reflect_blend_rt.frag";
             reflect.colors = {kHdrFormat};
-            reflect_blend_rt_ = CreateGraphicsPipeline(device_, reflect);
+            reflect_blend_rt_ = gpu_->CreateGraphicsPipeline(reflect);
             if (!reflect_make_rt_ || !reflect_blend_rt_) {
                 LogError("ray tracing: cannot create the ray traced reflection passes, that option stays off");
             }
-            // the layer for the temporal accumulation with an upscaler (12.16); without it the traced reflection blends as before
             reflect.fragment = "reflect_layer_rt.frag";
             reflect.colors = {kHdrFormat, kHdrFormat};
-            reflect_layer_rt_ = CreateGraphicsPipeline(device_, reflect);
-            rt_ao_trace_ = CreateComputePipeline(device_, rt_->Layout(), "rt_ao.comp");
-            rt_ao_filter_ = CreateComputePipeline(device_, rt_->Layout(), "rt_ao_filter.comp");
-            // the probe pass's pipeline (CreatePipelines) with probe_ao.frag
-            PipelineDesc probe;
+            reflect_layer_rt_ = gpu_->CreateGraphicsPipeline(reflect);
+            rt_ao_trace_ = gpu_->CreateComputePipeline({rt_->Layout(), "rt_ao.comp"});
+            rt_ao_filter_ = gpu_->CreateComputePipeline({rt_->Layout(), "rt_ao_filter.comp"});
+            gpu::GraphicsPipelineDesc probe;
             probe.layout = rt_->Layout();
             probe.vertex = "volume.vert";
             probe.fragment = "probe_ao.frag";
             probe.colors = {kLightFormat};
-            probe.blend = BlendMode::ProbeAccumulate;
-            probe_ao_ = CreateGraphicsPipeline(device_, probe);
+            probe.blend = gpu::BlendMode::ProbeAccumulate;
+            probe_ao_ = gpu_->CreateGraphicsPipeline(probe);
             if (!rt_ao_trace_ || !rt_ao_filter_ || !probe_ao_) {
                 LogError("ray tracing: AO pass creation failed, option disabled");
             }
@@ -234,43 +283,42 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
 }
 
 bool SceneRenderer::CreateDescriptors() {
-    VkDescriptorSetLayoutBinding bindings[7]{};
-    bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, gpu::kImageSlots, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLER, gpu::kSmpCount, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[4] = {4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
-    bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    const VkDescriptorBindingFlags binding_flags[7] = {0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
-    VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags_info.bindingCount = 7;
-    flags_info.pBindingFlags = binding_flags;
-    VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.pNext = &flags_info;
-    layout_info.bindingCount = 7;
-    layout_info.pBindings = bindings;
-    if (!vk::Check(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &frame_layout_), "frame set layout")) {
+    const bool d3d12 = gpu_->Info().backend == gpu::Backend::D3D12;
+    gpu::BindingLayoutDesc layout;
+    layout.bindings = {{0, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::All},
+                       {1, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::All},
+                       {2, gpu::BindingType::SampledImage, gpu::kImageSlots, gpu::ShaderStage::All, gpu::BindingFlag::PartiallyBound},
+                       {3, gpu::BindingType::Sampler, d3d12 ? uint32_t(gpu::kSmpShadow) : uint32_t(gpu::kSmpCount), gpu::ShaderStage::All},
+                       {4, gpu::BindingType::SampledImage, 1, gpu::ShaderStage::All},
+                       {5, gpu::BindingType::StorageBuffer, 1, gpu::ShaderStage::All}};
+    if (d3d12) {
+        layout.bindings.push_back({6, gpu::BindingType::Sampler, 1, gpu::ShaderStage::All});
+    }
+    if (bloom_compute_) layout.bindings.push_back({7, gpu::BindingType::StorageImage, 3, gpu::ShaderStage::Compute,
+                                                  gpu::BindingFlag::PartiallyBound});
+    frame_layout_ = gpu_->CreateBindingLayout(layout);
+    if (!frame_layout_) {
+        LogError("scene renderer: frame set layout failed");
         return false;
     }
-    VkDescriptorPoolSize sizes[4] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * (gpu::kImageSlots + 1) * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_SAMPLER, 2 * gpu::kSmpCount * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * 3 * Renderer::kFramesInFlight}};
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 2 * Renderer::kFramesInFlight;
-    pool_info.poolSizeCount = 4;
-    pool_info.pPoolSizes = sizes;
-    if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "frame descriptor pool")) {
+    gpu::BindingPoolDesc pool;
+    pool.sizes = {{gpu::BindingType::StorageBuffer, 6 * Renderer::kFramesInFlight},
+                  {gpu::BindingType::SampledImage, 2 * (gpu::kImageSlots + 1) * Renderer::kFramesInFlight},
+                  {gpu::BindingType::Sampler, 2 * gpu::kSmpCount * Renderer::kFramesInFlight}};
+    if (bloom_compute_) pool.sizes.push_back({gpu::BindingType::StorageImage, 6 * Renderer::kFramesInFlight});
+    pool.max_sets = 2 * Renderer::kFramesInFlight;
+    pool_ = gpu_->CreateBindingPool(pool);
+    if (!pool_) {
+        LogError("scene renderer: frame descriptor pool failed");
         return false;
     }
     for (FrameSlot& slot : slots_) {
-        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        alloc.descriptorPool = pool_;
-        alloc.descriptorSetCount = 1;
-        alloc.pSetLayouts = &frame_layout_;
-        if (!vk::Check(vkAllocateDescriptorSets(device_, &alloc, &slot.set), "frame descriptor set") ||
-            !vk::Check(vkAllocateDescriptorSets(device_, &alloc, &slot.post_set), "post descriptor set")) {
+        slot.set = gpu_->AllocateBindingSet(pool_, frame_layout_);
+        if (!slot.set) {
+            return false;
+        }
+        slot.post_set = gpu_->AllocateBindingSet(pool_, frame_layout_);
+        if (!slot.post_set) {
             return false;
         }
     }
@@ -278,7 +326,11 @@ bool SceneRenderer::CreateDescriptors() {
 }
 
 bool SceneRenderer::CreatePipelines() {
-    PipelineDesc desc;
+    light_depth_bounds_ = gpu_->Info().depth_bounds && [] {
+        const char* v = std::getenv("PT_LIGHT_DEPTH_BOUNDS");
+        return !(v && v[0] == '0');
+    }();
+    gpu::GraphicsPipelineDesc desc;
     desc.layout = layout_;
     desc.vertex = "mesh.vert";
     desc.fragment = "gbuffer.frag";
@@ -287,16 +339,15 @@ bool SceneRenderer::CreatePipelines() {
     desc.depth = kDepthFormat;
     desc.depth_test = true;
     desc.depth_write = true;
-    gbuffer_ = CreateGraphicsPipeline(device_, desc);
+    gbuffer_ = gpu_->CreateGraphicsPipeline(desc);
     desc.depth_write = false;
     desc.depth_bias = true;
-    desc.blend = BlendMode::Alpha;
-    // Fox's decal pass changes RGB and roughness/specular, preserving reflection and material identity.
-    constexpr uint32_t rgb = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
-    desc.write_masks = {rgb, rgb, VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT};
-    decal_ = CreateGraphicsPipeline(device_, desc);
+    desc.blend = gpu::BlendMode::Alpha;
+    const gpu::ColorMask rgb = gpu::ColorComponent::R | gpu::ColorComponent::G | gpu::ColorComponent::B;
+    desc.write_masks = {rgb, rgb, gpu::ColorComponent::R | gpu::ColorComponent::G};
+    decal_ = gpu_->CreateGraphicsPipeline(desc);
 
-    PipelineDesc shadow;
+    gpu::GraphicsPipelineDesc shadow;
     shadow.layout = layout_;
     shadow.vertex = "shadow.vert";
     shadow.fragment = "shadow.frag";
@@ -305,44 +356,43 @@ bool SceneRenderer::CreatePipelines() {
     shadow.depth_test = true;
     shadow.depth_write = true;
     shadow.depth_bias = true;
-    shadow_pipeline_ = CreateGraphicsPipeline(device_, shadow);
+    shadow_pipeline_ = gpu_->CreateGraphicsPipeline(shadow);
 
-    PipelineDesc volume;
+    gpu::GraphicsPipelineDesc volume;
     volume.layout = layout_;
     volume.vertex = "volume.vert";
     volume.fragment = "probe.frag";
-    // the probes accumulate into probe_acc_ (rendering.md 5, the SH resolve), at half resolution without an upscaler; no depth
-    // attachment there: each fragment reconstructs its position from the depth target and is dropped outside the probe's box
     volume.colors = {kLightFormat};
-    volume.blend = BlendMode::ProbeAccumulate;
-    probe_ = CreateGraphicsPipeline(device_, volume);
+    volume.blend = gpu::BlendMode::ProbeAccumulate;
+    probe_ = gpu_->CreateGraphicsPipeline(volume);
     {
-        PipelineDesc resolve;
+        gpu::GraphicsPipelineDesc resolve;
         resolve.layout = layout_;
         resolve.fragment = "probe_resolve.frag";
         resolve.colors = {kLightFormat, kLightFormat};
         resolve.depth = kDepthFormat;
-        resolve.write_masks = {0xF, 0x0};
-        probe_resolve_ = CreateGraphicsPipeline(device_, resolve);
+        resolve.write_masks = {gpu::kColorMaskAll, gpu::ColorMask{}};
+        probe_resolve_ = gpu_->CreateGraphicsPipeline(resolve);
     }
     volume.colors = {kLightFormat, kLightFormat};
     volume.depth = kDepthFormat;
     volume.depth_test = true;
-    volume.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
-    volume.write_masks = {0xF, 0x0};
+    volume.depth_compare = gpu::CompareOp::LessOrEqual;
+    volume.write_masks = {gpu::kColorMaskAll, gpu::ColorMask{}};
     volume.fragment = "light.frag";
-    volume.blend = BlendMode::Additive;
+    volume.blend = gpu::BlendMode::Additive;
     volume.write_masks.clear();
-    light_ = CreateGraphicsPipeline(device_, volume);
+    volume.depth_bounds = light_depth_bounds_;
+    light_ = gpu_->CreateGraphicsPipeline(volume);
 
-    PipelineDesc full;
+    gpu::GraphicsPipelineDesc full;
     full.layout = layout_;
     full.fragment = "compose.frag";
     full.colors = {kHdrFormat};
     full.depth = kDepthFormat;
-    compose_ = CreateGraphicsPipeline(device_, full);
+    compose_ = gpu_->CreateGraphicsPipeline(full);
 
-    PipelineDesc forward;
+    gpu::GraphicsPipelineDesc forward;
     forward.layout = layout_;
     forward.vertex = "mesh.vert";
     forward.fragment = "forward.frag";
@@ -351,14 +401,14 @@ bool SceneRenderer::CreatePipelines() {
     forward.depth = kDepthFormat;
     forward.depth_test = true;
     forward.depth_write = true;
-    forward.blend = BlendMode::PremultipliedFadeAlpha;
-    forward_ = CreateGraphicsPipeline(device_, forward);
-    forward_emissive_ = CreateGraphicsPipeline(device_, forward);
+    forward.blend = gpu::BlendMode::PremultipliedFadeAlpha;
+    forward_ = gpu_->CreateGraphicsPipeline(forward);
+    forward_emissive_ = gpu_->CreateGraphicsPipeline(forward);
 
-    luminance_ = CreateComputePipeline(device_, layout_, "luminance.comp");
-    reflect_colour_ = CreateComputePipeline(device_, layout_, "reflect_colour.comp");
+    luminance_ = gpu_->CreateComputePipeline({layout_, "luminance.comp"});
+    reflect_colour_ = gpu_->CreateComputePipeline({layout_, "reflect_colour.comp"});
 
-    PipelineDesc velocity;
+    gpu::GraphicsPipelineDesc velocity;
     velocity.layout = layout_;
     velocity.vertex = "velocity.vert";
     velocity.fragment = "velocity.frag";
@@ -366,136 +416,143 @@ bool SceneRenderer::CreatePipelines() {
     velocity.colors = {kPostFormat};
     velocity.depth = kDepthFormat;
     velocity.depth_test = true;
-    velocity_pipeline_ = CreateGraphicsPipeline(device_, velocity);
+    velocity_pipeline_ = gpu_->CreateGraphicsPipeline(velocity);
 
-    PipelineDesc post;
+    gpu::GraphicsPipelineDesc post;
     post.layout = layout_;
     post.fragment = "bright.frag";
     post.colors = {kBloomFormat};
-    bright_ = CreateGraphicsPipeline(device_, post);
+    bright_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "kawase.frag";
-    kawase_ = CreateGraphicsPipeline(device_, post);
-    post.blend = BlendMode::Additive;
-    bloom_add_ = CreateGraphicsPipeline(device_, post);
-    post.blend = BlendMode::None;
-    // the second Kawase pass of a bloom iteration with the add to the sum (scene_post.cpp)
+    kawase_ = gpu_->CreateGraphicsPipeline(post);
+    post.blend = gpu::BlendMode::Additive;
+    bloom_add_ = gpu_->CreateGraphicsPipeline(post);
+    post.blend = gpu::BlendMode::None;
     post.colors = {kBloomFormat, kBloomFormat};
-    post.blends = {BlendMode::None, BlendMode::Additive};
+    post.blends = {gpu::BlendMode::None, gpu::BlendMode::Additive};
     post.fragment = "kawase_sum.frag";
-    kawase_sum_ = CreateGraphicsPipeline(device_, post);
+    kawase_sum_ = gpu_->CreateGraphicsPipeline(post);
     if (bloom_compute_) {
-        bloom_kawase_ = CreateComputePipeline(device_, layout_, "bloom_kawase.comp");
-        if (!bloom_kawase_) {
-            LogError("scene renderer: cannot create the bloom dispatch, the bloom stays on render passes");
-            bloom_compute_ = false;
-        }
+        bloom_kawase_ = gpu_->CreateComputePipeline({layout_, "bloom_kawase.comp"});
+        if (!bloom_kawase_) bloom_compute_ = false;
     }
     LogInfo("scene renderer: bloom chain on {}", bloom_compute_ ? "dispatches" : "render passes");
     post.blends.clear();
     post.colors = {kBloomFormat};
     post.fragment = "gaussian.frag";
-    gaussian_ = CreateGraphicsPipeline(device_, post);
+    gaussian_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "tonemap.frag";
-    tonemap_ = CreateGraphicsPipeline(device_, post);
+    tonemap_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {Renderer::kHdrBoostFormat};
+    post.fragment = "hdr_boost.frag";
+    hdr_boost_pipeline_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {ldr_format_};
     post.fragment = "fxaa.frag";
-    fxaa_ = CreateGraphicsPipeline(device_, post);
-    // the mirror capture's history (mirror_temporal_) is an HDR target
+    fxaa_ = gpu_->CreateGraphicsPipeline(post);
+    post.fragment = "date_resolve.frag";
+    date_resolve_out_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {kPostFormat};
+    date_resolve_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {ldr_format_};
     post.colors = {kHdrFormat};
     post.fragment = "mirror_temporal.frag";
-    mirror_temporal_pipeline_ = CreateGraphicsPipeline(device_, post);
+    mirror_temporal_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "dof_blend.frag";
-    dof_blend_ = CreateGraphicsPipeline(device_, post);
+    dof_blend_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "dof_ratio.frag";
-    post.write_mask = VK_COLOR_COMPONENT_A_BIT;
-    dof_ratio_ = CreateGraphicsPipeline(device_, post);
-    post.write_mask = 0xF;
+    post.write_mask = gpu::ColorComponent::A;
+    dof_ratio_ = gpu_->CreateGraphicsPipeline(post);
+    post.write_mask = gpu::kColorMaskAll;
     post.fragment = "mb_composite.frag";
-    post.blend = BlendMode::Alpha;
-    mb_composite_ = CreateGraphicsPipeline(device_, post);
-    post.blend = BlendMode::None;
+    post.blend = gpu::BlendMode::Alpha;
+    mb_composite_ = gpu_->CreateGraphicsPipeline(post);
+    post.blend = gpu::BlendMode::None;
     post.colors = {kPostFormat};
+    mb_decode_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "dof_down.frag";
-    dof_down_ = CreateGraphicsPipeline(device_, post);
+    dof_down_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "dof_blur.frag";
-    dof_blur_ = CreateGraphicsPipeline(device_, post);
-    post.colors = {kMotionFormat};
+    dof_blur_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "mb_velocity.frag";
-    mb_velocity_ = CreateGraphicsPipeline(device_, post);
+    mb_velocity_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "mb_tile.frag";
-    mb_tile_pipeline_ = CreateGraphicsPipeline(device_, post);
-    post.colors = {kPostFormat};
+    mb_tile_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "mb_bake.frag";
-    mb_bake_pipeline_ = CreateGraphicsPipeline(device_, post);
+    mb_bake_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "mb_mcguire.frag";
-    mb_mcguire_ = CreateGraphicsPipeline(device_, post);
+    mb_mcguire_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "fsblur.frag";
-    fsblur_ = CreateGraphicsPipeline(device_, post);
+    fsblur_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "banding.frag";
-    banding_ = CreateGraphicsPipeline(device_, post);
+    banding_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "screen_fx.frag";
     post.colors = {renderer_->SceneColorFormat()};
-    screen_fx_ = CreateGraphicsPipeline(device_, post);
+    screen_fx_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "debug.frag";
-    debug_ = CreateGraphicsPipeline(device_, post);
+    debug_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "subliminal_string.frag";
     post.colors = {ldr_format_};
-    post.blend = BlendMode::None;
-    subliminal_string_ = CreateGraphicsPipeline(device_, post);
-    post.blend = BlendMode::None;
+    post.blend = gpu::BlendMode::None;
+    subliminal_string_ = gpu_->CreateGraphicsPipeline(post);
+    post.fragment = "backdrop.frag";
+    backdrop_ = gpu_->CreateGraphicsPipeline(post);
+    post.blend = gpu::BlendMode::None;
     post.fragment = "ssao.frag";
     post.colors = {kAoFormat};
-    occlusion_ = CreateGraphicsPipeline(device_, post);
+    occlusion_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "ssao_blur.frag";
-    occlusion_blur_ = CreateGraphicsPipeline(device_, post);
+    occlusion_blur_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "reflect_make.frag";
     post.colors = {kRefMapFormat};
-    reflect_make_ = CreateGraphicsPipeline(device_, post);
+    reflect_make_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "reflect_blend.frag";
     post.colors = {kHdrFormat};
-    reflect_blend_ = CreateGraphicsPipeline(device_, post);
+    reflect_blend_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {kHdrFormat, kHdrFormat};
     post.fragment = "reflect_layer.frag";
-    reflect_layer_pipeline_ = CreateGraphicsPipeline(device_, post);
+    reflect_layer_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "reflect_temporal.frag";
-    reflect_temporal_pipeline_ = CreateGraphicsPipeline(device_, post);
+    reflect_temporal_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {kHdrFormat};
     post.fragment = "vfx_composite.frag";
-    vfx_composite_ = CreateGraphicsPipeline(device_, post);
+    vfx_composite_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "vfx_depth_down.frag";
     post.colors = {kNearFarDepthFormat};
     post.depth = kDepthFormat;
     post.depth_test = true;
     post.depth_write = true;
-    post.depth_compare = VK_COMPARE_OP_ALWAYS;
-    vfx_depth_down_ = CreateGraphicsPipeline(device_, post);
+    post.depth_compare = gpu::CompareOp::Always;
+    vfx_depth_down_ = gpu_->CreateGraphicsPipeline(post);
 
-    const VkPipeline all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
-                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
-                              mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
+    const gpu::PipelineHandle all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
+                              reflect_colour_, kawase_, bloom_kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, hdr_boost_pipeline_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
+                              mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, mb_decode_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
                               debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
-                              reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_};
-    for (VkPipeline p : all) {
+                              reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_, backdrop_, date_resolve_, date_resolve_out_};
+    for (gpu::PipelineHandle p : all) {
         if (!p) {
             LogError("scene renderer: pipeline creation failed");
             return false;
         }
     }
+    LogInfo("startup: upscaler input passes");
     return CreateUpscalePipelines();
 }
 
 void SceneRenderer::DestroyPipelines() {
-    VkPipeline* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &luminance_, &bright_,
-                         &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &bloom_kawase_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
-                         &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &velocity_pipeline_, &fsblur_,
+    gpu::PipelineHandle* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &luminance_, &bright_,
+                         &reflect_colour_, &kawase_, &bloom_kawase_, &bloom_add_, &kawase_sum_, &gaussian_, &tonemap_, &hdr_boost_pipeline_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
+                         &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &mb_decode_, &velocity_pipeline_, &fsblur_,
                          &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_, &vfx_depth_down_,
-                         &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_, &subliminal_string_};
-    for (VkPipeline* p : all) {
+                         &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_, &subliminal_string_, &backdrop_,
+                         &date_resolve_, &date_resolve_out_};
+    for (gpu::PipelineHandle* p : all) {
         if (*p) {
-            vkDestroyPipeline(device_, *p, nullptr);
-            *p = VK_NULL_HANDLE;
+            gpu_->DestroyPipeline(*p);
+            *p = {};
         }
     }
     DestroyUpscalePipelines();
@@ -505,19 +562,17 @@ void SceneRenderer::Shutdown() {
     if (!renderer_) {
         return;
     }
-    vk::Context& ctx = renderer_->Context();
-    vkDeviceWaitIdle(device_);
+    gpu_->WaitIdle();
     sss_.Shutdown();
-    // Only timed frames reset and stamp a pool, so the last timed slot still holds complete results.
-    if (last_timed_slot_ < Renderer::kFramesInFlight) {
+    if (last_timed_slot_ < Renderer::kFramesInFlight && slots_[last_timed_slot_].timed) {
         ReadTimestamps(slots_[last_timed_slot_]);
-        LogInfo("scene renderer: last timed frame {}x{} gpu {:.2f} ms (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, "
+        LogInfo("scene renderer: last frame {}x{} gpu {:.2f} ms (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f}, compose {:.2f}, "
                 "post {:.2f}), cpu {:.2f} ms",
                 extent_.width, extent_.height, stats_.gpu_ms, stats_.pass_ms[0], stats_.pass_ms[1], stats_.pass_ms[2], stats_.pass_ms[3],
                 stats_.pass_ms[4], stats_.pass_ms[5], stats_.cpu_ms);
     }
     if (gpu_samples_ > 0) {
-        LogInfo("scene renderer: {}x{} -> {}x{}, {}: average gpu {:.3f} ms over {} timed frames, cpu {:.3f} ms", extent_.width, extent_.height,
+        LogInfo("scene renderer: {}x{} -> {}x{}, {}: average gpu {:.3f} ms over {} frames, cpu {:.3f} ms", extent_.width, extent_.height,
                 output_extent_.width, output_extent_.height, upscale_samples_ > 0 ? UpscalerName(upscale_stats_.kind) : "native",
                 gpu_ms_sum_ / gpu_samples_, gpu_samples_, cpu_samples_ > 0 ? cpu_ms_sum_ / cpu_samples_ : 0.0);
     }
@@ -540,16 +595,18 @@ void SceneRenderer::Shutdown() {
                 "gbuffer {:.3f}, lighting {:.3f}, compose {:.3f}, post {:.3f}",
                 n, extent_.width, extent_.height, output_extent_.width, output_extent_.height, gpu / n, lo, hi, pass[0] / n, pass[1] / n,
                 pass[2] / n, pass[3] / n, pass[4] / n, pass[5] / n);
-        // PT_TIMING_CSV=<file>: the frames themselves, oldest first (medians are robust to other processes sharing the GPU)
         if (const char* csv = std::getenv("PT_TIMING_CSV")) {
             if (FILE* f = std::fopen(csv, "w")) {
                 std::fprintf(f, "gpu,shadows,mirror,gbuffer,lighting,compose,post,forward,effects,upscale_inputs,reflections,upscaler,bloom,"
-                                "device_mb,frame\n");
+                                "velocity,ssao,rt_ao,probes,lights,sss,device_mb,frame,rt_classify,rt_gi,rt_glossy,rt_resolve,pt_direct,pt_indirect,pt_denoise,"
+                                "pt_layers\n");
                 for (size_t i = 0; i < n; ++i) {
                     const FrameTiming& t = timing_ring_[(timing_count_ - n + i) % timing_ring_.size()];
-                    std::fprintf(f, "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%llu\n", t.gpu_ms, t.pass_ms[0],
+                    std::fprintf(f, "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%llu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", t.gpu_ms, t.pass_ms[0],
                                  t.pass_ms[1], t.pass_ms[2], t.pass_ms[3], t.pass_ms[4], t.pass_ms[5], t.part_ms[0], t.part_ms[1], t.part_ms[2],
-                                 t.part_ms[3], t.part_ms[4], t.part_ms[5], t.device_mb, static_cast<unsigned long long>(t.frame));
+                                 t.part_ms[3], t.part_ms[4], t.part_ms[5], t.light_ms[0], t.light_ms[1], t.light_ms[2],
+                                 t.light_ms[3], t.light_ms[4], t.light_ms[5], t.device_mb, static_cast<unsigned long long>(t.frame), t.rt_ms[0],
+                                 t.rt_ms[1], t.rt_ms[2], t.rt_ms[3], t.pt_ms[0], t.pt_ms[1], t.pt_ms[2], t.pt_ms[3]);
                 }
                 std::fclose(f);
             }
@@ -557,10 +614,11 @@ void SceneRenderer::Shutdown() {
     }
     if (const char* csv = std::getenv("PT_FRAME_CSV"); csv && !frame_trace_.empty()) {
         if (FILE* f = std::fopen(csv, "w")) {
-            std::fprintf(f, "frame,cpu_ms,interval_ms,lights,shadow_views,draws\n");
+            std::fprintf(f, "frame,cpu_ms,interval_ms,lights,shadow_views,draws,pipelines,pipeline_ms\n");
             for (size_t i = 0; i < frame_trace_.size(); ++i) {
                 const FrameTrace& t = frame_trace_[i];
-                std::fprintf(f, "%zu,%.4f,%.4f,%u,%u,%u\n", i, t.cpu_ms, t.interval_ms, t.lights, t.shadow_views, t.draws);
+                std::fprintf(f, "%zu,%.4f,%.4f,%u,%u,%u,%u,%.3f\n", i, t.cpu_ms, t.interval_ms, t.lights, t.shadow_views, t.draws, t.pipelines,
+                             t.pipeline_ms);
             }
             std::fclose(f);
         }
@@ -578,71 +636,83 @@ void SceneRenderer::Shutdown() {
         rt_->Shutdown();
         rt_.reset();
     }
-    for (VkPipeline* p : {&light_rt_, &light_contact_, &reflect_make_rt_, &reflect_blend_rt_, &reflect_layer_rt_, &rt_ao_trace_, &rt_ao_filter_, &probe_ao_}) {
+    DestroyFullPipelines();
+    DestroyPathPipelines();
+    for (gpu::PipelineHandle* p : {&light_rt_, &light_contact_, &reflect_make_rt_, &reflect_blend_rt_, &reflect_layer_rt_, &rt_ao_trace_, &rt_ao_filter_, &probe_ao_}) {
         if (*p) {
-            vkDestroyPipeline(device_, *p, nullptr);
-            *p = VK_NULL_HANDLE;
+            gpu_->DestroyPipeline(*p);
+            *p = {};
         }
     }
     DestroyPipelines();
     DestroyTargets();
-    ctx.DestroyBuffer(dump_compose_);
-    ctx.DestroyBuffer(dump_forward_);
-    ctx.DestroyBuffer(dump_scene_);
-    ctx.DestroyBuffer(dump_mirror_);
-    ctx.DestroyImage(shadow_.image);
-    vk::Image* images[] = {&lut1_, &lut2_, &material_tex_, &dither_, &color_lut_, &color_lut_prev_, &noise_, &mask_, &white_};
-    for (vk::Image* image : images) {
-        ctx.DestroyImage(*image);
+    gpu_->DestroyBuffer(dump_compose_);
+    gpu_->DestroyBuffer(dump_forward_);
+    gpu_->DestroyBuffer(dump_scene_);
+    gpu_->DestroyBuffer(dump_mirror_);
+    gpu_->DestroyImage(shadow_.image);
+    gpu::ImageResource* images[] = {&lut1_, &lut2_, &material_tex_, &dither_, &color_lut_, &color_lut_prev_, &noise_, &mask_, &white_};
+    for (gpu::ImageResource* image : images) {
+        gpu_->DestroyImage(*image);
     }
     for (FrameSlot& slot : slots_) {
-        ctx.DestroyBuffer(slot.frame_data);
-        ctx.DestroyBuffer(slot.skin);
-        ctx.DestroyBuffer(slot.luminance);
-        vkDestroyQueryPool(device_, slot.queries, nullptr);
-        vkDestroyQueryPool(device_, slot.upscale_queries, nullptr);
+        gpu_->DestroyBuffer(slot.frame_data);
+        gpu_->DestroyBuffer(slot.skin);
+        gpu_->DestroyBuffer(slot.luminance);
+        gpu_->DestroyBuffer(slot.dispatch);
+        gpu_->DestroyQueryPool(slot.queries);
+        gpu_->DestroyQueryPool(slot.upscale_queries);
+        if (slot.light_queries) gpu_->DestroyQueryPool(slot.light_queries);
     }
-    vkDestroyPipelineLayout(device_, layout_, nullptr);
-    vkDestroyDescriptorPool(device_, pool_, nullptr);
-    vkDestroyDescriptorSetLayout(device_, frame_layout_, nullptr);
-    for (VkSampler s : samplers_) {
-        vkDestroySampler(device_, s, nullptr);
+    gpu_->DestroyPipelineLayout(layout_);
+    gpu_->DestroyBindingPool(pool_);
+    gpu_->DestroyBindingLayout(frame_layout_);
+    if (dispatch_pool_) gpu_->DestroyBindingPool(dispatch_pool_);
+    if (dispatch_layout_) gpu_->DestroyBindingLayout(dispatch_layout_);
+    for (gpu::SamplerHandle s : samplers_) {
+        gpu_->DestroySampler(s);
     }
     delete frame_;
     frame_ = nullptr;
     renderer_ = nullptr;
 }
 
-bool SceneRenderer::CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect,
-                                 bool metal_export) {
+bool SceneRenderer::CreateTarget(RenderTarget& target, gpu::Format format, gpu::Extent2D extent, gpu::ImageUsageFlags usage, gpu::AspectFlags aspect) {
     target = RenderTarget{};
     target.aspect = aspect;
-    return renderer_->Context().CreateImage(target.image, format, {std::max(extent.width, 1u), std::max(extent.height, 1u), 1}, usage, 1, 1, aspect,
-                                            false, metal_export);
+    gpu::ImageDesc desc;
+    desc.format = format;
+    desc.extent = {std::max(extent.width, 1u), std::max(extent.height, 1u), 1};
+    desc.usage = usage;
+    desc.aspect = aspect;
+    return gpu_->CreateImage(desc, target.image);
 }
 
 void SceneRenderer::DestroyTargets() {
-    vk::Context& ctx = renderer_->Context();
-    RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &diffuse_, &specular_, &probe_acc_, &hdr_, &bloom_[0], &bloom_[1], &bloom_[2],
-                               &flare_, &ldr_[0], &ldr_[1], &history_, &mirror_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_,
+    RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &flare_depth_, &diffuse_, &specular_, &probe_acc_, &hdr_, &bloom_[0], &bloom_[1], &bloom_[2],
+                               &flare_, &ldr_[0], &ldr_[1], &history_, &mirror_, &mirror_capture_cache_[0], &mirror_capture_cache_[1], &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_,
                                &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &dof_half_,
                                &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_,
                                &mb_tile_[0], &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_,
                                &mb_blur_[0], &mb_blur_[1], &mb_original_bake_, &mb_original_blur_[0], &mb_original_blur_[1],
                                &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_,
-                               &reflect_history_[0], &reflect_history_[1]};
+                               &reflect_history_[0], &reflect_history_[1], &nr_in_, &nr_out_};
     for (RenderTarget* t : targets) {
-        ctx.DestroyImage(t->image);
+        gpu_->DestroyImage(t->image);
         *t = RenderTarget{};
     }
-    ctx.DestroyImage(refmap_color_.image);
+    nr_feature_ready_ = false;
+    nr_extent_ = {};
+    gpu_->DestroyImage(refmap_color_.image);
     refmap_color_ = RenderTarget{};
     sss_.DestroyTargets();
     for (RenderTarget& t : rt_ao_images_) {
-        ctx.DestroyImage(t.image);
+        gpu_->DestroyImage(t.image);
         t = RenderTarget{};
     }
     rt_ao_history_ = false;
+    DestroyFullTargets();
+    DestroyPathTargets();
     mirror_history_valid_ = false;
     mirror_history_size_ = 0;
     reflect_history_valid_ = false;
@@ -651,7 +721,7 @@ void SceneRenderer::DestroyTargets() {
     output_extent_ = {0, 0};
 }
 
-bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool upscaling) {
+bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bool upscaling) {
     if (extent.width == 0 || extent.height == 0 || output.width == 0 || output.height == 0) {
         return false;
     }
@@ -659,48 +729,58 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
         output.height == output_extent_.height && upscaling == targets_upscaled_) {
         return true;
     }
-    vkDeviceWaitIdle(device_);
+    gpu_->WaitIdle();
     DestroyTargets();
-    // the new mirror_ target holds no capture
-    mirror_stale_.valid = false;
-    const VkImageUsageFlags color = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    // the G-buffer and light targets can be copied out for PT_TARGET_DUMP
-    const VkImageUsageFlags dumped = color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    // 0xDD0D40: the 480x270 chain of a 1080p frame, 270 rows at any output size
+    const vk::AllocTag tag("scene targets");
+    mirror_stale_ = {};
+    mirror_stale_cache_[0] = {};
+    mirror_stale_cache_[1] = {};
+    mirror_cache_index_ = mirror_render_cache_index_ = 0;
+    const gpu::ImageUsageFlags color = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::Sampled;
+    const gpu::ImageUsageFlags dumped = color | gpu::ImageUsage::TransferSrc;
     const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(270.0 * output.width / std::max(output.height, 1u))));
-    const VkExtent2D quarter{bloom_width, 270u};
-    const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
-    const VkImageUsageFlags bloom_usage = color | (bloom_compute_ ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
+    const gpu::Extent2D quarter{bloom_width, 270u};
+    const gpu::ImageUsageFlags bloom_usage = bloom_compute_ ? color | gpu::ImageUsage::Storage : color;
+    const gpu::AspectFlags c = gpu::Aspect::Color;
     bool ok = CreateTarget(albedo_, kAlbedoFormat, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
               CreateTarget(material_, kMaterialFormat, extent, dumped, c) &&
               CreateTarget(depth_, kDepthFormat, extent,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                           VK_IMAGE_ASPECT_DEPTH_BIT, true) &&
+                           gpu::ImageUsage::DepthStencilAttachment | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferSrc,
+                           gpu::Aspect::Depth) &&
+              CreateTarget(flare_depth_, kDepthFormat, extent,
+                           gpu::ImageUsage::DepthStencilAttachment | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst,
+                           gpu::Aspect::Depth) &&
               CreateTarget(diffuse_, kLightFormat, extent, dumped, c) && CreateTarget(specular_, kLightFormat, extent, dumped, c) &&
               CreateTarget(probe_acc_, kLightFormat, extent, dumped, c) &&
-              CreateTarget(hdr_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c, true) &&
-              CreateTarget(hdr_copy_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+              CreateTarget(hdr_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(hdr_copy_, kHdrFormat, extent, color | gpu::ImageUsage::TransferDst, c) &&
+              CreateTarget(nr_in_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(nr_out_, kHdrFormat, extent, color | gpu::ImageUsage::Storage | gpu::ImageUsage::TransferDst, c) &&
               CreateTarget(particles_, kHdrFormat, extent, dumped, c) &&
               CreateTarget(particles_near_, kHdrFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
               CreateTarget(particles_far_, kHdrFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
               CreateTarget(near_far_depth_, kNearFarDepthFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
               CreateTarget(near_far_depth_attachment_, kDepthFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2},
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                           VK_IMAGE_ASPECT_DEPTH_BIT) &&
+                           gpu::ImageUsage::DepthStencilAttachment | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferSrc,
+                           gpu::Aspect::Depth) &&
               CreateTarget(refmap_, kRefMapFormat, extent, color, c) &&
-              CreateTarget(mirror_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+              CreateTarget(mirror_, kHdrFormat, extent, color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(mirror_capture_cache_[0], kHdrFormat, {std::min(128u, extent.width), std::min(128u, extent.height)},
+                           color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(mirror_capture_cache_[1], kHdrFormat, {std::min(512u, extent.width), std::min(512u, extent.height)},
+                           color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(bloom_[0], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, bloom_usage, c) &&
               CreateTarget(bloom_[2], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
-              CreateTarget(ldr_[0], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-              CreateTarget(ldr_[1], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-              CreateTarget(history_, ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
-              CreateTarget(ao_[0], kAoFormat, extent, color, c) && CreateTarget(ao_[1], kAoFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c);
-    const VkExtent2D shift1{std::max(output.width >> 1, 1u), std::max(output.height >> 1, 1u)};
-    const VkExtent2D shift2{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
-    const VkExtent2D shift3{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
+              CreateTarget(ldr_[0], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(ldr_[1], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(history_, ldr_format_, output, color | gpu::ImageUsage::TransferDst, c) &&
+              CreateTarget(ao_[0], kAoFormat, extent, color, c) && CreateTarget(ao_[1], kAoFormat, extent, color | gpu::ImageUsage::TransferSrc, c);
+    const gpu::Extent2D shift1{std::max(output.width >> 1, 1u), std::max(output.height >> 1, 1u)};
+    const gpu::Extent2D shift2{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
+    const gpu::Extent2D shift3{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
     ok = ok && CreateTarget(dof_half_, kPostFormat, shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
          CreateTarget(dof_quarter_[1], kPostFormat, shift2, color, c) && CreateTarget(dof_eighth_[0], kPostFormat, shift3, color, c) &&
-         CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kMotionFormat, output, color, c) &&
+         CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kPostFormat, output, color, c) &&
          CreateTarget(object_velocity_, kPostFormat, extent, color, c) && CreateTarget(mb_blur_[0], kPostFormat, output, color, c) &&
          CreateTarget(mb_blur_[1], kPostFormat, output, color, c) &&
          CreateTarget(mb_original_bake_, kPostFormat, shift1, color, c) &&
@@ -708,64 +788,67 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
          CreateTarget(mb_original_blur_[1], kPostFormat, shift1, color, c);
     for (uint32_t i = 0; i < 5 && ok; ++i) {
         const uint32_t round = (2u << i) - 1u;
-        ok = CreateTarget(mb_tile_[i], kMotionFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
+        ok = CreateTarget(mb_tile_[i], kPostFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
     }
-    ok = ok && CreateTarget(mb_neighbour_, kMotionFormat, mb_tile_[4].Extent(), color, c) &&
+    ok = ok && CreateTarget(mb_neighbour_, kPostFormat, mb_tile_[4].Extent(), color, c) &&
          CreateTarget(mb_bake_, kPostFormat, output, color, c);
     ok = ok && (!upscaling || CreateUpscaleTargets(extent, output));
     ok = ok && (!upscaling ||
-                (CreateTarget(mirror_history_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
-                 CreateTarget(mirror_temporal_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+                (CreateTarget(mirror_history_, kHdrFormat, extent, color | gpu::ImageUsage::TransferDst, c) &&
+                 CreateTarget(mirror_temporal_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc, c) &&
                  CreateTarget(reflect_layer_, kHdrFormat, extent, color, c) && CreateTarget(reflect_offset_, kHdrFormat, extent, color, c) &&
                  CreateTarget(reflect_history_[0], kHdrFormat, extent, color, c) &&
                  CreateTarget(reflect_history_[1], kHdrFormat, extent, color, c)));
-    // ray traced reflections only exist on a device created with ray queries
     ok = ok && (!rt_ || CreateTarget(refmap_color_, kRefMapFormat, extent, color, c));
-    ok = ok && (!sss_ready_ || sss_.CreateTargets(extent));
+    if (ok && sss_ready_ && !sss_.CreateTargets(extent)) {
+        LogWarn("scene renderer: subsurface scattering off at {}x{}: out of video memory", extent.width, extent.height);
+    }
     if (!ok) {
         LogError("scene renderer: cannot create render targets {}x{}", extent.width, extent.height);
         return false;
     }
-    renderer_->Context().Submit([&](VkCommandBuffer cmd) {
-        RenderTarget* colors[] = {&albedo_, &normal_, &material_, &diffuse_, &specular_, &probe_acc_, &hdr_, &mirror_, &bloom_[0], &bloom_[1], &bloom_[2],
+    gpu_->Submit([&](gpu::CommandList& cmd) {
+        RenderTarget* colors[] = {&albedo_, &normal_, &material_, &diffuse_, &specular_, &probe_acc_, &hdr_, &mirror_, &mirror_capture_cache_[0], &mirror_capture_cache_[1], &bloom_[0], &bloom_[1], &bloom_[2],
                                   &flare_, &ldr_[0], &ldr_[1], &history_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_,
                                   &particles_near_, &particles_far_, &near_far_depth_, &dof_half_,
                                   &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_, &mb_tile_[0],
                                   &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_, &mb_blur_[0],
-                                  &mb_blur_[1], &mb_original_bake_, &mb_original_blur_[0], &mb_original_blur_[1]};
+                                  &mb_blur_[1], &mb_original_bake_, &mb_original_blur_[0], &mb_original_blur_[1], &nr_in_, &nr_out_};
         for (RenderTarget* t : colors) {
-            UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-            BeginPass(cmd, t->Extent(), {{t, true, {}}});
-            vkCmdEndRendering(cmd);
-            UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
+            cmd.UseTargets({{t, gpu::Layout::ColorAttachment}});
+            cmd.BeginPass(t->Extent(), {{t, true, {}}});
+            cmd.EndPass();
+            cmd.UseTargets({{t, gpu::Layout::ShaderReadOnly}});
         }
-        UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, extent, {}, &depth_, false, true);
-        vkCmdEndRendering(cmd);
-        UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-        UseTargets(cmd, {{&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL}});
-        BeginPass(cmd, near_far_depth_attachment_.Extent(), {}, &near_far_depth_attachment_, false, true);
-        vkCmdEndRendering(cmd);
-        UseTargets(cmd, {{&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
+        cmd.UseTargets({{&depth_, gpu::Layout::DepthAttachment}});
+        cmd.BeginPass(extent, {}, &depth_, false, true);
+        cmd.EndPass();
+        cmd.UseTargets({{&depth_, gpu::Layout::DepthReadOnly}});
+        cmd.UseTargets({{&flare_depth_, gpu::Layout::DepthAttachment}});
+        cmd.BeginPass(extent, {}, &flare_depth_, false, true);
+        cmd.EndPass();
+        cmd.UseTargets({{&flare_depth_, gpu::Layout::DepthReadOnly}});
+        cmd.UseTargets({{&near_far_depth_attachment_, gpu::Layout::DepthAttachment}});
+        cmd.BeginPass(near_far_depth_attachment_.Extent(), {}, &near_far_depth_attachment_, false, true);
+        cmd.EndPass();
+        cmd.UseTargets({{&near_far_depth_attachment_, gpu::Layout::DepthReadOnly}});
         RenderTarget* upscale_colors[] = {&motion_, &reactive_, &opaque_, &post_hdr_, &post_depth_, &post_object_velocity_, &refmap_color_,
                                          &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_, &reflect_history_[0],
                                          &reflect_history_[1]};
         for (RenderTarget* t : upscale_colors) {
             if (t->Valid()) {
-                UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
-                BeginPass(cmd, t->Extent(), {{t, true, {}}});
-                vkCmdEndRendering(cmd);
-                UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
+                cmd.UseTargets({{t, gpu::Layout::ColorAttachment}});
+                cmd.BeginPass(t->Extent(), {{t, true, {}}});
+                cmd.EndPass();
+                cmd.UseTargets({{t, gpu::Layout::ShaderReadOnly}});
             }
         }
         RenderTarget* upscale_storage[] = {&upscaled_, &exposure_image_};
         for (RenderTarget* t : upscale_storage) {
             if (t->Valid()) {
-                UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL}});
-                const VkClearColorValue zero{};
-                const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(cmd, t->image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                UseTargets(cmd, {{t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
+                cmd.UseTargets({{t, gpu::Layout::TransferDst}});
+                cmd.ClearColorImage(t->image, gpu::Layout::TransferDst, gpu::ClearColor{}, 1, 1);
+                cmd.UseTargets({{t, gpu::Layout::ShaderReadOnly}});
             }
         }
     });
@@ -773,25 +856,28 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     output_extent_ = output;
     targets_upscaled_ = upscaling;
     history_valid_ = false;
+    date_history_valid_ = false;
     WriteImageDescriptors();
     return true;
 }
 
 void SceneRenderer::WriteImageDescriptors() {
-    VkDescriptorImageInfo images[gpu::kImageSlots];
-    for (VkDescriptorImageInfo& info : images) {
-        info = {VK_NULL_HANDLE, white_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    gpu::ImageBinding images[gpu::kImageSlots];
+    for (gpu::ImageBinding& info : images) {
+        info = {white_.view, gpu::Layout::ShaderReadOnly, {}, &white_};
     }
     auto set_target = [&](uint32_t slot, const RenderTarget& t) {
         if (t.Valid()) {
-            images[slot].imageView = t.image.view;
-            images[slot].imageLayout =
-                t.aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            images[slot].view = t.image.view;
+            images[slot].image = &t.image;
+            images[slot].layout =
+                gpu::AspectFlags(t.aspect) == gpu::Aspect::Depth ? gpu::Layout::DepthReadOnly : gpu::Layout::ShaderReadOnly;
         }
     };
-    auto set_image = [&](uint32_t slot, const vk::Image& image) {
+    auto set_image = [&](uint32_t slot, const gpu::ImageResource& image) {
         if (image.view) {
-            images[slot].imageView = image.view;
+            images[slot].view = image.view;
+            images[slot].image = &image;
         }
     };
     set_target(gpu::kImgAlbedo, albedo_);
@@ -836,11 +922,12 @@ void SceneRenderer::WriteImageDescriptors() {
     set_target(gpu::kImgAo, ao_[0]);
     set_target(gpu::kImgAoBlur, ao_[1]);
     set_target(gpu::kImgRefMap, refmap_);
-    // the traced reflections' colour goes through the ray tracing set (binding 2), the image slots being taken
     if (rt_ && refmap_color_.Valid()) {
         rt_->SetReflectionImage(refmap_color_.image.view, samplers_[gpu::kSmpLinearWrap]);
     }
     set_target(gpu::kImgHdrCopy, hdr_copy_);
+    set_target(gpu::kImgNeuralIn, nr_in_);
+    set_target(gpu::kImgNeuralOut, nr_out_);
     set_target(gpu::kImgParticles, particles_);
     set_target(gpu::kImgParticlesNear, particles_near_);
     set_target(gpu::kImgParticlesFar, particles_far_);
@@ -855,141 +942,121 @@ void SceneRenderer::WriteImageDescriptors() {
     renderer_->SetGrainNoise(noise_.view);
     set_image(gpu::kResMask, mask_);
     set_image(gpu::kResWhite, white_);
-    VkDescriptorImageInfo sampler_infos[gpu::kSmpCount];
-    for (uint32_t i = 0; i < gpu::kSmpCount; ++i) {
-        sampler_infos[i] = {samplers_[i], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-    }
-    VkDescriptorImageInfo lut2_info{VK_NULL_HANDLE, lut2_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const bool d3d12 = gpu_->Info().backend == gpu::Backend::D3D12;
+    const gpu::ImageBinding lut2_info{lut2_.view, gpu::Layout::ShaderReadOnly, {}, &lut2_};
     WriteUpscaleDescriptors(images, false);
-    VkDescriptorImageInfo post_images[gpu::kImageSlots];
+    gpu::ImageBinding post_images[gpu::kImageSlots];
     std::copy(std::begin(images), std::end(images), std::begin(post_images));
     WriteUpscaleDescriptors(post_images, true);
     for (int set_index = 0; set_index < 2 * static_cast<int>(Renderer::kFramesInFlight); ++set_index) {
         FrameSlot& slot = slots_[set_index / 2];
         const bool post = (set_index & 1) != 0;
-        VkDescriptorBufferInfo frame_info{slot.frame_data.buffer, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo skin_info{slot.skin.buffer, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo luminance_info{slot.luminance.buffer, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet writes[7]{};
-        for (VkWriteDescriptorSet& w : writes) {
-            w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w.dstSet = post ? slot.post_set : slot.set;
-            w.descriptorCount = 1;
+        const gpu::BindingSetHandle set = post ? slot.post_set : slot.set;
+        const gpu::BufferBinding frame_info{slot.frame_data.buffer};
+        const gpu::BufferBinding skin_info{slot.skin.buffer};
+        const gpu::BufferBinding luminance_info{slot.luminance.buffer};
+        gpu::BindingWrite writes[8];
+        writes[0] = {set, 0, 0, gpu::BindingType::StorageBuffer, {}, {&frame_info, 1}};
+        writes[1] = {set, 1, 0, gpu::BindingType::StorageBuffer, {}, {&skin_info, 1}};
+        writes[2] = {set, 2, 0, gpu::BindingType::SampledImage, {post ? post_images : images, gpu::kImageSlots}};
+        writes[3] = {set, 3, 0, gpu::BindingType::Sampler, {}, {}, {samplers_, d3d12 ? size_t(gpu::kSmpShadow) : size_t(gpu::kSmpCount)}};
+        writes[4] = {set, 4, 0, gpu::BindingType::SampledImage, {&lut2_info, 1}};
+        writes[5] = {set, 5, 0, gpu::BindingType::StorageBuffer, {}, {&luminance_info, 1}};
+        writes[6] = {set, 6, 0, gpu::BindingType::Sampler, {}, {}, {&samplers_[gpu::kSmpShadow], 1}};
+        gpu_->WriteBindings({writes, d3d12 ? 7u : 6u});
+        if (bloom_compute_ && bloom_[0].Valid() && bloom_[1].Valid() && bloom_[2].Valid()) {
+            gpu::ImageBinding storage[3];
+            for (int i = 0; i < 3; ++i) storage[i] = {bloom_[i].image.view, gpu::Layout::General, {}, &bloom_[i].image};
+            const gpu::BindingWrite write{set, 7, 0, gpu::BindingType::StorageImage, {storage, 3}};
+            gpu_->WriteBindings({&write, 1});
         }
-        writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[0].pBufferInfo = &frame_info;
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[1].pBufferInfo = &skin_info;
-        writes[2].dstBinding = 2;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[2].descriptorCount = gpu::kImageSlots;
-        writes[2].pImageInfo = post ? post_images : images;
-        writes[3].dstBinding = 3;
-        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        writes[3].descriptorCount = gpu::kSmpCount;
-        writes[3].pImageInfo = sampler_infos;
-        writes[4].dstBinding = 4;
-        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[4].pImageInfo = &lut2_info;
-        writes[5].dstBinding = 5;
-        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[5].pBufferInfo = &luminance_info;
-        VkDescriptorImageInfo bloom_storage[3];
-        for (int i = 0; i < 3; ++i) {
-            bloom_storage[i] = {VK_NULL_HANDLE, bloom_[i].image.view, VK_IMAGE_LAYOUT_GENERAL};
-        }
-        writes[6].dstBinding = 6;
-        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[6].descriptorCount = 3;
-        writes[6].pImageInfo = bloom_storage;
-        const bool storage = bloom_compute_ && bloom_[0].Valid() && bloom_[1].Valid() && bloom_[2].Valid();
-        vkUpdateDescriptorSets(device_, storage ? 7 : 6, writes, 0, nullptr);
     }
 }
 
-bool SceneRenderer::UploadImage(vk::Image& image, VkFormat format, VkExtent3D extent, const void* data, size_t size) {
-    vk::Context& ctx = renderer_->Context();
+bool SceneRenderer::UploadImage(gpu::ImageResource& image, gpu::Format format, gpu::Extent3D extent, const void* data, size_t size) {
+    const vk::AllocTag tag("scene images");
+    bool created = false;
     if (!image.image || image.format != format || image.extent.width != extent.width || image.extent.height != extent.height ||
         image.extent.depth != extent.depth) {
         if (image.image) {
-            vkDeviceWaitIdle(device_);
-            ctx.DestroyImage(image);
+            gpu_->WaitIdle();
+            gpu_->DestroyImage(image);
         }
-        if (!ctx.CreateImage(image, format, extent, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+        if (!gpu_->CreateImage({format, extent, gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst}, image)) {
             return false;
         }
+        created = true;
     }
-    vk::Buffer staging;
-    if (!ctx.CreateBuffer(staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true)) {
+    gpu::BufferResource staging;
+    if (!MakeBuffer(staging, size, gpu::BufferUsage::TransferSrc, true)) {
+        if (created) gpu_->DestroyImage(image);
         return false;
     }
     std::memcpy(staging.mapped, data, size);
-    vmaFlushAllocation(ctx.allocator, staging.allocation, 0, size);
-    ctx.Submit([&](VkCommandBuffer cmd) {
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = extent;
-        vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    gpu_->FlushMapped(staging, 0, size);
+    gpu_->Submit([&](gpu::CommandList& cmd) {
+        cmd.Barrier({image.image, gpu::Aspect::Color, gpu::PipelineStage::AllCommands, 0, gpu::Layout::Undefined, gpu::PipelineStage::Transfer,
+                     gpu::Bits(gpu::Access::TransferWrite), gpu::Layout::TransferDst});
+        gpu::BufferImageCopy region;
+        region.image = {gpu::Aspect::Color, 0, 0, 1};
+        region.extent = extent;
+        cmd.CopyBufferToImage(staging, image, gpu::Layout::TransferDst, {&region, 1});
+        cmd.Barrier({image.image, gpu::Aspect::Color, gpu::PipelineStage::Transfer, gpu::Bits(gpu::Access::TransferWrite),
+                     gpu::Layout::TransferDst, gpu::PipelineStage::AllCommands, gpu::Bits(gpu::Access::ShaderSampledRead),
+                     gpu::Layout::ShaderReadOnly});
     });
-    ctx.DestroyBuffer(staging);
+    gpu_->DestroyBuffer(staging);
     return true;
 }
 
-bool SceneRenderer::UploadImageMips(vk::Image& image, VkFormat format, VkExtent3D extent, const std::vector<std::vector<uint8_t>>& mips) {
-    vk::Context& ctx = renderer_->Context();
+bool SceneRenderer::UploadImageMips(gpu::ImageResource& image, gpu::Format format, gpu::Extent3D extent, const std::vector<std::vector<uint8_t>>& mips) {
+    const vk::AllocTag tag("scene images");
     const uint32_t levels = static_cast<uint32_t>(mips.size());
     if (image.image) {
-        vkDeviceWaitIdle(device_);
-        ctx.DestroyImage(image);
+        gpu_->WaitIdle();
+        gpu_->DestroyImage(image);
     }
-    if (levels == 0 || !ctx.CreateImage(image, format, extent, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, levels)) {
+    if (levels == 0 || !gpu_->CreateImage({format, extent, gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst, levels}, image)) {
         return false;
     }
     size_t total = 0;
     for (const std::vector<uint8_t>& mip : mips) {
         total += mip.size();
     }
-    vk::Buffer staging;
-    if (!ctx.CreateBuffer(staging, total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true)) {
+    gpu::BufferResource staging;
+    if (!MakeBuffer(staging, total, gpu::BufferUsage::TransferSrc, true)) {
+        gpu_->DestroyImage(image);
         return false;
     }
-    std::vector<VkBufferImageCopy> regions;
+    std::vector<gpu::BufferImageCopy> regions;
     size_t offset = 0;
     for (uint32_t level = 0; level < levels; ++level) {
         std::memcpy(static_cast<uint8_t*>(staging.mapped) + offset, mips[level].data(), mips[level].size());
-        VkBufferImageCopy region{};
-        region.bufferOffset = offset;
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-        region.imageExtent = {std::max(1u, extent.width >> level), std::max(1u, extent.height >> level), 1};
+        gpu::BufferImageCopy region;
+        region.buffer_offset = offset;
+        region.image = {gpu::Aspect::Color, level, 0, 1};
+        region.extent = {std::max(1u, extent.width >> level), std::max(1u, extent.height >> level), 1};
         regions.push_back(region);
         offset += mips[level].size();
     }
-    vmaFlushAllocation(ctx.allocator, staging.allocation, 0, total);
-    ctx.Submit([&](VkCommandBuffer cmd) {
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, levels, 1);
-        vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()),
-                               regions.data());
-        vk::ImageBarrier(cmd, image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, levels, 1);
+    gpu_->FlushMapped(staging, 0, total);
+    gpu_->Submit([&](gpu::CommandList& cmd) {
+        cmd.Barrier({image.image, gpu::Aspect::Color, gpu::PipelineStage::AllCommands, 0, gpu::Layout::Undefined, gpu::PipelineStage::Transfer,
+                     gpu::Bits(gpu::Access::TransferWrite), gpu::Layout::TransferDst, 0, levels, 0, 1});
+        cmd.CopyBufferToImage(staging, image, gpu::Layout::TransferDst, regions);
+        cmd.Barrier({image.image, gpu::Aspect::Color, gpu::PipelineStage::Transfer, gpu::Bits(gpu::Access::TransferWrite),
+                     gpu::Layout::TransferDst, gpu::PipelineStage::AllCommands, gpu::Bits(gpu::Access::ShaderSampledRead),
+                     gpu::Layout::ShaderReadOnly, 0, levels, 0, 1});
     });
-    ctx.DestroyBuffer(staging);
+    gpu_->DestroyBuffer(staging);
     return true;
 }
 
 void SceneRenderer::CreateBuiltinResources() {
     const uint8_t white[4] = {255, 255, 255, 255};
-    UploadImage(white_, VK_FORMAT_R8G8B8A8_UNORM, {1, 1, 1}, white, 4);
-    UploadImage(noise_, VK_FORMAT_R8G8B8A8_UNORM, {1, 1, 1}, white, 4);
-    UploadImage(mask_, VK_FORMAT_R8G8B8A8_UNORM, {1, 1, 1}, white, 4);
+    UploadImage(white_, gpu::Format::R8G8B8A8Unorm, {1, 1, 1}, white, 4);
+    UploadImage(noise_, gpu::Format::R8G8B8A8Unorm, {1, 1, 1}, white, 4);
+    UploadImage(mask_, gpu::Format::R8G8B8A8Unorm, {1, 1, 1}, white, 4);
 
     std::vector<uint8_t> lut1(64 * 64);
     for (int j = 0; j < 64; ++j) {
@@ -999,7 +1066,7 @@ void SceneRenderer::CreateBuiltinResources() {
             lut1[j * 64 + i] = static_cast<uint8_t>(std::floor(255.0 * (f0 + (1.0 - f0) * std::pow(1.0 - c, 5.0))));
         }
     }
-    UploadImage(lut1_, VK_FORMAT_R8_UNORM, {64, 64, 1}, lut1.data(), lut1.size());
+    UploadImage(lut1_, gpu::Format::R8Unorm, {64, 64, 1}, lut1.data(), lut1.size());
 
     std::vector<uint8_t> lut2(64 * 16 * 16 * 2);
     for (int k = 0; k < 16; ++k) {
@@ -1017,16 +1084,11 @@ void SceneRenderer::CreateBuiltinResources() {
             }
         }
     }
-    UploadImage(lut2_, VK_FORMAT_R8G8_UNORM, {64, 16, 16}, lut2.data(), lut2.size());
+    UploadImage(lut2_, gpu::Format::R8G8Unorm, {64, 16, 16}, lut2.data(), lut2.size());
 
     static const int kBayer[8][8] = {{0, 32, 8, 40, 2, 34, 10, 42},  {48, 16, 56, 24, 50, 18, 58, 26}, {12, 44, 4, 36, 14, 46, 6, 38},
                                      {60, 28, 52, 20, 62, 30, 54, 22}, {3, 35, 11, 43, 1, 33, 9, 41},   {51, 19, 59, 27, 49, 17, 57, 25},
                                      {15, 47, 7, 39, 13, 45, 5, 37},   {63, 31, 55, 23, 61, 29, 53, 21}};
-    // g_tex_mesh as 0xD43430 builds it from the Bayer table at 0x13D6680 (bytes B, G, R, A per texel, likely, so the
-    // shaders read R for the fade and A for the alpha reference): R = 4b + 2 in both textures, A = 2b + 1 in the one
-    // 0xD81690 binds for alpha mode 4 and 64 in the one for every other mode. x holds R, y and z the two alpha
-    // references; the forward glass and mirror shaders read z, the alpha of the texture their draws bind (28c406c00, A = 64
-    // in every texel: lantern_trace_f040 op 1735, f010_dumps op 567)
     std::vector<uint8_t> dither(8 * 8 * 4);
     for (int y = 0; y < 8; ++y) {
         for (int x = 0; x < 8; ++x) {
@@ -1038,7 +1100,7 @@ void SceneRenderer::CreateBuiltinResources() {
             p[3] = 64;
         }
     }
-    UploadImage(dither_, VK_FORMAT_R8G8B8A8_UNORM, {8, 8, 1}, dither.data(), dither.size());
+    UploadImage(dither_, gpu::Format::R8G8B8A8Unorm, {8, 8, 1}, dither.data(), dither.size());
 
     std::vector<uint8_t> material(256 * 2 * 4, 0);
     for (int i = 0; i < 256; ++i) {
@@ -1047,25 +1109,25 @@ void SceneRenderer::CreateBuiltinResources() {
         row0[0] = row0[1] = row0[2] = 255;
         row1[0] = 10;
     }
-    UploadImage(material_tex_, VK_FORMAT_R8G8B8A8_UNORM, {256, 2, 1}, material.data(), material.size());
+    UploadImage(material_tex_, gpu::Format::R8G8B8A8Unorm, {256, 2, 1}, material.data(), material.size());
 
     ScreenSettings identity;
     std::vector<uint8_t> lut;
     BuildColorLut(std::string(), identity, lut);
-    UploadImage(color_lut_, VK_FORMAT_R8G8B8A8_UNORM, {256, 16, 1}, lut.data(), lut.size());
-    UploadImage(color_lut_prev_, VK_FORMAT_R8G8B8A8_UNORM, {256, 16, 1}, lut.data(), lut.size());
+    UploadImage(color_lut_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
+    UploadImage(color_lut_prev_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
 }
 
 bool SceneRenderer::LoadResources(Vfs& vfs) {
     vfs_ = &vfs;
-    auto load = [&](const char* path, vk::Image& target, bool rgba_only) {
+    auto load = [&](const char* path, gpu::ImageResource& target, bool rgba_only) {
         FtexTexture ftex;
         if (!LoadFtex(vfs.Textures(), path, ftex) || ftex.mips.empty() || ftex.mips[0].empty()) {
             LogWarn("scene renderer: resource {} missing", path);
             return false;
         }
-        const VkFormat format = ftex.Format();
-        if (rgba_only && format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB) {
+        const gpu::Format format = ftex.Format();
+        if (rgba_only && format != gpu::Format::B8G8R8A8Unorm && format != gpu::Format::B8G8R8A8Srgb) {
             LogWarn("scene renderer: resource {} unexpected format", path);
             return false;
         }
@@ -1074,7 +1136,6 @@ bool SceneRenderer::LoadResources(Vfs& vfs) {
         return ok;
     };
     load("/Assets/fox/effect/gr_pic/materials_alp_rgba32_nomip_nrt", material_tex_, true);
-    // Draw2D_ShFilmGrain samples its noise with mipmaps (f010_grain_ops 1705, op 1181: the BC1 512x512 texture with its 8 levels)
     {
         FtexTexture ftex;
         const char* path = "/Assets/sh/effect/vfx_pic/view/fx_viwfilnis01_iy";
@@ -1093,7 +1154,7 @@ bool SceneRenderer::LoadResources(Vfs& vfs) {
     load("/Assets/sh/effect/vfx_pic/fx_flr23_iy_alp_clp", mask_, false);
     color_lut_key_.clear();
     if (extent_.width > 0) {
-        vkDeviceWaitIdle(device_);
+        gpu_->WaitIdle();
         WriteImageDescriptors();
     }
     return true;
@@ -1165,11 +1226,11 @@ void SceneRenderer::UpdateColorLut(const ScreenSettings& screen) {
     }
     std::vector<uint8_t> lut;
     BuildColorLut(screen.lut_path, screen, lut);
-    vkDeviceWaitIdle(device_);
+    gpu_->WaitIdle();
     std::swap(color_lut_, color_lut_prev_);
-    UploadImage(color_lut_, VK_FORMAT_R8G8B8A8_UNORM, {256, 16, 1}, lut.data(), lut.size());
+    UploadImage(color_lut_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
     if (color_lut_key_.empty()) {
-        UploadImage(color_lut_prev_, VK_FORMAT_R8G8B8A8_UNORM, {256, 16, 1}, lut.data(), lut.size());
+        UploadImage(color_lut_prev_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
     }
     color_lut_prev_key_ = color_lut_key_;
     color_lut_key_ = key;
@@ -1179,7 +1240,7 @@ void SceneRenderer::UpdateColorLut(const ScreenSettings& screen) {
 }
 
 std::unique_ptr<GpuMesh> SceneRenderer::Upload(const MeshData& data) {
-    auto& ctx = renderer_->Context();
+    const vk::AllocTag tag("meshes");
     auto mesh = std::make_unique<GpuMesh>();
     mesh->name = data.name;
     mesh->submeshes = data.submeshes;
@@ -1189,28 +1250,39 @@ std::unique_ptr<GpuMesh> SceneRenderer::Upload(const MeshData& data) {
     for (const SubMesh& sub : data.submeshes) {
         mesh->skinned = mesh->skinned || sub.skinned;
     }
-    const VkDeviceSize vertex_bytes = data.vertices.size() * sizeof(Vertex);
-    const VkDeviceSize index_bytes = data.indices.size() * sizeof(uint32_t);
+    const uint64_t vertex_bytes = data.vertices.size() * sizeof(Vertex);
+    const uint64_t index_bytes = data.indices.size() * sizeof(uint32_t);
     if (vertex_bytes == 0 || index_bytes == 0) {
         return nullptr;
     }
-    // on a device with ray queries the meshes are also acceleration structure inputs, read by address (ray traced shadows)
-    const VkBufferUsageFlags rt_usage =
-        ctx.ray_query ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0;
-    ctx.CreateBuffer(mesh->vertices, vertex_bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | rt_usage, false);
-    ctx.CreateBuffer(mesh->indices, index_bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | rt_usage, false);
-    ctx.Upload(mesh->vertices, data.vertices.data(), vertex_bytes);
-    ctx.Upload(mesh->indices, data.indices.data(), index_bytes);
+    const gpu::BufferUsageFlags rt_usage =
+        gpu_->Info().ray_query ? gpu::BufferUsage::ShaderDeviceAddress | gpu::BufferUsage::AccelerationStructureBuildInput : gpu::BufferUsageFlags{};
+    if (!MakeBuffer(mesh->vertices, vertex_bytes, gpu::BufferUsage::VertexBuffer | gpu::BufferUsage::TransferDst | rt_usage, false) ||
+        !MakeBuffer(mesh->indices, index_bytes, gpu::BufferUsage::IndexBuffer | gpu::BufferUsage::TransferDst | rt_usage, false)) {
+        gpu_->DestroyBuffer(mesh->vertices);
+        gpu_->DestroyBuffer(mesh->indices);
+        return nullptr;
+    }
+    if (!gpu::UploadBuffer(*gpu_, mesh->vertices, data.vertices.data(), vertex_bytes) ||
+        !gpu::UploadBuffer(*gpu_, mesh->indices, data.indices.data(), index_bytes)) {
+        gpu_->DestroyBuffer(mesh->vertices);
+        gpu_->DestroyBuffer(mesh->indices);
+        return nullptr;
+    }
     return mesh;
 }
 
 void SceneRenderer::Destroy(GpuMesh& mesh) {
-    auto& ctx = renderer_->Context();
+    gpu_->WaitIdle();
     if (rt_) {
         rt_->Forget(mesh);
     }
-    ctx.DestroyBuffer(mesh.vertices);
-    ctx.DestroyBuffer(mesh.indices);
+    gpu_->DestroyBuffer(mesh.vertices);
+    gpu_->DestroyBuffer(mesh.indices);
+}
+
+vk::Context& SceneRenderer::Context() {
+    return renderer_->Context();
 }
 
 bool SceneRenderer::RayTracingSupported(std::string& reason) const {
@@ -1219,6 +1291,18 @@ bool SceneRenderer::RayTracingSupported(std::string& reason) const {
     reason = "ray queries are unavailable in this Android beta";
     return false;
 #else
+    if (gpu_ && gpu_->Info().backend != gpu::Backend::Vulkan) {
+        if (!gpu_->Info().ray_query) {
+            reason = "no DirectX Raytracing 1.1 on this GPU";
+            return false;
+        }
+        if (!D3D12RayTracingAvailable()) {
+            reason = "ray tracing is not available on DirectX 12 in this build";
+            return false;
+        }
+        reason.clear();
+        return true;
+    }
     const vk::Context& ctx = renderer_->Context();
     if (!ctx.ray_query_supported) {
         reason = ctx.ray_query_missing.empty() ? std::string("no Vulkan ray queries") : ctx.ray_query_missing + " missing";
@@ -1251,12 +1335,10 @@ float SceneRenderer::ExposureFor(float ev, const ExposureSettings& s) const {
 
 void SceneRenderer::ReadTimestamps(FrameSlot& slot) {
     uint64_t stamps[kTimestamps] = {};
-    const VkResult result =
-        vkGetQueryPoolResults(device_, slot.queries, 0, kTimestamps, sizeof(stamps), stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-    if (result != VK_SUCCESS) {
+    if (!gpu_->ReadTimestamps(slot.queries, 0, kTimestamps, stamps)) {
         return;
     }
-    const double period = renderer_->Context().properties.limits.timestampPeriod * 1.0e-6;
+    const double period = gpu_->Info().timestamp_period_ns * 1.0e-6;
     const auto span = [&](uint32_t from, uint32_t to) {
         return stamps[to] >= stamps[from] ? static_cast<float>(static_cast<double>(stamps[to] - stamps[from]) * period) : 0.0f;
     };
@@ -1269,16 +1351,80 @@ void SceneRenderer::ReadTimestamps(FrameSlot& slot) {
     stats_.part_ms[3] = span(8, 9);
     stats_.part_ms[4] = span(9, 10);
     stats_.part_ms[5] = span(10, 11);
+    stats_.light_ms[0] = span(3, 12);
+    stats_.light_ms[1] = span(12, 13);
+    stats_.light_ms[2] = std::max(0.0f, span(13, 14) - span(17, 20));
+    stats_.light_ms[3] = span(14, 15);
+    stats_.light_ms[4] = span(15, 16);
+    stats_.light_ms[5] = span(16, 4);
     stats_.gpu_ms = span(0, 6);
+    for (uint32_t i = 0; i < 3; ++i) {
+        stats_.rt_ms[i] = span(17 + i, 18 + i);
+    }
+    stats_.rt_ms[3] = span(21, 22) + span(23, 24);
+    stats_.pt_ms[0] = span(18, 25);
+    stats_.pt_ms[1] = span(25, 26);
+    stats_.pt_ms[2] = span(26, 27);
+    stats_.pt_ms[3] = span(27, 28);
+}
+
+float SceneRenderer::MeterLuminance(const glm::vec2* texels, uint32_t count) {
+    constexpr double kCap = 32.0;
+    double all = 0.0;
+    double covered = 0.0;
+    uint32_t n_covered = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const float x = texels[i].x;
+        const double l = std::isfinite(x) ? std::min(std::log(static_cast<double>(std::max(x, 0.0f)) + 2.0), kCap) : std::log(2.0);
+        all += l;
+        if (texels[i].y > 0.5f) {
+            covered += l;
+            ++n_covered;
+        }
+    }
+    if (count == 0 || n_covered == 0) {
+        return -1.0f;
+    }
+    const double mean = n_covered < count ? covered / n_covered : all / count;
+    const float measured = static_cast<float>(std::exp(mean) - 2.0);
+    return std::isfinite(measured) ? std::max(measured, 0.0f) : -1.0f;
 }
 
 void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings) {
     if (slot.timed) {
         ReadTimestamps(slot);
     }
+    if (slot.light_timed && !slot.light_names.empty()) {
+        static std::map<std::string, std::pair<double, uint32_t>> sums;
+        static uint32_t frames = 0;
+        const uint32_t n = static_cast<uint32_t>(slot.light_names.size());
+        std::vector<uint64_t> stamps(2 * n);
+        if (gpu_->ReadTimestamps(slot.light_queries, 0, 2 * n, stamps.data())) {
+            const double period = gpu_->Info().timestamp_period_ns * 1.0e-6;
+            for (uint32_t i = 0; i < n; ++i) {
+                auto& [ms, count] = sums[slot.light_names[i]];
+                ms += stamps[2 * i + 1] >= stamps[2 * i] ? static_cast<double>(stamps[2 * i + 1] - stamps[2 * i]) * period : 0.0;
+                ++count;
+            }
+            if (++frames % 240 == 0) {
+                std::vector<std::pair<double, std::string>> order;
+                double total = 0.0;
+                for (const auto& [name, v] : sums) {
+                    order.emplace_back(v.first / frames, std::format("{} ({} frames)", name, v.second));
+                    total += v.first / frames;
+                }
+                std::sort(order.rbegin(), order.rend());
+                std::string text;
+                for (size_t i = 0; i < std::min<size_t>(order.size(), 24); ++i) text += std::format("; {:.3f} {}", order[i].first, order[i].second);
+                LogInfo("light timing: {:.3f} ms a frame over {} lights{}", total, sums.size(), text);
+                sums.clear();
+                frames = 0;
+            }
+        }
+        slot.light_timed = false;
+    }
     if (slot.reflection_sampled) {
-        // the slot's fence has passed: what RecordReflectionSample wrote kFramesInFlight frames ago, without a wait
-        vmaInvalidateAllocation(renderer_->Context().allocator, slot.luminance.allocation, 0, VK_WHOLE_SIZE);
+        gpu_->InvalidateMapped(slot.luminance, 0, ~0ull);
         const glm::vec2* entries = static_cast<const glm::vec2*>(slot.luminance.mapped);
         const glm::vec2 rg = entries[gpu::kReflectionReadback];
         const glm::vec2 b = entries[gpu::kReflectionReadback + 1];
@@ -1291,25 +1437,16 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
     if (!slot.measured || slot.luminance_groups == 0) {
         return;
     }
-    vmaInvalidateAllocation(renderer_->Context().allocator, slot.luminance.allocation, 0, VK_WHOLE_SIZE);
-    const glm::vec2* partial = static_cast<const glm::vec2*>(slot.luminance.mapped);
-    double sum = 0.0;
-    double count = 0.0;
-    for (uint32_t i = 0; i < slot.luminance_groups; ++i) {
-        sum += partial[i].x;
-        count += partial[i].y;
-    }
+    gpu_->InvalidateMapped(slot.luminance, 0, ~0ull);
+    const float measured = MeterLuminance(static_cast<const glm::vec2*>(slot.luminance.mapped), slot.luminance_groups);
     slot.measured = false;
-    if (count <= 0.0) {
+    if (measured < 0.0f) {
         return;
     }
-    const float measured = static_cast<float>(sum / count);
     stats_.luminance = measured;
     if (!adaptation_valid_ || !toggles.adaptation || !lighting_ || !lighting_->valid) {
         return;
     }
-    // 0xDA9B00 clamps the current EV into the floor's range before it steps (view +0x4CC against the min and max EV), so
-    // a range that moves (a new floor's lighting row) takes the EV with it at once instead of easing in from outside it
     ev_ = std::clamp(ev_, settings.min_ev, settings.max_ev);
     const float raw = measured / std::max(slot.exposure_used, 1.0e-12f);
     const float adapted = raw * std::exp2(ev_);
@@ -1319,8 +1456,9 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
     if (std::abs(step) > std::abs(diff)) {
         step = diff;
     }
-    ev_ += step;
-    // PT_EV_TRACE=1: each adaptation step (the measured luminance, the EV it moves toward, the EV after the step)
+    if (std::isfinite(step)) {
+        ev_ += step;
+    }
     if (static const bool ev_trace = std::getenv("PT_EV_TRACE") != nullptr; ev_trace) {
         LogInfo("ev trace: measured {:.5f} raw {:.5f} target {:.3f} ev {:.3f} dt {:.4f}", measured, raw, target, ev_, dt);
     }
@@ -1328,91 +1466,139 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
 
 namespace {
 
-uint32_t DumpTexelBytes(VkFormat format) {
-    switch (format) {
-    case VK_FORMAT_R8_UNORM:
-        return 1;
-    case VK_FORMAT_R16G16B16A16_SFLOAT:
-        return 8;
-    case VK_FORMAT_R32G32B32A32_SFLOAT:
-        return 16;
-    default:
-        return 4;
-    }
+uint32_t DumpTexelBytes(gpu::Format format) {
+    const uint32_t bytes = gpu::Describe(format).bytes;
+    return bytes ? bytes : 4;
 }
 
-}  // namespace
+}
 
-void SceneRenderer::RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer) {
-    vk::Context& ctx = renderer_->Context();
-    const VkExtent3D e = target.image.extent;
-    const VkDeviceSize size = VkDeviceSize(e.width) * e.height * DumpTexelBytes(target.image.format);
+void SceneRenderer::RecordDumpCopy(gpu::CommandList& cmd, RenderTarget& target, gpu::BufferResource& buffer) {
+    const gpu::Extent3D e = target.image.extent;
+    const uint64_t size = uint64_t(e.width) * e.height * DumpTexelBytes(target.image.format);
     if (buffer.size < size) {
-        ctx.DestroyBuffer(buffer);
-        if (!ctx.CreateBuffer(buffer, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+        gpu_->DestroyBuffer(buffer);
+        if (!MakeBuffer(buffer, size, gpu::BufferUsage::TransferDst, true)) {
             return;
         }
     }
-    const VkImageLayout back = target.layout;
-    UseTargets(cmd, {{&target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL}});
-    VkBufferImageCopy region{};
-    region.imageSubresource = {target.aspect, 0, 0, 1};
-    region.imageExtent = {e.width, e.height, 1};
-    vkCmdCopyImageToBuffer(cmd, target.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &region);
-    UseTargets(cmd, {{&target, back}});
+    const gpu::Layout back = target.layout;
+    cmd.UseTargets({{&target, gpu::Layout::TransferSrc}});
+    gpu::BufferImageCopy region;
+    region.image = {target.aspect, 0, 0, 1};
+    region.extent = {e.width, e.height, 1};
+    cmd.CopyImageToBuffer(target.image, gpu::Layout::TransferSrc, buffer, {&region, 1});
+    cmd.UseTargets({{&target, back}});
 }
 
 bool SceneRenderer::DumpTargets(const std::string& prefix) {
     dump_requested_ = false;
-    vk::Context& ctx = renderer_->Context();
-    vkDeviceWaitIdle(device_);
+    gpu_->WaitIdle();
     std::ofstream index(prefix + ".targets.txt");
-    auto write = [&](const char* name, const void* data, VkExtent3D e, VkFormat format) {
+    auto write = [&](const char* name, const void* data, gpu::Extent3D e, gpu::Format format) {
         const size_t bytes = size_t(e.width) * e.height * DumpTexelBytes(format);
         std::ofstream out(prefix + "." + name + ".bin", std::ios::binary);
         out.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
         index << name << " " << e.width << " " << e.height << " " << static_cast<int>(format) << "\n";
     };
-    // particles: RecordForward's full-resolution buffer; particles_near/far and near_far_depth are the original half-resolution
-    // Prim_* layers and DownSampleDepth_NearFar range that NearFarUpScale2x2 reads; refmap: the floor reflections' map of this frame
-    // (reflect_make.frag), reflection: the reflection layer under an upscaler (reflect_layer.frag), hdr: the scene target at the end
-    // of the frame (after the floor reflections)
     RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &diffuse_, &specular_, &reactive_, &motion_, &ao_[1], &particles_,
-                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &refmap_, &reflect_layer_, &hdr_};
+                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &refmap_, &reflect_layer_, &hdr_, &flare_};
     const char* names[] = {"albedo", "normal", "material", "depth", "diffuse", "specular", "reactive", "motion", "occlusion", "particles",
-                           "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr"};
+                           "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr", "flare"};
     for (size_t i = 0; i < std::size(targets); ++i) {
         RenderTarget& target = *targets[i];
-        // The reactive mask is not drawn for upscalers that ignore it, so its contents would be stale.
-        if (!target.Valid() || (&target == &reactive_ && !(up_.backend && up_.backend->UsesReactive()))) {
+        if (!target.Valid()) {
             continue;
         }
-        vk::Buffer buffer;
-        const VkExtent3D e = target.image.extent;
-        if (!ctx.CreateBuffer(buffer, VkDeviceSize(e.width) * e.height * DumpTexelBytes(target.image.format), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        gpu::BufferResource buffer;
+        const gpu::Extent3D e = target.image.extent;
+        if (!MakeBuffer(buffer, uint64_t(e.width) * e.height * DumpTexelBytes(target.image.format), gpu::BufferUsage::TransferDst,
                               true)) {
             continue;
         }
-        ctx.Submit([&](VkCommandBuffer cmd) { RecordDumpCopy(cmd, target, buffer); });
-        vmaInvalidateAllocation(ctx.allocator, buffer.allocation, 0, VK_WHOLE_SIZE);
+        gpu_->Submit([&](gpu::CommandList& cmd) { RecordDumpCopy(cmd, target, buffer); });
+        gpu_->InvalidateMapped(buffer, 0, ~0ull);
         write(names[i], buffer.mapped, e, target.image.format);
-        ctx.DestroyBuffer(buffer);
+        gpu_->DestroyBuffer(buffer);
+    }
+    static const char* const kFullNames[RayTracing::kFullImages] = {
+        "rt_unshadowed", "rt_shadowed", "rt_ratio0", "rt_ratio1", "rt_depth0", "rt_depth1", "rt_ratio_spatial", "rt_gi_raw", "rt_gi_history0",
+        "rt_gi_history1", "rt_gi", "rt_gi_pong", "rt_glossy_raw", "rt_glossy_history0", "rt_glossy_history1", "rt_glossy_ping", "rt_glossy"};
+    for (uint32_t i = 0; i < RayTracing::kFullImages; ++i) {
+        RenderTarget& target = rt_full_images_[i];
+        if (!target.Valid()) {
+            continue;
+        }
+        gpu::BufferResource buffer;
+        const gpu::Extent3D e = target.image.extent;
+        if (!MakeBuffer(buffer, uint64_t(e.width) * e.height * DumpTexelBytes(target.image.format), gpu::BufferUsage::TransferDst,
+                              true)) {
+            continue;
+        }
+        gpu_->Submit([&](gpu::CommandList& cmd) { RecordDumpCopy(cmd, target, buffer); });
+        gpu_->InvalidateMapped(buffer, 0, ~0ull);
+        write(kFullNames[i], buffer.mapped, e, target.image.format);
+        gpu_->DestroyBuffer(buffer);
+    }
+    static const char* const kPathNames32[RayTracing::kPathImages32] = {"pt_reservoir", "pt_reservoir_history0", "pt_reservoir_history1",
+                                                                        "pt_reference"};
+    static const char* const kPathNames16[RayTracing::kPathImages16] = {"pt_spec_unshadowed", "pt_diffuse_moments0", "pt_diffuse_moments1",
+                                                                        "pt_specular_moments0", "pt_specular_moments1", "pt_variance_ping",
+                                                                        "pt_variance_pong", "pt_spare", "pt_layer_raw", "pt_layer_history0",
+                                                                        "pt_layer_history1"};
+    for (uint32_t i = 0; i < RayTracing::kPathImages32 + RayTracing::kPathImages16; ++i) {
+        const bool wide = i < RayTracing::kPathImages32;
+        RenderTarget& target = wide ? pt_images32_[i] : pt_images16_[i - RayTracing::kPathImages32];
+        if (!target.Valid()) {
+            continue;
+        }
+        gpu::BufferResource buffer;
+        const gpu::Extent3D e = target.image.extent;
+        if (!MakeBuffer(buffer, uint64_t(e.width) * e.height * DumpTexelBytes(target.image.format), gpu::BufferUsage::TransferDst,
+                              true)) {
+            continue;
+        }
+        gpu_->Submit([&](gpu::CommandList& cmd) { RecordDumpCopy(cmd, target, buffer); });
+        gpu_->InvalidateMapped(buffer, 0, ~0ull);
+        write(wide ? kPathNames32[i] : kPathNames16[i - RayTracing::kPathImages32], buffer.mapped, e, target.image.format);
+        gpu_->DestroyBuffer(buffer);
+    }
+    if (rt_ && RtFullAny() && light_count_ > 0) {
+        const gpu::BufferResource& state = rt_->LightState(renderer_->FrameIndex());
+        gpu::BufferResource buffer;
+        const uint64_t bytes = sizeof(glm::vec4) * light_count_;
+        if (state.buffer && MakeBuffer(buffer, bytes, gpu::BufferUsage::TransferDst, true)) {
+            gpu_->Submit([&](gpu::CommandList& cmd) {
+                cmd.CopyBuffer(state, 0, buffer, 0, bytes);
+            });
+            gpu_->InvalidateMapped(buffer, 0, ~0ull);
+            const glm::vec4* values = static_cast<const glm::vec4*>(buffer.mapped);
+            std::ofstream lights(prefix + ".rt_lights.txt");
+            for (uint32_t i = 0; i < light_count_ && i < light_sources_.size(); ++i) {
+                const gpu::Light& g = frame_->lights[i];
+                lights << std::format("{} back {:.3f} blocked {:.3f} light {:.5f} factor {:.3f} strength {:.3f} bounce {:.2f} rays {} cast {} at {:.2f} {:.2f} {:.2f} {} "
+                                      "axis {:.2f} {:.2f} {:.2f} inner {:.3f} cone {:.3f}\n",
+                                      light_sources_[i]->name.empty() ? "(effect)" : light_sources_[i]->name, values[i].x, values[i].y,
+                                      values[i].z, values[i].w, g.shadow_cone.z, g.shadow_cone.w, g.info.x >= 0 ? (g.info.x >> 16) & 0xFF : 0,
+                                      light_sources_[i]->cast_shadow ? 1 : 0, g.position.x, g.position.y, g.position.z,
+                                      g.position.w > 0.5f ? "spot" : "point", g.direction.x, g.direction.y, g.direction.z, g.range.y, g.cone.x);
+            }
+            gpu_->DestroyBuffer(buffer);
+        }
     }
     if (dump_recorded_ && hdr_.Valid()) {
-        const std::pair<const char*, vk::Buffer*> copies[] = {{"compose", &dump_compose_}, {"forward", &dump_forward_}, {"scene", &dump_scene_}};
+        const std::pair<const char*, gpu::BufferResource*> copies[] = {{"compose", &dump_compose_}, {"forward", &dump_forward_}, {"scene", &dump_scene_}};
         for (const auto& [name, buffer] : copies) {
             if (buffer->mapped) {
-                vmaInvalidateAllocation(ctx.allocator, buffer->allocation, 0, VK_WHOLE_SIZE);
+                gpu_->InvalidateMapped(*buffer, 0, ~0ull);
                 write(name, buffer->mapped, hdr_.image.extent, hdr_.image.format);
             }
         }
     }
     if (dump_mirror_.mapped && mirror_.Valid()) {
-        // the capture the mirror view rendered, at its own square extent
-        vmaInvalidateAllocation(ctx.allocator, dump_mirror_.allocation, 0, VK_WHOLE_SIZE);
+        gpu_->InvalidateMapped(dump_mirror_, 0, ~0ull);
         write("mirror", dump_mirror_.mapped, mirror_.image.extent, mirror_.image.format);
-        // and the same square as the 8-bit image a viewer can open: what the capture saw, before the mirror's material
-        const VkExtent3D e = mirror_.image.extent;
+        const gpu::Extent3D e = mirror_.image.extent;
         const uint32_t size = mirror_view_.area.width;
         const float* src = static_cast<const float*>(dump_mirror_.mapped);
         std::vector<uint8_t> image(size_t(size) * size * 4);

@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/audio/subtitles.h"
 
 #include <cctype>
@@ -20,7 +21,7 @@ std::string NormalizeLanguage(std::string_view language) {
         lang.resize(lang.size() - 4);
     }
     for (size_t i = 0; i < lang.size(); ++i) {
-        lang[i] = static_cast<char>(i == 0 ? std::toupper(static_cast<unsigned char>(lang[i])) : std::tolower(static_cast<unsigned char>(lang[i])));
+        lang[i] = static_cast<char>(i == 0 ? pt::AsciiUpper(lang[i]) : pt::AsciiLower(lang[i]));
     }
     return lang;
 }
@@ -50,7 +51,7 @@ std::string SubtitleTable::PackagePath(std::string_view language) {
 uint32_t SubtitleTable::SubtitleKey(std::string_view subtitle_id) {
     std::string lower(subtitle_id);
     for (char& c : lower) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        c = static_cast<char>(pt::AsciiLower(c));
     }
     return static_cast<uint32_t>(StrCode64(lower) & 0xFFFFFFFFull);
 }
@@ -62,7 +63,6 @@ uint64_t SubtitleTable::MarkerKey(std::string_view label) {
 bool SubtitleTable::Load(Vfs& vfs, std::string_view language, std::span<const std::vector<uint8_t>> sab_tables, std::string* error) {
     const std::string lang = NormalizeLanguage(language);
     std::string source = (lang == "Tur" || lang == "Zhs" || lang == "Ara" || lang == "Rus" || lang == "Ukr" || lang == "Ces" || lang == "Pol") ? "Eng" : lang;
-    // another release of P.T. may lack one of the seven subtitle languages of the US data: English then, with a warning
     if (source != "Eng" && !vfs.Archive().Contains(Vfs::ToArchivePath(PackagePath(source)))) {
         LogWarn("subtitles: {} missing, falling back to English", PackagePath(source));
         source = "Eng";
@@ -165,8 +165,6 @@ bool SubtitleTable::Parse(std::span<const uint8_t> data, std::span<const std::ve
                 while (!cleaned.empty() && (cleaned.front() == '\n' || cleaned.front() == ' ')) {
                     cleaned.erase(cleaned.begin());
                 }
-                // a trailing space stays: the original lays it out (42 pieces end in one, e.g. "in a loud voice. $"; their lines sit
-                // half a space further left, radio_subtitles_rb frame 3220)
                 while (!cleaned.empty() && cleaned.back() == '\n') {
                     cleaned.pop_back();
                 }

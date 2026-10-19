@@ -19,10 +19,8 @@
 700 stap 0 down
 700 swait 8
 700 stap 0 down
-700 swait 8
-700 stap 0 down
 700 swait 20
-700 sexpect pcrow pc_focus_pause
+700 sexpect pcrow pc_vsync
 700 sshot w3_pc_page_pad_nav.png
 700 stap 0 circle
 700 swait 40

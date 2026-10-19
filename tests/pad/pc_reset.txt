@@ -1,5 +1,6 @@
-# Reset progress on the PC settings page with a pad: cross asks once more, circle cancels that, and a second cross deletes
-# the save and turns the row off. Run it with an empty save folder, never the real one.
+# Reset progress on the PC settings page with a pad: cross opens the question (its focus on No), circle cancels it, and cross, left
+# (to Yes) and cross delete the save and restart the game in the same session, which closes the menu (the row is reached by its
+# label, `sui pcfocus`). Run it with an empty save folder, never the real one.
 # pt.exe --headless --virtual-pads --audio-offline --save-dir <empty folder> --start-floor f010 --frames 3000 --input-script tests/pad/pc_reset.txt
 10 pattach 0 ps4
 20 sstep 15
@@ -9,23 +10,25 @@
 20 stap 0 cross
 20 swait 40
 20 sexpect page 1
-20 stap 0 up
+20 sui pcfocus pc_reset
 20 swait 4
 20 sexpect pcrow pc_reset
 20 sexpect pcenabled pc_reset 1
 20 stap 0 cross
 20 swait 4
+20 sexpect dialog confirm 1
 20 stap 0 circle
 20 swait 4
+20 sexpect dialog none
 20 sexpect page 1
 20 sexpect pcenabled pc_reset 1
 20 stap 0 cross
 20 swait 4
-20 stap 0 cross
+20 stap 0 left
 20 swait 4
-20 sexpect pcenabled pc_reset 0
-20 stap 0 circle
+20 sexpect dialog confirm 0
+20 stap 0 cross
 20 swait 40
-20 sexpect page 0
+20 sexpect menu 0
 20 slog
 20 squit

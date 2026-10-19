@@ -1,6 +1,7 @@
 set(PT_UPSCALER_SDK_DIR "${CMAKE_BINARY_DIR}/_deps/upscaler-sdks" CACHE PATH "Folder for the downloaded upscaler SDK files")
-# FSR (amd_fidelityfx_vk.dll), XeSS (libxess.dll) and the DLSS link library used here are Windows binaries: off elsewhere
-if(WIN32)
+# FSR (amd_fidelityfx_vk.dll), XeSS (libxess.dll, libxess_fg.dll, libxell.dll) and the DLSS link library used here are Windows binaries;
+# Linux builds DLSS and FSR from the SDKs' Linux files and sources (cmake/UpscalersLinux.cmake); off elsewhere
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(pt_upscalers_default ON)
 else()
   set(pt_upscalers_default OFF)
@@ -53,7 +54,20 @@ set(PT_FFX_FILES
   "ffx-api/include/ffx_api/ffx_api_types.h|dee2782813d22047c068e0fb27d1347324f8ce79d280a4672848b3b294cb12fe"
   "ffx-api/include/ffx_api/ffx_upscale.h|1155bcdcea9c10e6a95507bc9422ca062a853ac84250f0b09a637a66836b3ac1"
   "ffx-api/include/ffx_api/ffx_framegeneration.h|344936dccf49267d4421d1d74dc6db617d0a83c5a9f5991841325e812a38f127"
-  "ffx-api/include/ffx_api/vk/ffx_api_vk.h|a50a8d5ff5689a10a6ce378f2df5569fd880c89ec46e8356aaf35eb40512edd9")
+  "ffx-api/include/ffx_api/vk/ffx_api_vk.h|a50a8d5ff5689a10a6ce378f2df5569fd880c89ec46e8356aaf35eb40512edd9"
+  # the DirectX 12 game (developer exe, cmake/D3D12Backend.cmake): the same API over AMD's DX12 DLL
+  "ffx-api/include/ffx_api/dx12/ffx_api_dx12.h|215804fba316acb81d2c463b6bbce36c53cc63465c15b8c9858554c8111fae24"
+  "PrebuiltSignedDLL/amd_fidelityfx_dx12.dll|12a5081257ec95b0b53ad51b4a87fb3c03f97fe0bbb59f9496968f8d50ef93a6")
+
+# AMD FSR SDK 2.3.0 (DirectX 12 only): FSR 4 exists only in its amd_fidelityfx_upscaler_dx12.dll (upscaler 4.1.1, which falls back
+# to FSR 3.1.5 on other GPUs). amd_fidelityfx_loader_dx12.dll is the interface-compatible successor of amd_fidelityfx_dx12.dll and
+# loads the upscaler DLL from its own folder; the D3D12 upscalers use it (d3d12_upscale.cpp). Frame generation on DirectX 12 keeps
+# v1.1.4's amd_fidelityfx_dx12.dll. The FSR 4 network itself runs in AMD's driver (amdxcffx64.dll), which the port does not ship.
+set(PT_FFX2_DIR "${PT_UPSCALER_SDK_DIR}/fsr-sdk-v2.3.0")
+set(PT_FFX2_FILES
+  "docs/license.md|6757f2fec461238da6f84f83536ec195e8c036b1773a06f6f34301b9ed8c0963"
+  "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll|e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa"
+  "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll|d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46")
 
 set(PT_DLSS_DIR "${PT_UPSCALER_SDK_DIR}/dlss-v310.9.1")
 set(PT_DLSS_FILES
@@ -65,21 +79,44 @@ set(PT_DLSS_FILES
   "include/nvsdk_ngx_helpers_vk.h|c192bff72138f12f770db48e12c1d8f712dfc81ea0e8e055ebb27d8dd1b31623"
   "include/nvsdk_ngx_params.h|943bc8cc5cdae03b6303016fbad3183636f2335ae27a2d18776798c3b4efabbc"
   "include/nvsdk_ngx_vk.h|2d364ce7132881eb669e9498fd570d74cba563b1fbebc82c235f8e1ad2dd8b6d"
+  # DLSS Ray Reconstruction (DLSS-D) for the Path traced ray quality (docs/pathtracing.md 7): its Vulkan helpers and runtime from
+  # the same SDK release, under the same licence as nvngx_dlss.dll
+  "include/nvsdk_ngx_defs_dlssd.h|2e97fe1595b1334f71b51724f2cb67496e8c296a7a2eec5606da53055882e716"
+  "include/nvsdk_ngx_params_dlssd.h|d41e3ba8f1d72583b55273092c99bf426dc4a0d46de827229e25d5b1325a370e"
+  "include/nvsdk_ngx_helpers_dlssd_vk.h|11df8fbda532a97fe867c8ef2b40058b49b7898183710f3468e55b1eedb8f40b"
+  "lib/Windows_x86_64/rel/nvngx_dlssd.dll|4bc7ea5fcb2f32cf86bc2cb072e8d2860914a0be511cbdcb2fc206c1d9d83b80"
   "lib/Windows_x86_64/x64/nvsdk_ngx_s.lib|4e5d355086d2bc11e1a0842457d2519ea528ee1f3e112c45679a84960c07dff3"
-  "lib/Windows_x86_64/rel/nvngx_dlss.dll|3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983")
+  "lib/Windows_x86_64/rel/nvngx_dlss.dll|3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983"
+  # NGX's D3D12 helpers for the DirectX 12 game (cmake/D3D12Backend.cmake); nvsdk_ngx_helpers.h includes the D3D and CUDA ones
+  "include/nvsdk_ngx_helpers_d3d.h|ec75224f36ed6580baaf250fa83620405ad81a1d98c2c436654a0c9cf6a6b8ba"
+  "include/nvsdk_ngx_helpers_cuda.h|f2851a76107bdf4fbcb7b261f3c35573c312d8ecb4bc18fb02d9e2cec7705042"
+  "include/nvsdk_ngx_helpers_dlssd_d3d.h|6df9d02c6f47feee3afc8d12340a9f554a7ddce4ddacb1b6a13a42b26c2c6293")
 
 set(PT_XESS_DIR "${PT_UPSCALER_SDK_DIR}/xess-v3.0.2")
 set(PT_XESS_FILES
   "LICENSE.txt|784be42c39a4a4d03cf85d88e15e59d75828fca773ce45b8dbfffbd7eaf208df"
   "inc/xess/xess.h|98dc435f5aed252d83a161fc1f86223f20c67eb863214fe3b5cb215a3f6e3319"
   "inc/xess/xess_vk.h|859086df3c531ceccab628b287f69bd9a4528045bcbdd8c639589082dcbf8977"
-  "bin/libxess.dll|251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7")
+  # XeSS on DirectX 12 (the D3D12 game, cmake/D3D12Backend.cmake), the same libxess.dll
+  "inc/xess/xess_d3d12.h|a582a60c3e39ee6fd6aa4871e23082cfb5ec510f98a19fc04acf7a7edb2f6b6c"
+  "bin/libxess.dll|251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"
+  # XeSS Frame Generation and Intel Xe Low Latency (XeLL, which XeSS-FG requires) from the same SDK release: DirectX 12 only,
+  # so the Vulkan renderer presents through a D3D12 bridge while XeSS-FG is on (xefg_bridge.cpp, upscaling.md). Both DLLs are
+  # loaded at run time; the import libraries are not used.
+  "third-party-programs.txt|e8d8899dbfc4de0e8ca25560be9358e03c1405d7c956d20a1838c3c709b9b51c"
+  "inc/xess_fg/xefg_swapchain.h|39f20fc1eef0b5d3fd41e25a2c5c04734d1a2cbdcf3f3da1c86cefef181ce976"
+  "inc/xess_fg/xefg_swapchain_d3d12.h|1aa9a1c31214aaefb2c4ca4fd3bce29a166c8384148466d69f679ea554cf2dbc"
+  "inc/xess_fg/xefg_swapchain_debug.h|3600f2698fc747810948deb6fe568f105a8f40c003c73b6940262ae311f33aeb"
+  "inc/xell/xell.h|0a65a677001edf473156e6ed1d6cf97150fa12ff9930811bbaf4613b080c11b2"
+  "inc/xell/xell_d3d12.h|e3b07f2f3adc317416a6aaa2343ae9b56c7707a34bb0e56fbefea14463a76bce"
+  "bin/libxess_fg.dll|ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27"
+  "bin/libxell.dll|d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7")
 
 # NVIDIA Streamline 2.14.1 (github.com/NVIDIA-RTX/Streamline, release zip): DLSS Frame Generation, Reflex and PCL, and DLSS
 # Super Resolution through sl.dlss while Streamline is loaded (upscaling.md, DLSS Frame Generation). Only the production
 # (signed) DLLs of bin/x64 and the headers are taken from the 276 MB zip, which is deleted after extraction. Experimental:
 # a release build configured with -DPT_STREAMLINE=OFF leaves the code and the DLLs out.
-option(PT_STREAMLINE "Download Streamline and build the experimental DLSS Frame Generation path" ${pt_upscalers_default})
+option(PT_STREAMLINE "Download Streamline and build the experimental DLSS Frame Generation path" ${WIN32})
 set(PT_SL_DIR "${PT_UPSCALER_SDK_DIR}/streamline-v2.14.1")
 set(PT_SL_ZIP_HASH "92c4d954631a1710da86ca3fa8d5034f2b9503838c95fc4ae977ae149319781b")
 set(PT_SL_FILES
@@ -92,6 +129,7 @@ set(PT_SL_FILES
   "include/sl_core_types.h|f420cb052ce14489fc9fa0d933c3ed81a010deb01fa13b1aa8d45da1c5ba3234"
   "include/sl_dlss.h|d2c8c61fa71794c8ba424cebce5b3079ebfab8e47ed98b4b00cf8b257ecfd6b5"
   "include/sl_dlss_g.h|1fc18cbe004e280df1f787276d08a1b28b8a8c4c65856fbaa659f56dff6a915d"
+  "include/sl_dlss_d.h|6e51cf9815301c597d0657970a668147e34a20db5a76d0af254ec11248f5c4fe"
   "include/sl_reflex.h|3b623a1189e04a686384d224a58c4ad9974c4e6e3204077676f6ec529475164c"
   "include/sl_pcl.h|f43c5135fc8d5349ccd345e424f8cf1f61953a9f17e9897204b0741a3ab7b0fb"
   "include/sl_helpers_vk.h|82604567d239d00ac0ac2270cec744f6f11266e1d9d5187a95d4954f76d8c41c"
@@ -108,13 +146,14 @@ set(PT_SL_FILES
   "bin/x64/sl.common.dll|82924a8954dd671e09351c5de0eb87ad0eb25b944cc9f9ab955ca1d9950de15d"
   "bin/x64/sl.dlss.dll|73bf52c0cfaa5900a8f3f4a91306e4625e7cca696dfb305aae44c9f97b582e1f"
   "bin/x64/sl.dlss_g.dll|f4a6b2b14dcc0b1485989e430d3b4e3a44ac1800b92ba1ad74f476e64fb2b09c"
+  "bin/x64/sl.dlss_d.dll|026b9f4f9ea848f2f5aa0e2024fc6b1c885f57eea5d41078124dba14f873b86b"
   "bin/x64/sl.reflex.dll|0ce9725e3e03ea9e7f81d008b57f33ee365973d2e349131c8b1c3e3378fe2db0"
   "bin/x64/sl.pcl.dll|f13d51cfa05f4cd514df2026049e2db8adf359221713170ad386fd499915b582"
   "bin/x64/nvngx_dlssg.dll|ff6e90eb78b827927dff5b4ecc6b1c870c2e9bca29ed9f48c7d348cc9e170b82")
-# the DLLs that ship: the interposer and sl.common (mandatory), the plugins used, and the DLSS-G runtime. nvngx_dlss.dll
-# comes from the DLSS SDK above (the same 310.9.1 file as Streamline's). NvLowLatencyVk.dll is left out: sl.reflex uses
+# the DLLs that ship: the interposer and sl.common (mandatory), the plugins used, and the DLSS-G runtime. nvngx_dlss.dll and
+# nvngx_dlssd.dll (sl.dlss_d's DLSS Ray Reconstruction) come from the DLSS SDK above (the same 310.9.1 files as Streamline's). NvLowLatencyVk.dll is left out: sl.reflex uses
 # VK_NV_low_latency2 where the driver has it (Streamline 2.14.0), and the Reflex license names no such DLL as distributable.
-set(PT_SL_RUNTIME sl.interposer.dll sl.common.dll sl.dlss.dll sl.dlss_g.dll sl.reflex.dll sl.pcl.dll nvngx_dlssg.dll)
+set(PT_SL_RUNTIME sl.interposer.dll sl.common.dll sl.dlss.dll sl.dlss_g.dll sl.dlss_d.dll sl.reflex.dll sl.pcl.dll nvngx_dlssg.dll)
 
 function(pt_streamline_files out_ok)
   set(missing FALSE)
@@ -172,10 +211,15 @@ endfunction()
 set(PT_UPSCALER_RUNTIME_FILES)
 set(PT_UPSCALER_NOTICES)
 set(pt_ffx_ok FALSE)
+set(pt_ffx2_ok FALSE)
 set(pt_dlss_ok FALSE)
 set(pt_xess_ok FALSE)
+set(pt_xefg_ok FALSE)
 set(pt_sl_ok FALSE)
-if(PT_UPSCALERS)
+if(PT_UPSCALERS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND PT_UPSCALER_NOTICES "${CMAKE_SOURCE_DIR}/third_party/upscaler_notices/UPSCALERS-linux.txt|UPSCALERS.txt")
+  include("${CMAKE_SOURCE_DIR}/cmake/UpscalersLinux.cmake")
+elseif(PT_UPSCALERS)
   # what each runtime's licence lets the port ship (licenses/UPSCALERS.txt next to pt.exe)
   list(APPEND PT_UPSCALER_NOTICES "${CMAKE_SOURCE_DIR}/third_party/upscaler_notices/UPSCALERS.txt|UPSCALERS.txt")
   pt_sdk_files(pt_ffx_ok "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v1.1.4" "${PT_FFX_DIR}" ${PT_FFX_FILES})
@@ -184,24 +228,43 @@ if(PT_UPSCALERS)
     target_compile_definitions(pt_engine PRIVATE PT_WITH_FSR=1)
     list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_FFX_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll")
     list(APPEND PT_UPSCALER_NOTICES "${PT_FFX_DIR}/LICENSE.txt|AMD_FidelityFX_SDK_LICENSE.txt")
+    pt_sdk_files(pt_ffx2_ok "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.3.0" "${PT_FFX2_DIR}" ${PT_FFX2_FILES})
+    if(pt_ffx2_ok)
+      list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll"
+        "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll")
+      list(APPEND PT_UPSCALER_NOTICES "${PT_FFX2_DIR}/docs/license.md|AMD_FSR_SDK_2_LICENSE.txt")
+    elseif(PT_REQUIRE_UPSCALERS)
+      message(FATAL_ERROR "Strict Windows release requires the AMD FSR SDK 2.3.0 DirectX 12 DLLs (FSR 4); see download/hash errors above")
+    endif()
   endif()
   pt_sdk_files(pt_dlss_ok "https://raw.githubusercontent.com/NVIDIA/DLSS/v310.9.1" "${PT_DLSS_DIR}" ${PT_DLSS_FILES})
   if(pt_dlss_ok)
     target_include_directories(pt_engine PRIVATE "${PT_DLSS_DIR}/include")
     target_compile_definitions(pt_engine PRIVATE PT_WITH_DLSS=1)
     target_link_libraries(pt_engine PRIVATE "${PT_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
-    list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll")
+    list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll"
+      "${PT_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlssd.dll")
     list(APPEND PT_UPSCALER_NOTICES "${PT_DLSS_DIR}/LICENSE.txt|NVIDIA_RTX_SDKs_LICENSE.txt")
   endif()
   pt_sdk_files(pt_xess_ok "https://raw.githubusercontent.com/intel/xess/v3.0.2" "${PT_XESS_DIR}" ${PT_XESS_FILES})
   if(PT_REQUIRE_UPSCALERS AND (NOT pt_ffx_ok OR NOT pt_dlss_ok OR NOT pt_xess_ok))
     message(FATAL_ERROR "Strict Windows release requires the FSR, DLSS, and XeSS SDK files; see download/hash errors above")
   endif()
+  if(PT_REQUIRE_UPSCALERS AND NOT PT_D3D12_PRESENT)
+    message(FATAL_ERROR "Strict Windows release requires PT_D3D12_PRESENT=ON (XeSS Frame Generation)")
+  endif()
   if(pt_xess_ok)
     target_include_directories(pt_engine PRIVATE "${PT_XESS_DIR}/inc")
     target_compile_definitions(pt_engine PRIVATE PT_WITH_XESS=1)
     list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_XESS_DIR}/bin/libxess.dll")
-    list(APPEND PT_UPSCALER_NOTICES "${PT_XESS_DIR}/LICENSE.txt|Intel_XeSS_SDK_LICENSE.txt")
+    # XeSS Frame Generation presents through the Direct3D 12 path (cmake/D3D12.cmake)
+    if(PT_D3D12_PRESENT)
+      set(pt_xefg_ok TRUE)
+      target_compile_definitions(pt_engine PRIVATE PT_WITH_XEFG=1)
+      list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_XESS_DIR}/bin/libxess_fg.dll" "${PT_XESS_DIR}/bin/libxell.dll")
+    endif()
+    list(APPEND PT_UPSCALER_NOTICES "${PT_XESS_DIR}/LICENSE.txt|Intel_XeSS_SDK_LICENSE.txt"
+      "${PT_XESS_DIR}/third-party-programs.txt|Intel_XeSS_SDK_third-party-programs.txt")
   endif()
   if(PT_STREAMLINE AND pt_dlss_ok)
     pt_streamline_files(pt_sl_ok)
@@ -222,13 +285,15 @@ if(PT_UPSCALERS)
 endif()
 
 # The package builder checks this configure-time record along with the copied runtime DLLs.
-foreach(backend FSR DLSS XeSS Streamline)
+foreach(backend FSR DLSS XeSS XeSSFG Streamline)
   if(backend STREQUAL "FSR")
     set(ok ${pt_ffx_ok})
   elseif(backend STREQUAL "DLSS")
     set(ok ${pt_dlss_ok})
   elseif(backend STREQUAL "XeSS")
     set(ok ${pt_xess_ok})
+  elseif(backend STREQUAL "XeSSFG")
+    set(ok ${pt_xefg_ok})
   else()
     set(ok ${pt_sl_ok})
   endif()
@@ -238,7 +303,7 @@ foreach(backend FSR DLSS XeSS Streamline)
     set(${backend}_available 0)
   endif()
 endforeach()
-file(WRITE "${CMAKE_BINARY_DIR}/upscalers.txt" "FSR=${FSR_available}\nDLSS=${DLSS_available}\nXeSS=${XeSS_available}\nStreamline=${Streamline_available}\n")
+file(WRITE "${CMAKE_BINARY_DIR}/upscalers.txt" "FSR=${FSR_available}\nDLSS=${DLSS_available}\nXeSS=${XeSS_available}\nXeSSFG=${XeSSFG_available}\nStreamline=${Streamline_available}\n")
 
 # These outputs are build dependencies, so Ninja recopies a DLL if it was deleted even when the EXE is up to date.
 set(pt_upscaler_runtime_dir "${CMAKE_BINARY_DIR}")
@@ -252,6 +317,18 @@ foreach(runtime ${PT_UPSCALER_RUNTIME_FILES})
   set(runtime_output "${pt_upscaler_runtime_dir}/${runtime_name}")
   pt_add_staged_file(pt_upscaler_runtime_outputs "${runtime}" "${runtime_output}")
 endforeach()
+# The port's own ReShade for the DLSS 5 community route (tools/build_reshade.py; docs/upscaling.md, "The port's own ReShade"): in
+# reshade/ beside pt.exe, never next to it (a dxgi.dll there would enter every run). pt-updater puts it over Autopilot's after an
+# install. Built once into the shared deps folder; without it the route keeps Autopilot's official ReShade.
+set(PT_RESHADE_PT_DIR "${PT_UPSCALER_SDK_DIR}/../reshade-pt-6.8.0" CACHE PATH "Folder with the port's own ReShade build (tools/build_reshade.py)")
+if(WIN32 AND PT_UPSCALERS)
+  if(EXISTS "${PT_RESHADE_PT_DIR}/dxgi.dll" AND EXISTS "${PT_RESHADE_PT_DIR}/LICENSE.md")
+    pt_add_staged_file(pt_upscaler_runtime_outputs "${PT_RESHADE_PT_DIR}/dxgi.dll" "${pt_upscaler_runtime_dir}/reshade/dxgi.dll")
+    list(APPEND PT_UPSCALER_NOTICES "${PT_RESHADE_PT_DIR}/LICENSE.md|ReShade_LICENSE.md")
+  else()
+    message(WARNING "The port's own ReShade is missing in ${PT_RESHADE_PT_DIR} (python tools/build_reshade.py); the DLSS 5 route keeps Autopilot's ReShade")
+  endif()
+endif()
 foreach(entry ${PT_UPSCALER_NOTICES})
   string(REPLACE "|" ";" parts "${entry}")
   list(GET parts 0 notice_source)
@@ -274,7 +351,7 @@ if(WIN32)
         COMMAND "${CMAKE_COMMAND}"
           "-DEXE=$<TARGET_FILE:${target}>"
           "-DOUT=$<TARGET_FILE:${target}>.upscalers.json"
-          "-DFSR=${FSR_available}" "-DDLSS=${DLSS_available}" "-DXeSS=${XeSS_available}"
+          "-DFSR=${FSR_available}" "-DDLSS=${DLSS_available}" "-DXeSS=${XeSS_available}" "-DXeSSFG=${XeSSFG_available}"
           "-DStreamline=${Streamline_available}"
           -P "${CMAKE_SOURCE_DIR}/cmake/write_upscaler_manifest.cmake"
         VERBATIM)

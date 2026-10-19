@@ -1,6 +1,5 @@
 #include "engine/render/upscale/upscale_platform.h"
 
-// only the Windows upscaler SDKs (FSR, XeSS, DLSS) report wide text; they are not built elsewhere (cmake/Upscalers.cmake)
 #ifdef _WIN32
 
 #include <windows.h>
@@ -24,7 +23,6 @@ std::string NarrowText(const wchar_t* text) {
 
 namespace {
 
-// the d3dkmthk.h structures used here (shared/d3dkmthk.h, d3dkmdt.h of the Windows SDK), loaded from gdi32.dll at run time
 struct KmtOpenAdapterFromLuid {
     LUID luid;
     UINT adapter;
@@ -38,7 +36,7 @@ struct KmtQueryAdapterInfo {
 struct KmtCloseAdapter {
     UINT adapter;
 };
-constexpr int kKmtWddm27Caps = 70;  // KMTQAITYPE_WDDM_2_7_CAPS: HwSchSupported bit 0, HwSchEnabled bit 1
+constexpr int kKmtWddm27Caps = 70;
 using KmtOpen = LONG(APIENTRY*)(KmtOpenAdapterFromLuid*);
 using KmtQuery = LONG(APIENTRY*)(const KmtQueryAdapterInfo*);
 using KmtClose = LONG(APIENTRY*)(const KmtCloseAdapter*);
@@ -70,6 +68,40 @@ int HardwareGpuScheduling(const uint8_t (&luid)[8]) {
         return -1;
     }
     return (caps & 2u) ? 1 : 0;
+}
+
+}
+
+#elif defined(__linux__)
+
+#include <cstdint>
+
+namespace pt {
+
+std::string NarrowText(const wchar_t* text) {
+    std::string out;
+    for (; text && *text; ++text) {
+        uint32_t c = static_cast<uint32_t>(*text);
+        if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) {
+            c = 0xFFFD;
+        }
+        if (c < 0x80) {
+            out += static_cast<char>(c);
+        } else if (c < 0x800) {
+            out += static_cast<char>(0xC0 | (c >> 6));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            out += static_cast<char>(0xE0 | (c >> 12));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (c >> 18));
+            out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
 }
 
 }

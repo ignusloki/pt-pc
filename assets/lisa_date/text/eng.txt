@@ -1,0 +1,162 @@
+# Coffee with Lisa, English (the fallback for every language). key = text
+name_lisa = Lisa
+name_you = You
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Skip
+ui_affection = Affection
+ui_leave_hold = Hold to leave the date
+title_1 = Part 1: Black Coffee
+title_2 = Part 2: Two Sugars
+title_3 = Part 3: Last Call
+ending_good = GOOD END: Same Time Next Loop
+ending_bad = BAD END: Cold Coffee
+ending_true = TRUE END: 204863
+
+intro_01 = (The hallway is gone. It smells like coffee in here. Coffee, and something very old.)
+intro_02 = (Is that... Lisa? Why is she smiling? Why is she SITTING?)
+
+s1_01 = Oh! You actually came in. Nobody ever comes in. They just walk past me in the hallway. Over and over and over.
+s1_02 = Sit, sit! I made coffee. I didn't know how you take it, so I made it how I take it.
+s1_03 = Black. Like the hallway at three in the morning.
+c1_a = Black is perfect.
+c1_a_r = See? We're already compatible. I knew it the first time you ran away from me.
+c1_b = Could I get some milk?
+c1_b_r1 = The milk is in the fridge.
+c1_b_r2 = ...Don't open the fridge.
+c1_c = Is that a radio I hear?
+c1_c_r1 = What radio? There's no radio. There has never been a radio.
+c1_c_r2 = Drink your coffee.
+
+s1_04 = So. Do you notice anything different about me?
+c2_a = Your hair looks amazing.
+c2_a_r = Really? It takes me ages. Nobody knows how long. Not even me.
+c2_b = You're... not moving towards me for once.
+c2_b_r = I'm sitting! A friend taught me. She lives in a bathtub. Lovely girl. Not much of a talker.
+c2_c = Did you brush it with a fork?
+c2_c_r = I'm going to pretend you didn't say that. I'm very good at pretending. Ask the hallway.
+
+s1_05 = I don't really go out much. My doctor says I'm "not technically alive", which feels a little judgmental.
+s1_06 = What about you? What do you do all day?
+c3_a = I walk down a hallway. Then I do it again.
+c3_a_r = Me too! We have so much in common!
+c3_b = I collect little scraps of paper.
+c3_b_r = A collector! Do you have the one with my face on it? I look so good in that one.
+c3_c = I shout "Jack" into a microphone until a phone rings.
+c3_c_r = ...I'm sure that's very normal where you're from.
+
+s1_07 = This is nice. Normal. Two people, sitting, drinking coffee. Nobody crawling on any ceilings.
+c4_a = You're really easy to talk to.
+c4_a_r = Stop it. My head is going to do the thing.
+c4_b = Do you crawl on ceilings?
+c4_b_r = Only on weekends.
+c4_c = Can I move my chair a little further away?
+c4_c_r = ...Oh. Sure. It's bolted to the floor, but sure.
+
+s2_01 = Can I tell you a secret? When I get nervous, my head does a little...
+s2_02 = ...that.
+c5_a = It's kind of cute, honestly.
+c5_a_r = Nobody has ever called it cute. Mostly they scream and drop the flashlight.
+c5_b = Please never do that again.
+c5_b_r = I can't help it! It's like hiccups. Haunted hiccups.
+c5_c = Is that why you bang on the bathroom door?
+c5_c_r = That door started it.
+
+s2_03 = Okay, a game! My favourite number is 2-0-4-8-6-3. Guess why.
+c6_a = Is it your birthday?
+c6_a_r = No, silly. It's the time. Look at the clock. ...Where did the clock go?
+c6_b = 204863 is my favourite number too.
+c6_b_r = ...Nobody remembers the number. Nobody.
+c6_c = That's a really weird number.
+c6_c_r = Says the person who counts their own footsteps.
+
+s2_04 = Do you like kids?
+c7_a = Sure, in reasonable amounts.
+c7_a_r = Reasonable is good. I like reasonable.
+c7_b = I found one in a sink once.
+c7_b_r = Oh, that's where they keep them. It's very hygienic.
+c7_c = Not really.
+c7_c_r = The sink heard that.
+
+s2_05 = Okay. Big question. If I were a flashlight, would you hold me close in the dark?
+c8_a = I'd never put you down.
+c8_a_r = Even when I flicker? ...You're sweet. Nobody ever says I'm sweet.
+c8_b = Only until the batteries die.
+c8_b_r = The flashlights in this house don't have batteries. They have feelings.
+c8_c = You'd be the one blinding me.
+c8_c_r = That's the nicest way anyone has ever said "your face hurts my eyes".
+
+s2_06 = I'm having fun. Are you having fun? Blink twice if you're having fun.
+s2_07 = ...You didn't blink. You never blink. Interesting.
+
+s3_01 = It's getting late. It's always late here. It has been late for a very long time.
+s3_02 = Everyone leaves through the door at the end of the hall. And then they walk right back in.
+c9_a = I'll stay a little longer.
+c9_a_r = I knew you would.
+c9_b = I should get back to the hallway.
+c9_b_r = The hallway will still be there. The hallway is always still there.
+c9_c = I feel like I've been here before.
+c9_c_r = You say that every time.
+
+s3_03 = Can I ask you something? What's my name?
+c10_a = Lisa.
+c10_a_r = You remembered! Nobody remembers. They just call me "the thing behind you".
+c10_b = Ocho?
+c10_b_r = That's what the programmers called me. We don't talk about the programmers.
+c10_c = The woman in the hallway?
+c10_c_r = ...That's my job. It's not my name.
+
+s3_04 = Promise me something. Don't look behind you.
+c11_a = I promise.
+c11_a_r = Good. There's nothing there. There's never anything there.
+c11_b = (Look behind you.)
+c11_b_r1 = (There's nothing there. Just a door. It wasn't there a second ago.)
+c11_b_r2 = ...You looked. Why does everyone always look?
+c11_c = Can I look through the peephole instead?
+c11_c_r = There's no door here. ...So what are you looking through right now?
+
+s3_05 = Last question, I promise. Will you come back?
+c12_a = Of course I will.
+c12_a_r = Then I'll keep the coffee warm. Forever, if I have to. I'm good at forever.
+c12_b = Every loop.
+c12_b_r = Every loop. That's practically a marriage where I come from.
+c12_c = I'm going to turn off the game.
+c12_c_r = Turn off the WHAT?
+
+good_01 = Can we... can we take a picture? To remember this. I'm terrible at remembering things.
+good_02 = Look at us! You look nervous. I look... like me. It's perfect.
+good_03 = I'll hang it in the hallway. Next to the other pictures. Then I'll see you every time you walk past.
+good_04 = Same time next loop? I'll make the coffee. You bring the flashlight.
+
+bad_01 = You know what? You're just like all the others.
+bad_02 = You come in. You look around. You leave. You come back. You never, ever stay.
+bad_03 = Let me show you what happens to people who don't finish their coffee.
+
+true_01 = You picked those on purpose, didn't you?
+true_02 = The radio. The number. The loop. The peephole. You've been paying attention.
+true_03 = So I'll be honest with you. Not with the man in the hallway. With YOU.
+true_04 = This room isn't real. The coffee isn't real. Somebody painted it. I'm not even really sitting. They borrowed the pose from a bathtub.
+true_05 = But you're real. You're holding something in your hands right now, in a room I can't see. Is it dark there too?
+true_06 = I watched you walk that hallway. Again. And again. You opened that same door so many times.
+true_07 = Don't worry. I won't touch your save file. I'm not that kind of girl.
+true_08 = I just wanted one cup of coffee with someone who looks back.
+true_09 = Okay. Go back now. The hallway misses you. And the radio still has something to tell you.
+true_10 = And if a phone rings... let it ring a little longer. For me.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Look at us! Two big smiles. I didn't know your face could do that. I'm keeping it forever.
+selfie_both_grumpy = Look at us. Two grumpy faces over coffee. It's the most honest picture I own. It's perfect.
+selfie_she_smiles = I'm smiling and you're scowling. Everyone will think I'm the nice one. Finally.
+selfie_you_smile = You're grinning and I'm glaring. Good. Now they'll know who's in charge here.
+ui_selfie = Selfie
+ui_selfie_face = Expression
+ui_selfie_tilt = Head tilt
+ui_selfie_take = Take the photo
+ui_face_grumpy = Grumpy
+ui_face_frown = Frown
+ui_face_neutral = Neutral
+ui_face_smile = Smile
+ui_face_grin = Big grin
+ui_photo_saved = Photo saved: {file}
+ui_photo_failed = The photo could not be saved
+ui_hint_menu = Menu

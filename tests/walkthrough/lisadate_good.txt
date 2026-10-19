@@ -1,0 +1,44 @@
+# Coffee with Lisa: the date by its warm answers (GOOD), from where the script stands
+sshot {shots}/good_00_before.png
+swait 2
+slisadate
+swait 160
+sshot {shots}/good_01_intro.png
+swait 260
+sshot {shots}/good_02_scene.png
+swait 2
+slisaadvance
+swait 240
+sshot {shots}/good_02b_choice.png
+swait 2
+slisachoice 1
+swait 40
+sshot {shots}/good_03_answer.png
+swait 2
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+swait 30
+sshot {shots}/good_04_scene2.png
+swait 2
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+sexpect lisadate 1
+slisaline good_02
+swait 90
+sshot {shots}/good_05_photo.png
+swait 2
+slisaadvance
+swait 120
+sshot {shots}/good_06_ending.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+sshot {shots}/good_07_back.png

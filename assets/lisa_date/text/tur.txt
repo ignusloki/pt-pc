@@ -1,0 +1,162 @@
+# Lisa ile Kahve, Türkçe. anahtar = metin (eksik anahtarlar eng.txt'den gelir)
+name_lisa = Lisa
+name_you = Sen
+name_glitch = Lisa
+ui_auto = Otomatik
+ui_skip = Atla
+ui_affection = Sevgi
+ui_leave_hold = Buluşmadan ayrılmak için basılı tut
+title_1 = Bölüm 1: Sade Kahve
+title_2 = Bölüm 2: İki Şeker
+title_3 = Bölüm 3: Son Sipariş
+ending_good = İYİ SON: Bir Sonraki Döngüde, Aynı Saatte
+ending_bad = KÖTÜ SON: Soğuk Kahve
+ending_true = GERÇEK SON: 204863
+
+intro_01 = (Koridor yok olmuş. Burası kahve kokuyor. Kahve ve çok eski bir şey.)
+intro_02 = (Bu... Lisa mı? Neden gülümsüyor? Neden OTURUYOR?)
+
+s1_01 = Aa! Gerçekten içeri girdin. Kimse içeri girmez. Koridorda yanımdan geçip giderler. Tekrar tekrar tekrar.
+s1_02 = Otur, otur! Kahve yaptım. Nasıl içtiğini bilmiyordum, ben nasıl içiyorsam öyle yaptım.
+s1_03 = Sade. Gece saat üçteki koridor gibi.
+c1_a = Sade harika.
+c1_a_r = Gördün mü? Zaten uyumluyuz. Benden ilk kaçtığında anlamıştım.
+c1_b = Biraz süt alabilir miyim?
+c1_b_r1 = Süt buzdolabında.
+c1_b_r2 = ...Buzdolabını açma.
+c1_c = Bir radyo mu duyuyorum?
+c1_c_r1 = Ne radyosu? Radyo falan yok. Hiç radyo olmadı.
+c1_c_r2 = Kahveni iç.
+
+s1_04 = Eee. Bende farklı bir şey fark ettin mi?
+c2_a = Saçların harika görünüyor.
+c2_a_r = Sahiden mi? Çok uğraşıyorum. Ne kadar sürdüğünü kimse bilmiyor. Ben bile.
+c2_b = Bu sefer... bana doğru gelmiyorsun.
+c2_b_r = Oturuyorum! Bir arkadaşım öğretti. Küvette yaşıyor. Tatlı kızdır. Pek konuşkan değil ama.
+c2_c = Saçını çatalla mı taradın?
+c2_c_r = Bunu söylemediğini varsayacağım. Varsaymakta çok iyiyimdir. Koridora sor.
+
+s1_05 = Pek dışarı çıkmam. Doktorum "teknik olarak canlı değilsin" diyor, biraz yargılayıcı buluyorum.
+s1_06 = Ya sen? Bütün gün ne yapıyorsun?
+c3_a = Bir koridorda yürüyorum. Sonra bir daha.
+c3_a_r = Ben de! Ne çok ortak noktamız var!
+c3_b = Küçük kağıt parçaları topluyorum.
+c3_b_r = Koleksiyoncu! Benim yüzümün olduğu parça sende var mı? O fotoğrafta çok güzel çıkmışım.
+c3_c = Bir telefon çalana kadar mikrofona "Jack" diye bağırıyorum.
+c3_c_r = ...Eminim geldiğin yerde bu çok normaldir.
+
+s1_07 = Bu güzel. Normal. İki insan oturmuş kahve içiyor. Kimse tavanda sürünmüyor.
+c4_a = Seninle konuşmak çok kolay.
+c4_a_r = Yapma. Kafam o şeyi yapacak.
+c4_b = Tavanda sürünür müsün?
+c4_b_r = Sadece hafta sonları.
+c4_c = Sandalyemi biraz uzağa çekebilir miyim?
+c4_c_r = ...Ha. Tabii. Yere vidalı ama, tabii.
+
+s2_01 = Sana bir sır verebilir miyim? Gerildiğimde kafam ufak bir...
+s2_02 = ...şey yapıyor.
+c5_a = Açıkçası biraz tatlı.
+c5_a_r = Kimse ona tatlı dememişti. Genelde çığlık atıp el fenerini düşürüyorlar.
+c5_b = Lütfen bunu bir daha yapma.
+c5_b_r = Elimde değil! Hıçkırık gibi. Lanetli hıçkırık.
+c5_c = Banyo kapısına bu yüzden mi vuruyorsun?
+c5_c_r = Önce o kapı başladı.
+
+s2_03 = Tamam, bir oyun! En sevdiğim sayı 2-0-4-8-6-3. Bil bakalım neden.
+c6_a = Doğum günün mü?
+c6_a_r = Hayır, şapşal. Saat o. Saate bak. ...Saat nereye gitti?
+c6_b = 204863 benim de en sevdiğim sayı.
+c6_b_r = ...Kimse o sayıyı hatırlamaz. Kimse.
+c6_c = Çok tuhaf bir sayı.
+c6_c_r = Kendi adımlarını sayan biri söylüyor bunu.
+
+s2_04 = Çocukları sever misin?
+c7_a = Tabii, makul miktarlarda.
+c7_a_r = Makul iyidir. Makulü severim.
+c7_b = Bir keresinde lavaboda bir tane buldum.
+c7_b_r = Aa, onları orada saklarlar zaten. Çok hijyenik.
+c7_c = Pek sayılmaz.
+c7_c_r = Lavabo duydu bunu.
+
+s2_05 = Tamam. Büyük soru. Ben bir el feneri olsaydım, beni karanlıkta sıkıca tutar mıydın?
+c8_a = Seni elimden hiç bırakmazdım.
+c8_a_r = Titrediğimde bile mi? ...Çok tatlısın. Kimse bana tatlı demez.
+c8_b = Sadece pilin bitene kadar.
+c8_b_r = Bu evdeki fenerlerin pili yok. Duyguları var.
+c8_c = Gözümü sen kamaştırırdın.
+c8_c_r = Bu, "yüzün gözümü acıtıyor" demenin şimdiye kadar duyduğum en kibar hali.
+
+s2_06 = Eğleniyorum. Sen eğleniyor musun? Eğleniyorsan iki kere göz kırp.
+s2_07 = ...Göz kırpmadın. Hiç göz kırpmıyorsun. İlginç.
+
+s3_01 = Geç oluyor. Burada hep geç. Çok uzun zamandır geç.
+s3_02 = Herkes koridorun sonundaki kapıdan çıkıp gidiyor. Sonra da hemen geri giriyorlar.
+c9_a = Biraz daha kalırım.
+c9_a_r = Kalacağını biliyordum.
+c9_b = Koridora dönmem lazım.
+c9_b_r = Koridor yine orada olacak. Koridor hep orada.
+c9_c = Sanki daha önce de buradaydım.
+c9_c_r = Bunu her seferinde söylüyorsun.
+
+s3_03 = Sana bir şey sorabilir miyim? Benim adım ne?
+c10_a = Lisa.
+c10_a_r = Hatırladın! Kimse hatırlamaz. Bana sadece "arkandaki şey" derler.
+c10_b = Ocho?
+c10_b_r = Programcılar bana öyle diyordu. Programcılardan bahsetmiyoruz.
+c10_c = Koridordaki kadın?
+c10_c_r = ...O benim işim. Adım değil.
+
+s3_04 = Bana bir söz ver. Arkana bakma.
+c11_a = Söz.
+c11_a_r = Güzel. Orada bir şey yok. Orada hiçbir zaman bir şey olmuyor.
+c11_b = (Arkana bak.)
+c11_b_r1 = (Orada bir şey yok. Sadece bir kapı. Bir saniye önce orada değildi.)
+c11_b_r2 = ...Baktın. Neden herkes hep bakıyor?
+c11_c = Onun yerine kapı deliğinden baksam olur mu?
+c11_c_r = Burada kapı yok. ...Peki şu an neyin içinden bakıyorsun?
+
+s3_05 = Son soru, söz. Geri gelecek misin?
+c12_a = Tabii ki geleceğim.
+c12_a_r = O zaman kahveyi sıcak tutarım. Gerekirse sonsuza dek. Sonsuzlukta iyiyimdir.
+c12_b = Her döngüde.
+c12_b_r = Her döngüde. Benim oralarda bu neredeyse evlilik demek.
+c12_c = Oyunu kapatacağım.
+c12_c_r = NEYİ kapatacaksın?
+
+good_01 = Bir... bir fotoğraf çekelim mi? Bunu hatırlamak için. Bir şeyleri hatırlamakta berbatımdır.
+good_02 = Şunlara bak! Gergin görünüyorsun. Ben de... kendim gibi. Mükemmel.
+good_03 = Koridora asarım. Diğer resimlerin yanına. Böylece her geçtiğinde seni görürüm.
+good_04 = Bir sonraki döngüde aynı saatte? Kahveyi ben yaparım. Feneri sen getir.
+
+bad_01 = Biliyor musun? Sen de diğerleri gibisin.
+bad_02 = Giriyorsun. Etrafa bakıyorsun. Gidiyorsun. Geri geliyorsun. Hiç ama hiç kalmıyorsun.
+bad_03 = Kahvesini bitirmeyenlere ne olduğunu sana göstereyim.
+
+true_01 = Bunları bilerek seçtin, değil mi?
+true_02 = Radyo. Sayı. Döngü. Kapı deliği. Dikkat ediyormuşsun.
+true_03 = O yüzden sana dürüst olacağım. Koridordaki adama değil. SANA.
+true_04 = Bu oda gerçek değil. Kahve gerçek değil. Biri boyamış bunu. Aslında oturmuyorum bile. Bu duruşu bir küvetten ödünç aldılar.
+true_05 = Ama sen gerçeksin. Şu an elinde bir şey tutuyorsun, göremediğim bir odada. Orası da karanlık mı?
+true_06 = O koridorda yürümeni izledim. Tekrar. Ve tekrar. O aynı kapıyı kaç kere açtın.
+true_07 = Merak etme. Kayıt dosyana dokunmayacağım. Ben öyle bir kız değilim.
+true_08 = Sadece bana geri bakan biriyle bir fincan kahve içmek istedim.
+true_09 = Tamam. Şimdi geri dön. Koridor seni özledi. Radyonun da sana anlatacağı bir şey var hâlâ.
+true_10 = Ve bir telefon çalarsa... biraz daha çalmasına izin ver. Benim için.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Şunlara bak! İki kocaman gülümseme. Yüzünün bunu yapabildiğini bilmiyordum. Bunu sonsuza dek saklayacağım.
+selfie_both_grumpy = Şunlara bak. Kahve başında iki huysuz surat. Sahip olduğum en dürüst fotoğraf. Mükemmel.
+selfie_she_smiles = Ben gülümsüyorum, sen kaş çatıyorsun. Herkes iyi olanın ben olduğumu düşünecek. Sonunda.
+selfie_you_smile = Sen sırıtıyorsun, ben ters ters bakıyorum. Güzel. Artık burada kimin sözünün geçtiğini herkes bilecek.
+ui_selfie = Özçekim
+ui_selfie_face = İfade
+ui_selfie_tilt = Baş eğimi
+ui_selfie_take = Fotoğrafı çek
+ui_face_grumpy = Huysuz
+ui_face_frown = Kaş çatma
+ui_face_neutral = Nötr
+ui_face_smile = Gülümseme
+ui_face_grin = Kocaman sırıtış
+ui_photo_saved = Fotoğraf kaydedildi: {file}
+ui_photo_failed = Fotoğraf kaydedilemedi
+ui_hint_menu = Menü

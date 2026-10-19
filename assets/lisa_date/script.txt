@@ -1,0 +1,290 @@
+# Coffee with Lisa (port easter egg, docs/superpowers/specs/2026-10-13-coffee-with-lisa-design.md)
+#
+# One command per line, # starts a comment. The text of every `say`, `option` and `title` lives in text/<language>.txt under
+# its key (text/eng.txt is the fallback for a key a language lacks).
+#   scene <n> <title key>          a title card
+#   bg <name>                      the backdrop bg_<name>.png (else .jpg)
+#   music <name>|slow|stop         music.ogg or music.wav (name "music"), its slowed copy, or silence
+#   expr <name>                    neutral happy shy sad angry creepy (her face, head, lean, a push-in and a light tint)
+#   light <name>                   warm blush angry glitch dark dusk
+#   cam <name>                     normal close face far rush
+#   fx <name>                      flash heart shake glitch noglitch photo scare tear notear darken
+#                                  twitch (one small) twitch_violent twitch_rare twitch_often twitch_off flicker_on flicker_off
+#   say <lisa|you|none|glitch> <key> [expression]
+#   wait <seconds>
+#   choice <key>                   then option lines, each followed by its own indented lines, closed by `end`
+#   option <key> <affection> [flag:<name>] [goto:<label>]
+#   label <name> / goto <name>
+#   if <affection|secrets|flag:<name>|selfie:lisa|selfie:you> <op> <number> <label>    op: < <= > >= == !=
+#   selfie                         the selfie's photo mode (Lisa and you, each an expression and a head tilt), the shot, the
+#                                  polaroid developing; then selfie:lisa and selfie:you hold the expressions (-2 grumpy .. 2 big grin)
+#   ending good|bad|true
+
+bg cafe
+music music
+light warm
+cam far
+fx twitch_off
+expr neutral
+say you intro_01
+say you intro_02
+cam normal
+
+scene 1 title_1
+say lisa s1_01 happy
+say lisa s1_02 happy
+say lisa s1_03 neutral
+choice c1
+  option c1_a 1
+    say lisa c1_a_r happy
+  option c1_b 0
+    say lisa c1_b_r1 neutral
+    say lisa c1_b_r2 creepy
+  option c1_c 0 flag:radio
+    fx glitch
+    say lisa c1_c_r1 creepy
+    fx noglitch
+    say lisa c1_c_r2 neutral
+end
+
+say lisa s1_04 happy
+choice c2
+  option c2_a 2
+    light blush
+    say lisa c2_a_r shy
+    light warm
+  option c2_b 1
+    say lisa c2_b_r happy
+  option c2_c -2
+    light angry
+    say lisa c2_c_r angry
+    light warm
+end
+
+say lisa s1_05 sad
+say lisa s1_06 neutral
+choice c3
+  option c3_a 2
+    say lisa c3_a_r happy
+  option c3_b 1
+    say lisa c3_b_r happy
+  option c3_c 0
+    say lisa c3_c_r neutral
+end
+
+fx twitch
+say lisa s1_07 shy
+choice c4
+  option c4_a 2
+    light blush
+    say lisa c4_a_r shy
+    light warm
+  option c4_b 0
+    say lisa c4_b_r happy
+  option c4_c -1
+    say lisa c4_c_r sad
+end
+
+scene 2 title_2
+fx twitch_rare
+say lisa s2_01 shy
+fx twitch
+say lisa s2_02 creepy
+choice c5
+  option c5_a 2
+    light blush
+    say lisa c5_a_r shy
+    light warm
+  option c5_b -1
+    say lisa c5_b_r sad
+  option c5_c 0
+    say lisa c5_c_r angry
+end
+
+say lisa s2_03 happy
+choice c6
+  option c6_a 1
+    say lisa c6_a_r happy
+  option c6_b 0 flag:number
+    cam close
+    fx glitch
+    fx twitch
+    say lisa c6_b_r creepy
+    fx noglitch
+    cam normal
+  option c6_c -1
+    say lisa c6_c_r angry
+end
+
+say lisa s2_04 neutral
+choice c7
+  option c7_a 1
+    say lisa c7_a_r happy
+  option c7_b 1
+    say lisa c7_b_r happy
+  option c7_c -2
+    light angry
+    say lisa c7_c_r angry
+    light warm
+end
+
+light blush
+say lisa s2_05 shy
+choice c8
+  option c8_a 2
+    say lisa c8_a_r shy
+  option c8_b -1
+    say lisa c8_b_r sad
+  option c8_c 1
+    say lisa c8_c_r happy
+end
+light warm
+
+say lisa s2_06 happy
+cam close
+fx twitch
+say lisa s2_07 creepy
+cam normal
+if affection <= -3 bad
+
+scene 3 title_3
+light dusk
+music slow
+say lisa s3_01 sad
+say lisa s3_02 neutral
+choice c9
+  option c9_a 2
+    say lisa c9_a_r happy
+  option c9_b -1
+    say lisa c9_b_r sad
+  option c9_c 0 flag:loop
+    fx glitch
+    fx twitch
+    say lisa c9_c_r creepy
+    fx noglitch
+end
+
+say lisa s3_03 neutral
+choice c10
+  option c10_a 2
+    say lisa c10_a_r shy
+  option c10_b -1
+    light angry
+    say lisa c10_b_r angry
+    light dusk
+  option c10_c 0
+    say lisa c10_c_r sad
+end
+
+cam close
+say lisa s3_04 creepy
+choice c11
+  option c11_a 1
+    say lisa c11_a_r happy
+  option c11_b -2
+    fx shake
+    light dark
+    say none c11_b_r1
+    light dusk
+    fx twitch
+    say lisa c11_b_r2 creepy
+  option c11_c 0 flag:peephole
+    fx glitch
+    say lisa c11_c_r creepy
+    fx noglitch
+end
+cam normal
+
+say lisa s3_05 neutral
+choice c12
+  option c12_a 2
+    say lisa c12_a_r shy
+  option c12_b 1
+    say lisa c12_b_r happy
+  option c12_c -3
+    say lisa c12_c_r angry
+end
+
+if secrets >= 3 true
+if affection >= 12 good
+goto bad
+
+label good
+fx twitch_off
+music music
+light blush
+say lisa good_01 shy
+selfie
+# her reaction to the faces in the photo: both grinning, both grumpy, one smiling while the other frowns; else (a neutral face)
+# the first look at it
+if selfie:lisa >= 1 selfie_she_smiles
+if selfie:lisa <= -1 selfie_she_frowns
+goto selfie_plain
+label selfie_she_smiles
+if selfie:you >= 1 selfie_both_grin
+if selfie:you <= -1 selfie_she_smiles_you_frown
+goto selfie_plain
+label selfie_she_frowns
+if selfie:you <= -1 selfie_both_grumpy
+if selfie:you >= 1 selfie_you_smile_she_frowns
+goto selfie_plain
+label selfie_both_grin
+say lisa selfie_both_grin happy
+goto selfie_after
+label selfie_both_grumpy
+say lisa selfie_both_grumpy angry
+goto selfie_after
+label selfie_she_smiles_you_frown
+say lisa selfie_she_smiles happy
+goto selfie_after
+label selfie_you_smile_she_frowns
+say lisa selfie_you_smile angry
+goto selfie_after
+label selfie_plain
+say lisa good_02 happy
+label selfie_after
+say lisa good_03 happy
+say lisa good_04 shy
+ending good
+
+label bad
+fx twitch_rare
+light angry
+music stop
+say lisa bad_01 angry
+say lisa bad_02 creepy
+light dark
+bg cafe_bad
+fx darken
+say glitch bad_03 creepy
+fx twitch_violent
+fx scare
+ending bad
+
+label true
+fx twitch_often
+fx flicker_on
+music slow
+cam close
+fx glitch
+say lisa true_01 creepy
+fx noglitch
+say lisa true_02 creepy
+light glitch
+bg cafe_glitch
+fx tear
+say glitch true_03 creepy
+say lisa true_04 sad
+fx notear
+say lisa true_05 neutral
+say lisa true_06 sad
+fx glitch
+say glitch true_07 creepy
+fx noglitch
+light warm
+cam normal
+say lisa true_08 shy
+say lisa true_09 happy
+fx tear
+say glitch true_10 creepy
+ending true

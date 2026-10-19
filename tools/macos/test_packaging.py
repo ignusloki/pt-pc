@@ -35,6 +35,10 @@ class PackagingTests(unittest.TestCase):
         (self.build/'voice/libggml-cpu-fixture.so').write_bytes(self.magic)
         (self.build/'voice/licenses/MIT.txt').write_text('Fixture license')
         (self.build/'fonts/font.ttf').write_bytes(b'font fixture')
+        (self.build/'lisa_date/text').mkdir(parents=True)
+        (self.build/'lisa_date/script.txt').write_text('Fixture script')
+        (self.build/'lisa_date/music.ogg').write_bytes(b'Fixture audio')
+        (self.build/'lisa_date/text/eng.txt').write_text('Fixture dialogue')
         (self.build/'licenses/enhanced-textures').mkdir(parents=True)
         (self.build/'licenses/enhanced-textures/notice.txt').write_text('Fixture texture tool license')
         for shader in (REPO/'shaders').iterdir():
@@ -42,7 +46,7 @@ class PackagingTests(unittest.TestCase):
         (self.source/'LICENSE.txt').write_text('Fixture license')
         (self.extractor/'PT.PkgExtract').write_bytes(self.magic)
     def tearDown(self):self.temp.cleanup()
-    def portable(self):
+    def portable(self, extractor=False):
         out=self.root/'out'
         def ditto(args,**kwargs):
             app=Path(args[-2]);archive=Path(args[-1])
@@ -50,7 +54,9 @@ class PackagingTests(unittest.TestCase):
                 for file in app.rglob('*'):
                     if file.is_file():z.write(file,file.relative_to(app.parent))
                 z.writestr('__MACOSX/._P.T. PC Port.app',b'metadata')
-        with patch.object(make_app,'sign'),patch.object(make_app.subprocess,'run',side_effect=ditto),patch.object(sys,'argv',['make_app.py','--build',str(self.build),'--exe',str(self.build/'pt_release'),'--out',str(out),'--game',str(self.root/'absent')]):make_app.main()
+        args=['make_app.py','--build',str(self.build),'--exe',str(self.build/'pt_release'),'--out',str(out),'--game',str(self.root/'absent')]
+        if extractor: args += ['--extractor',str(self.extractor)]
+        with patch.object(make_app,'sign'),patch.object(make_app.subprocess,'run',side_effect=ditto),patch.object(sys,'argv',args):make_app.main()
         return out/'pt-port-1.2.3-macos-arm64.zip'
     def payload(self,archive,rid=None):
         out=self.root/'payload';prepare.prepare(archive,self.extractor,self.source,out,rid);return out
@@ -73,6 +79,9 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(files[prefix+'Resources/'+mac.ICON_FILE],(REPO/'assets/macos'/mac.ICON_FILE).read_bytes())
         self.assertFalse(any(n.startswith('__MACOSX') for n in files))
         self.assertIn('extractor/PT.PkgExtract',files)
+        self.assertEqual(files[prefix+'Resources/lisa_date/script.txt'],b'Fixture script')
+        self.assertEqual(files[prefix+'Resources/lisa_date/music.ogg'],b'Fixture audio')
+        self.assertIn('pt-files.json',files)
         with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r osx-arm64',z.read('BUILD.txt').decode())
         self.assertEqual(set(files),set(json.loads((out/'payload-manifest.json').read_text())))
     def test_other_platform_layout_and_windows_validation_preserved(self):
@@ -87,6 +96,25 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(validate.call_count,1 if rid=='win-x64' else 0)
             self.assertIn(name,json.loads((out/'payload-manifest.json').read_text()))
             with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r '+rid,z.read('BUILD.txt').decode())
+
+    def test_portable_first_run_helper_and_notices_are_bundled(self):
+        notices=self.extractor.with_name(self.extractor.name+'-notices')
+        notices.mkdir()
+        (notices/'LICENSE-LibOrbisPkg.txt').write_text('LGPL fixture')
+        (notices/'LibOrbisPkg-corresponding-source.zip').write_bytes(b'Source fixture')
+        with zipfile.ZipFile(self.portable(extractor=True)) as z:
+            prefix='P.T. PC Port.app/Contents/'
+            self.assertEqual(z.read(prefix+'MacOS/extractor/PT.PkgExtract'),self.magic)
+            self.assertEqual(z.read(prefix+'Resources/licenses/PT.PkgExtract/LibOrbisPkg-corresponding-source.zip'),b'Source fixture')
+
+    def test_first_run_helper_without_corresponding_source_is_refused(self):
+        with self.assertRaisesRegex(SystemExit,'lacks the LibOrbisPkg licence or corresponding source'):
+            self.portable(extractor=True)
+
+    def test_managed_dlls_in_the_app_code_folder_are_refused(self):
+        (self.extractor/'LibOrbisPkg.Core.dll').write_bytes(b'Managed DLL fixture')
+        with self.assertRaisesRegex(SystemExit,'must be a single-file publish'):
+            self.portable(extractor=True)
     def test_wrong_runtime_architecture_refused(self):
         with self.assertRaisesRegex(RuntimeError,'architecture mismatch'):self.payload(self.portable(),'osx-x64')
     def test_unsafe_duplicates_assets_and_data_refused(self):

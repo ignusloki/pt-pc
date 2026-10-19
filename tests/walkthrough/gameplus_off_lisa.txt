@@ -1,0 +1,4 @@
+# Game+ off (tier 4 forced): Lisa rushes are not counted and the portrait gives the plain zoom
+sexpect gameplustier 0
+sexpect lisarushes 0
+sexpect lisadate 0

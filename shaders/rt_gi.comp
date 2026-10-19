@@ -1,0 +1,96 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#endif
+#include "common.glsl"
+#include "rt_shadow.glsl"
+#include "rt_full.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+#include "rt_full_images.glsl"
+
+void main() {
+    View v = frame.views[pass.ids.x];
+    ivec2 half_pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(v.viewport.xy);
+    ivec2 half_size = (size + 1) / 2;
+    if (half_pixel.x >= half_size.x || half_pixel.y >= half_size.y) {
+        return;
+    }
+    ivec2 pixel = min(half_pixel * 2, size - 1);
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    if (depth <= 0.0) {
+        imageStore(rt_gi_raw, half_pixel, vec4(0.0));
+        return;
+    }
+    vec3 c = ViewPosition(v, PixelNdc(v, vec2(pixel) + 0.5), depth);
+    mat3 to_world = mat3(v.inv_view);
+    vec3 ng = normalize(to_world * RtFaceNormal(v, pixel, size, c));
+    vec3 n = normalize(to_world * DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz));
+    if (dot(n, ng) < 0.0) {
+        n = ng;
+    }
+    vec3 world = (v.inv_view * vec4(c, 1.0)).xyz;
+    vec3 origin = world + ng * max(0.003, 0.0015 * c.z);
+    uint rng = RtHash(uint(half_pixel.x) * 1973u + uint(half_pixel.y) * 9277u) ^ RtHash(pass.ids.z * 26699u + 1u);
+    uint seed = RtHash(uint(half_pixel.x) * 7919u + uint(half_pixel.y) * 104729u);
+    vec2 e = fract(vec2(float(seed & 0xFFFFu), float(seed >> 16u)) / 65536.0 + float(pass.ids.z) * vec2(0.7548776662, 0.5698402910));
+    vec3 t = normalize(cross(n, abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(n, t);
+    float phi = 6.2831853 * e.x;
+    float sin_theta = sqrt(e.y);
+    vec3 dir = normalize((t * cos(phi) + b * sin(phi)) * sin_theta + n * sqrt(1.0 - e.y));
+    float below = dot(dir, ng);
+    if (below < 0.0) {
+        dir = normalize(dir - 2.0 * below * ng);
+    }
+    float reach = pass.f0.x;
+    vec3 result = vec3(0.0);
+    float travel = reach;
+    if (RtRayValid(origin, dir, reach)) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, kRtSurfaceMask, origin, 0.0, dir, reach);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                               rayQueryGetIntersectionBarycentricsEXT(rq, false))) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+            travel = rayQueryGetIntersectionTEXT(rq, true);
+            uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            RtSurfaceHit h = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                           rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+            Material m = materials[h.material];
+            bool front = rayQueryGetIntersectionFrontFaceEXT(rq, true) || (m.flags & MAT_TWO_SIDED) != 0u;
+            if (front && m.kind == KIND_DEFERRED) {
+                vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), h.uv, pass.f0.y).rgb;
+                vec3 hit = origin + dir * travel;
+                result = albedo * RtFullDirect(hit, h.normal, pass.ids.y, true, rng, vec2(half_pixel), v.exposure.w);
+            }
+        }
+    }
+    if (any(isnan(result)) || any(isinf(result))) {
+        result = vec3(0.0);
+    }
+    float bright = Luma709(result) * v.exposure.x;
+    if (bright > 1.0) {
+        result /= bright;
+    }
+    if (pass.f0.z > 0.5) {
+        result = fract(world * 0.5);
+    }
+    imageStore(rt_gi_raw, half_pixel, vec4(min(result, vec3(64.0)), travel));
+}

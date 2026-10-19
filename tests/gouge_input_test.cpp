@@ -26,7 +26,7 @@ int main(){
     SDL_Event mouse_motion{};mouse_motion.type=SDL_EVENT_MOUSE_MOTION;mouse_motion.motion.xrel=20;input.ProcessEvent(mouse_motion);
     poll(pt::MouseUse::Look);
     check(input.Prompts().device==pt::PromptDevice::Steam,"mouse-look motion does not replace controller prompts during play");
-    pads.SetButton(0,"south",true);poll(); // process the controller press before the newer key press
+    pads.SetButton(0,"south",true);poll();
     input.InjectKey(SDL_SCANCODE_W,true);const pt::InputState mixed=poll();
     check(input.Prompts().device==pt::PromptDevice::Keyboard&&mixed.left_stick.y>0.5f&&(mixed.raw_held&pt::kRawCross),"keyboard and Steam controller input work together while prompts follow the key press");
     input.InjectKey(SDL_SCANCODE_W,false);pads.SetButton(0,"south",false);poll();pads.Detach(0);poll();
@@ -44,7 +44,6 @@ int main(){
     check(!voice_key.Consume(),"held key repeat does not retrigger");
     key_event.key.repeat=false;voice_key.ProcessEvent(key_event,SDL_SCANCODE_J);voice_key.Discard();
     check(!voice_key.Consume(),"hidden or frozen frame discards queued key press before resume");
-    // Jack's controller fallback is the two triggers together. Exercise the SDL gamepad axes, not a synthetic InputState.
     for(const char* kind:{"xbox","ps5","switch"}){
         check(pads.Attach(0,kind),"virtual controller for voice chord attaches");poll();
         pads.SetAxis(0,"r2",0.49f);pads.SetAxis(0,"l2",1.0f);
@@ -68,19 +67,16 @@ int main(){
         check(poll().voice_keyword_pressed,"release after resume rearms the chord");
         pads.Detach(0);check(!poll().voice_keyword_pressed,"disconnecting a held chord clears its edge state");
     }
-    // The chord must come from one physical controller, regardless of the order of connected pads.
     check(pads.Attach(0,"xbox")&&pads.Attach(1,"ps5"),"two virtual controllers attach");poll();
     pads.SetAxis(0,"r2",1.0f);poll();pads.SetAxis(1,"l2",1.0f);
     check(!poll().voice_keyword_pressed,"triggers on separate controllers do not form a chord");
     pads.SetAxis(0,"r2",0.0f);pads.SetAxis(1,"l2",0.0f);poll();
     pads.DetachAll();poll();
     input.InjectKey(SDL_SCANCODE_X,true);check((poll().pressed&pt::kPadGouge)!=0,"keyboard X gouges");check((poll().pressed&pt::kPadGouge)==0,"holding X does not repeat");input.InjectKey(SDL_SCANCODE_X,false);poll();
-    // the original gouges with its interact button (`Action`, TrapSystem::GougePressed reads kPadGouge or kPadAction): the Act keys press that bit
     input.InjectMouseButton(SDL_BUTTON_LEFT,true);check((poll().pressed&pt::kPadAction)!=0,"left mouse is the action, which gouges");input.InjectMouseButton(SDL_BUTTON_LEFT,false);poll();
     for(const SDL_Scancode act:{SDL_SCANCODE_E,SDL_SCANCODE_RETURN,SDL_SCANCODE_SPACE}){
         input.InjectKey(act,true);const uint32_t pressed=poll().pressed;check((pressed&pt::kPadAction)!=0&&(pressed&pt::kPadGouge)==0,"an Act key is the action, not the X key");input.InjectKey(act,false);poll();
     }
-    // the gouge is X on every device: PlayStation cross (south), Xbox X (west), Switch X (north); every other face button is not
     const std::pair<const char*,const char*> kinds[]={{"ps5","cross"},{"xbox","square"},{"switch","triangle"}};
     for(const auto& [kind,gouge]:kinds){
         check(pads.Attach(0,kind),"virtual pad attaches");poll();
@@ -93,6 +89,39 @@ int main(){
             pads.SetButton(0,face,false);poll();
         }
         pads.Detach(0);poll();
+    }
+    auto mouse_event=[&](bool down){SDL_Event e{};e.type=down?SDL_EVENT_MOUSE_BUTTON_DOWN:SDL_EVENT_MOUSE_BUTTON_UP;e.button.button=SDL_BUTTON_RIGHT;e.button.down=down;e.button.clicks=1;input.ProcessEvent(e);};
+    for(const pt::MouseUse use:{pt::MouseUse::Look,pt::MouseUse::Menu}){
+        poll(use);mouse_event(true);mouse_event(false);
+        const pt::InputState quick=poll(use);
+        check((quick.held&pt::kPadZoom)!=0&&(quick.pressed&pt::kPadZoom)!=0&&(quick.raw_held&pt::kRawR3)!=0,"a right click inside one poll is the zoom held for that poll");
+        const pt::InputState after=poll(use);
+        check((after.held&pt::kPadZoom)==0,"the quick right click is released at the next poll");
+    }
+    mouse_event(true);mouse_event(false);
+    check((poll(pt::MouseUse::None).held&pt::kPadZoom)==0,"a quick click while the mouse is not in use (a dev window) is dropped");
+    check((poll(pt::MouseUse::Menu).held&pt::kPadZoom)==0,"and does not come back once the mouse is in use again");
+    input.InjectMouseButton(SDL_BUTTON_RIGHT,true);
+    bool held_all=true;for(int i=0;i<120;++i)held_all&=(poll(pt::MouseUse::Menu).held&pt::kPadZoom)!=0;
+    check(held_all,"a held right button is the zoom on every poll in the menu");
+    input.InjectMouseButton(SDL_BUTTON_RIGHT,false);
+    check((poll(pt::MouseUse::Menu).held&pt::kPadZoom)==0,"releasing the right button ends the zoom at the next poll");
+    {
+        pt::InputState pending;auto tick=[&]{const pt::InputState t=pending;pending.pressed=pending.raw_pressed=0;return t;};
+        input.InjectMouseButton(SDL_BUTTON_RIGHT,true);pt::MergeFrameButtons(pending,poll(pt::MouseUse::Menu));
+        input.InjectMouseButton(SDL_BUTTON_RIGHT,false);pt::MergeFrameButtons(pending,poll(pt::MouseUse::Menu));
+        const pt::InputState first=tick();
+        check((first.held&pt::kPadZoom)&&(first.pressed&pt::kPadZoom)&&(first.raw_held&pt::kRawR3),"a one-frame click between two ticks is held at the next tick");
+        pt::MergeFrameButtons(pending,poll(pt::MouseUse::Menu));
+        check(!(tick().held&pt::kPadZoom),"and released at the tick after");
+        input.InjectMouseButton(SDL_BUTTON_RIGHT,true);
+        bool held=true;for(int i=0;i<12;++i){pt::MergeFrameButtons(pending,poll(pt::MouseUse::Menu));if(i%4==3)held&=(tick().held&pt::kPadZoom)!=0;}
+        check(held,"a hold over many frames is held at every tick");
+        input.InjectMouseButton(SDL_BUTTON_RIGHT,false);pt::MergeFrameButtons(pending,poll(pt::MouseUse::Menu));
+        check(!(tick().held&pt::kPadZoom),"its release reaches the next tick");
+        input.InjectKey(SDL_SCANCODE_X,true);pt::MergeFrameButtons(pending,poll());input.InjectKey(SDL_SCANCODE_X,false);pt::MergeFrameButtons(pending,poll());
+        const pt::InputState gouge=tick();
+        check((gouge.pressed&pt::kPadGouge)&&!(gouge.held&pt::kPadGouge),"the X key's gouge is a press, never held");
     }
     pads.DetachAll();input.Shutdown();SDL_Quit();return failed?1:0;
 }

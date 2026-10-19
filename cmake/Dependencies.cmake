@@ -159,7 +159,7 @@ FetchContent_Populate(stb)
 
 FetchContent_Declare(bc7enc URL https://codeload.github.com/richgel999/bc7enc_rdo/zip/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0)
 FetchContent_Populate(bc7enc)
-add_library(pt_bc7enc STATIC ${bc7enc_SOURCE_DIR}/bc7enc.cpp)
+add_library(pt_bc7enc STATIC ${bc7enc_SOURCE_DIR}/bc7enc.cpp ${bc7enc_SOURCE_DIR}/rgbcx.cpp)
 target_include_directories(pt_bc7enc PUBLIC ${bc7enc_SOURCE_DIR})
 if(MSVC)
   target_compile_options(pt_bc7enc PRIVATE /w)

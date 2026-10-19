@@ -1,0 +1,6 @@
+# after the fake crash (fakecrash, --bug-screen 3): its red picture sh_bug_5 opened crash_4 in play, the other pictures stay locked
+swait 30
+sexpect archive crash_4 1
+sexpect archive crash_1 0
+sexpect archive crash_5 0
+sexpect archive sub05 0

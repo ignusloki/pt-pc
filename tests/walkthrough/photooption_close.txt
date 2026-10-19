@@ -1,0 +1,21 @@
+# The option screen's photo part, the menu closed during zoom_in (shadPS4 capture photops4_close): a one-frame R3 tap, OPTIONS
+# 0.5 s later. The close does not drop the kept release (+0x1BC, cleared only by the setup 0x1285630, not by the open 0x12856B0),
+# zoom_in stays where the close left it, and when the menu is opened again PhotoOption is sent with zoom_out as soon as its setin has
+# ended. A second R3 tap then does nothing: the part is no longer pending
+pattach 0 ps5
+stap 0 options
+smenu 1
+swait 60
+stap 0 r3 2
+swait 30
+stap 0 options
+smenu 0
+swait 160
+stap 0 options
+smenu 1
+swait 120
+stap 0 r3 2
+swait 150
+stap 0 options
+smenu 0
+slog

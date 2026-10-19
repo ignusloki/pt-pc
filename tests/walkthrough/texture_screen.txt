@@ -1,0 +1,11 @@
+# the start's enhanced textures screen (tools/walkthrough.py texture_screen): Return asks to skip, Esc says no (the progress line is back),
+# Return asks again and Return says yes, and the start goes on to step 15
+sktap Return
+swait 8
+sktap Escape
+swait 8
+sktap Return
+swait 8
+sktap Return
+swait 8
+sstep 15

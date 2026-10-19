@@ -85,7 +85,6 @@ bool ControllerPcmCapture::Accumulate(uint32_t event_id, uint32_t frame, float l
         scratch_[static_cast<size_t>(frame) * 2] += left;
         scratch_[static_cast<size_t>(frame) * 2 + 1] += right;
     }
-    // the haptic-only events (the player's own footsteps) are a light touch under Lisa's
     constexpr float kHapticOnlyGain = 0.35f;
     const float weight = speaker ? 1.0f : kHapticOnlyGain;
     haptic_scratch_[static_cast<size_t>(frame) * 2] += left * weight;

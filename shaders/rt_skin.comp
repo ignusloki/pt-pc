@@ -1,15 +1,30 @@
 #version 460
+#ifndef PT_D3D12
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#endif
 #include "common.glsl"
-
-// Ray traced shadows (rendering.md 12.21): a skinned draw's vertex positions through the frame's skin matrices, as mesh.vert
-// places them, for the draw's BLAS
 
 layout(local_size_x = 64) in;
 
-// Vertex (mesh.h): position 0-2, normal 3-5, tangent 6-9, uv0 10-11, uv1 12-13, color 14-17, joints 18 (4 x u8), weights 19 (4 x unorm8),
-// uv2 20-21
+#ifdef PT_D3D12
+/* D3D12 has no device addresses (rt_shadow.glsl RtRecord): push.vertices and push.positions are {x: index of the buffer in the
+   raw-buffer array, y: byte offset of the data in it (a multiple of 4)}. The mesh's vertex buffer is a read-only view in skin_raw[]
+   (the same descriptor array as rt_shadow.glsl's rt_raw[]: set 2 binding 2); the skinned positions go to a read-write array,
+   skin_out[] (set 2 binding 3), which the host also uses as the BLAS build input. The index is a push constant, so uniform. */
+layout(std430, set = 2, binding = 2) readonly buffer SkinRaw {
+    uint d[];
+} skin_raw[];
+layout(std430, set = 2, binding = 3) writeonly buffer SkinOut {
+    uint d[];
+} skin_out[];
+#define SkinVertexRef uvec2
+#define SkinPositionRef uvec2
+#define SKIN_VERTEX_REF(address) (address)
+#define SKIN_POSITION_REF(address) (address)
+#define SKIN_VERTEX(buf, k) uintBitsToFloat(skin_raw[buf.x].d[(buf.y >> 2u) + (k)])
+#define SKIN_STORE(buf, k, value) skin_out[buf.x].d[(buf.y >> 2u) + (k)] = floatBitsToUint(value)
+#else
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SkinVertices {
     float v[];
 };
@@ -17,6 +32,13 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Ski
 layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer SkinPositions {
     float p[];
 };
+#define SkinVertexRef SkinVertices
+#define SkinPositionRef SkinPositions
+#define SKIN_VERTEX_REF(address) SkinVertices(address)
+#define SKIN_POSITION_REF(address) SkinPositions(address)
+#define SKIN_VERTEX(buf, k) buf.v[k]
+#define SKIN_STORE(buf, k, value) buf.p[k] = value
+#endif
 
 layout(push_constant) uniform SkinPush {
     uvec2 vertices;
@@ -30,11 +52,11 @@ void main() {
     if (i >= push.count) {
         return;
     }
-    SkinVertices vb = SkinVertices(push.vertices);
+    SkinVertexRef vb = SKIN_VERTEX_REF(push.vertices);
     uint b = i * 22u;
-    vec3 position = vec3(vb.v[b], vb.v[b + 1u], vb.v[b + 2u]);
-    uint joints = floatBitsToUint(vb.v[b + 18u]);
-    vec4 weights = unpackUnorm4x8(floatBitsToUint(vb.v[b + 19u]));
+    vec3 position = vec3(SKIN_VERTEX(vb, b), SKIN_VERTEX(vb, b + 1u), SKIN_VERTEX(vb, b + 2u));
+    uint joints = floatBitsToUint(SKIN_VERTEX(vb, b + 18u));
+    vec4 weights = unpackUnorm4x8(floatBitsToUint(SKIN_VERTEX(vb, b + 19u)));
     float weight_sum = dot(weights, vec4(1.0));
     if (weight_sum > 0.0) {
         uint base = push.skin_base;
@@ -43,8 +65,8 @@ void main() {
         s /= weight_sum;
         position = (s * vec4(position, 1.0)).xyz;
     }
-    SkinPositions out_positions = SkinPositions(push.positions);
-    out_positions.p[i * 3u] = position.x;
-    out_positions.p[i * 3u + 1u] = position.y;
-    out_positions.p[i * 3u + 2u] = position.z;
+    SkinPositionRef out_positions = SKIN_POSITION_REF(push.positions);
+    SKIN_STORE(out_positions, i * 3u, position.x);
+    SKIN_STORE(out_positions, i * 3u + 1u, position.y);
+    SKIN_STORE(out_positions, i * 3u + 2u, position.z);
 }

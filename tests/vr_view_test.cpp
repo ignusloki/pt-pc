@@ -1,5 +1,3 @@
-// The VR mode's view mapping (src/engine/xr/xr_view.h, docs/vr.md): headset orientations to the port's Camera, the eye
-// frusta and their crop, the rig's recentre and turns. No game files or GPU needed.
 #include <cstdio>
 #include <cmath>
 #include <limits>
@@ -23,10 +21,9 @@ void Expect(bool ok, const char* what, double value = 0.0) {
 
 float Distance(const glm::vec3& a, const glm::vec3& b) { return glm::length(a - b); }
 
-}  // namespace
+}
 
 int main() {
-    // Height adjustment is a world-vertical translation of the eye anchor. Zero must retain the existing anchor formula.
     const glm::vec3 logic_position(1.0f, 2.0f, 3.0f);
     const glm::vec3 feet(1.0f, 0.0f, 3.0f);
     const glm::vec3 eye(1.0f, 1.6f, 3.0f);
@@ -47,25 +44,52 @@ int main() {
            "VR world scale affects vertical and horizontal head translation");
     const glm::vec3 eye_relative_offset(-0.032f, 0.0f, 0.0f);
     const glm::vec3 mapped_eye = pt::game::MapVrEyeOffset(tracked_head_offset, eye_relative_offset, 2.0f);
-    Expect(Distance(mapped_eye, tracked_head_offset * 2.0f + eye_relative_offset) < 1e-6f,
-           "world scale keeps eye offset relative to the head unscaled");
+    Expect(Distance(mapped_eye, (tracked_head_offset + eye_relative_offset) * 2.0f) < 1e-6f,
+           "world scale applies the same metre mapping to head and eye offsets");
     const glm::vec3 mapped_left_eye = pt::game::MapVrEyeOffset(tracked_head_offset, glm::vec3(-0.032f, 0.0f, 0.0f), 2.0f);
     const glm::vec3 mapped_right_eye = pt::game::MapVrEyeOffset(tracked_head_offset, glm::vec3(0.032f, 0.0f, 0.0f), 2.0f);
-    Expect(std::abs(Distance(mapped_left_eye, mapped_right_eye) - 0.064f) < 1e-6f,
-           "world scale preserves 64 mm interpupillary distance");
-    Expect(std::abs(pt::game::ClampVrWorldScale(0.1f) - 0.5f) < 1e-6f &&
-               std::abs(pt::game::ClampVrWorldScale(5.0f) - 2.0f) < 1e-6f &&
-               pt::game::ClampVrWorldScale(std::numeric_limits<float>::quiet_NaN()) == 1.0f,
-           "VR world scale clamps to supported range");
+    Expect(std::abs(Distance(mapped_left_eye, mapped_right_eye) - 0.128f) < 1e-6f,
+           "200 percent maps runtime IPD into a doubled game-space eye baseline");
+    for (const float scale : {0.5f, 1.0f, 2.0f}) {
+        const glm::vec3 left = pt::game::MapVrEyeOffset(glm::vec3(0.0f), glm::vec3(-0.032f, 0.0f, 0.0f), scale);
+        const glm::vec3 right = pt::game::MapVrEyeOffset(glm::vec3(0.0f), glm::vec3(0.032f, 0.0f, 0.0f), scale);
+        Expect(std::abs(Distance(left, right) - 0.064f * scale) < 1e-6f,
+               "world scale changes the stereo baseline while the head is stationary");
+        const float model_depth = 2.0f;
+        const float disparity = 2.0f * std::atan((Distance(left, right) * 0.5f) / model_depth);
+        const float physical_disparity = 2.0f * std::atan(0.032f / (model_depth / scale));
+        Expect(std::abs(disparity - physical_disparity) < 1e-6f,
+               "world scale yields the documented inverse physical size through stereo disparity");
+    }
+    Expect(std::abs(pt::game::ClampVrWorldSize(0.1f) - 0.5f) < 1e-6f &&
+               std::abs(pt::game::ClampVrWorldSize(5.0f) - 2.0f) < 1e-6f &&
+               pt::game::ClampVrWorldSize(std::numeric_limits<float>::quiet_NaN()) == 1.0f,
+           "VR world size clamps to supported range");
+
+    using pt::game::VrUnitsPerMetre;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    Expect(std::abs(VrUnitsPerMetre(-1.0f, 1.0f) - 1.0f) < 1e-6f, "no floor: one unit per metre");
+    Expect(std::abs(VrUnitsPerMetre(nan, 1.0f) - 1.0f) < 1e-6f, "no finite floor height: one unit per metre");
+    Expect(std::abs(VrUnitsPerMetre(1.645f, 1.0f) - 1.0f) < 1e-6f, "an eye at the protagonist's height: one unit per metre");
+    Expect(std::abs(VrUnitsPerMetre(1.50f, 1.0f) - 1.645f / 1.50f) < 1e-6f, "a 1.50 m eye takes 1.097 units per metre");
+    Expect(std::abs(VrUnitsPerMetre(1.10f, 1.0f) - 1.0f) < 1e-6f, "a seated eye keeps the real size");
+    Expect(std::abs(VrUnitsPerMetre(2.50f, 1.0f) - 1.645f / 2.1f) < 1e-6f, "a very high eye is clamped");
+    Expect(std::abs(VrUnitsPerMetre(1.645f, 2.0f) - 0.5f) < 1e-6f, "size 200 percent halves the units per metre");
+    Expect(std::abs(VrUnitsPerMetre(1.645f, 0.5f) - 2.0f) < 1e-6f, "size 50 percent doubles them");
+    for (const float floor_eye : {1.40f, 1.645f, 1.80f}) {
+        const float units = VrUnitsPerMetre(floor_eye, 1.0f);
+        Expect(std::abs(pt::game::kPs4EyeHeight / units - floor_eye) < 1e-5f, "the protagonist's eye at the player's eye", floor_eye);
+        const glm::vec3 l = pt::game::MapVrEyeOffset(glm::vec3(0.0f), glm::vec3(-0.032f, 0.0f, 0.0f), units);
+        const glm::vec3 r = pt::game::MapVrEyeOffset(glm::vec3(0.0f), glm::vec3(0.032f, 0.0f, 0.0f), units);
+        Expect(std::abs(Distance(l, r) - 0.064f * units) < 1e-6f, "the eye baseline takes the same units per metre", floor_eye);
+    }
 
     std::mt19937 rng(7);
     std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
-    // 1. any orientation comes back from the Camera's yaw, pitch and roll
     float worst = 0.0f;
     for (int i = 0; i < 20000; ++i) {
         glm::quat q = glm::normalize(glm::quat(unit(rng), unit(rng), unit(rng), unit(rng)));
         if (i < 4) {
-            // the poles: straight up and down, turned and rolled
             q = glm::angleAxis(unit(rng) * 3.0f, glm::vec3(0, 1, 0)) * glm::angleAxis((i % 2 ? 1.0f : -1.0f) * 1.5707963f, glm::vec3(1, 0, 0)) *
                 glm::angleAxis(unit(rng), glm::vec3(0, 0, 1));
         }
@@ -76,8 +100,6 @@ int main() {
     Expect(worst < 2.0e-3f, "camera from orientation", worst);
     std::printf("orientation round trip: worst %.2e\n", worst);
 
-    // 2. the eye's own field lands on the crop rectangle: the corners of an asymmetric field, projected with the symmetric
-    // frustum's camera, fall on the rect's corners
     const glm::vec4 left_eye(std::tan(-0.9425f), std::tan(0.7330f), std::tan(0.8203f), std::tan(-0.8901f));
     const glm::vec4 right_eye(-left_eye.y, -left_eye.x, left_eye.z, left_eye.w);
     const glm::vec4 eyes[2] = {left_eye, right_eye};
@@ -94,11 +116,9 @@ int main() {
         const float uvs[2][2] = {{f.rect.x, f.rect.y}, {f.rect.x + f.rect.z, f.rect.y + f.rect.w}};
         for (int k = 0; k < 2; ++k) {
             const glm::vec4 clip = vp * glm::vec4(tangents[k][0], tangents[k][1], -1.0f, 1.0f);
-            // Vulkan: x right, y down (the projection's -f), uv = ndc * 0.5 + 0.5
             const glm::vec2 uv = glm::vec2(clip.x, clip.y) / clip.w * 0.5f + 0.5f;
             corner_error = std::max({corner_error, std::abs(uv.x - uvs[k][0]), std::abs(uv.y - uvs[k][1])});
         }
-        // the eye's part has at least the swapchain image's pixels on both axes (square pixels, the denser axis kept)
         Expect(f.rect.z * size.x > 1023.0f && f.rect.w * size.y > 1103.0f, "crop density", f.rect.w * size.y);
         std::printf("eye %d: part %.1f x %.1f pixels of %ux%u for a 1024x1104 image\n", e, f.rect.z * size.x, f.rect.w * size.y, size.x, size.y);
         Expect(f.rect.x >= -1e-5f && f.rect.y >= -1e-5f && f.rect.x + f.rect.z <= 1.0f + 1e-5f && f.rect.y + f.rect.w <= 1.0f + 1e-5f, "crop inside");
@@ -106,8 +126,6 @@ int main() {
     Expect(corner_error < 1.0e-4f, "crop corners", corner_error);
     std::printf("crop corners: worst %.2e uv\n", corner_error);
 
-    // 3. the rig: a recentre puts the head's view along the world yaw, a turn keeps the head where it is in the world and
-    // turns its view by the angle
     pt::xr::Rig rig;
     const glm::quat head = glm::angleAxis(0.4f, glm::vec3(0, 1, 0)) * glm::angleAxis(-0.2f, glm::vec3(1, 0, 0));
     const glm::vec3 head_position(0.1f, 0.05f, -0.2f);
@@ -127,7 +145,6 @@ int main() {
     Expect(Distance(rig.Offset(moved), before) < 1e-5f, "turn keeps the head", Distance(rig.Offset(moved), before));
     const pt::xr::Angles turned = pt::xr::AnglesOf(rig.ToWorld(head));
     Expect(std::abs(pt::xr::WrapAngle(turned.yaw - start.yaw - 0.5236f)) < 1e-4f, "turn angle", turned.yaw - start.yaw);
-    // the eyes 64 mm apart in LOCAL stay 64 mm apart in the world, along the head's right
     const glm::vec3 left = head * glm::vec3(-0.032f, 0, 0) + moved;
     const glm::vec3 right = head * glm::vec3(0.032f, 0, 0) + moved;
     const glm::vec3 world_left = rig.Offset(left);

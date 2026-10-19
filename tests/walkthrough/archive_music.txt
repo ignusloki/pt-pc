@@ -1,0 +1,109 @@
+# the Museum's music hall (release locks, a finished profile that heard the start room's and the hallway's ambience, the f110 music
+# and saw the ending and gc_p01_090, pt.ini [progress] archive): the halls' grid (down a row and right to the models, the
+# seventh of nine halls in five columns; the Game+ extras stay hidden without Coffee with Lisa), the models hall's
+# free camera entries (Lisa's walk to the bathroom door open, her backward steps locked), a track played from its frame, back
+# and forward 10 s, the next track taking over while one plays, pause and resume, the loop going back to the f110 music's loop point
+# from a click near the end of the bar, a track's end without the loop, a locked track that does not play, the ending's demo stream,
+# an unused track, from the start, and the page closing stops it
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 20
+sui menukey down
+swait 4
+sexpect pcrow pc_archive_cutscenes
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_models
+sui menukey accept
+swait 20
+sexpect archive lisa_bathroom_walk 1
+sexpect archive lisa_backwards 0
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sshot {shots}/models_lisa_walk.png
+swait 2
+sui menukey close
+swait 20
+sexpect pcrow pc_archive_models
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_music
+sshot {shots}/music_halls.png
+swait 2
+sui menukey accept
+swait 20
+sexpect archive music_startroom 1
+sexpect archive music_hallway 1
+sexpect archive music_unrest03 0
+sexpect archive music_herald 0
+sexpect archive music_f110 1
+sexpect archive music_ending 1
+sexpect archive music_unrest01 1
+sexpect archive music_mystery01 1
+sexpect archive music_1a95368d 1
+sui menukey accept
+swait 120
+sui menukey musicforward
+swait 30
+sui menukey musicback
+swait 30
+sshot {shots}/music_playing.png
+swait 2
+sui menukey right
+swait 60
+sui menukey accept
+swait 20
+sui menukey accept
+swait 20
+sui menuclick 27.4 2.4
+swait 150
+sui menukey right
+swait 30
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 30
+sui menukey accept
+swait 30
+sui menukey musicloop
+swait 4
+sui menuclick 27.4 2.4
+swait 300
+sshot {shots}/music_f110_loop.png
+swait 2
+sui menukey musicloop
+swait 4
+sui menukey right
+swait 120
+sshot {shots}/music_ending.png
+swait 2
+sui menukey right
+swait 60
+sui menukey musicrestart
+swait 30
+sui menukey close
+swait 20
+sexpect pcrow pc_archive_music
+sui menukey close
+swait 20
+sui menukey close
+swait 90
+sui menukey close
+swait 90
+sexpect menu 0
+squit

@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "game/prompt_textures.h"
 
 #include <glm/glm.hpp>
@@ -23,9 +24,6 @@ constexpr const char* kFramePath = "/Assets/sh/environ/object/shsb/label/shsb_la
 
 using Box = PromptBox;
 
-// The R3 of p1 (1024 pixels, BC3, one colour, the strokes in alpha): rthr001's mesh 0 maps u 0.050..0.539 and v 0.250..0.582 onto the
-// floor beside the fallen frame. In that box the R spans x 21..268 and the 3 x 315..475; the strokes are 25 pixels wide (medial axis half
-// width 12.6), start in bristles and are otherwise solid.
 constexpr Box kR3Box{51, 256, 553, 597};
 constexpr int kThreeFrom = 290;
 constexpr float kChalkWidth = 25.0f;
@@ -38,7 +36,6 @@ float Hash(int64_t i, uint32_t seed) {
     return static_cast<float>((v ^ (v >> 16)) & 0xFFFFu) / 65535.0f;
 }
 
-// smooth value noise
 float Noise(float x, uint32_t seed) {
     const float fl = std::floor(x);
     const int64_t i = static_cast<int64_t>(fl);
@@ -67,7 +64,6 @@ std::vector<glm::vec2> CatmullRom(std::initializer_list<glm::vec2> points) {
     return out;
 }
 
-// A float alpha layer over a box of the texture's level 0
 struct Layer {
     Box box;
     std::vector<float> a;
@@ -80,9 +76,6 @@ struct Layer {
     }
 };
 
-// One brush stroke along a path (texture pixels): the nearest point of the path gives each pixel its distance, its place along the stroke
-// and across it. The width swells and tapers; Paint strokes are dry at both ends (bristle streaks, as the cross's ends; at most a quarter
-// of the stroke each, so a short stroke keeps a solid middle), Chalk strokes start in a few bristles, as the R3's.
 void Stroke(Layer& layer, const std::vector<glm::vec2>& path, float width, uint32_t seed, Style style) {
     if (path.size() < 2) {
         return;
@@ -159,7 +152,6 @@ void Stroke(Layer& layer, const std::vector<glm::vec2>& path, float width, uint3
     }
 }
 
-// A filled shape with a slightly ragged edge (the mouse's pressed button, the stick's ball), from its signed distance
 void Fill(Layer& layer, const std::function<float(glm::vec2)>& sdf, Box area, uint32_t seed, float opacity) {
     for (int y = std::max(area.y0, layer.box.y0); y < std::min(area.y1, layer.box.y1); ++y) {
         for (int x = std::max(area.x0, layer.box.x0); x < std::min(area.x1, layer.box.x1); ++x) {
@@ -173,9 +165,6 @@ void Fill(Layer& layer, const std::function<float(glm::vec2)>& sdf, Box area, ui
     }
 }
 
-// Glyphs around a centre c at a scale s for the R3: a mouse, a chalked S and a joystick
-// A mouse seen from above, its outline, the split between the buttons and the pressed button (1 left, 3 right) filled. The outline starts
-// low on the left and runs on past its start, so the stroke's ends overlap there instead of meeting at the split.
 void DrawMouse(Layer& l, glm::vec2 c, float s, int button, float line, Style style) {
     const glm::vec2 half = glm::vec2(100.0f, 150.0f) * s;
     constexpr float kPower = 2.6f;
@@ -210,7 +199,6 @@ void ChalkS(Layer& l, glm::vec2 c) {
            kChalkWidth, 31, Style::Chalk);
 }
 
-// A joystick from the side: the ball, the stick and the base under it
 void ChalkStick(Layer& l, glm::vec2 c) {
     const glm::vec2 ball = c + glm::vec2(0.0f, -58.0f);
     Fill(l, [ball](glm::vec2 q) { return glm::length(q - ball) - 40.0f; },
@@ -219,8 +207,6 @@ void ChalkStick(Layer& l, glm::vec2 c) {
     Stroke(l, CatmullRom({c + glm::vec2(-72, 66), c + glm::vec2(-30, 80), c + glm::vec2(30, 80), c + glm::vec2(74, 64)}), kChalkWidth, 63, Style::Chalk);
 }
 
-// Replaces the changed blocks of every level: level L gets the change of level 0 (the new pixels minus the old) averaged over its 2^L
-// squares added to its own decoded pixels, so everything the change does not reach keeps its data bit for bit
 bool PatchLevels(FtexTexture& ftex, const std::vector<uint8_t>& before, const std::vector<uint8_t>& after, const std::vector<Box>& boxes) {
     const int width = static_cast<int>(ftex.width);
     const bool bc3 = ftex.pixel_format == 4;
@@ -286,7 +272,6 @@ bool PatchLevels(FtexTexture& ftex, const std::vector<uint8_t>& before, const st
     return true;
 }
 
-// PT_PROMPT_TEXTURE_DUMP=<folder>: the whole level 0 of each texture once and the painted boxes of each variant as PNG, for checking
 void Dump(const char* path, const std::string& variant, const FtexTexture& ftex, const std::vector<uint8_t>& before,
           const std::vector<uint8_t>& after, const std::vector<Box>& boxes) {
     const char* dump = std::getenv("PT_PROMPT_TEXTURE_DUMP");
@@ -296,9 +281,9 @@ void Dump(const char* path, const std::string& variant, const FtexTexture& ftex,
     const int width = static_cast<int>(ftex.width);
     std::string stem = FtexStem(path);
     stem = stem.substr(stem.find_last_of('/') + 1);
-    const std::filesystem::path whole = std::filesystem::path(dump) / std::format("{}_level0.png", stem);
+    const std::filesystem::path whole = pt::os::PathFromUtf8(pt::os::GetEnv("PT_PROMPT_TEXTURE_DUMP")) / std::format("{}_level0.png", stem);
     if (!std::filesystem::exists(whole)) {
-        stbi_write_png(whole.string().c_str(), width, static_cast<int>(ftex.height), 4, before.data(), width * 4);
+        stbi_write_png(pt::os::PathToUtf8(whole).c_str(), width, static_cast<int>(ftex.height), 4, before.data(), width * 4);
     }
     for (size_t b = 0; b < boxes.size(); ++b) {
         const Box& box = boxes[b];
@@ -306,8 +291,8 @@ void Dump(const char* path, const std::string& variant, const FtexTexture& ftex,
         for (int y = 0; y < box.Height(); ++y) {
             std::copy_n(&after[(static_cast<size_t>(box.y0 + y) * width + box.x0) * 4], box.Width() * 4, &crop[static_cast<size_t>(y) * box.Width() * 4]);
         }
-        const std::filesystem::path file = std::filesystem::path(dump) / std::format("{}_{}_{}.png", stem, variant, b);
-        stbi_write_png(file.string().c_str(), box.Width(), box.Height(), 4, crop.data(), box.Width() * 4);
+        const std::filesystem::path file = pt::os::PathFromUtf8(pt::os::GetEnv("PT_PROMPT_TEXTURE_DUMP")) / std::format("{}_{}_{}.png", stem, variant, b);
+        stbi_write_png(pt::os::PathToUtf8(file).c_str(), box.Width(), box.Height(), 4, crop.data(), box.Width() * 4);
     }
 }
 
@@ -328,18 +313,14 @@ PromptTextures::~PromptTextures() {
 void PromptTextures::Init(Vfs& vfs, TextureManager& textures, bool background) {
     vfs_ = &vfs;
     textures_ = &textures;
-    // PT_PROMPT_TEXTURE_WORKER=1 takes the worker in headless runs too, to test it
     const char* worker = std::getenv("PT_PROMPT_TEXTURE_WORKER");
     background_ = background || (worker && *worker == '1');
     targets_.clear();
-    // the XMark photo's cross is no button prompt: it is the story's mark (the husband crossing Lisa out), the same on every device
     targets_.resize(1);
     targets_[0].textures.resize(1);
     targets_[0].textures[0].path = kFramePath;
 }
 
-// The fallen frame's R3 (the zoom): Xbox and other pads RS, Nintendo pads R and a stick, the keyboard and mouse the zoom's first binding, a
-// mouse with that button lit. PlayStation and Steam keep the original R3 mark.
 std::string PromptTextures::VariantFor(const PromptStyle& style) const {
     if (style.device == PromptDevice::PlayStation || style.device == PromptDevice::Steam) {
         return {};
@@ -351,8 +332,6 @@ std::string PromptTextures::VariantFor(const PromptStyle& style) const {
     return style.device == PromptDevice::Nintendo ? "stick" : "rs";
 }
 
-// Paints one variant into copies of the target's textures. Runs on the worker thread with a window: it reads the textures' Fox data and
-// fills their cleaned boxes, which nothing else touches while a painting is pending.
 PromptTextures::Painted PromptTextures::Paint(Target& target, const std::string& variant) {
     const auto started = std::chrono::steady_clock::now();
     Painted painted;
@@ -360,7 +339,6 @@ PromptTextures::Painted PromptTextures::Paint(Target& target, const std::string&
     painted.textures.resize(target.textures.size());
     painted.ok.assign(target.textures.size(), false);
     {
-        // the chalk is alpha over one colour: rub out what goes (the 3, or all of it for the mouse) and chalk the new strokes
         Texture& texture = target.textures.front();
         FtexTexture& ftex = painted.textures.front();
         ftex = texture.ftex;
@@ -395,7 +373,6 @@ PromptTextures::Painted PromptTextures::Paint(Target& target, const std::string&
     return painted;
 }
 
-// Uploads a painting's textures (main thread) and records them as the variant's
 void PromptTextures::Finish(Target& target, Painted painted) {
     for (size_t t = 0; t < target.textures.size(); ++t) {
         Texture& texture = target.textures[t];
@@ -430,7 +407,6 @@ void PromptTextures::Update(const PromptStyle& style) {
             continue;
         }
         if (!target.loaded) {
-            // the stage's materials load the textures; until they have, there is nothing to point elsewhere
             bool all = true;
             for (Texture& texture : target.textures) {
                 texture.original = textures_->Find(FtexStem(texture.path));
@@ -464,7 +440,6 @@ void PromptTextures::Update(const PromptStyle& style) {
         }
         if (!variant.empty() && !target.textures.front().variants.contains(variant)) {
             if (background_) {
-                // one painting at a time per target; the one for the device now in use follows when it is done
                 target.pending = std::async(std::launch::async, [&target, variant] { return Paint(target, variant); });
                 continue;
             }

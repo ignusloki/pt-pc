@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/assets/gltf_model.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,10 +21,9 @@
 namespace pt {
 namespace {
 
-constexpr uint32_t kGlbMagic = 0x46546C67;  // "glTF"
+constexpr uint32_t kGlbMagic = 0x46546C67;
 constexpr uint32_t kChunkJson = 0x4E4F534A;
 constexpr uint32_t kChunkBin = 0x004E4942;
-// FMDL mesh flags (model_cache.cpp): double sided, alpha tested with the dithered reference
 constexpr uint32_t kFlagDoubleSided = 0x20;
 constexpr uint32_t kFlagAlphaTest = 0x80;
 
@@ -40,11 +40,10 @@ std::string Stem(const std::string& path) {
 
 std::string LowerCopy(std::string_view text) {
     std::string out(text);
-    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : out) c = static_cast<char>(pt::AsciiLower(c));
     return out;
 }
 
-// a URI's %XX escapes (Blender writes spaces in file names as %20)
 std::string Unescape(std::string_view uri) {
     std::string out;
     for (size_t i = 0; i < uri.size(); ++i) {
@@ -135,7 +134,6 @@ private:
         return false;
     }
 
-    // a URI's bytes: data: URIs decoded, other URIs read from the mods relative to the model's folder
     std::optional<std::vector<uint8_t>> ReadUri(const std::string& uri) const {
         if (uri.starts_with("data:")) {
             const size_t comma = uri.find(',');
@@ -162,7 +160,6 @@ private:
         return true;
     }
 
-    // a buffer view's bytes (offset and length checked)
     std::optional<std::span<const uint8_t>> View(int index, size_t* stride = nullptr) const {
         const json::Value* views = doc_.Find("bufferViews");
         const json::Value* view = views ? views->At(static_cast<size_t>(index)) : nullptr;
@@ -175,7 +172,6 @@ private:
         return std::span<const uint8_t>(buffers_[buffer].data() + offset, length);
     }
 
-    // an accessor as floats, `components` a element (normalized integers scaled to 0..1 or -1..1, others as their value)
     bool Accessor(int index, std::vector<float>& out, int& components) const {
         const json::Value* accessors = doc_.Find("accessors");
         const json::Value* a = accessors ? accessors->At(static_cast<size_t>(index)) : nullptr;
@@ -196,7 +192,7 @@ private:
         }
         out.assign(count * static_cast<size_t>(components), 0.0f);
         const json::Value* view_index = a->Find("bufferView");
-        if (!view_index) return true;  // all zero (sparse accessors are not read)
+        if (!view_index) return true;
         size_t stride = 0;
         const auto view = View(static_cast<int>(view_index->number), &stride);
         if (!view) return false;
@@ -222,7 +218,6 @@ private:
         return true;
     }
 
-    // an image as a file the texture manager reads through the mods (any picture stb_image decodes); its texture path
     std::string Image(int texture_index, const char* suffix) {
         const json::Value* textures = doc_.Find("textures");
         const json::Value* texture = textures ? textures->At(static_cast<size_t>(texture_index)) : nullptr;
@@ -240,8 +235,6 @@ private:
         }
         std::string path;
         if (bytes) {
-            // the texture manager tries <stem>.png for a texture path: the image goes there whatever its format, and the suffix
-            // tells colour (_srgb) from data (_nrm, _srm) as the game's names do (TextureManager::LoadModImage)
             const std::string stem = std::format("{}_gltf_image{}_{}", Stem(asset_path_), image_index, suffix);
             mods::RegisterGenerated(stem + ".png", std::move(*bytes));
             path = stem;
@@ -252,11 +245,9 @@ private:
         return path;
     }
 
-    // a one-pixel PNG of a colour (a material with a base colour factor and no image)
     std::string ColourImage(glm::vec4 colour) {
         const std::string key = std::format("colour {:.4f} {:.4f} {:.4f} {:.4f}", colour.r, colour.g, colour.b, colour.a);
         if (auto it = images_.find(key); it != images_.end()) return it->second;
-        // an uncompressed 1x1 RGBA PNG: signature, IHDR, IDAT (zlib stored block), IEND
         auto crc = [](const uint8_t* p, size_t n) {
             uint32_t c = 0xFFFFFFFFu;
             for (size_t i = 0; i < n; ++i) {
@@ -276,7 +267,6 @@ private:
             for (int s = 24; s >= 0; s -= 8) png.push_back(static_cast<uint8_t>(c >> s));
         };
         chunk("IHDR", {0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0});
-        // linear factor to sRGB bytes
         auto byte = [](float v, bool srgb) {
             v = std::clamp(v, 0.0f, 1.0f);
             if (srgb) v = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
@@ -310,11 +300,9 @@ private:
             material.name = m.String("name", std::format("material{}", i));
             const json::Value* extras = m.Find("extras");
             if (extras && extras->IsObject() && !extras->String("shader").empty()) {
-                // exported by tools/fmdl.py: the game's own material, its textures at their game paths
                 material.shader = extras->String("shader");
                 material.technique = extras->String("technique");
                 if (const json::Value* textures = extras->Find("textures"); textures && textures->IsObject()) {
-                    // tools/fmdl.py writes each slot as {directory, stem, ftex, ...}; the game's material names the directory and stem
                     for (const auto& [name, value] : textures->object) {
                         if (value.IsString()) {
                             material.textures.emplace_back(name, Stem(value.string));
@@ -331,7 +319,6 @@ private:
                     }
                 }
             } else {
-                // a new material: the game's standard opaque one (fox3DDF_Blin) with the glTF images
                 const bool double_sided = m.Bool("doubleSided", false);
                 material.shader = "fox_3ddf_blin";
                 material.technique = double_sided ? "fox3DDF_Blin_NC" : "fox3DDF_Blin";
@@ -362,7 +349,6 @@ private:
             out.materials.push_back(std::move(material));
         }
         if (out.materials.empty() || !materials) {
-            // primitives without a material: a light grey
             FmdlMaterial material;
             material.name = "default";
             material.shader = "fox_3ddf_blin";
@@ -375,7 +361,6 @@ private:
         }
     }
 
-    // the skeleton a skinned primitive's joints map into: the original model's bones (by name)
     bool Skeleton(FmdlModel& out, std::string& error) {
         if (original_) {
             out.bone_names = original_->bone_names;
@@ -384,7 +369,6 @@ private:
             out.bone_groups = original_->bone_groups;
             out.mesh_group_names = original_->mesh_group_names;
             out.mesh.groups = original_->mesh.groups;
-            // the original's collision shapes index its own vertex positions (.geom flag 0x800): they keep them
             out.raw_positions = original_->raw_positions;
         }
         const json::Value* skins = doc_.Find("skins");
@@ -449,7 +433,6 @@ private:
         if (const json::Value* s = scenes ? scenes->At(scene) : nullptr; s && s->Find("nodes")) {
             for (const json::Value& n : s->Find("nodes")->array) roots.push_back(static_cast<int>(n.number));
         } else if (nodes) {
-            // no scene: the nodes no other node holds
             std::vector<bool> child(nodes->Size(), false);
             for (const json::Value& n : nodes->array) {
                 if (const json::Value* c = n.Find("children")) {
@@ -474,7 +457,6 @@ private:
         if (!node || depth > 64) return true;
         const glm::mat4 world = parent * LocalMatrix(*node);
         if (const json::Value* mesh = node->Find("mesh")) {
-            // a skinned mesh's vertices are in the bind space (the node's transform does not apply, glTF 2.0 3.7.3.3)
             const json::Value* skin = node->Find("skin");
             node_extras_ = node->Find("extras");
             const int skin_index = skin ? static_cast<int>(skin->number) : -1;
@@ -490,7 +472,6 @@ private:
         return true;
     }
 
-    // the original's mesh group a primitive belongs to: tools/fmdl.py's node names are "<group>.<n>", its extras say the group
     uint16_t GroupOf(const std::string& node_name, const json::Value* mesh_extras) const {
         std::string name = mesh_extras ? mesh_extras->String("mesh_group") : std::string();
         if (name.empty()) {
@@ -509,7 +490,6 @@ private:
         if (!mesh) return Fail(error, std::format("mesh {} is missing", index));
         mesh_group_names_ = out.mesh_group_names;
         const glm::mat3 normal_matrix = glm::transpose(glm::inverse(glm::mat3(transform)));
-        // a mirroring transform turns the triangles over
         const bool mirrored = glm::determinant(glm::mat3(transform)) < 0.0f;
         const json::Value* primitives = mesh->Find("primitives");
         for (size_t p = 0; primitives && p < primitives->Size(); ++p) {
@@ -584,7 +564,6 @@ private:
                         vertex.weights[c] = static_cast<uint8_t>(std::lround(w * 255.0f));
                         sum += vertex.weights[c];
                     }
-                    // the bytes add up to 255 as the game's do
                     vertex.weights[0] = static_cast<uint8_t>(std::clamp(vertex.weights[0] + 255 - sum, 0, 255));
                 }
                 out.mesh.vertices.push_back(vertex);
@@ -595,7 +574,6 @@ private:
             for (size_t k = 0; k + 2 < indices.size(); k += 3) {
                 const uint32_t a = static_cast<uint32_t>(indices[k]), b = static_cast<uint32_t>(indices[k + 1]), c = static_cast<uint32_t>(indices[k + 2]);
                 if (a >= count || b >= count || c >= count) return Fail(error, std::format("mesh {} primitive {}: index out of range", index, p));
-                // glTF's front faces wind counter-clockwise as the game's model indices do once read (LoadFmdl's a, c, b)
                 out.mesh.indices.push_back(a);
                 out.mesh.indices.push_back(mirrored ? c : b);
                 out.mesh.indices.push_back(mirrored ? b : c);
@@ -614,7 +592,6 @@ private:
             info.skinned = skinned;
             const std::string flags = prim_extras ? prim_extras->String("flags") : std::string();
             if (!flags.empty()) {
-                // tools/fmdl.py's export: the original mesh's own flags
                 info.render_flags = static_cast<uint32_t>(std::stoul(flags, nullptr, 0));
             } else {
                 if (sub.material < double_sided_.size() && double_sided_[sub.material]) info.render_flags |= kFlagDoubleSided;
@@ -629,7 +606,6 @@ private:
         return true;
     }
 
-    // flat normals and UV-aligned tangents for a primitive that has none
     static void Tangents(MeshData& mesh, const SubMesh& sub, bool normals, bool tangents) {
         const size_t first = static_cast<size_t>(sub.vertex_offset);
         std::vector<glm::vec3> n_sum, t_sum, b_sum;
@@ -645,7 +621,6 @@ private:
             const Vertex& b = mesh.vertices[first + k[1]];
             const Vertex& c = mesh.vertices[first + k[2]];
             const glm::vec3 e1 = b.position - a.position, e2 = c.position - a.position;
-            // glTF's counter-clockwise front faces, kept as they are in the indices above
             const glm::vec3 face = glm::cross(e1, e2);
             const glm::vec2 d1 = b.uv0 - a.uv0, d2 = c.uv0 - a.uv0;
             const float det = d1.x * d2.y - d2.x * d1.y;

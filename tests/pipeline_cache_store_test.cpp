@@ -1,7 +1,9 @@
 #include "engine/render/pipeline_cache_store.h"
+#include "engine/render/pipeline_warmup.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -63,5 +65,31 @@ int main() {
           "atomic save replaces the previous cache without truncating it first");
     check(!pt::vk::ReadPipelineCacheFile(path_a, other_device, loaded, status), "cache file read rejects a GPU mismatch");
     std::filesystem::remove_all(base);
+
+    using namespace std::chrono_literals;
+    pt::vk::PipelineCacheSavePolicy policy;
+    const auto t0 = std::chrono::steady_clock::time_point{} + 100s;
+    check(!policy.Due(0, t0), "no save before any pipeline is made");
+    check(!policy.Due(67, t0 + 1s), "no save while pipelines are still coming");
+    check(policy.Due(67, t0 + 4s), "a save once new pipelines have settled for 3 s");
+    policy.Saved(67, t0 + 4s);
+    check(!policy.Due(67, t0 + 60s), "nothing new: no save");
+    check(!policy.Due(70, t0 + 10s) && !policy.Due(70, t0 + 20s), "new pipelines within 30 s of the last save wait");
+    check(policy.Due(70, t0 + 35s), "new pipelines are saved once 30 s have passed");
+    policy.Saved(70, t0 + 35s);
+    policy.requested = true;
+    check(!policy.Due(70, t0 + 36s) && !policy.requested, "a requested save with nothing new is dropped");
+    policy.requested = true;
+    check(policy.Due(110, t0 + 36s), "a requested save (the end of the warm-up) is due at once");
+
+    pt::vk::PipelineWarmup warmup;
+    std::atomic<uint32_t> ran{0};
+    for (int i = 0; i < 40; ++i) warmup.Add([&ran]() -> uint32_t { ++ran; return 2; });
+    warmup.Start(4);
+    warmup.Join();
+    check(warmup.Done() && ran == 40 && warmup.Pipelines() == 80 && warmup.Finished() == 40, "warm-up runs each job once");
+    pt::vk::PipelineWarmup empty;
+    empty.Start(4);
+    check(empty.Done() && empty.Total() == 0, "an empty warm-up is done at once");
     return failures ? 1 : 0;
 }

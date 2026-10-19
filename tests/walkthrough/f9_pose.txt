@@ -1,0 +1,5 @@
+# F9 logs the capture pose and the route lines through the input device (a key press), in the release build too
+skey F9 1
+swait 4
+skey F9 0
+swait 4

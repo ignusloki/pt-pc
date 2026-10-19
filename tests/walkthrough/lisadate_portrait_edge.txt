@@ -1,0 +1,15 @@
+# Coffee with Lisa: the zoom on the armed portrait with the view shaking about 20 degrees off the portrait (near the edge of the
+# zoom's area, the held view shaking by 5 degrees every other frame). The date still starts after the 10 s, with the portrait armed
+# once and never let go on the way
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 3.0
+gfile 0.05 -1.4 6.9
+slisarushes 3
+swait 200
+szoom 1
+sportraitjit 20 0 5 900
+sexpect lisadate 1
+swait 60
+szoom 0
+slog

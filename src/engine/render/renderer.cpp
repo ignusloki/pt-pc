@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "engine/render/renderer.h"
 
 #include <SDL3/SDL.h>
@@ -5,6 +6,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
 
+#define STBIW_WINDOWS_UTF8
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
@@ -13,6 +15,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -44,6 +48,26 @@ bool RecreateForSuboptimal(const vk::Context& context, SDL_Window* window) {
 #else
     return true;
 #endif
+}
+
+gpu::SamplerDesc LinearClamp() {
+    gpu::SamplerDesc s;
+    s.mag = gpu::Filter::Linear;
+    s.min = gpu::Filter::Linear;
+    s.mipmap = gpu::MipmapMode::Nearest;
+    s.address_u = s.address_v = s.address_w = gpu::AddressMode::ClampToEdge;
+    s.max_anisotropy = 0.0f;
+    s.max_lod = 0.0f;
+    return s;
+}
+
+gpu::ImageBinding Bind(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) {
+    return {view, gpu::Layout::ShaderReadOnly, sampler};
+}
+
+gpu::ImageBarrier ColorBarrier(gpu::ImageHandle image, gpu::PipelineStage src_stage, uint64_t src_access, gpu::Layout old_layout,
+                               gpu::PipelineStage dst_stage, uint64_t dst_access, gpu::Layout new_layout) {
+    return {image, gpu::Aspect::Color, src_stage, src_access, old_layout, dst_stage, dst_access, new_layout};
 }
 
 void ImGuiCheck(VkResult result) {
@@ -85,7 +109,12 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         brightness_override_ = static_cast<float>(std::atof(brightness));
     }
     ctx_.pipeline_cache_dir = settings.pipeline_cache_dir;
+    ctx_.hdr_paper_nits = render::ClampHdrPaperWhite(static_cast<float>(settings.hdr_paper_white));
+    ctx_.hdr_peak_setting = settings.hdr_peak;
     window_ = settings.headless ? nullptr : window;
+    if (settings.backend == gpu::Backend::D3D12) {
+        return InitD3D12(settings);
+    }
     if (!ctx_.Init(window_, settings.validation, settings.hdr && !settings.headless)) {
         return false;
     }
@@ -93,9 +122,20 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     android_surface_generation_ = AndroidSurfaceGeneration();
     if (window_) android_native_window_ = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
 #endif
+    gpu_ = std::make_unique<gpu::vk::Device>(ctx_);
     uint32_t width = settings.width;
     uint32_t height = settings.height;
-    VkFormat output_format = VK_FORMAT_R8G8B8A8_UNORM;
+    gpu::Format output_format = gpu::Format::R8G8B8A8Unorm;
+    if (settings.headless) {
+        const char* forced = std::getenv("PT_HDR_HEADLESS");
+        if (forced && std::string_view(forced) == "scrgb") {
+            output_format = gpu::Format::R16G16B16A16Sfloat;
+            output_mode_ = RendererOutputMode::ScRgb;
+        } else if (forced && std::string_view(forced) == "hdr10") {
+            output_format = gpu::Format::A2B10G10R10UnormPack32;
+            output_mode_ = RendererOutputMode::Hdr10;
+        }
+    }
     if (window_) {
         int w = 0;
         int h = 0;
@@ -104,7 +144,6 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         height = static_cast<uint32_t>(h);
         bool created = ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr);
         if (!created && settings.hdr) {
-            // an HDR swapchain the driver or an overlay refuses: SDR rather than no window
             LogWarn("vulkan: the HDR swapchain was refused, SDR is used");
             created = ctx_.CreateSwapchain(width, height, settings.vsync, false);
         }
@@ -119,13 +158,13 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
                 return false;
             }
         }
-        output_format = ctx_.swapchain.format;
+        output_format = gpu::vk::FromNative(ctx_.swapchain.format);
         UpdateOutputMode();
         width = ctx_.swapchain.extent.width;
         height = ctx_.swapchain.extent.height;
     }
     output_format_ = output_format;
-    final_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+    final_format_ = gpu::Format::R16G16B16A16Sfloat;
     for (Frame& frame : frames_) {
         VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pool_info.queueFamilyIndex = ctx_.queue_family;
@@ -133,8 +172,6 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         alloc.commandPool = frame.pool;
         alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        // three: the frame's own, the one it continues in after SplitForExternal, and the generated frame's composite
-        // (Apple MetalFX)
         VkCommandBuffer buffers[3] = {};
         alloc.commandBufferCount = 3;
         vkAllocateCommandBuffers(ctx_.device, &alloc, buffers);
@@ -149,20 +186,12 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.in_flight);
         vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.gen_in_flight);
     }
-    VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(ctx_.device, &sampler_info, nullptr, &linear_sampler_);
-    // the film grain noise: wrapped and filtered between its mip levels like Draw2D_ShFilmGrain's sampler
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampler_info.maxLod = VK_LOD_CLAMP_NONE;
-    vkCreateSampler(ctx_.device, &sampler_info, nullptr, &wrap_sampler_);
+    gpu::SamplerDesc sampler_info = LinearClamp();
+    linear_sampler_ = gpu_->CreateSampler(sampler_info);
+    sampler_info.address_u = sampler_info.address_v = sampler_info.address_w = gpu::AddressMode::Repeat;
+    sampler_info.mipmap = gpu::MipmapMode::Linear;
+    sampler_info.max_lod = 1000.0f;
+    wrap_sampler_ = gpu_->CreateSampler(sampler_info);
     if (!CreateTargets(width, height) || !CreateCompositePipeline(output_format)) {
         return false;
     }
@@ -170,6 +199,19 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         return false;
     }
     return true;
+}
+
+void Renderer::ImGuiNewFrame() {
+    if (!imgui_ready_) {
+        return;
+    }
+#ifdef _WIN32
+    if (d3d12_) {
+        d3d12_->ImGuiNewFrame();
+        return;
+    }
+#endif
+    ImGui_ImplVulkan_NewFrame();
 }
 
 bool Renderer::InitImGui(SDL_Window* window) {
@@ -180,7 +222,7 @@ bool Renderer::InitImGui(SDL_Window* window) {
     io.IniFilename = "pt_imgui.ini";
     ImGui::StyleColorsDark();
     ImGui_ImplSDL3_InitForVulkan(window);
-    g_imgui_format = final_format_;
+    g_imgui_format = gpu::vk::Native(final_format_);
     ImGui_ImplVulkan_InitInfo info{};
     info.ApiVersion = VK_API_VERSION_1_3;
     info.Instance = ctx_.instance;
@@ -205,31 +247,48 @@ bool Renderer::InitImGui(SDL_Window* window) {
 }
 
 bool Renderer::CreateTargets(uint32_t width, uint32_t height) {
-    const VkExtent3D extent{width, height, 1};
-    if (!ctx_.CreateImage(scene_color_, SceneColorFormat(), extent,
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+    const vk::AllocTag tag("output targets");
+    const gpu::Extent3D extent{width, height, 1};
+    auto make = [&](gpu::ImageResource& image, gpu::Format format, gpu::ImageUsageFlags usage) {
+        gpu::ImageDesc desc;
+        desc.format = format;
+        desc.extent = extent;
+        desc.usage = usage;
+        return gpu_->CreateImage(desc, image);
+    };
+    using gpu::ImageUsage;
+    if (!make(scene_color_, SceneColorFormat(), ImageUsage::ColorAttachment | ImageUsage::Sampled | ImageUsage::TransferSrc)) {
         return false;
     }
-    if (settings_.headless &&
-        !ctx_.CreateImage(output_, VK_FORMAT_R8G8B8A8_UNORM, extent, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+    if ((settings_.headless || d3d12_) && !make(output_, output_format_, ImageUsage::ColorAttachment | ImageUsage::TransferSrc)) {
         return false;
     }
     output_ready_ = false;
-    if (!settings_.headless) {
+    if (!settings_.headless && !d3d12_) {
         const VkFormat format = ctx_.swapchain.format;
         const bool capture = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_UNORM ||
                              format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_R16G16B16A16_SFLOAT ||
                              format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-        const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const gpu::ImageUsageFlags usage = ImageUsage::ColorAttachment | ImageUsage::TransferSrc | ImageUsage::TransferDst;
         if (!capture) {
             LogWarn("renderer: swapchain format {} has no screenshot readback path", static_cast<int>(format));
-        } else if (!ctx_.CreateImage(output_, format, extent, usage)) {
+        } else if (!make(output_, gpu::vk::FromNative(format), usage)) {
             LogWarn("renderer: no capture image, windowed screenshots disabled");
         }
     }
-    if (!ctx_.CreateImage(final_, final_format_, extent, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+    if (!make(final_, final_format_, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
         return false;
     }
+    if (!make(hdr_boost_, kHdrBoostFormat, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
+        return false;
+    }
+    if (!make(ui_top_, final_format_, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
+        return false;
+    }
+    ui_top_ready_ = false;
+    ui_top_dirty_ = false;
+    present_target_ = gpu::RenderTarget{};
+    present_target_.image = output_;
     WriteCompositeSets();
     return true;
 }
@@ -238,165 +297,221 @@ void Renderer::WriteCompositeSets() {
     if (!composite_set_ || !final_set_) {
         return;
     }
-    const VkImageView noise = grain_noise_ ? grain_noise_ : scene_color_.view;
-    VkDescriptorImageInfo infos[4] = {{linear_sampler_, scene_color_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {linear_sampler_, final_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    VkWriteDescriptorSet writes[4]{};
+    const gpu::ImageViewHandle noise = grain_noise_ ? grain_noise_ : scene_color_.view;
+    const gpu::ImageBinding infos[4] = {Bind(scene_color_.view, linear_sampler_), Bind(final_.view, linear_sampler_),
+                                        Bind(hdr_boost_.view, linear_sampler_), Bind(noise, wrap_sampler_)};
+    gpu::BindingWrite writes[4];
     for (int i = 0; i < 4; ++i) {
-        writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[i].dstSet = i % 2 == 0 ? composite_set_ : final_set_;
-        writes[i].dstBinding = i < 2 ? 0 : 1;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &infos[i];
+        writes[i] = {i % 2 == 0 ? composite_set_ : final_set_, static_cast<uint32_t>(i < 2 ? 0 : 1), 0, gpu::BindingType::CombinedImageSampler,
+                     {&infos[i], 1}};
     }
-    vkUpdateDescriptorSets(ctx_.device, 4, writes, 0, nullptr);
+    gpu_->WriteBindings(writes);
+    const gpu::ImageBinding top_info = Bind(ui_top_.view, linear_sampler_);
+    const gpu::BindingSetHandle top_sets[4] = {composite_set_, final_set_, gen_set_[0], gen_set_[1]};
+    gpu::BindingWrite top_writes[4];
+    uint32_t top_count = 0;
+    for (gpu::BindingSetHandle set : top_sets) {
+        if (!set) {
+            continue;
+        }
+        top_writes[top_count++] = {set, 2, 0, gpu::BindingType::CombinedImageSampler, {&top_info, 1}};
+    }
+    gpu_->WriteBindings({top_writes, top_count});
 }
 
-void Renderer::SetGrainNoise(VkImageView view) {
+void Renderer::SetGrainNoise(gpu::ImageViewHandle view) {
     if (grain_noise_ == view) {
         return;
     }
-    vkDeviceWaitIdle(ctx_.device);
+    gpu_->WaitIdle();
     grain_noise_ = view;
     WriteCompositeSets();
 }
 
 void Renderer::DestroyTargets() {
-    ctx_.DestroyImage(scene_color_);
-    ctx_.DestroyImage(final_);
-    ctx_.DestroyImage(output_);
-    for (Frame& frame : frames_) ctx_.DestroyImage(frame.gen_final);
+    gpu_->DestroyImage(scene_color_);
+    gpu_->DestroyImage(hdr_boost_);
+    gpu_->DestroyImage(final_);
+    gpu_->DestroyImage(ui_top_);
+    gpu_->DestroyImage(output_);
+    present_target_ = gpu::RenderTarget{};
 }
 
-bool Renderer::CreateCompositePipeline(VkFormat output_format) {
-    VkDescriptorSetLayoutBinding bindings[2] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-                                                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
-    VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    set_info.bindingCount = 2;
-    set_info.pBindings = bindings;
-    if (const VkResult r = vkCreateDescriptorSetLayout(ctx_.device, &set_info, nullptr, &composite_set_layout_); r != VK_SUCCESS) {
-        LogError("renderer: composite set layout failed ({})", static_cast<int>(r));
+bool Renderer::CreateCompositePipeline(gpu::Format output_format) {
+    gpu::BindingLayoutDesc set_info;
+    for (uint32_t b = 0; b < 3; ++b) {
+        set_info.bindings.push_back({b, gpu::BindingType::CombinedImageSampler, 1, gpu::ShaderStage::Fragment});
+    }
+    composite_set_layout_ = gpu_->CreateBindingLayout(set_info);
+    if (!composite_set_layout_) {
+        LogError("renderer: composite set layout failed");
         return false;
     }
-    constexpr uint32_t kCompositeSets = 2 + 2 * kFramesInFlight;
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kCompositeSets};
-    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    // Normal scene/final sets and input/final sets for each generated-frame slot.
-    pool_info.maxSets = kCompositeSets;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
-    if (const VkResult r = vkCreateDescriptorPool(ctx_.device, &pool_info, nullptr, &composite_pool_); r != VK_SUCCESS) {
-        LogError("renderer: composite descriptor pool failed ({})", static_cast<int>(r));
+    gpu::BindingPoolDesc pool_info;
+    pool_info.sizes = {{gpu::BindingType::CombinedImageSampler, 12}};
+    pool_info.max_sets = 4;
+    composite_pool_ = gpu_->CreateBindingPool(pool_info);
+    if (!composite_pool_) {
+        LogError("renderer: composite descriptor pool failed");
         return false;
     }
-    VkDescriptorSetLayout layouts[kCompositeSets];
-    std::fill(std::begin(layouts), std::end(layouts), composite_set_layout_);
-    VkDescriptorSet sets[kCompositeSets] = {};
-    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    alloc.descriptorPool = composite_pool_;
-    alloc.descriptorSetCount = kCompositeSets;
-    alloc.pSetLayouts = layouts;
-    if (const VkResult r = vkAllocateDescriptorSets(ctx_.device, &alloc, sets); r != VK_SUCCESS) {
-        LogError("renderer: composite descriptor sets failed ({})", static_cast<int>(r));
+    const gpu::BindingLayoutHandle layouts[4] = {composite_set_layout_, composite_set_layout_, composite_set_layout_, composite_set_layout_};
+    gpu::BindingSetHandle sets[4] = {};
+    if (!gpu_->AllocateBindingSets(composite_pool_, layouts, sets)) {
+        LogError("renderer: composite descriptor sets failed");
         return false;
     }
     composite_set_ = sets[0];
     final_set_ = sets[1];
-    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
-        gen_set_[i] = sets[2 + i];
-        gen_final_set_[i] = sets[2 + kFramesInFlight + i];
-    }
+    gen_set_[0] = sets[2];
+    gen_set_[1] = sets[3];
     WriteCompositeSets();
 
-    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64};
-    VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_info.setLayoutCount = 1;
-    layout_info.pSetLayouts = &composite_set_layout_;
-    layout_info.pushConstantRangeCount = 1;
-    layout_info.pPushConstantRanges = &push;
-    vkCreatePipelineLayout(ctx_.device, &layout_info, nullptr, &composite_layout_);
-    return BuildCompositePipeline(output_format, composite_pipeline_) && BuildCompositePipeline(final_format_, final_composite_pipeline_);
+    gpu::PipelineLayoutDesc layout_info;
+    layout_info.sets = {composite_set_layout_};
+    layout_info.push_bytes = 80;
+    layout_info.push_stages = gpu::ShaderStage::Fragment;
+    composite_layout_ = gpu_->CreatePipelineLayout(layout_info);
+    return BuildCompositePipeline(output_format, composite_pipeline_) && BuildCompositePipeline(final_format_, final_composite_pipeline_) &&
+           CreateLayerPipeline();
 }
 
-bool Renderer::BuildCompositePipeline(VkFormat format, VkPipeline& pipeline) {
-    VkShaderModule vert = vk::LoadShaderModule(ctx_.device, "fullscreen.vert");
-    VkShaderModule frag = vk::LoadShaderModule(ctx_.device, "composite.frag");
-    if (!vert || !frag) {
+bool Renderer::CreateLayerPipeline() {
+    gpu::BindingLayoutDesc set_info;
+    for (uint32_t b = 0; b < 4; ++b) {
+        set_info.bindings.push_back({b, gpu::BindingType::CombinedImageSampler, 1, gpu::ShaderStage::Fragment});
+    }
+    layer_set_layout_ = gpu_->CreateBindingLayout(set_info);
+    if (!layer_set_layout_) {
+        LogError("renderer: frame generation layer set layout failed");
         return false;
     }
-    VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
-                                                 {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vert;
-    stages[0].pName = "main";
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = frag;
-    stages[1].pName = "main";
-    VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    viewport.viewportCount = 1;
-    viewport.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
-    raster.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.colorWriteMask = 0xF;
-    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blend_attachment;
-    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamic_states;
-    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &format;
-    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    info.pNext = &rendering;
-    info.stageCount = 2;
-    info.pStages = stages;
-    info.pVertexInputState = &vertex_input;
-    info.pInputAssemblyState = &assembly;
-    info.pViewportState = &viewport;
-    info.pRasterizationState = &raster;
-    info.pMultisampleState = &multisample;
-    info.pColorBlendState = &blend;
-    info.pDynamicState = &dynamic;
-    info.layout = composite_layout_;
-    const bool ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &pipeline), "composite pipeline");
-    vkDestroyShaderModule(ctx_.device, vert, nullptr);
-    vkDestroyShaderModule(ctx_.device, frag, nullptr);
-    return ok;
+    gpu::BindingPoolDesc pool_info;
+    pool_info.sizes = {{gpu::BindingType::CombinedImageSampler, 4 * kFramesInFlight}};
+    pool_info.max_sets = kFramesInFlight;
+    layer_pool_ = gpu_->CreateBindingPool(pool_info);
+    if (!layer_pool_) {
+        LogError("renderer: frame generation layer descriptor pool failed");
+        return false;
+    }
+    const gpu::BindingLayoutHandle layouts[kFramesInFlight] = {layer_set_layout_, layer_set_layout_};
+    if (!gpu_->AllocateBindingSets(layer_pool_, layouts, layer_sets_)) {
+        LogError("renderer: frame generation layer descriptor sets failed");
+        return false;
+    }
+    gpu::PipelineLayoutDesc layout_info;
+    layout_info.sets = {layer_set_layout_};
+    layout_info.push_bytes = 80;
+    layout_info.push_stages = gpu::ShaderStage::Fragment;
+    layer_layout_ = gpu_->CreatePipelineLayout(layout_info);
+    if (!layer_layout_) {
+        LogError("renderer: frame generation layer pipeline layout failed");
+        return false;
+    }
+    return BuildCompositePipeline(gpu::vk::FromNative(kUiLayerFormat), layer_pipeline_, "fg_ui_layer.frag", layer_layout_);
+}
+
+gpu::BindingSetHandle Renderer::LayerSet(gpu::ImageViewHandle hudless_view) {
+    const gpu::BindingSetHandle set = layer_sets_[frame_index_];
+    if (!set) {
+        return {};
+    }
+    const gpu::ImageViewHandle noise = grain_noise_ ? grain_noise_ : scene_color_.view;
+    const gpu::ImageBinding infos[4] = {Bind(final_.view, linear_sampler_), Bind(noise, wrap_sampler_), Bind(ui_top_.view, linear_sampler_),
+                                        Bind(hudless_view, linear_sampler_)};
+    gpu::BindingWrite writes[4];
+    for (uint32_t i = 0; i < 4; ++i) {
+        writes[i] = {set, i, 0, gpu::BindingType::CombinedImageSampler, {&infos[i], 1}};
+    }
+    gpu_->WriteBindings(writes);
+    return set;
+}
+
+bool Renderer::BuildCompositePipeline(gpu::Format format, gpu::PipelineHandle& pipeline, const char* fragment, gpu::PipelineLayoutHandle layout) {
+    gpu::GraphicsPipelineDesc desc;
+    desc.vertex = "fullscreen.vert";
+    desc.fragment = fragment;
+    desc.layout = layout ? layout : composite_layout_;
+    desc.colors = {format};
+    desc.fixed_state = true;
+    desc.depth_state = false;
+    desc.cull = gpu::CullMode::None;
+    gpu::BlendState blend;
+    blend.src_color = blend.dst_color = blend.src_alpha = blend.dst_alpha = gpu::BlendFactor::Zero;
+    desc.blend_states = {blend};
+    pipeline = gpu_->CreateGraphicsPipeline(desc);
+    return static_cast<bool>(pipeline);
+}
+
+void Renderer::AddPipelineWarmup(vk::PipelineWarmup& warmup) {
+    if (d3d12_ || !ctx_.surface || !ctx_.physical) {
+        return;
+    }
+    uint32_t count = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(ctx_.physical, ctx_.surface, &count, nullptr);
+    std::vector<VkSurfaceFormatKHR> offered(count);
+    if (count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(ctx_.physical, ctx_.surface, &count, offered.data());
+    for (const VkFormat format : {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                                  VK_FORMAT_R16G16B16A16_SFLOAT}) {
+        const bool listed = std::any_of(offered.begin(), offered.end(), [&](const VkSurfaceFormatKHR& f) { return f.format == format; });
+        if (!listed || gpu::vk::FromNative(format) == output_format_ || gpu::vk::FromNative(format) == final_format_) {
+            continue;
+        }
+        warmup.Add([this, format]() -> uint32_t {
+            gpu::PipelineHandle pipeline;
+            if (!BuildCompositePipeline(gpu::vk::FromNative(format), pipeline)) {
+                return 0;
+            }
+            gpu_->DestroyPipeline(pipeline);
+            return 1;
+        });
+    }
 }
 
 void Renderer::Shutdown() {
-    if (!ctx_.device) {
+    if (!gpu_) {
         return;
     }
-    vkDeviceWaitIdle(ctx_.device);
-    if (imgui_ready_) {
+    gpu_->WaitIdle();
+    if (imgui_ready_ && !d3d12_) {
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         imgui_ready_ = false;
     }
-    DestroyXr();
-    if (final_composite_pipeline_) vkDestroyPipeline(ctx_.device, final_composite_pipeline_, nullptr);
-    vkDestroyPipeline(ctx_.device, composite_pipeline_, nullptr);
-    vkDestroyPipelineLayout(ctx_.device, composite_layout_, nullptr);
-    vkDestroyDescriptorPool(ctx_.device, composite_pool_, nullptr);
-    vkDestroyDescriptorSetLayout(ctx_.device, composite_set_layout_, nullptr);
-    vkDestroySampler(ctx_.device, linear_sampler_, nullptr);
-    vkDestroySampler(ctx_.device, wrap_sampler_, nullptr);
+    if (!d3d12_) {
+        DestroyXr();
+    }
+    if (final_composite_pipeline_) gpu_->DestroyPipeline(final_composite_pipeline_);
+    if (layer_pipeline_) gpu_->DestroyPipeline(layer_pipeline_);
+    if (layer_layout_) gpu_->DestroyPipelineLayout(layer_layout_);
+    if (layer_pool_) gpu_->DestroyBindingPool(layer_pool_);
+    if (layer_set_layout_) gpu_->DestroyBindingLayout(layer_set_layout_);
+    gpu_->DestroyPipeline(composite_pipeline_);
+    gpu_->DestroyPipelineLayout(composite_layout_);
+    gpu_->DestroyBindingPool(composite_pool_);
+    gpu_->DestroyBindingLayout(composite_set_layout_);
+    gpu_->DestroySampler(linear_sampler_);
+    gpu_->DestroySampler(wrap_sampler_);
     DestroyTargets();
+    if (d3d12_) {
+#ifdef _WIN32
+        if (imgui_ready_) {
+            d3d12_->ShutdownImGui();
+            ImGui_ImplSDL3_Shutdown();
+            ImGui::DestroyContext();
+            imgui_ready_ = false;
+        }
+        gpu_->DestroyImage(fg_hudless_.image);
+        gpu_->DestroyImage(fg_ui_.image);
+        DestroyXrD3D12();
+        d3d12_->DestroySwapchain();
+        LogInfo("renderer: DirectX 12 debug layer errors: {}", d3d12_->DebugErrors());
+#endif
+        gpu_.reset();
+        d3d12_ = nullptr;
+        return;
+    }
     for (Frame& frame : frames_) {
         vkDestroyFence(ctx_.device, frame.in_flight, nullptr);
         vkDestroyFence(ctx_.device, frame.gen_in_flight, nullptr);
@@ -420,6 +535,18 @@ void Renderer::SetHdr(bool enabled) {
     LogInfo("display: HDR {} (applied at next frame)", enabled ? "on" : "off");
 }
 
+void Renderer::SetHdrLevels(int paper_white, int peak) {
+    const float paper = render::ClampHdrPaperWhite(static_cast<float>(paper_white));
+    if (ctx_.hdr_paper_nits == paper && ctx_.hdr_peak_setting == peak) return;
+    ctx_.hdr_paper_nits = paper;
+    ctx_.hdr_peak_setting = peak;
+    if (d3d12_) {
+        if (window_ && output_mode_ != RendererOutputMode::Sdr) swapchain_dirty_ = true;
+        return;
+    }
+    ctx_.SetHdrMetadata();
+}
+
 void Renderer::RecheckOutput() {
     if (window_) swapchain_dirty_ = true;
 }
@@ -431,7 +558,11 @@ void Renderer::SetVsync(bool enabled) {
     LogInfo("display: VSync {} (applied at next frame)", enabled ? "on" : "off");
 }
 
-void Renderer::Resize(uint32_t, uint32_t) {
+void Renderer::Resize(uint32_t width, uint32_t height) {
+    if (width > 0 && height > 0 && swapchain_window_w_ == static_cast<int>(width) && swapchain_window_h_ == static_cast<int>(height) &&
+        !swapchain_dirty_) {
+        return;
+    }
     swapchain_dirty_ = true;
 }
 
@@ -489,11 +620,26 @@ bool Renderer::BeginFrame(bool present) {
         }
     }
 #endif
+    if (d3d12_) {
+        return BeginFrameD3D12(present);
+    }
     Frame& frame = frames_[frame_index_];
+    ctx_.pipeline_saver.Poll();
+    using wait_ms = std::chrono::duration<float, std::milli>;
+    const auto fence_started = std::chrono::steady_clock::now();
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
-    // a frame generation switch (DLSS-G's swapchain and plugin) happens here, between frames: the previous frame is presented,
-    // and no command buffer or swapchain image of this one exists yet
+    cpu_waits_ = CpuWaits{};
+    cpu_waits_.fence_ms = wait_ms(std::chrono::steady_clock::now() - fence_started).count();
+    ctx_.ReapDeferred(false);
     bool keep_current_swapchain = false;
+    if (window_ && present && !swapchain_dirty_ && swapchain_window_w_ > 0) {
+        int w = 0;
+        int h = 0;
+        SDL_GetWindowSizeInPixels(window_, &w, &h);
+        if (w > 0 && h > 0 && (w != swapchain_window_w_ || h != swapchain_window_h_)) {
+            swapchain_dirty_ = true;
+        }
+    }
     if (window_ && present && frame_start) {
         const FrameStartAction action = frame_start(swapchain_dirty_);
         if (action == FrameStartAction::RecreateSwapchain) {
@@ -502,18 +648,36 @@ bool Renderer::BeginFrame(bool present) {
             keep_current_swapchain = true;
         }
     }
-    // Streamline (DLSS Frame Generation): a frame token per rendered frame, the Reflex sleep and the PCL markers
+    const auto sleep_started = std::chrono::steady_clock::now();
     streamline::BeginFrame();
+    cpu_waits_.sleep_ms = wait_ms(std::chrono::steady_clock::now() - sleep_started).count();
     grain[0] = 0.0f;
-    // VR: the eye size, whatever the window's
+    if (targets_missing_ && !swapchain_dirty_) {
+        if (std::chrono::steady_clock::now() < targets_retry_at_) {
+            return false;
+        }
+        vkDeviceWaitIdle(ctx_.device);
+        DestroyTargets();
+        const VkExtent2D size = render_extent_.width > 0 && render_extent_.height > 0 ? render_extent_ : ctx_.swapchain.extent;
+        if (!CreateTargets(size.width, size.height)) {
+            DestroyTargets();
+            targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            return false;
+        }
+        targets_missing_ = false;
+        LogInfo("renderer: output targets made again at {}x{}", size.width, size.height);
+    }
     if (render_extent_.width > 0 && render_extent_.height > 0 &&
         (scene_color_.extent.width != render_extent_.width || scene_color_.extent.height != render_extent_.height)) {
         vkDeviceWaitIdle(ctx_.device);
         DestroyTargets();
         if (!CreateTargets(render_extent_.width, render_extent_.height)) {
+            DestroyTargets();
+            targets_missing_ = true;
+            targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
             return false;
         }
-        LogInfo("renderer: render size {}x{} (VR)", render_extent_.width, render_extent_.height);
+        LogInfo("renderer: render size {}x{}", render_extent_.width, render_extent_.height);
     }
     presenting_ = window_ && present;
     if (presenting_) {
@@ -524,7 +688,6 @@ bool Renderer::BeginFrame(bool present) {
             if (w == 0 || h == 0) {
                 return false;
             }
-            // the output the display offers now (Windows HDR may have been switched): only the last composite depends on it
             const VkFormat previous_format = ctx_.swapchain.format;
             const RendererOutputMode previous_mode = output_mode_;
             bool created = ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync, settings_.hdr);
@@ -537,11 +700,13 @@ bool Renderer::BeginFrame(bool present) {
                 }
                 return false;
             }
+            swapchain_window_w_ = w;
+            swapchain_window_h_ = h;
             UpdateOutputMode();
             if (ctx_.swapchain.format != previous_format) {
-                if (composite_pipeline_) vkDestroyPipeline(ctx_.device, composite_pipeline_, nullptr);
-                composite_pipeline_ = VK_NULL_HANDLE;
-                output_format_ = ctx_.swapchain.format;
+                if (composite_pipeline_) gpu_->DestroyPipeline(composite_pipeline_);
+                composite_pipeline_ = {};
+                output_format_ = gpu::vk::FromNative(ctx_.swapchain.format);
                 if (!BuildCompositePipeline(output_format_, composite_pipeline_)) {
                     return false;
                 }
@@ -551,16 +716,24 @@ bool Renderer::BeginFrame(bool present) {
             }
             DestroyTargets();
             if (render_extent_.width > 0 && render_extent_.height > 0) {
-                CreateTargets(render_extent_.width, render_extent_.height);
+                targets_missing_ = !CreateTargets(render_extent_.width, render_extent_.height);
             } else {
-                CreateTargets(ctx_.swapchain.extent.width, ctx_.swapchain.extent.height);
+                targets_missing_ = !CreateTargets(ctx_.swapchain.extent.width, ctx_.swapchain.extent.height);
+            }
+            if (targets_missing_) {
+                DestroyTargets();
+                targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                swapchain_dirty_ = false;
+                return false;
             }
             if (imgui_ready_) {
                 ImGui_ImplVulkan_SetMinImageCount(ctx_.swapchain.min_image_count);
             }
             swapchain_dirty_ = false;
         }
+        const auto acquire_started = std::chrono::steady_clock::now();
         const VkResult acquire = ctx_.AcquireNextImage(frame.image_available, &image_index_);
+        cpu_waits_.acquire_ms += wait_ms(std::chrono::steady_clock::now() - acquire_started).count();
         ctx_.CheckDeviceLost(acquire, "swapchain acquire");
         if (acquire == VK_NOT_READY || acquire == VK_TIMEOUT) {
             return false;
@@ -585,9 +758,9 @@ bool Renderer::BeginFrame(bool present) {
     }
     vkResetFences(ctx_.device, 1, &frame.in_flight);
     if (frame.gen_pending) {
-        // the generated frame's composite is submitted after the frame's own and must be done before this slot's command
-        // buffers are reset (Apple MetalFX frame interpolation)
+        const auto gen_started = std::chrono::steady_clock::now();
         ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.gen_in_flight, VK_TRUE, UINT64_MAX), "generated frame fence wait");
+        cpu_waits_.fence_ms += wait_ms(std::chrono::steady_clock::now() - gen_started).count();
         vkResetFences(ctx_.device, 1, &frame.gen_in_flight);
         frame.gen_pending = false;
     }
@@ -597,14 +770,14 @@ bool Renderer::BeginFrame(bool present) {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.cmd, &begin);
     active_cmd_ = frame.cmd;
+    active_list_ = gpu::vk::CommandList(active_cmd_);
     split_wait_ = VK_NULL_HANDLE;
     split_wait_value_ = 0;
     gen_acquired_ = false;
     if (presenting_ && generated_frame.generate) {
-        // the generated frame's swapchain image, acquired beside the rendered one; both are presented at EndFrame, the
-        // generated frame first. The hooks may go away while the frame renders (a mid-frame switch off): the image is then
-        // presented with the rendered frame's content repeated.
+        const auto gen_acquire_started = std::chrono::steady_clock::now();
         const VkResult gen_acquire = ctx_.AcquireNextImage(frame.gen_available, &gen_index_);
+        cpu_waits_.acquire_ms += wait_ms(std::chrono::steady_clock::now() - gen_acquire_started).count();
         if (gen_acquire == VK_SUCCESS || gen_acquire == VK_SUBOPTIMAL_KHR) {
             gen_acquired_ = true;
         } else if (gen_acquire != VK_NOT_READY && gen_acquire != VK_TIMEOUT) {
@@ -613,77 +786,120 @@ bool Renderer::BeginFrame(bool present) {
         }
     }
 
-    vk::ImageBarrier(frame.cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = scene_color_.view;
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea = {{0, 0}, RenderExtent()};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
-    vkCmdBeginRendering(frame.cmd, &rendering);
-    vkCmdEndRendering(frame.cmd);
+    using gpu::Layout;
+    using gpu::PipelineStage;
+    gpu::CommandList& cmd = active_list_;
+    cmd.Barrier(ColorBarrier(scene_color_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    gpu::Attachment color{scene_color_.view, gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    const gpu::Rect2D area{{0, 0}, RenderExtent()};
+    cmd.BeginRendering(area, {&color, 1});
+    cmd.EndPass();
+    cmd.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    color.view = hdr_boost_.view;
+    color.clear_value = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    cmd.BeginRendering(area, {&color, 1});
+    cmd.EndPass();
     streamline::SetMarker(streamline::Marker::SimulationEnd);
     streamline::SetMarker(streamline::Marker::RenderSubmitStart);
     return true;
 }
 
-void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format, VkOffset2D offset) {
-    VkViewport viewport{static_cast<float>(offset.x), static_cast<float>(offset.y), static_cast<float>(extent.width), static_cast<float>(extent.height),
-                        0.0f, 1.0f};
-    VkRect2D scissor{offset, extent};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-    const VkPipeline pipeline = target_format == final_format_ ? final_composite_pipeline_ : composite_pipeline_;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_layout_, 0, 1, &set, 0, nullptr);
+void Renderer::RecordTopUi(gpu::CommandList& cmd, gpu::Extent2D extent, bool draw, bool after_overlay) {
+    if (!ui_top_.image || (!draw && ui_top_ready_ && (!ui_top_dirty_ || !after_overlay))) {
+        return;
+    }
+    using gpu::Layout;
+    using gpu::PipelineStage;
+    cmd.Barrier(ColorBarrier(ui_top_.image, PipelineStage::FragmentShader, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    const gpu::Attachment color{ui_top_.view, gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 0.0f}}};
+    cmd.BeginRendering({{0, 0}, extent}, {&color, 1});
+    if (draw && overlay) {
+        overlay(cmd, ui_top_.view, extent, OverlayPart::Top);
+    }
+    cmd.EndPass();
+    cmd.Barrier(ColorBarrier(ui_top_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(gpu::Access::ColorAttachmentWrite),
+                             Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(gpu::Access::ShaderSampledRead),
+                             Layout::ShaderReadOnly));
+    ui_top_ready_ = true;
+    ui_top_dirty_ = draw;
+}
+
+void Renderer::CompositePush(float (&out)[20], float mode, gpu::Extent2D extent, bool with_top_ui, bool grain_off) const {
     const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
-    // grain_offset.z: the frame's width in 16:9 frames, so the grain's three tiles across the original's 16:9 frame keep their
-    // texel shape in a wider or narrower window (composite.frag)
-    /* The grain tiles three times across the original 16:9 frame; scaling by the window's width in 16:9 frames keeps the grain texel size on ultrawide. */
     const float across = extent.height ? (static_cast<float>(extent.width) / static_cast<float>(extent.height)) / (16.0f / 9.0f) : 1.0f;
-    const float push[16] = {exposure, brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
-                            plain_output ? 0.0f : grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across,
-                            static_cast<float>(output_mode_)};
-    vkCmdPushConstants(cmd, composite_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    const bool hdr_output = output_mode_ != RendererOutputMode::Sdr;
+    const float push[20] = {exposure, brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
+                            plain_output || grain_off ? 0.0f : grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across,
+                            static_cast<float>(output_mode_), ctx_.hdr_paper_nits, HdrPeak(),
+                            hdr_output && !plain_output ? 1.0f : 0.0f, with_top_ui ? 1.0f : 0.0f};
+    std::copy(std::begin(push), std::end(push), std::begin(out));
+}
+
+void Renderer::Composite(gpu::CommandList& cmd, gpu::BindingSetHandle set, float mode, gpu::Extent2D extent, gpu::Format target_format,
+                         gpu::Offset2D offset, bool with_top_ui, bool grain_off) {
+    cmd.SetViewport({offset, extent});
+    const gpu::PipelineHandle pipeline = target_format == final_format_ ? final_composite_pipeline_ : composite_pipeline_;
+    cmd.BindPipeline(gpu::BindPoint::Graphics, pipeline);
+    cmd.BindSets(gpu::BindPoint::Graphics, composite_layout_, 0, {&set, 1});
+    float push[20];
+    CompositePush(push, mode, extent, with_top_ui, grain_off);
+    cmd.PushConstants(composite_layout_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+    cmd.Draw(3, 1, 0, 0);
 }
 
 void Renderer::EndFrame(bool draw_ui) {
+    if (d3d12_) {
+        EndFrameD3D12(draw_ui);
+        return;
+    }
+    using gpu::Access;
+    using gpu::Layout;
+    using gpu::PipelineStage;
     Frame& frame = frames_[frame_index_];
     VkCommandBuffer cmd = active_cmd_;
-    vk::ImageBarrier(cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    VkImage target_image = window_ ? (presenting_ ? ctx_.swapchain.images[image_index_] : VK_NULL_HANDLE) : output_.image;
-    VkImageView target_view = window_ ? (presenting_ ? ctx_.swapchain.views[image_index_] : VK_NULL_HANDLE) : output_.view;
-    const VkExtent2D extent = RenderExtent();
+    gpu::CommandList& list = active_list_;
+    using wait_ms = std::chrono::duration<float, std::milli>;
+    const auto end_started = std::chrono::steady_clock::now();
+    list.Barrier(ColorBarrier(scene_color_.image, PipelineStage::ColorAttachmentOutput | PipelineStage::ComputeShader,
+                              Access::ColorAttachmentWrite | Access::ShaderStorageWrite, Layout::ColorAttachment, PipelineStage::FragmentShader,
+                              gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    list.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                              Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    const gpu::ImageHandle target_image = window_ ? (presenting_ ? gpu::vk::Wrap<gpu::ImageTag>(ctx_.swapchain.images[image_index_]) : gpu::ImageHandle{})
+                                                  : output_.image;
+    const gpu::ImageViewHandle target_view =
+        window_ ? (presenting_ ? gpu::vk::Wrap<gpu::ImageViewTag>(ctx_.swapchain.views[image_index_]) : gpu::ImageViewHandle{}) : output_.view;
+    const gpu::Extent2D extent = RenderExtent();
     const bool xr = std::exchange(xr_pending_, false);
-    vk::ImageBarrier(cmd, final_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = final_.view;
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea = {{0, 0}, extent};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
+    static const bool ui_over_grain = [] {
+        const char* value = std::getenv("PT_UI_OVER_GRAIN");
+        return !(value && value[0] == '0');
+    }();
+    const bool split_ui = overlay && !xr && ui_over_grain;
+    RecordTopUi(list, extent, false, false);
+    list.Barrier(ColorBarrier(final_.image, PipelineStage::FragmentShader, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                              gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    gpu::Attachment color{final_.view, gpu::LoadOp::DontCare, {}};
+    gpu::Rect2D rendering{{0, 0}, extent};
     const vk::Image* hud = presenting_ && hudless && !xr ? hudless(image_index_) : nullptr;
-    vkCmdBeginRendering(cmd, &rendering);
-    Composite(cmd, composite_set_, 0.0f, extent, final_format_);
+    const bool layer_fits = hud && ui_layer && layer_pipeline_ && output_mode_ == RendererOutputMode::Sdr && hud->extent.width == extent.width &&
+                            hud->extent.height == extent.height;
+    const vk::Image* layer = layer_fits ? ui_layer(image_index_) : nullptr;
+    const bool layer_over_rendered = layer && ui_layer_over_rendered && ui_layer_over_rendered();
+    auto composite_fitted = [&](gpu::Extent2D area, gpu::Format format, bool with_top_ui) {
+        const float scale = std::min(static_cast<float>(area.width) / static_cast<float>(extent.width),
+                                     static_cast<float>(area.height) / static_cast<float>(extent.height));
+        const gpu::Extent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
+        Composite(list, final_set_, 1.0f, shown, format,
+                  {static_cast<int32_t>((area.width - shown.width) / 2), static_cast<int32_t>((area.height - shown.height) / 2)}, with_top_ui);
+    };
+    list.BeginRendering(rendering, {&color, 1});
+    Composite(list, composite_set_, 0.0f, extent, final_format_);
     if (overlay && !hud && (!xr || xr_frame_.overlay_on_frame)) {
-        overlay(cmd, final_.view, extent);
+        overlay(list, final_.view, extent, split_ui ? OverlayPart::Below : OverlayPart::All);
     }
     if (draw_ui && imgui_ready_ && presenting_) {
         ImDrawData* data = ImGui::GetDrawData();
@@ -695,118 +911,150 @@ void Renderer::EndFrame(bool draw_ui) {
             data->FramebufferScale = saved_scale;
         }
     }
-    vkCmdEndRendering(cmd);
-    vk::ImageBarrier(cmd, final_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    list.EndPass();
+    list.Barrier(ColorBarrier(final_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment,
+                              PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
     if (hud) {
-        vk::ImageBarrier(cmd, hud->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        color.imageView = hud->view;
-        vkCmdBeginRendering(cmd, &rendering);
-        // MetalFX composes UI and applies output brightness/grain after interpolation. Other generators keep their existing input.
-        Composite(cmd, final_set_, generated_frame.generate ? -1.0f : 1.0f, extent, hud->format);
-        vkCmdEndRendering(cmd);
-        vk::ImageBarrier(cmd, hud->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                         VK_ACCESS_2_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        if (overlay) {
-            vk::ImageBarrier(cmd, final_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            color.imageView = final_.view;
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            vkCmdBeginRendering(cmd, &rendering);
-            overlay(cmd, final_.view, extent);
-            vkCmdEndRendering(cmd);
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            vk::ImageBarrier(cmd, final_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(hud->image), PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                                  gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        color.view = gpu::vk::Wrap<gpu::ImageViewTag>(hud->view);
+        const gpu::Extent2D hud_extent{hud->extent.width, hud->extent.height};
+        const bool hud_fitted = hud_extent.width != extent.width || hud_extent.height != extent.height;
+        gpu::Rect2D hud_rendering = rendering;
+        if (hud_fitted) {
+            color.load = gpu::LoadOp::Clear;
+            color.clear_value = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            hud_rendering = {{0, 0}, hud_extent};
         }
+        list.BeginRendering(hud_rendering, {&color, 1});
+        if (hud_fitted) {
+            composite_fitted(hud_extent, gpu::vk::FromNative(hud->format), false);
+        } else {
+            Composite(list, final_set_, generated_frame.generate ? -1.0f : 1.0f, extent,
+                      gpu::vk::FromNative(hud->format), {0, 0}, false, layer != nullptr);
+        }
+        list.EndPass();
+        color.load = gpu::LoadOp::DontCare;
+        list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(hud->image), PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment,
+                                  PipelineStage::AllCommands, gpu::Bits(Access::ShaderRead), Layout::ShaderReadOnly));
+        if (overlay) {
+            list.Barrier(ColorBarrier(final_.image, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly,
+                                      PipelineStage::ColorAttachmentOutput, Access::ColorAttachmentRead | Access::ColorAttachmentWrite,
+                                      Layout::ColorAttachment));
+            color.view = final_.view;
+            color.load = gpu::LoadOp::Load;
+            list.BeginRendering(rendering, {&color, 1});
+            overlay(list, final_.view, extent, split_ui ? OverlayPart::Below : OverlayPart::All);
+            list.EndPass();
+            color.load = gpu::LoadOp::DontCare;
+            list.Barrier(ColorBarrier(final_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                      Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead),
+                                      Layout::ShaderReadOnly));
+        }
+    }
+    RecordTopUi(list, extent, split_ui && overlay_top_pending && overlay_top_pending(), true);
+    if (layer) {
+        const gpu::BindingSetHandle set = LayerSet(gpu::vk::Wrap<gpu::ImageViewTag>(hud->view));
+        list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(layer->image), PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                                  gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        const gpu::Attachment layer_color{gpu::vk::Wrap<gpu::ImageViewTag>(layer->view), set ? gpu::LoadOp::DontCare : gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 0.0f}}};
+        list.BeginRendering({{0, 0}, extent}, {&layer_color, 1});
+        if (set) {
+            list.SetViewport({{0, 0}, extent});
+            list.BindPipeline(gpu::BindPoint::Graphics, layer_pipeline_);
+            list.BindSets(gpu::BindPoint::Graphics, layer_layout_, 0, {&set, 1});
+            float push[20];
+            CompositePush(push, 1.0f, extent, true, false);
+            list.PushConstants(layer_layout_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+            list.Draw(3, 1, 0, 0);
+        }
+        list.EndPass();
+        list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(layer->image), PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment,
+                                  PipelineStage::AllCommands, gpu::Bits(Access::ShaderRead), Layout::ShaderReadOnly));
     }
     if (xr) {
         RecordXr(cmd);
     }
-    // VR: the window shows the eye scaled to fit (its size is the headset's, not the window's)
-    const VkExtent2D window_extent = presenting_ ? ctx_.swapchain.extent : extent;
+    const gpu::Extent2D window_extent = presenting_ ? gpu::vk::FromNative(ctx_.swapchain.extent) : extent;
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
+    const gpu::Layout present_layout = gpu::vk::FromNative(ctx_.PresentLayout());
     if (target_image) {
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        color.imageView = target_view;
+        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                                  gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        color.view = target_view;
         if (fitted) {
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            color.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-            rendering.renderArea = {{0, 0}, window_extent};
+            color.load = gpu::LoadOp::Clear;
+            color.clear_value = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            rendering = {{0, 0}, window_extent};
         }
-        vkCmdBeginRendering(cmd, &rendering);
-        if (fitted) {
-            const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
-                                         static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
-            const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
-            Composite(cmd, final_set_, 1.0f, shown, ctx_.swapchain.format,
-                      {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
+        if (layer_over_rendered) {
+            list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(hud->image), PipelineStage::AllCommands, gpu::Bits(Access::ShaderRead), Layout::ShaderReadOnly,
+                                      PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
+            list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                      Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::TransferDst));
+            gpu::ImageCopy copy;
+            copy.src = {gpu::Aspect::Color, 0, 0, 1};
+            copy.dst = copy.src;
+            copy.extent = {extent.width, extent.height, 1};
+            gpu::ImageResource hud_image = *hud;
+            gpu::ImageResource target;
+            target.image = target_image;
+            list.CopyImage(hud_image, Layout::TransferSrc, target, Layout::TransferDst, {&copy, 1});
+            list.Barrier(ColorBarrier(gpu::vk::Wrap<gpu::ImageTag>(hud->image), PipelineStage::Transfer, 0, Layout::TransferSrc, PipelineStage::AllCommands,
+                                      gpu::Bits(Access::ShaderRead), Layout::ShaderReadOnly));
+            list.Barrier(ColorBarrier(target_image, PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::TransferDst,
+                                      PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
         } else {
-            Composite(cmd, final_set_, 1.0f, extent, window_ ? ctx_.swapchain.format : output_.format);
+            list.BeginRendering(rendering, {&color, 1});
+            if (fitted) {
+                composite_fitted(window_extent, gpu::vk::FromNative(ctx_.swapchain.format), true);
+            } else {
+                Composite(list, final_set_, 1.0f, extent, window_ ? gpu::vk::FromNative(ctx_.swapchain.format) : gpu::Format(output_.format), {0, 0},
+                          true);
+            }
+            list.EndPass();
         }
-        vkCmdEndRendering(cmd);
     }
-    if (presenting_ && output_.image && !fitted) {
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkImageCopy copy{};
-        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.dstSubresource = copy.srcSubresource;
+    if (presenting_ && output_.image && !fitted && !layer_over_rendered) {
+        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
+        list.Barrier(ColorBarrier(output_.image, PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::Undefined,
+                                  PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::TransferDst));
+        gpu::ImageCopy copy;
+        copy.src = {gpu::Aspect::Color, 0, 0, 1};
+        copy.dst = copy.src;
         copy.extent = {extent.width, extent.height, 1};
-        vkCmdCopyImage(cmd, target_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
+        gpu::ImageResource target;
+        target.image = target_image;
+        list.CopyImage(target, Layout::TransferSrc, output_, Layout::TransferDst, {&copy, 1});
+        list.Barrier(ColorBarrier(output_.image, PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::TransferDst,
+                                  PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
+        list.Barrier(ColorBarrier(target_image, PipelineStage::Transfer, 0, Layout::TransferSrc, PipelineStage::BottomOfPipe, 0, present_layout));
         output_ready_ = true;
-    } else if (presenting_ && output_.image && fitted) {
-        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        color.imageView = output_.view;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        rendering.renderArea = {{0, 0}, extent};
-        vkCmdBeginRendering(cmd, &rendering);
-        Composite(cmd, final_set_, 1.0f, extent, output_.format);
-        vkCmdEndRendering(cmd);
-        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
+    } else if (presenting_ && output_.image && (fitted || layer_over_rendered)) {
+        list.Barrier(ColorBarrier(output_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                                  gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        color.view = output_.view;
+        color.load = gpu::LoadOp::DontCare;
+        rendering = {{0, 0}, extent};
+        list.BeginRendering(rendering, {&color, 1});
+        Composite(list, final_set_, 1.0f, extent, output_.format, {0, 0}, true);
+        list.EndPass();
+        list.Barrier(ColorBarrier(output_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
+        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::BottomOfPipe, 0, present_layout));
         output_ready_ = true;
     } else if (presenting_) {
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0,
-                         ctx_.PresentLayout());
+        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::BottomOfPipe, 0, present_layout));
     } else if (!window_) {
         output_ready_ = true;
-        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
     }
     vkEndCommandBuffer(cmd);
     if (split_wait_) {
-        // MetalFX cannot signal a Vulkan queue semaphore directly (the completion callback host-signals this timeline). Wait
-        // here before submitting the resumed command buffer so both Vulkan validation and the present queue see the completed
-        // cross-API dependency rather than an unresolved imported-event signal.
         VkSemaphoreWaitInfo split_wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         split_wait.semaphoreCount = 1;
         split_wait.pSemaphores = &split_wait_;
@@ -822,7 +1070,6 @@ void Renderer::EndFrame(bool draw_ui) {
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    // the frame generation's ordering: the frame's command buffer signals the value the Metal interpolation waits on
     VkSemaphoreSubmitInfo fg_signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     VkSemaphore fg_wait = VK_NULL_HANDLE;
     uint64_t fg_signal_value = 0;
@@ -851,15 +1098,17 @@ void Renderer::EndFrame(bool draw_ui) {
     submit.signalSemaphoreInfoCount = signal_count;
     submit.pSignalSemaphoreInfos = signals;
     active_cmd_ = VK_NULL_HANDLE;
+    active_list_ = gpu::vk::CommandList(active_cmd_);
+    const auto submit_started = std::chrono::steady_clock::now();
+    cpu_waits_.end_record_ms = wait_ms(submit_started - end_started).count();
     ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, frame.in_flight), "frame submit");
     if (presenting_ && gen_acquired_) {
-        // the generated frame, presented before the rendered one: the interpolation of the previous and this frame's
-        // HUD-less copies (Apple MetalFX). Repeats the rendered frame when the interpolation did not run, and then waits
-        // nothing on the Metal side (the wait would never be signaled).
         const vk::Image* generated = fg_sync && !xr ? generated_frame.generate() : nullptr;
         PresentGeneratedFrame(frame, generated, generated ? fg_wait : VK_NULL_HANDLE, fg_wait_value, draw_ui);
     }
     streamline::SetMarker(streamline::Marker::RenderSubmitEnd);
+    const auto present_started = std::chrono::steady_clock::now();
+    cpu_waits_.submit_ms = wait_ms(present_started - submit_started).count();
     if (presenting_) {
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
@@ -881,11 +1130,12 @@ void Renderer::EndFrame(bool draw_ui) {
             swapchain_dirty_ = true;
         }
     }
+    cpu_waits_.present_ms = wait_ms(std::chrono::steady_clock::now() - present_started).count();
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
 }
 
 bool Renderer::SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSemaphore wait, uint64_t wait_value) {
-    if (!active_cmd_ || active_cmd_ != frames_[frame_index_].cmd) {
+    if (!active_cmd_ || split_wait_ || active_cmd_ != frames_[frame_index_].cmd || !signal || !wait || !signal_value || !wait_value) {
         return false;
     }
     Frame& frame = frames_[frame_index_];
@@ -912,9 +1162,11 @@ bool Renderer::SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSem
     if (begun != VK_SUCCESS) {
         LogError("renderer: the upscale split could not begin the resume command buffer ({})", vk::ResultName(begun));
         active_cmd_ = VK_NULL_HANDLE;
+        active_list_ = gpu::vk::CommandList(active_cmd_);
         return false;
     }
     active_cmd_ = frame.resume;
+    active_list_ = gpu::vk::CommandList(active_cmd_);
     split_wait_ = wait;
     split_wait_value_ = wait_value;
     return true;
@@ -940,31 +1192,15 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
     VkImage target = ctx_.swapchain.images[gen_index_];
     VkImageView view = ctx_.swapchain.views[gen_index_];
     VkCommandBuffer cmd = frame.gen_cmd;
-    const VkExtent2D extent = RenderExtent();
-    if (!frame.gen_final.image &&
-        !ctx_.CreateImage(frame.gen_final, final_format_, {extent.width, extent.height, 1},
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
-        LogError("renderer: the generated frame's UI target could not be created");
-        gen_acquired_ = false;
-        return;
+    gpu::vk::CommandList list(cmd);
+    const gpu::ImageViewHandle from = source ? gpu::vk::Wrap<gpu::ImageViewTag>(source->view) : final_.view;
+    const gpu::ImageViewHandle noise = grain_noise_ ? grain_noise_ : scene_color_.view;
+    const gpu::ImageBinding infos[2] = {Bind(from, linear_sampler_), Bind(noise, wrap_sampler_)};
+    gpu::BindingWrite writes[2];
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i] = {gen_set_[frame_index_], i, 0, gpu::BindingType::CombinedImageSampler, {&infos[i], 1}};
     }
-    const vk::Image& from = source ? *source : final_;
-    // this slot's gen set binds the image to composite (the generated frame, or the rendered frame repeated)
-    const VkImageView noise = grain_noise_ ? grain_noise_ : scene_color_.view;
-    VkDescriptorImageInfo infos[4] = {{linear_sampler_, from.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {linear_sampler_, frame.gen_final.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {wrap_sampler_, noise, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    VkWriteDescriptorSet writes[4]{};
-    for (int i = 0; i < 4; ++i) {
-        writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[i].dstSet = i < 2 ? gen_set_[frame_index_] : gen_final_set_[frame_index_];
-        writes[i].dstBinding = i % 2;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &infos[i];
-    }
-    vkUpdateDescriptorSets(ctx_.device, 4, writes, 0, nullptr);
+    gpu_->WriteBindings(writes);
 
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -972,67 +1208,53 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
         gen_acquired_ = false;
         return;
     }
-    const VkExtent2D window_extent = ctx_.swapchain.extent;
+    const gpu::Extent2D extent = RenderExtent();
+    const gpu::Extent2D window_extent = gpu::vk::FromNative(ctx_.swapchain.extent);
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
     vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     if (source) {
-        // Metal wrote the generated frame between the Vulkan submits. The render submit signaled the Metal shared event, and
-        // this composite submit waits for the signal back before transitioning from the Metal pass's GENERAL layout.
         vk::ImageBarrier(cmd, source->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                          VK_ACCESS_2_MEMORY_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                          VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
-    vk::ImageBarrier(cmd, frame.gen_final.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = frame.gen_final.view;
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea = {{0, 0}, extent};
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
-    vkCmdBeginRendering(cmd, &rendering);
-    Composite(cmd, gen_set_[frame_index_], -1.0f, extent, final_format_);
-    // UI pipelines target the floating-point final format, never a swapchain format. A repeated frame already contains UI.
-    if (source && overlay) {
-        overlay(cmd, frame.gen_final.view, extent);
-    }
-    if (source && draw_ui && imgui_ready_) {
-        ImDrawData* data = ImGui::GetDrawData();
-        if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
-            const ImVec2 saved_scale = data->FramebufferScale;
-            data->FramebufferScale = ImVec2(static_cast<float>(extent.width) / data->DisplaySize.x,
-                                            static_cast<float>(extent.height) / data->DisplaySize.y);
-            ImGui_ImplVulkan_RenderDrawData(data, cmd);
-            data->FramebufferScale = saved_scale;
+    if (source) {
+        list.Barrier(ColorBarrier(final_.image, gpu::PipelineStage::FragmentShader, gpu::Bits(gpu::Access::ShaderSampledRead),
+                                  gpu::Layout::ShaderReadOnly, gpu::PipelineStage::ColorAttachmentOutput,
+                                  gpu::Bits(gpu::Access::ColorAttachmentWrite), gpu::Layout::ColorAttachment));
+        const gpu::Attachment generated_color{final_.view, gpu::LoadOp::DontCare, {}};
+        list.BeginRendering({{0, 0}, extent}, {&generated_color, 1});
+        Composite(list, gen_set_[frame_index_], -1.0f, extent, final_format_);
+        if (overlay) overlay(list, final_.view, extent, OverlayPart::Below);
+        if (draw_ui && imgui_ready_) {
+            ImDrawData* data = ImGui::GetDrawData();
+            if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
+                const ImVec2 saved_scale = data->FramebufferScale;
+                data->FramebufferScale = ImVec2(static_cast<float>(extent.width) / data->DisplaySize.x,
+                                                static_cast<float>(extent.height) / data->DisplaySize.y);
+                ImGui_ImplVulkan_RenderDrawData(data, cmd);
+                data->FramebufferScale = saved_scale;
+            }
         }
+        list.EndPass();
+        list.Barrier(ColorBarrier(final_.image, gpu::PipelineStage::ColorAttachmentOutput, gpu::Bits(gpu::Access::ColorAttachmentWrite),
+                                  gpu::Layout::ColorAttachment, gpu::PipelineStage::FragmentShader,
+                                  gpu::Bits(gpu::Access::ShaderSampledRead), gpu::Layout::ShaderReadOnly));
     }
-    vkCmdEndRendering(cmd);
-    vk::ImageBarrier(cmd, frame.gen_final.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    color.imageView = view;
-    color.loadOp = fitted ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    rendering.renderArea = {{0, 0}, fitted ? window_extent : extent};
-    vkCmdBeginRendering(cmd, &rendering);
+    const gpu::Attachment color{gpu::vk::Wrap<gpu::ImageViewTag>(view), fitted ? gpu::LoadOp::Clear : gpu::LoadOp::DontCare,
+                                {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    list.BeginRendering({{0, 0}, fitted ? window_extent : extent}, {&color, 1});
     if (fitted) {
         const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
                                      static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
-        const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
-        Composite(cmd, gen_final_set_[frame_index_], 1.0f, shown, ctx_.swapchain.format,
-                  {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
+        const gpu::Extent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
+        Composite(list, final_set_, 1.0f, shown, gpu::vk::FromNative(ctx_.swapchain.format),
+                  {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)}, true);
     } else {
-        Composite(cmd, gen_final_set_[frame_index_], 1.0f, extent, ctx_.swapchain.format);
+        Composite(list, final_set_, 1.0f, extent, gpu::vk::FromNative(ctx_.swapchain.format), {0, 0}, true);
     }
-    vkCmdEndRendering(cmd);
+    list.EndPass();
     vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
     const VkResult ended = vkEndCommandBuffer(cmd);
@@ -1077,50 +1299,60 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
 
 bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop) {
     if (!output_.image || !output_ready_) {
-        LogError("screenshot {} not written: {}", path.string(), output_.image ? "no frame rendered yet" : "no capture image");
+        LogError("screenshot {} not written: {}", pt::os::PathToUtf8(path), output_.image ? "no frame rendered yet" : "no capture image");
         return false;
     }
-    vkDeviceWaitIdle(ctx_.device);
+    gpu_->WaitIdle();
     const uint32_t source_width = output_.extent.width;
     const uint32_t source_height = output_.extent.height;
     render::PixelRect crop_rect;
     if (!render::MakePixelCrop(source_width, source_height, crop, crop_rect)) {
-        LogError("screenshot {} not written: crop is empty", path.string());
+        LogError("screenshot {} not written: crop is empty", pt::os::PathToUtf8(path));
         return false;
     }
     const uint32_t x0 = crop_rect.x;
     const uint32_t y0 = crop_rect.y;
     const uint32_t width = crop_rect.width;
     const uint32_t height = crop_rect.height;
-    const VkFormat format = output_.format;
-    const VkDeviceSize bytes_per_pixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
-    vk::Buffer readback;
-    if (!ctx_.CreateBuffer(readback, VkDeviceSize(width) * height * bytes_per_pixel, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+    const VkFormat format = gpu::vk::Native(output_.format);
+    const uint64_t bytes_per_pixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
+    gpu::BufferResource readback;
+    if (!gpu_->CreateBuffer({uint64_t(width) * height * bytes_per_pixel, gpu::BufferUsage::TransferDst, true}, readback)) {
         return false;
     }
-    ctx_.Submit([&](VkCommandBuffer cmd) {
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0};
-        region.imageExtent = {width, height, 1};
-        vkCmdCopyImageToBuffer(cmd, output_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
+    gpu_->Submit([&](gpu::CommandList& cmd) {
+        gpu::BufferImageCopy region;
+        region.image = {gpu::Aspect::Color, 0, 0, 1};
+        region.image_offset[0] = static_cast<int32_t>(x0);
+        region.image_offset[1] = static_cast<int32_t>(y0);
+        region.extent = {width, height, 1};
+        cmd.CopyImageToBuffer(output_, gpu::Layout::TransferSrc, readback, {&region, 1});
     });
-    vmaInvalidateAllocation(ctx_.allocator, readback.allocation, 0, VK_WHOLE_SIZE);
+    gpu_->InvalidateMapped(readback, 0, ~0ull);
     if (!readback.mapped) {
-        ctx_.DestroyBuffer(readback);
-        LogError("screenshot {} not written: readback buffer is not mapped", path.string());
+        gpu_->DestroyBuffer(readback);
+        LogError("screenshot {} not written: readback buffer is not mapped", pt::os::PathToUtf8(path));
         return false;
     }
     uint8_t* pixels = static_cast<uint8_t*>(readback.mapped);
     std::vector<uint8_t> cropped(size_t(width) * height * 4);
     const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool hdr_capture = format == VK_FORMAT_R16G16B16A16_SFLOAT || format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    std::vector<float> nits_dump;
+    if (hdr_capture && std::getenv("PT_HDR_DUMP")) nits_dump.resize(size_t(width) * height * 3);
+    const float paper = ctx_.hdr_paper_nits;
     for (uint32_t y = 0; y < height; ++y) {
         for (uint32_t x = 0; x < width; ++x) {
             const size_t src = (size_t(y) * width + x) * bytes_per_pixel;
             uint8_t* dst = cropped.data() + (size_t(y) * width + x) * 4;
+            float* nits = nits_dump.empty() ? nullptr : nits_dump.data() + (size_t(y) * width + x) * 3;
             if (format == VK_FORMAT_R16G16B16A16_SFLOAT) {
                 const uint16_t* half = reinterpret_cast<const uint16_t*>(pixels + src);
-                for (int c = 0; c < 3; ++c) dst[c] = render::LinearToSrgb8(HalfToFloat(half[c]) * (80.0f / 203.0f));
+                for (int c = 0; c < 3; ++c) {
+                    const float value = HalfToFloat(half[c]);
+                    dst[c] = render::LinearToSrgb8(value * (80.0f / paper));
+                    if (nits) nits[c] = value * 80.0f;
+                }
             } else if (format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
                 uint32_t packed;
                 std::memcpy(&packed, pixels + src, sizeof(packed));
@@ -1130,9 +1362,14 @@ bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop)
                 const float r709 = 1.660491f * r - 0.587641f * g - 0.072850f * b;
                 const float g709 = -0.124550f * r + 1.132900f * g - 0.008349f * b;
                 const float b709 = -0.018151f * r - 0.100579f * g + 1.118730f * b;
-                dst[0] = render::LinearToSrgb8(r709 / 203.0f);
-                dst[1] = render::LinearToSrgb8(g709 / 203.0f);
-                dst[2] = render::LinearToSrgb8(b709 / 203.0f);
+                dst[0] = render::LinearToSrgb8(r709 / paper);
+                dst[1] = render::LinearToSrgb8(g709 / paper);
+                dst[2] = render::LinearToSrgb8(b709 / paper);
+                if (nits) {
+                    nits[0] = r709;
+                    nits[1] = g709;
+                    nits[2] = b709;
+                }
             } else {
                 const uint8_t* p = pixels + src;
                 dst[0] = p[bgra ? 2 : 0];
@@ -1142,26 +1379,31 @@ bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop)
             dst[3] = 255;
         }
     }
-    const int ok = stbi_write_png(path.string().c_str(), static_cast<int>(width), static_cast<int>(height), 4, cropped.data(), static_cast<int>(width * 4));
-    ctx_.DestroyBuffer(readback);
+    const int ok = stbi_write_png(pt::os::PathToUtf8(path).c_str(), static_cast<int>(width), static_cast<int>(height), 4, cropped.data(), static_cast<int>(width * 4));
+    if (!nits_dump.empty()) {
+        std::ofstream pfm(std::filesystem::path(path).concat(".pfm"), std::ios::binary);
+        pfm << "PF\n" << width << " " << height << "\n-1.0\n";
+        for (uint32_t y = height; y-- > 0;) {
+            pfm.write(reinterpret_cast<const char*>(nits_dump.data() + size_t(y) * width * 3), std::streamsize(width) * 3 * sizeof(float));
+        }
+    }
+    gpu_->DestroyBuffer(readback);
     if (ok) {
-        LogInfo("screenshot written to {}", path.string());
+        LogInfo("screenshot written to {}", pt::os::PathToUtf8(path));
     } else {
-        LogError("screenshot {} write failed", path.string());
+        LogError("screenshot {} write failed", pt::os::PathToUtf8(path));
     }
     return ok != 0;
 }
 
-// VR (docs/vr.md): the HUD image (the overlay alone, cleared to transparent) and the copies of the frame and the HUD into the
-// OpenXR swapchain images. The swapchain images come in colour attachment layout and are left in it, as XR_KHR_vulkan_enable2
-// asks; the queue's order puts these writes before the runtime's reads after xrReleaseSwapchainImage.
 /* XR_KHR_vulkan_enable2 hands the swapchain images over in colour attachment layout and wants them back the same way, hence no transitions here. */
 void Renderer::RecordXr(VkCommandBuffer cmd) {
     if (!xr_layout_) {
         VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64};
         VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        const VkDescriptorSetLayout composite_set_layout = gpu::vk::Native(composite_set_layout_);
         layout_info.setLayoutCount = 1;
-        layout_info.pSetLayouts = &composite_set_layout_;
+        layout_info.pSetLayouts = &composite_set_layout;
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push;
         if (!vk::Check(vkCreatePipelineLayout(ctx_.device, &layout_info, nullptr, &xr_layout_), "xr copy layout")) {
@@ -1170,11 +1412,11 @@ void Renderer::RecordXr(VkCommandBuffer cmd) {
     }
     if (xr_frame_.hud) {
         if (!hud_.image) {
-            if (!ctx_.CreateImage(hud_, final_format_, {kHudExtent.width, kHudExtent.height, 1},
+            if (!ctx_.CreateImage(hud_, gpu::vk::Native(final_format_), {kHudExtent.width, kHudExtent.height, 1},
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
                 return;
             }
-            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
             VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             pool_info.maxSets = 1;
             pool_info.poolSizeCount = 1;
@@ -1183,10 +1425,12 @@ void Renderer::RecordXr(VkCommandBuffer cmd) {
             VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             alloc.descriptorPool = xr_pool_;
             alloc.descriptorSetCount = 1;
-            alloc.pSetLayouts = &composite_set_layout_;
+            const VkDescriptorSetLayout composite_set_layout = gpu::vk::Native(composite_set_layout_);
+            alloc.pSetLayouts = &composite_set_layout;
             vkAllocateDescriptorSets(ctx_.device, &alloc, &hud_set_);
-            VkDescriptorImageInfo infos[2] = {{linear_sampler_, hud_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                              {linear_sampler_, hud_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+            const VkSampler linear_sampler = gpu::vk::Native(linear_sampler_);
+            VkDescriptorImageInfo infos[2] = {{linear_sampler, hud_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                              {linear_sampler, hud_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
             VkWriteDescriptorSet writes[2]{};
             for (uint32_t i = 0; i < 2; ++i) {
                 writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -1214,7 +1458,8 @@ void Renderer::RecordXr(VkCommandBuffer cmd) {
         rendering.pColorAttachments = &color;
         vkCmdBeginRendering(cmd, &rendering);
         if (overlay) {
-            overlay(cmd, hud_.view, kHudExtent);
+            gpu::vk::CommandList list(cmd);
+            overlay(list, gpu::vk::Wrap<gpu::ImageViewTag>(hud_.view), gpu::vk::FromNative(kHudExtent), OverlayPart::All);
         }
         vkCmdEndRendering(cmd);
         vk::ImageBarrier(cmd, hud_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1223,7 +1468,7 @@ void Renderer::RecordXr(VkCommandBuffer cmd) {
         CopyToXr(cmd, hud_set_, *xr_frame_.hud, true);
     }
     if (xr_frame_.eye) {
-        CopyToXr(cmd, final_set_, *xr_frame_.eye, false);
+        CopyToXr(cmd, gpu::vk::Native(final_set_), *xr_frame_.eye, false);
     }
 }
 
@@ -1252,7 +1497,6 @@ void Renderer::CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, xr_layout_, 0, 1, &set, 0, nullptr);
     const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
-    // the grain tiles keep the window's texel shape: the frame's width in 16:9 frames, as Composite
     const float across = target.rect.w > 0.0f && target.extent.height
                              ? (static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height)) / (16.0f / 9.0f)
                              : 1.0f;
@@ -1319,7 +1563,7 @@ VkPipeline Renderer::XrPipeline(VkFormat format) {
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
         info.layout = xr_layout_;
-        if (!vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &pipeline), "xr copy pipeline")) {
+        if (!vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &pipeline, "xr copy"), "xr copy pipeline")) {
             pipeline = VK_NULL_HANDLE;
         }
     }
@@ -1340,6 +1584,614 @@ void Renderer::DestroyXr() {
     xr_pool_ = VK_NULL_HANDLE;
     hud_set_ = VK_NULL_HANDLE;
     ctx_.DestroyImage(hud_);
+}
+
+bool Renderer::InitD3D12(const RendererSettings& settings) {
+#ifdef _WIN32
+    if (!settings.create_d3d12) {
+        LogError("renderer: DirectX 12 asked for, but this executable cannot make its device");
+        return false;
+    }
+    std::string error;
+    std::unique_ptr<gpu::d3d12::D3D12Device> device = settings.create_d3d12(error);
+    if (!device) {
+        LogError("renderer: no DirectX 12 device: {}", error);
+        return false;
+    }
+    d3d12_ = device.get();
+    gpu_ = std::move(device);
+    LogInfo("renderer: DirectX 12 on {} ({})", gpu_->Info().adapter, d3d12_->RuntimeDescription());
+    uint32_t width = settings.width;
+    uint32_t height = settings.height;
+    output_format_ = gpu::Format::R8G8B8A8Unorm;
+    output_mode_ = RendererOutputMode::Sdr;
+    final_format_ = gpu::Format::R16G16B16A16Sfloat;
+    if (settings.headless) {
+        const char* forced = std::getenv("PT_HDR_HEADLESS");
+        if (forced && std::string_view(forced) == "scrgb") {
+            output_format_ = gpu::Format::R16G16B16A16Sfloat;
+            output_mode_ = RendererOutputMode::ScRgb;
+        } else if (forced && std::string_view(forced) == "hdr10") {
+            output_format_ = gpu::Format::A2B10G10R10UnormPack32;
+            output_mode_ = RendererOutputMode::Hdr10;
+        }
+    }
+    if (window_) {
+        int w = 0;
+        int h = 0;
+        SDL_GetWindowSizeInPixels(window_, &w, &h);
+        width = static_cast<uint32_t>(std::max(w, 1));
+        height = static_cast<uint32_t>(std::max(h, 1));
+        void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+        output_format_ = ChooseOutputD3D12(hwnd);
+        if (!d3d12_->CreateSwapchain(static_cast<HWND__*>(hwnd), width, height, output_format_, settings.vsync, error, HdrPeak())) {
+            LogError("renderer: DirectX 12 swapchain: {}", error);
+            return false;
+        }
+        d3d12_window_w_ = w;
+        d3d12_window_h_ = h;
+    }
+    gpu::SamplerDesc sampler_info = LinearClamp();
+    linear_sampler_ = gpu_->CreateSampler(sampler_info);
+    sampler_info.address_u = sampler_info.address_v = sampler_info.address_w = gpu::AddressMode::Repeat;
+    sampler_info.mipmap = gpu::MipmapMode::Linear;
+    sampler_info.max_lod = 1000.0f;
+    wrap_sampler_ = gpu_->CreateSampler(sampler_info);
+    if (!CreateTargets(width, height) || !CreateCompositePipeline(output_format_)) {
+        return false;
+    }
+    if (window_) {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
+        ImGui::GetIO().IniFilename = "pt_imgui.ini";
+        ImGui::StyleColorsDark();
+        ImGui_ImplSDL3_InitForD3D(window_);
+        if (!d3d12_->InitImGui(final_format_)) {
+            ImGui_ImplSDL3_Shutdown();
+            ImGui::DestroyContext();
+            return false;
+        }
+        imgui_ready_ = true;
+    }
+    return true;
+#else
+    (void)settings;
+    LogError("renderer: DirectX 12 exists on Windows only");
+    return false;
+#endif
+}
+
+gpu::Format Renderer::ChooseOutputD3D12(void* hwnd) {
+#ifdef _WIN32
+    float peak = 0.0f;
+    const bool display_hdr = d3d12_->DisplayHdr(static_cast<HWND__*>(hwnd), peak);
+    d3d12_display_peak_ = peak;
+    if (settings_.hdr && display_hdr) {
+        output_mode_ = RendererOutputMode::ScRgb;
+        LogInfo("d3d12: Windows HDR on for this display, it reports {:.0f} nits at most: scRGB output", peak);
+        return gpu::Format::R16G16B16A16Sfloat;
+    }
+    if (settings_.hdr) {
+        LogInfo("d3d12: HDR asked for, but Windows HDR is off for this display: SDR output");
+    }
+#else
+    (void)hwnd;
+#endif
+    output_mode_ = RendererOutputMode::Sdr;
+    return gpu::Format::R8G8B8A8Unorm;
+}
+
+#ifdef _WIN32
+void Renderer::RecordXrD3D12(gpu::CommandList& list) {
+    using gpu::Layout;
+    if (!xr_layout_d3d12_) {
+        gpu::PipelineLayoutDesc layout_info;
+        layout_info.sets = {composite_set_layout_};
+        layout_info.push_bytes = 64;
+        layout_info.push_stages = gpu::ShaderStage::Fragment;
+        xr_layout_d3d12_ = gpu_->CreatePipelineLayout(layout_info);
+        if (!xr_layout_d3d12_) {
+            LogError("renderer: VR copy layout failed");
+            return;
+        }
+    }
+    if (xr_frame_.hud) {
+        if (!xr_hud_d3d12_.Valid()) {
+            gpu::ImageDesc desc;
+            desc.format = final_format_;
+            desc.extent = {kHudExtent.width, kHudExtent.height, 1};
+            desc.usage = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::Sampled;
+            desc.name = "VR HUD";
+            if (!gpu_->CreateImage(desc, xr_hud_d3d12_.image)) {
+                return;
+            }
+            gpu::BindingPoolDesc pool_info;
+            pool_info.sizes = {{gpu::BindingType::CombinedImageSampler, 3}};
+            pool_info.max_sets = 1;
+            xr_pool_d3d12_ = gpu_->CreateBindingPool(pool_info);
+            xr_hud_set_d3d12_ = xr_pool_d3d12_ ? gpu_->AllocateBindingSet(xr_pool_d3d12_, composite_set_layout_, 0) : gpu::BindingSetHandle{};
+            if (!xr_hud_set_d3d12_) {
+                LogError("renderer: VR HUD set failed");
+                return;
+            }
+            const gpu::ImageBinding infos[2] = {Bind(xr_hud_d3d12_.image.view, linear_sampler_), Bind(xr_hud_d3d12_.image.view, linear_sampler_)};
+            const gpu::BindingWrite writes[2] = {{xr_hud_set_d3d12_, 0, 0, gpu::BindingType::CombinedImageSampler, {&infos[0], 1}},
+                                                 {xr_hud_set_d3d12_, 1, 0, gpu::BindingType::CombinedImageSampler, {&infos[1], 1}}};
+            gpu_->WriteBindings(writes);
+        }
+        list.UseTargets({{&xr_hud_d3d12_, Layout::ColorAttachment}});
+        const gpu::Attachment hud{xr_hud_d3d12_.image.view, gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 0.0f}}};
+        list.BeginRendering({{0, 0}, gpu::vk::FromNative(kHudExtent)}, {&hud, 1});
+        if (overlay) {
+            overlay(list, xr_hud_d3d12_.image.view, gpu::vk::FromNative(kHudExtent), OverlayPart::All);
+        }
+        list.EndPass();
+        list.UseTargets({{&xr_hud_d3d12_, Layout::ShaderReadOnly}});
+        CopyToXrD3D12(list, xr_hud_set_d3d12_, *xr_frame_.hud, true);
+    }
+    if (xr_frame_.eye) {
+        CopyToXrD3D12(list, final_set_, *xr_frame_.eye, false);
+    }
+}
+
+void Renderer::CopyToXrD3D12(gpu::CommandList& list, gpu::BindingSetHandle set, const XrTarget& target, bool premultiplied) {
+    using gpu::Layout;
+    if (!target.d3d12_image || !set) {
+        return;
+    }
+    const gpu::Format format = gpu::vk::FromNative(target.format);
+    gpu::RenderTarget* wrapped = nullptr;
+    for (auto& [resource, rt] : xr_wrapped_) {
+        if (resource == target.d3d12_image) {
+            wrapped = &rt;
+        }
+    }
+    if (!wrapped) {
+        gpu::RenderTarget rt;
+        if (!d3d12_->WrapRenderTarget(target.d3d12_image, format, gpu::vk::FromNative(target.extent), rt.image)) {
+            return;
+        }
+        rt.layout = Layout::ColorAttachment;
+        xr_wrapped_.emplace_back(target.d3d12_image, rt);
+        wrapped = &xr_wrapped_.back().second;
+    }
+    gpu::PipelineHandle pipeline;
+    for (const auto& [f, p] : xr_pipelines_d3d12_) {
+        if (f == format) {
+            pipeline = p;
+        }
+    }
+    if (!pipeline) {
+        gpu::GraphicsPipelineDesc desc;
+        desc.vertex = "fullscreen.vert";
+        desc.fragment = "xr_copy.frag";
+        desc.layout = xr_layout_d3d12_;
+        desc.colors = {format};
+        desc.fixed_state = true;
+        desc.depth_state = false;
+        desc.cull = gpu::CullMode::None;
+        gpu::BlendState blend;
+        blend.src_color = blend.dst_color = blend.src_alpha = blend.dst_alpha = gpu::BlendFactor::Zero;
+        desc.blend_states = {blend};
+        pipeline = gpu_->CreateGraphicsPipeline(desc);
+        xr_pipelines_d3d12_.emplace_back(format, pipeline);
+        if (!pipeline) {
+            LogError("renderer: VR copy pipeline for format {} failed", static_cast<int>(format));
+        }
+    }
+    if (!pipeline) {
+        return;
+    }
+    const gpu::Extent2D extent = gpu::vk::FromNative(target.extent);
+    list.UseTargets({{wrapped, Layout::ColorAttachment}});
+    const gpu::Attachment color{wrapped->image.view, gpu::LoadOp::DontCare, {}};
+    list.BeginRendering({{0, 0}, extent}, {&color, 1});
+    list.SetViewport({{0, 0}, extent});
+    list.BindPipeline(gpu::BindPoint::Graphics, pipeline);
+    list.BindSets(gpu::BindPoint::Graphics, xr_layout_d3d12_, 0, {&set, 1});
+    const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    const float across = target.rect.w > 0.0f && target.extent.height
+                             ? (static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height)) / (16.0f / 9.0f)
+                             : 1.0f;
+    const float push[16] = {target.rect.x, target.rect.y, target.rect.z, target.rect.w,
+                            premultiplied ? 1.0f : 0.0f, premultiplied ? 1.0f : brightness, 0.0f, 0.0f,
+                            premultiplied || plain_output ? 0.0f : grain[0], grain[1], grain[2], grain[3],
+                            grain_offset[0], grain_offset[1], across, 0.0f};
+    list.PushConstants(xr_layout_d3d12_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+    list.Draw(3, 1, 0, 0);
+    list.EndPass();
+}
+
+void Renderer::DestroyXrD3D12() {
+    for (auto& [format, pipeline] : xr_pipelines_d3d12_) {
+        if (pipeline) gpu_->DestroyPipeline(pipeline);
+    }
+    xr_pipelines_d3d12_.clear();
+    if (xr_layout_d3d12_) gpu_->DestroyPipelineLayout(xr_layout_d3d12_);
+    xr_layout_d3d12_ = {};
+    if (xr_pool_d3d12_) gpu_->DestroyBindingPool(xr_pool_d3d12_);
+    xr_pool_d3d12_ = {};
+    xr_hud_set_d3d12_ = {};
+    gpu_->DestroyImage(xr_hud_d3d12_.image);
+    xr_hud_d3d12_ = gpu::RenderTarget{};
+    for (auto& [resource, rt] : xr_wrapped_) {
+        gpu_->DestroyImage(rt.image);
+    }
+    xr_wrapped_.clear();
+    gpu_->DestroyImage(window_target_.image);
+    window_target_ = gpu::RenderTarget{};
+}
+
+namespace {
+const char* FrameGenOwnerName(gpu::d3d12::FrameGenOwner owner) {
+    switch (owner) {
+    case gpu::d3d12::FrameGenOwner::Xess: return "XeSS Frame Generation";
+    case gpu::d3d12::FrameGenOwner::Fsr: return "FSR 3 frame generation";
+    case gpu::d3d12::FrameGenOwner::Dlss: return "DLSS Frame Generation";
+    case gpu::d3d12::FrameGenOwner::None: break;
+    }
+    return "frame generation";
+}
+}
+
+std::string Renderer::FrameGenReasonD3D12(gpu::d3d12::FrameGenOwner owner) {
+    std::string reason;
+    if (!d3d12_ || owner == gpu::d3d12::FrameGenOwner::None) {
+        return reason;
+    }
+    if (!window_) {
+        return "needs a window";
+    }
+    if (fg_failed_d3d12_[static_cast<int>(owner)]) {
+        return "could not start this session; restart to try again";
+    }
+    d3d12_->FrameGenAvailable(owner, reason);
+    return reason;
+}
+
+void Renderer::UpdateFrameGenerationD3D12(gpu::d3d12::FrameGenOwner owner, bool paused) {
+    using gpu::d3d12::FrameGenOwner;
+    if (!d3d12_ || !window_) {
+        return;
+    }
+    const char* name = FrameGenOwnerName(owner);
+    if (owner != FrameGenOwner::None && output_mode_ != RendererOutputMode::Sdr) {
+        if (!fg_refusal_logged_[static_cast<int>(owner)]) {
+            LogWarn("frame generation: {} off while the native HDR output is on", name);
+            fg_refusal_logged_[static_cast<int>(owner)] = true;
+        }
+        owner = FrameGenOwner::None;
+    }
+    if (owner != FrameGenOwner::None) {
+        const std::string reason = FrameGenReasonD3D12(owner);
+        if (!reason.empty()) {
+            if (!fg_refusal_logged_[static_cast<int>(owner)]) {
+                LogInfo("frame generation: {} unavailable on DirectX 12: {}", name, reason);
+                fg_refusal_logged_[static_cast<int>(owner)] = true;
+            }
+            owner = FrameGenOwner::None;
+        }
+    }
+    if (owner != fg_wanted_d3d12_) {
+        LogInfo("frame generation: {} on DirectX 12, the swapchain is made again", owner == FrameGenOwner::None ? "off" : name);
+        fg_wanted_d3d12_ = owner;
+        d3d12_->SetFrameGenOwner(owner);
+        swapchain_dirty_ = true;
+    }
+    d3d12_->SetGenerating(!paused);
+    fg_paused_d3d12_ = paused;
+}
+
+bool Renderer::FrameGeneratingD3D12() const {
+    return d3d12_ && window_ && !fg_paused_d3d12_ && d3d12_->ActiveFrameGenOwner() != gpu::d3d12::FrameGenOwner::None &&
+           d3d12_->ActiveFrameGenOwner() == fg_wanted_d3d12_ && output_mode_ == RendererOutputMode::Sdr && layer_pipeline_;
+}
+
+bool Renderer::EnsureFrameGenTargetsD3D12(gpu::Extent2D extent) {
+    const gpu::Format layer_format = gpu::vk::FromNative(kUiLayerFormat);
+    if (fg_hudless_.Valid() && fg_hudless_.Extent().width == extent.width && fg_hudless_.Extent().height == extent.height &&
+        fg_hudless_.image.format == output_format_) {
+        return true;
+    }
+    gpu_->WaitIdle();
+    gpu_->DestroyImage(fg_hudless_.image);
+    gpu_->DestroyImage(fg_ui_.image);
+    fg_hudless_ = gpu::RenderTarget{};
+    fg_ui_ = gpu::RenderTarget{};
+    gpu::ImageDesc desc;
+    desc.extent = {extent.width, extent.height, 1};
+    desc.format = output_format_;
+    desc.usage = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferSrc;
+    if (!gpu_->CreateImage(desc, fg_hudless_.image)) {
+        LogError("frame generation: no HUD-less target at {}x{}", extent.width, extent.height);
+        return false;
+    }
+    desc.format = layer_format;
+    if (!gpu_->CreateImage(desc, fg_ui_.image)) {
+        LogError("frame generation: no UI layer target at {}x{}", extent.width, extent.height);
+        gpu_->DestroyImage(fg_hudless_.image);
+        fg_hudless_ = gpu::RenderTarget{};
+        return false;
+    }
+    return true;
+}
+#endif
+
+bool Renderer::ResizeSwapchainD3D12() {
+#ifdef _WIN32
+    int w = 0;
+    int h = 0;
+    SDL_GetWindowSizeInPixels(window_, &w, &h);
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+    gpu_->WaitIdle();
+    d3d12_->DestroySwapchain();
+    std::string error;
+    void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    const gpu::Format previous_format = output_format_;
+    const RendererOutputMode previous_mode = output_mode_;
+    output_format_ = ChooseOutputD3D12(hwnd);
+    if (output_format_ != previous_format) {
+        if (composite_pipeline_) gpu_->DestroyPipeline(composite_pipeline_);
+        composite_pipeline_ = {};
+        if (!BuildCompositePipeline(output_format_, composite_pipeline_)) {
+            return false;
+        }
+    }
+    if (output_mode_ != previous_mode) {
+        LogInfo("display: output {} while running", output_mode_ == RendererOutputMode::Sdr ? "SDR" : output_mode_ == RendererOutputMode::ScRgb ? "HDR (scRGB)" : "HDR (HDR10)");
+    }
+    if (!d3d12_->CreateSwapchain(static_cast<HWND__*>(hwnd), static_cast<uint32_t>(w), static_cast<uint32_t>(h), output_format_, settings_.vsync,
+                                 error, HdrPeak())) {
+        LogError("renderer: DirectX 12 swapchain: {}", error);
+        return false;
+    }
+    if (fg_wanted_d3d12_ != gpu::d3d12::FrameGenOwner::None && d3d12_->ActiveFrameGenOwner() != fg_wanted_d3d12_) {
+        LogWarn("frame generation: {} could not start on DirectX 12; off for this session",
+                FrameGenOwnerName(fg_wanted_d3d12_));
+        fg_failed_d3d12_[static_cast<int>(fg_wanted_d3d12_)] = true;
+        fg_wanted_d3d12_ = gpu::d3d12::FrameGenOwner::None;
+        d3d12_->SetFrameGenOwner(fg_wanted_d3d12_);
+    }
+    d3d12_window_w_ = w;
+    d3d12_window_h_ = h;
+    DestroyTargets();
+    const gpu::Extent2D size = render_extent_.width > 0 && render_extent_.height > 0 ? gpu::vk::FromNative(render_extent_)
+                                                                                      : gpu::Extent2D{static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+    targets_missing_ = !CreateTargets(size.width, size.height);
+    if (targets_missing_) {
+        DestroyTargets();
+        targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool Renderer::BeginFrameD3D12(bool present) {
+    using wait_ms = std::chrono::duration<float, std::milli>;
+    cpu_waits_ = CpuWaits{};
+    grain[0] = 0.0f;
+    if (window_ && present) {
+        int w = 0;
+        int h = 0;
+        SDL_GetWindowSizeInPixels(window_, &w, &h);
+        if (w > 0 && h > 0 && (w != d3d12_window_w_ || h != d3d12_window_h_)) {
+            swapchain_dirty_ = true;
+        }
+        if (swapchain_dirty_) {
+            swapchain_dirty_ = false;
+            if (!ResizeSwapchainD3D12()) {
+                return false;
+            }
+        }
+    }
+    if (targets_missing_) {
+        if (std::chrono::steady_clock::now() < targets_retry_at_) {
+            return false;
+        }
+        gpu_->WaitIdle();
+        DestroyTargets();
+        const gpu::Extent2D size = RenderExtent().width ? RenderExtent() : gpu::Extent2D{settings_.width, settings_.height};
+        if (!CreateTargets(size.width, size.height)) {
+            DestroyTargets();
+            targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            return false;
+        }
+        targets_missing_ = false;
+    }
+    if (render_extent_.width > 0 && render_extent_.height > 0 &&
+        (scene_color_.extent.width != render_extent_.width || scene_color_.extent.height != render_extent_.height)) {
+        gpu_->WaitIdle();
+        DestroyTargets();
+        if (!CreateTargets(render_extent_.width, render_extent_.height)) {
+            DestroyTargets();
+            targets_missing_ = true;
+            targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            return false;
+        }
+        LogInfo("renderer: render size {}x{}", render_extent_.width, render_extent_.height);
+    }
+    presenting_ = window_ && present;
+    const auto fence_started = std::chrono::steady_clock::now();
+    gpu::CommandList* list = gpu_->BeginFrame(frame_index_);
+    cpu_waits_.fence_ms = wait_ms(std::chrono::steady_clock::now() - fence_started).count();
+    if (!list) {
+        return false;
+    }
+    list_ = list;
+    gpu_->ReapDeferred(false);
+    using gpu::Layout;
+    using gpu::PipelineStage;
+    gpu::CommandList& cmd = *list_;
+    cmd.Barrier(ColorBarrier(scene_color_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    gpu::Attachment color{scene_color_.view, gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    const gpu::Rect2D area{{0, 0}, RenderExtent()};
+    cmd.BeginRendering(area, {&color, 1});
+    cmd.EndPass();
+    cmd.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    color.view = hdr_boost_.view;
+    color.clear_value = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    cmd.BeginRendering(area, {&color, 1});
+    cmd.EndPass();
+    return true;
+}
+
+void Renderer::EndFrameD3D12(bool draw_ui) {
+    using gpu::Access;
+    using gpu::Layout;
+    using gpu::PipelineStage;
+    using wait_ms = std::chrono::duration<float, std::milli>;
+    const auto end_started = std::chrono::steady_clock::now();
+    gpu::CommandList& list = *list_;
+    list.Barrier(ColorBarrier(scene_color_.image, PipelineStage::ColorAttachmentOutput | PipelineStage::ComputeShader,
+                              Access::ColorAttachmentWrite | Access::ShaderStorageWrite, Layout::ColorAttachment, PipelineStage::FragmentShader,
+                              gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    list.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                              Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    const gpu::Extent2D extent = RenderExtent();
+    const bool xr = std::exchange(xr_pending_, false);
+    static const bool ui_over_grain = [] {
+        const char* value = std::getenv("PT_UI_OVER_GRAIN");
+        return !(value && value[0] == '0');
+    }();
+    const bool split_ui = overlay && !xr && ui_over_grain;
+#ifdef _WIN32
+    const bool generate = !xr && presenting_ && std::exchange(fg_inputs_ready_, false) && FrameGeneratingD3D12() &&
+                          extent.width == static_cast<uint32_t>(d3d12_window_w_) && extent.height == static_cast<uint32_t>(d3d12_window_h_) &&
+                          EnsureFrameGenTargetsD3D12(extent);
+#else
+    const bool generate = false;
+#endif
+    RecordTopUi(list, extent, false, false);
+    list.Barrier(ColorBarrier(final_.image, PipelineStage::FragmentShader, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                              gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+    gpu::Attachment color{final_.view, gpu::LoadOp::DontCare, {}};
+    list.BeginRendering({{0, 0}, extent}, {&color, 1});
+    Composite(list, composite_set_, 0.0f, extent, final_format_);
+    if (overlay && !generate && (!xr || xr_frame_.overlay_on_frame)) {
+        overlay(list, final_.view, extent, split_ui ? OverlayPart::Below : OverlayPart::All);
+    }
+#ifdef _WIN32
+    if (draw_ui && imgui_ready_ && presenting_) {
+        ImDrawData* data = ImGui::GetDrawData();
+        if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
+            const ImVec2 saved_scale = data->FramebufferScale;
+            data->FramebufferScale = ImVec2(static_cast<float>(extent.width) / data->DisplaySize.x,
+                                            static_cast<float>(extent.height) / data->DisplaySize.y);
+            d3d12_->RenderImGui(list, data);
+            data->FramebufferScale = saved_scale;
+        }
+    }
+#endif
+    list.EndPass();
+    list.Barrier(ColorBarrier(final_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment,
+                              PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+#ifdef _WIN32
+    if (generate) {
+        list.UseTargets({{&fg_hudless_, Layout::ColorAttachment}});
+        gpu::Attachment hud_color{fg_hudless_.image.view, gpu::LoadOp::DontCare, {}};
+        list.BeginRendering({{0, 0}, extent}, {&hud_color, 1});
+        Composite(list, final_set_, 1.0f, extent, output_format_, {0, 0}, false, true);
+        list.EndPass();
+        list.UseTargets({{&fg_hudless_, Layout::ShaderReadOnly}});
+        if (overlay) {
+            list.Barrier(ColorBarrier(final_.image, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly,
+                                      PipelineStage::ColorAttachmentOutput, Access::ColorAttachmentRead | Access::ColorAttachmentWrite,
+                                      Layout::ColorAttachment));
+            color.load = gpu::LoadOp::Load;
+            list.BeginRendering({{0, 0}, extent}, {&color, 1});
+            overlay(list, final_.view, extent, split_ui ? OverlayPart::Below : OverlayPart::All);
+            list.EndPass();
+            color.load = gpu::LoadOp::DontCare;
+            list.Barrier(ColorBarrier(final_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                      Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead),
+                                      Layout::ShaderReadOnly));
+        }
+    }
+#endif
+    RecordTopUi(list, extent, split_ui && overlay_top_pending && overlay_top_pending(), true);
+#ifdef _WIN32
+    if (generate) {
+        const gpu::BindingSetHandle set = LayerSet(fg_hudless_.image.view);
+        list.UseTargets({{&fg_ui_, Layout::ColorAttachment}});
+        const gpu::Attachment layer_color{fg_ui_.image.view, set ? gpu::LoadOp::DontCare : gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 0.0f}}};
+        list.BeginRendering({{0, 0}, extent}, {&layer_color, 1});
+        if (set) {
+            list.SetViewport({{0, 0}, extent});
+            list.BindPipeline(gpu::BindPoint::Graphics, layer_pipeline_);
+            list.BindSets(gpu::BindPoint::Graphics, layer_layout_, 0, {&set, 1});
+            float push[20];
+            CompositePush(push, 1.0f, extent, true, false);
+            list.PushConstants(layer_layout_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+            list.Draw(3, 1, 0, 0);
+        }
+        list.EndPass();
+        list.UseTargets({{&fg_ui_, Layout::ShaderReadOnly}});
+        fg_inputs_d3d12_.hudless = &fg_hudless_;
+        fg_inputs_d3d12_.ui = &fg_ui_;
+        d3d12_->SetFrameGenInputs(fg_inputs_d3d12_);
+    }
+#endif
+#ifdef _WIN32
+    if (xr) {
+        RecordXrD3D12(list);
+    }
+#endif
+    present_target_.image = output_;
+    list.UseTargets({{&present_target_, Layout::ColorAttachment}});
+    color.view = output_.view;
+    list.BeginRendering({{0, 0}, extent}, {&color, 1});
+    Composite(list, final_set_, 1.0f, extent, output_.format, {0, 0}, true);
+    list.EndPass();
+    list.UseTargets({{&present_target_, Layout::TransferSrc}});
+    output_ready_ = true;
+    gpu::RenderTarget* shown = &present_target_;
+#ifdef _WIN32
+    const gpu::Extent2D window_extent{static_cast<uint32_t>(std::max(d3d12_window_w_, 1)), static_cast<uint32_t>(std::max(d3d12_window_h_, 1))};
+    if (presenting_ && (window_extent.width != extent.width || window_extent.height != extent.height)) {
+        if (!window_target_.Valid() || window_target_.Extent().width != window_extent.width || window_target_.Extent().height != window_extent.height ||
+            window_target_.image.format != output_format_) {
+            gpu_->WaitIdle();
+            gpu_->DestroyImage(window_target_.image);
+            window_target_ = gpu::RenderTarget{};
+            gpu::ImageDesc desc;
+            desc.format = output_format_;
+            desc.extent = {window_extent.width, window_extent.height, 1};
+            desc.usage = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::TransferSrc;
+            desc.name = "window target";
+            if (!gpu_->CreateImage(desc, window_target_.image)) {
+                LogError("renderer: no {}x{} window target", window_extent.width, window_extent.height);
+            }
+        }
+        if (window_target_.Valid()) {
+            list.UseTargets({{&window_target_, Layout::ColorAttachment}});
+            gpu::Attachment window_color{window_target_.image.view, gpu::LoadOp::Clear, {{0.0f, 0.0f, 0.0f, 1.0f}}};
+            list.BeginRendering({{0, 0}, window_extent}, {&window_color, 1});
+            const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
+                                         static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
+            const gpu::Extent2D fitted{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
+            Composite(list, final_set_, 1.0f, fitted, output_format_,
+                      {static_cast<int32_t>((window_extent.width - fitted.width) / 2), static_cast<int32_t>((window_extent.height - fitted.height) / 2)},
+                      true);
+            list.EndPass();
+            list.UseTargets({{&window_target_, Layout::TransferSrc}});
+            shown = &window_target_;
+        }
+    }
+#endif
+    list_ = &active_list_;
+    const auto submit_started = std::chrono::steady_clock::now();
+    cpu_waits_.end_record_ms = wait_ms(submit_started - end_started).count();
+    gpu_->EndFrame(frame_index_, presenting_ ? shown : nullptr);
+    cpu_waits_.present_ms = wait_ms(std::chrono::steady_clock::now() - submit_started).count();
+    frame_index_ = (frame_index_ + 1) % kFramesInFlight;
 }
 
 }

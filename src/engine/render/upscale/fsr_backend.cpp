@@ -2,10 +2,18 @@
 
 #if defined(PT_WITH_FSR)
 
+#ifdef _WIN32
 #include <windows.h>
 
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_api_loader.h>
+#else
+#include <dlfcn.h>
+
+#define __declspec(x)
+#include <ffx_api/ffx_api.h>
+#undef __declspec
+#endif
 #include <ffx_api/ffx_upscale.h>
 #include <ffx_api/vk/ffx_api_vk.h>
 
@@ -21,6 +29,32 @@
 
 namespace pt {
 namespace {
+
+#ifdef _WIN32
+using FfxModule = HMODULE;
+constexpr const char* kFfxLibrary = "amd_fidelityfx_vk.dll";
+constexpr const char* kExecutable = "pt.exe";
+#else
+using FfxModule = void*;
+constexpr const char* kFfxLibrary = "libamd_fidelityfx_vk.so";
+constexpr const char* kExecutable = "pt";
+
+struct ffxFunctions {
+    PfnFfxCreateContext CreateContext;
+    PfnFfxDestroyContext DestroyContext;
+    PfnFfxConfigure Configure;
+    PfnFfxQuery Query;
+    PfnFfxDispatch Dispatch;
+};
+
+void ffxLoadFunctions(ffxFunctions* out, void* module) {
+    out->CreateContext = reinterpret_cast<PfnFfxCreateContext>(dlsym(module, "ffxCreateContext"));
+    out->DestroyContext = reinterpret_cast<PfnFfxDestroyContext>(dlsym(module, "ffxDestroyContext"));
+    out->Configure = reinterpret_cast<PfnFfxConfigure>(dlsym(module, "ffxConfigure"));
+    out->Query = reinterpret_cast<PfnFfxQuery>(dlsym(module, "ffxQuery"));
+    out->Dispatch = reinterpret_cast<PfnFfxDispatch>(dlsym(module, "ffxDispatch"));
+}
+#endif
 
 void Message(uint32_t type, const wchar_t* message) {
     const std::string text = NarrowText(message);
@@ -50,9 +84,6 @@ FfxApiResource Resource(const UpscaleImage& image, uint32_t state, bool depth, b
     return resource;
 }
 
-// the FidelityFX API lists the upscaler providers of the loaded DLL by version; FSR 3 and FSR 4 are two providers of the same
-// API (AMD FSR SDK 2.x: FSR 4 falls back to FSR 3.1 on other GPUs). amd_fidelityfx_vk.dll v1.1.4, the newest Vulkan build AMD
-// ships, has only FSR 3.1.4; FSR 4 is in AMD's DirectX 12 DLLs only (upscaling.md, AMD FSR 4)
 /* FSR 3 and FSR 4 are two providers of one FidelityFX API, but AMD ships FSR 4 only in its DX12 DLLs; on Vulkan the FSR 4 path can only say why it is missing. */
 class FsrBackend final : public UpscaleBackend {
 public:
@@ -60,19 +91,22 @@ public:
     ~FsrBackend() override {
         Release();
         if (module_) {
+#ifdef _WIN32
             FreeLibrary(module_);
+#else
+            dlclose(module_);
+#endif
         }
     }
 
     UpscalerKind Kind() const override { return generation_ == 4 ? UpscalerKind::Fsr4 : UpscalerKind::Fsr; }
 
     bool Supported(std::string& reason) override {
-        if (!std::filesystem::exists(ExecutableDir() / L"amd_fidelityfx_vk.dll")) {
-            reason = "amd_fidelityfx_vk.dll is missing next to pt.exe";
+        if (!std::filesystem::exists(ExecutableDir() / kFfxLibrary)) {
+            reason = std::format("{} is missing next to {}", kFfxLibrary, kExecutable);
             return false;
         }
         if (generation_ == 4 && !probed_) {
-            // known without loading the DLL: the one this build ships (cmake/Upscalers.cmake) has no FSR 4 provider
             std::string probe;
             if (!Available(probe)) {
                 reason = probe;
@@ -98,15 +132,29 @@ public:
     }
 
     bool Probe(std::string& reason) {
-        const std::filesystem::path path = ExecutableDir() / L"amd_fidelityfx_vk.dll";
+        const std::filesystem::path path = ExecutableDir() / kFfxLibrary;
+#ifdef _WIN32
         module_ = module_ ? module_ : LoadLibraryW(path.c_str());
+#else
         if (!module_) {
-            reason = "amd_fidelityfx_vk.dll is missing next to pt.exe";
+            module_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (module_) {
+                LogInfo("fsr: loaded {}", path.string());
+            } else if (std::error_code ec; std::filesystem::exists(path, ec)) {
+                const char* error = dlerror();
+                LogWarn("fsr: cannot load {}: {}", path.string(), error ? error : "unknown error");
+                reason = std::format("{} could not be loaded ({})", kFfxLibrary, error ? error : "unknown error");
+                return false;
+            }
+        }
+#endif
+        if (!module_) {
+            reason = std::format("{} is missing next to {}", kFfxLibrary, kExecutable);
             return false;
         }
         ffxLoadFunctions(&fn_, module_);
         if (!fn_.CreateContext || !fn_.DestroyContext || !fn_.Dispatch || !fn_.Query || !fn_.Configure) {
-            reason = "amd_fidelityfx_vk.dll has no FidelityFX API exports";
+            reason = std::format("{} has no FidelityFX API exports", kFfxLibrary);
             return false;
         }
         uint64_t count = 0;
@@ -115,7 +163,7 @@ public:
         versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         versions.outputCount = &count;
         if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0) {
-            reason = "no FSR upscaler in amd_fidelityfx_vk.dll";
+            reason = std::format("no FSR upscaler in {}", kFfxLibrary);
             return false;
         }
         std::vector<uint64_t> ids(count);
@@ -123,10 +171,9 @@ public:
         versions.versionIds = ids.data();
         versions.versionNames = names.data();
         if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK) {
-            reason = "no FSR upscaler in amd_fidelityfx_vk.dll";
+            reason = std::format("no FSR upscaler in {}", kFfxLibrary);
             return false;
         }
-        // the newest provider of this generation ("3.1.4", "4.1.1")
         std::string listed;
         std::vector<int> best;
         for (uint64_t i = 0; i < count; ++i) {
@@ -146,10 +193,10 @@ public:
                 version_name_ = name;
             }
         }
-        LogInfo("fsr: amd_fidelityfx_vk.dll upscalers: {}", listed);
+        LogInfo("fsr: {} upscalers: {}", kFfxLibrary, listed);
         if (!version_id_) {
             reason = generation_ == 4 ? "AMD releases FSR 4 for DirectX 12 only, and this game renders with Vulkan"
-                                      : std::format("no FSR {} upscaler in amd_fidelityfx_vk.dll", generation_);
+                                      : std::format("no FSR {} upscaler in {}", generation_, kFfxLibrary);
             return false;
         }
         return true;
@@ -246,7 +293,7 @@ private:
     std::string reason_;
     uint64_t version_id_ = 0;
     std::string version_name_;
-    HMODULE module_ = nullptr;
+    FfxModule module_ = nullptr;
     ffxFunctions fn_{};
     ffxContext context_ = nullptr;
     bool debug_view_ = false;

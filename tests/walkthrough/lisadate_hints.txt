@@ -1,0 +1,41 @@
+# Coffee with Lisa's hints (Game+ tier 4): the rush count set by `slisarushes` (each as if that rush had just been counted), the
+# handy light on the corridor's end wall after each, then the portrait's glint, the zoom's heartbeat and pink edges at about 0, 5
+# and 9 s, let go before the date starts
+sanchor
+gfile 0 -1.4 -4.0
+ffile 0 -0.6 3.0
+swait 90
+sshot {shots}/hint_rush0.png
+swait 2
+slisarushes 1
+swait 200
+sshot {shots}/hint_rush1.png
+swait 2
+slisarushes 2
+swait 200
+sshot {shots}/hint_rush2.png
+swait 2
+slisarushes 3
+swait 200
+sshot {shots}/hint_rush3.png
+swait 2
+gfile 0 -1.4 3.0
+gfile 0.05 -1.4 6.9
+fportrait
+swait 150
+sshot {shots}/hint_glint.png
+swait 2
+szoom 1
+swait 20
+sshot {shots}/hint_zoom_0s.png
+swait 280
+sshot {shots}/hint_zoom_5s.png
+swait 240
+sshot {shots}/hint_zoom_9s.png
+swait 20
+szoom 0
+swait 25
+sshot {shots}/hint_zoom_released.png
+swait 60
+sexpect lisadate 0
+slog

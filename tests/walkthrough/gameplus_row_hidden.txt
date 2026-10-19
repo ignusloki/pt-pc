@@ -1,0 +1,16 @@
+# a fresh profile (no finished game): the PC settings' Extras tab has no Game+ row
+sui menu pc
+swait 60
+sexpect menu 1
+sui menukey tabprev
+swait 40
+sexpect pcvalue pc_third_person 0
+sexpect pcabsent pc_game_plus
+sexpect gameplustier 0
+sui menukey back
+swait 60
+sui menukey close
+swait 90
+sexpect menu 0
+slog
+squit

@@ -1,0 +1,18 @@
+# Coffee with Lisa: the Museum's row replays the date (sarchive asks for it as the row does)
+sarchive coffee_lisa
+swait 30
+sexpect lisadate 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisawait
+sexpect lisadate 0

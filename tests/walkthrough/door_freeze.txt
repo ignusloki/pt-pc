@@ -1,0 +1,6 @@
+# after "start" on a relaunch at f120: the door's demo, then into f160's hallway, far enough for the start room's swap trap
+# (ShTrapExecUnlJackStage: the start room goes, the hallway becomes current)
+swait 120
+goto 0 0 15.5
+goto 0 0 17.5
+swait 120

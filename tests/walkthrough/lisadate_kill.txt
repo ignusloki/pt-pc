@@ -1,0 +1,10 @@
+# Coffee with Lisa: after the session's first rush she chases to kill; looking back lets her, and the game over brings the
+# player back to the start room (the count stays)
+ffile 0 -0.5 -6.0
+swait 90
+ffile 0 -0.5 10.0
+swait 90
+ffile 0 -0.5 -6.0
+swait 600
+swait 240
+sstep 15

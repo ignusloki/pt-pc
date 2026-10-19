@@ -1,0 +1,16 @@
+# Game+ tier 2's intercom: the corridor's end shows it in place of the painting; walking up to it (its light area) on a forced ring
+# gives Lisa's tell on f060 and f050 (her chase comes on the next loop), then the ring, the screen lit and off again
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+sexpect intercom 1
+sexpect body shsb_pctr001_vrtn003_0007 0
+sexpect body shsb_mntr001_0000 1
+gfile -6.6 -1.4 8.0
+ffile -9.49 0.2 9.0
+swait 30
+sexpect intercomlit 1
+swait 1500
+sexpect intercomlit 0
+slog

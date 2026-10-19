@@ -1,10 +1,6 @@
-// Ray traced shadows (rendering.md 12.21), the PC option in place of the shadow map lookup of lighting.glsl: one ray query
-// from the lit point toward the light against the frame's TLAS of shadow casters. Needs common.glsl before it and the
-// extensions GL_EXT_ray_query, GL_EXT_buffer_reference and GL_EXT_buffer_reference_uvec2 (light_rt.frag).
 
 layout(set = 2, binding = 0) uniform accelerationStructureEXT rt_casters;
 
-// RayTracing's record of a TLAS instance (instanceCustomIndex)
 struct RtRecord {
     uvec2 vertices;
     uvec2 indices;
@@ -18,6 +14,20 @@ layout(std430, set = 2, binding = 1) readonly buffer RtRecords {
     RtRecord rt_records[];
 };
 
+#ifdef PT_D3D12
+/* D3D12: raw (byte address) views of every vertex and index buffer a TLAS record can name, one unbounded descriptor array: set 2
+   binding 2 as 32-bit words, nonuniform (the records of one wave differ). RtRecord.vertices.x / indices.x index it. A vertex is 22
+   floats (mesh.h); the index buffer holds 32-bit indices. */
+layout(std430, set = 2, binding = 2) readonly buffer RtRaw {
+    uint d[];
+} rt_raw[];
+#define RtVertexRef uvec2
+#define RtIndexRef uvec2
+#define RT_VERTEX_REF(address) (address)
+#define RT_INDEX_REF(address) (address)
+#define RT_VERTEX(buf, k) uintBitsToFloat(rt_raw[nonuniformEXT(buf.x)].d[(buf.y >> 2u) + (k)])
+#define RT_INDEX(buf, k) rt_raw[nonuniformEXT(buf.x)].d[(buf.y >> 2u) + (k)]
+#else
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RtVertexData {
     float v[];
 };
@@ -25,27 +35,34 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RtV
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RtIndexData {
     uint i[];
 };
+#define RtVertexRef RtVertexData
+#define RtIndexRef RtIndexData
+#define RT_VERTEX_REF(address) RtVertexData(address)
+#define RT_INDEX_REF(address) RtIndexData(address)
+#define RT_VERTEX(buf, k) buf.v[k]
+#define RT_INDEX(buf, k) buf.i[k]
+#endif
 
-// The same alpha cutoff as shadow.frag at a candidate hit of an alpha tested caster.
-bool RtCasterOpaque(uint record, uint primitive, vec2 bary) {
-    RtRecord r = rt_records[record];
-    RtIndexData ib = RtIndexData(r.indices);
-    RtVertexData vb = RtVertexData(r.vertices);
-    uint base = r.first_index + 3u * primitive;
-    uint i0 = (ib.i[base] + uint(r.vertex_offset)) * 22u + 10u;
-    uint i1 = (ib.i[base + 1u] + uint(r.vertex_offset)) * 22u + 10u;
-    uint i2 = (ib.i[base + 2u] + uint(r.vertex_offset)) * 22u + 10u;
-    vec2 uv = vec2(vb.v[i0], vb.v[i0 + 1u]) * (1.0 - bary.x - bary.y) + vec2(vb.v[i1], vb.v[i1 + 1u]) * bary.x + vec2(vb.v[i2], vb.v[i2 + 1u]) * bary.y;
-    Material m = materials[r.material];
-    return textureLod(textures[nonuniformEXT(m.albedo)], uv, 0.0).a >= ShadowAlphaCutoff(m.flags);
+/* A ray query with a NaN or infinite origin, direction or extent is undefined in Vulkan and can hang or fault the GPU; a bad
+   G-buffer texel (zero normal, invalid depth) would make one. Such a ray is not cast. */
+bool RtRayValid(vec3 origin, vec3 dir, float t_max) {
+    return !any(isnan(origin)) && !any(isinf(origin)) && !any(isnan(dir)) && !any(isinf(dir)) && !isnan(t_max) && !isinf(t_max) &&
+           t_max > 0.0 && dot(dir, dir) > 0.0;
 }
 
-// One ray from the lit point toward a point of the light: true when a caster lies between. l.info.x holds the light's caster
-// mask in bits 0-7 (1: the camera view's casters, 2: the mirror view's) and the culling ray flag in bits 8-15: triangles
-// facing the light are back faces for a ray toward it, and the shadow passes cull them (double-sided casters are not culled:
-// their instances disable culling). The ray starts shadowBias (at least 2 mm) toward the light, as the maps test the receiver
-// that much nearer to it, and a spot light's casters nearer to it than innerRange along its axis are left out, as its shadow
-// projection's near plane clips them.
+bool RtCasterOpaque(uint record, uint primitive, vec2 bary) {
+    RtRecord r = rt_records[record];
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
+    uint base = r.first_index + 3u * primitive;
+    uint i0 = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i1 = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i2 = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u + 10u;
+    vec2 uv = vec2(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u)) * (1.0 - bary.x - bary.y) + vec2(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u)) * bary.x + vec2(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u)) * bary.y;
+    Material m = materials[r.material];
+    return textureLod(PT_TEX2D(m.albedo), uv, 0.0).a >= ShadowAlphaCutoff(m.flags);
+}
+
 bool RtOccluded(Light l, vec3 world, vec3 target, bool spot, uint info) {
     vec3 to_light = target - world;
     float dist = length(to_light);
@@ -63,7 +80,7 @@ bool RtOccluded(Light l, vec3 world, vec3 target, bool spot, uint info) {
         }
     }
     float t_max = reach - offset;
-    if (t_max <= 0.0) {
+    if (!RtRayValid(world + dir * offset, dir, t_max)) {
         return false;
     }
     rayQueryEXT rq;
@@ -79,14 +96,35 @@ bool RtOccluded(Light l, vec3 world, vec3 target, bool spot, uint info) {
     return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
 }
 
-// The shadow factor of the maps' form, (1 - shadow_cone * occlusion)^2. Sharp (l.info.x bits 16-23 at most 1): one ray to the
-// light's position, occlusion 0 or 1. Soft: that many rays to points of the light's disc facing the lit point, its radius
-// lightSize / 2 (l.color.w = sin(atan(lightSize / 2))) up to 30 cm and half the distance, turned per pixel and per frame
-// (interleaved gradient noise), so the occlusion is the covered share of the disc and a temporal upscaler averages the steps.
-// The first two rays go to opposite points of the disc's rim: when they agree the pixel is taken as out of the penumbra and the
-// others are skipped. A point of the disc below the lit surface's horizon (n, the surface normal; 0 for a translucent surface)
-// lights nothing there and is not counted: the disc of a wall lamp (lightSize about 0.6, 7 cm from its wall) reaches behind the
-// wall, whose rays would otherwise darken the wall beside the lamp.
+const float kRtSourceScale = 0.2;
+const float kRtSourceMax = 0.1;
+struct RtDisc {
+    float radius;
+    vec3 u;
+    vec3 v;
+    float turn;
+};
+
+RtDisc RtLightDisc(Light l, vec3 world, vec2 frag, float time) {
+    RtDisc d;
+    vec3 to_light = l.position.xyz - world;
+    float w = clamp(l.color.w, 0.0, 0.999);
+    d.radius = min(min(kRtSourceScale * w * inversesqrt(1.0 - w * w), kRtSourceMax), 0.5 * length(to_light));
+    vec3 axis = normalize(to_light);
+    d.u = normalize(cross(axis, abs(axis.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    d.v = cross(axis, d.u);
+    float frame = floor(time * 60.0 + 0.5);
+    d.turn = 6.2831853 * fract(52.9829189 * fract(dot(frag + 5.588238 * mod(frame, 64.0), vec2(0.06711056, 0.00583715))));
+    return d;
+}
+
+vec3 RtDiscPoint(Light l, RtDisc d, uint i, uint samples) {
+    const float kAngles[4] = float[4](0.0, 3.14159265, 1.5707963, 4.712389);
+    float r = d.radius * (i < 2u ? 0.9 : i < 4u ? 0.5 : sqrt((float(i) + 0.5) / float(samples)));
+    float a = d.turn + (i < 4u ? kAngles[i] : float(i) * 2.39996323);
+    return l.position.xyz + (d.u * cos(a) + d.v * sin(a)) * r;
+}
+
 float RtShadow(Light l, vec3 world, vec3 n, bool spot, float shadow_cone, vec2 frag, float time) {
     uint info = uint(l.info.x);
     uint samples = (info >> 16u) & 0xFFu;
@@ -94,27 +132,15 @@ float RtShadow(Light l, vec3 world, vec3 n, bool spot, float shadow_cone, vec2 f
     if (samples <= 1u) {
         occluded = RtOccluded(l, world, l.position.xyz, spot, info) ? 1.0 : 0.0;
     } else {
-        vec3 to_light = l.position.xyz - world;
-        float w = clamp(l.color.w, 0.0, 0.999);
-        float radius = min(min(w * inversesqrt(1.0 - w * w), 0.3), 0.5 * length(to_light));
-        vec3 axis = normalize(to_light);
-        vec3 u = normalize(cross(axis, abs(axis.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-        vec3 v = cross(axis, u);
-        float frame = floor(time * 60.0 + 0.5);
-        float turn = 6.2831853 * fract(52.9829189 * fract(dot(frag + 5.588238 * mod(frame, 64.0), vec2(0.06711056, 0.00583715))));
+        RtDisc d = RtLightDisc(l, world, frag, time);
         float counted = 0.0;
         for (uint i = 0u; i < samples; ++i) {
-            // two opposite rim points (0.9 of the radius), then two at half the radius turned by a quarter, then a spiral
-            const float kAngles[4] = float[4](0.0, 3.14159265, 1.5707963, 4.712389);
-            float r = radius * (i < 2u ? 0.9 : i < 4u ? 0.5 : sqrt((float(i) + 0.5) / float(samples)));
-            float a = turn + (i < 4u ? kAngles[i] : float(i) * 2.39996323);
-            vec3 target = l.position.xyz + (u * cos(a) + v * sin(a)) * r;
+            vec3 target = RtDiscPoint(l, d, i, samples);
             if (dot(n, target - world) <= 0.0 && dot(n, n) > 0.0) {
                 continue;
             }
             counted += 1.0;
             occluded += RtOccluded(l, world, target, spot, info) ? 1.0 : 0.0;
-            // the two rim rays agree (both blocked or both free): out of the penumbra
             if (i == 1u && counted == 2.0 && occluded != 1.0) {
                 break;
             }
@@ -125,16 +151,8 @@ float RtShadow(Light l, vec3 world, vec3 n, bool spot, float shadow_cone, vec2 f
     return s * s;
 }
 
-// Contact shadows (12.21), for the lights the original lets cast shadows: one ray from the lit point toward the light, up to
-// the reach, against the camera view's G-buffer surfaces without the lights' own fittings (TLAS mask bit 4,
-// SceneRenderer::RecordRayTracing), which also holds the props the shadow passes leave out; so what touches or nearly touches a
-// surface shadows it. Both faces occlude: props are often single-sided shells (a photo frame's open back faces the wall), which
-// the shadow passes' culling would let through. A fitting whose bounds miss the light (the metal frame of a hallway sconce, its
-// lights in front of it) is left out by the ray stopping 20 cm short of the light. Spot rays also stop at the authored shadow
-// near plane, as the map and ordinary RT shadow do. Returns the distance to the nearest occluder, -1 for none; EvaluateLight
-// (lighting.glsl) turns it into the light's visibility.
-float RtContactDistance(Light l, vec3 world, vec3 n, float reach) {
-    vec3 to_light = l.position.xyz - world;
+float RtContactDistanceTo(Light l, vec3 world, vec3 n, vec3 target, float reach) {
+    vec3 to_light = target - world;
     float dist = length(to_light);
     if (dist <= 1.0e-4) {
         return -1.0;
@@ -146,11 +164,10 @@ float RtContactDistance(Light l, vec3 world, vec3 n, float reach) {
         vec3 axis = normalize(l.direction.xyz);
         float rate = -dot(dir, axis);
         if (rate > 1.0e-6) {
-            // Match the spot shadow map's near plane, measured from the offset ray origin.
             t_max = min(t_max, (dot(origin - l.position.xyz, axis) - l.range.y) / rate);
         }
     }
-    if (t_max <= 0.0) {
+    if (!RtRayValid(origin, dir, t_max)) {
         return -1.0;
     }
     rayQueryEXT rq;
@@ -168,3 +185,22 @@ float RtContactDistance(Light l, vec3 world, vec3 n, float reach) {
     return rayQueryGetIntersectionTEXT(rq, true);
 }
 
+float RtContactDistance(Light l, vec3 world, vec3 n, float reach) {
+    return RtContactDistanceTo(l, world, n, l.position.xyz, reach);
+}
+
+float RtContactSoft(Light l, vec3 world, vec3 n, bool translucent, float reach, float shadow_cone, uint rays, vec2 frag, float time) {
+    RtDisc d = RtLightDisc(l, world, frag, time);
+    float sum = 0.0;
+    float counted = 0.0;
+    for (uint i = 0u; i < rays; ++i) {
+        vec3 target = RtDiscPoint(l, d, i, 8u);
+        if (!translucent && dot(n, target - world) <= 0.0) {
+            continue;
+        }
+        float t = RtContactDistanceTo(l, world, n, target, reach);
+        sum += t >= 0.0 ? 1.0 - shadow_cone * (1.0 - smoothstep(0.0, reach, t)) : 1.0;
+        counted += 1.0;
+    }
+    return counted > 0.0 ? sum / counted : 1.0;
+}

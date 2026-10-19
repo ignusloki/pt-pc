@@ -16,27 +16,9 @@
 20 swait 70
 20 stap 0 cross
 20 swait 40
-20 stap 0 r1
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 sexpect pcrow pc_extras
-20 stap 0 cross
-20 swait 20
+20 stap 0 l1
+20 swait 10
+20 sexpect pctab pc_extras 0
 20 stap 0 down
 20 swait 4
 20 stap 0 down
@@ -61,8 +43,6 @@
 20 swait 10
 20 sexpect fastwalkenabled 1
 20 sshot fast-walk-menu.png
-20 sktap Escape
-20 swait 10
 20 sktap Escape
 20 swait 40
 20 sktap Escape

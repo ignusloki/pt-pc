@@ -1,0 +1,76 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#endif
+#include "common.glsl"
+#include "rt_shadow.glsl"
+#define RT_LIGHT_STATE_WRITE 1
+#include "rt_full.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+shared float s_back[256];
+shared float s_probed[256];
+
+void main() {
+    uint index = gl_WorkGroupID.x;
+    uint t = gl_LocalInvocationIndex;
+    Light l = frame.lights[index];
+
+    float back = 0.0;
+    float probed = 0.0;
+    {
+        float z = 1.0 - (2.0 * float(t) + 1.0) / 256.0;
+        float r = sqrt(max(0.0, 1.0 - z * z));
+        float phi = float(t) * 2.39996323;
+        vec3 dir = vec3(r * cos(phi), z, r * sin(phi));
+        float t_min = 0.2;
+        bool inside = true;
+        if (l.position.w > 0.5) {
+            float along = dot(dir, normalize(l.direction.xyz));
+            inside = along > max(l.cone.x, 0.0);
+            t_min = max(t_min, l.range.y / max(along, 1.0e-3));
+        }
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, RtFullCasters(l), l.position.xyz, t_min, dir, t_min + 0.5);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                               rayQueryGetIntersectionBarycentricsEXT(rq, false))) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+        if (inside) {
+            probed = 1.0;
+            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT && !rayQueryGetIntersectionFrontFaceEXT(rq, true)) {
+                back = 1.0;
+            }
+        }
+    }
+
+    s_back[t] = back;
+    s_probed[t] = probed;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (t < stride) {
+            s_back[t] += s_back[t + stride];
+            s_probed[t] += s_probed[t + stride];
+        }
+        barrier();
+    }
+    if (t == 0u) {
+        float back_share = s_probed[0] > 0.0 ? s_back[0] / s_probed[0] : 0.0;
+        float factor = (uint(l.info.x) & kRtFullOriginalShadow) != 0u ? 1.0 : 1.0 - smoothstep(0.12, 0.25, back_share);
+        rt_light_state[index] = vec4(back_share, 0.0, 0.0, factor);
+    }
+}

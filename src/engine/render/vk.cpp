@@ -3,6 +3,8 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "engine/render/vk.h"
 
+#include "engine/render/gpu/gpu_vk_native.h"
+
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -41,6 +43,32 @@ bool Check(VkResult result, const char* what) {
     return true;
 }
 
+Image::operator gpu::ImageResource() const {
+    gpu::ImageResource out;
+    out.image = gpu::vk::Wrap<gpu::ImageTag>(image);
+    out.view = gpu::vk::Wrap<gpu::ImageViewTag>(view);
+    out.allocation = gpu::vk::Wrap<gpu::AllocationTag>(allocation);
+    out.format = gpu::vk::FromNative(format);
+    out.extent = {extent.width, extent.height, extent.depth};
+    out.mip_levels = mip_levels;
+    out.layers = layers;
+    out.usage = gpu::ImageUsageFlags(usage);
+    return out;
+}
+
+Image FromGpu(const gpu::ImageResource& image) {
+    Image out;
+    out.image = gpu::vk::Native(image.image);
+    out.view = gpu::vk::Native(image.view);
+    out.allocation = gpu::vk::Native(image.allocation);
+    out.format = gpu::vk::Native(image.format);
+    out.extent = gpu::vk::Native(image.extent);
+    out.mip_levels = image.mip_levels;
+    out.layers = image.layers;
+    out.usage = image.usage.bits;
+    return out;
+}
+
 void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                   VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access, VkImageLayout old_layout,
                   VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access, VkImageLayout new_layout,
@@ -67,7 +95,7 @@ VkShaderModule LoadShaderModule(VkDevice device, const char* file_name) {
     const std::filesystem::path path = shader_dir / (std::string(file_name) + ".spv");
     FILE* f = os::OpenFile(path, "rb");
     if (!f) {
-        LogError("shader {} not found", path.string());
+        LogError("shader {} not found", pt::os::PathToUtf8(path));
         return VK_NULL_HANDLE;
     }
     std::vector<uint32_t> code(static_cast<size_t>(std::filesystem::file_size(path)) / 4);

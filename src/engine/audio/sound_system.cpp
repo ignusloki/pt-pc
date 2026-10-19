@@ -29,8 +29,6 @@ bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
     LogInfo("audio: {} banks, {} media", banks->Banks().size(), banks->AllMedia().size());
     engine_ = std::make_unique<SoundEngine>(std::move(banks));
     engine_->SetRtpc(Fnv1Hash32("volumeRtpc"), 1.0f, 0, false);
-    // test switches: PT_SOLO_EVENT=<event> posts that event alone (a capture measures it without the rest of the mix),
-    // PT_SET_RTPC=<parameter id>=<value> sets a global game parameter at the start
     if (const char* solo = std::getenv("PT_SOLO_EVENT")) {
         solo_event_ = Fnv1Hash32(solo);
         LogInfo("audio: only {} ({:08X}) is posted", solo, solo_event_);
@@ -46,15 +44,23 @@ bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
         }
     }
     if (open_device) {
-        auto output = std::make_unique<AudioOutput>();
-        SoundEngine* engine = engine_.get();
-        if (output->Open(kOutputRate, surround_output,
-                         [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); })) {
-            output_ = std::move(output);
-        } else {
-            LogWarn("audio: no playback device, offline rendering only");
-        }
+        OpenDevice(surround_output);
     }
+    return true;
+}
+
+bool SoundSystem::OpenDevice(bool surround_output) {
+    if (!engine_ || output_) {
+        return output_ != nullptr;
+    }
+    auto output = std::make_unique<AudioOutput>();
+    SoundEngine* engine = engine_.get();
+    if (!output->Open(kOutputRate, surround_output,
+                      [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); })) {
+        LogWarn("audio: no playback device, offline rendering only");
+        return false;
+    }
+    output_ = std::move(output);
     return true;
 }
 
@@ -82,7 +88,24 @@ PlayingId SoundSystem::PostEventId(uint32_t event_id, GameObjectId object) {
     if (solo_event_ != 0 && event_id != solo_event_) {
         return 0;
     }
-    return engine_ ? engine_->PostEvent(event_id, object) : 0;
+    const PlayingId playing = engine_ ? engine_->PostEvent(event_id, object) : 0;
+    if (playing && post_observer_) {
+        std::optional<glm::vec3> position;
+        if (object != 0) {
+            std::lock_guard lock(position_mutex_);
+            if (const auto it = positions_.find(object); it != positions_.end()) {
+                position = it->second;
+            }
+        }
+        post_observer_(event_id, position);
+    }
+    return playing;
+}
+
+void SoundSystem::SetPostObserver(std::function<void(uint32_t, const std::optional<glm::vec3>&)> observer) {
+    std::lock_guard lock(position_mutex_);
+    post_observer_ = std::move(observer);
+    positions_.clear();
 }
 
 PlayingId SoundSystem::PostEventMedia(std::string_view event_name, std::vector<uint32_t> media_ids, GameObjectId object) {
@@ -147,12 +170,20 @@ void SoundSystem::RegisterObject(GameObjectId object, std::string_view debug_nam
 }
 
 void SoundSystem::UnregisterObject(GameObjectId object) {
+    if (post_observer_) {
+        std::lock_guard lock(position_mutex_);
+        positions_.erase(object);
+    }
     if (engine_) {
         engine_->UnregisterObject(object);
     }
 }
 
 void SoundSystem::SetObjectTransform(GameObjectId object, const glm::vec3& position, const glm::vec3& forward) {
+    if (post_observer_) {
+        std::lock_guard lock(position_mutex_);
+        positions_[object] = position;
+    }
     if (engine_) {
         engine_->SetObjectTransform(object, position, forward);
     }
@@ -227,6 +258,39 @@ PlayingId SoundSystem::PlayStream(std::vector<uint8_t> wem_riff, GameObjectId ob
     auto media = Media::Create(0, storage, 0, storage->size(), &error);
     if (!media) {
         LogError("audio: stream rejected: {}", error);
+        return 0;
+    }
+    if (!engine_->HasEvent(kExternalSourceEvent)) {
+        LogError("audio: external source event {:08X} not loaded", kExternalSourceEvent);
+        return 0;
+    }
+    return engine_->PostEvent(kExternalSourceEvent, object, std::move(media));
+}
+
+PlayingId SoundSystem::PlayStreamAs(std::vector<uint8_t> wem_riff, std::string_view donor_event, GameObjectId object) {
+    if (!engine_) {
+        return 0;
+    }
+    auto storage = std::make_shared<const std::vector<uint8_t>>(std::move(wem_riff));
+    std::string error;
+    auto media = Media::Create(0, storage, 0, storage->size(), &error);
+    if (!media) {
+        LogError("audio: stream rejected: {}", error);
+        return 0;
+    }
+    const PlayingId playing = engine_->PostEventClip(Fnv1Hash32(donor_event), object, std::move(media));
+    if (!playing) {
+        LogError("audio: donor event {} not loaded", donor_event);
+    }
+    return playing;
+}
+
+std::shared_ptr<const Media> SoundSystem::FindMedia(uint32_t media_id) const {
+    return engine_ ? engine_->Banks().FindMedia(media_id) : nullptr;
+}
+
+PlayingId SoundSystem::PlayMedia(std::shared_ptr<const Media> media, GameObjectId object) {
+    if (!engine_ || !media) {
         return 0;
     }
     if (!engine_->HasEvent(kExternalSourceEvent)) {

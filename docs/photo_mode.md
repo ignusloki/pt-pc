@@ -15,5 +15,6 @@ chosen shape. A tested 960 × 540 view saved at native square resolution as 540 
 3840 × 2880. Repeated captures of the same view were pixel-identical, and the game returned to its 960 × 540 render
 size after each capture.
 
-Photographs are saved under `Pictures/PT Photos`. The image uses the selected crop, resolution and filter, while the
+Photographs are saved under `Pictures/PT Photos` (`PT_PHOTO_DIR` names another folder; the walkthrough runs use their work
+folder). The image uses the selected crop, resolution and filter, while the
 game remains paused during the capture.

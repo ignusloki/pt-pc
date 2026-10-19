@@ -1,0 +1,25 @@
+# Coffee with Lisa's selfie in VR (run with --vr): the date to its photo by the input script, then the panel on the virtual
+# screen driven by the test runtime's controllers (walkthrough.py lisadate_vr_selfie: the left stick and A)
+slisadate
+swait 300
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaselfie 0 0 0 0
+swait 100
+sshot {shots}/vr_selfie_panel.png
+swait 2
+swait 900
+sshot {shots}/vr_selfie_polaroid.png
+swait 2
+slisawait
+sexpect lisadate 0

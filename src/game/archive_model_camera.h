@@ -17,9 +17,6 @@ inline float ArchiveModelFrontYaw(std::string_view id, float placement_yaw) {
     return placement_yaw + (id == "radio" ? glm::radians(90.0f) : 0.0f);
 }
 
-// The museum draws no room geometry. Its lights therefore belong to the orbit camera,
-// rather than to the start room or the player's flashlight. Scale their intensity with
-// distance squared so a phone and Lisa receive the same illumination.
 inline void LightArchiveModel(SceneLighting& lighting, const Camera& camera, const glm::vec3& center,
                               float radius, float ev) {
     lighting = SceneLighting{};
@@ -57,8 +54,6 @@ inline void LightArchiveModel(SceneLighting& lighting, const Camera& camera, con
     lighting.screen.local_reflections = false;
 }
 
-// Move the model's look point in the camera plane. The limit is relative to the framing chosen at StartModel,
-// so panning can reveal the face or other details without losing the model altogether.
 inline glm::vec3 PanArchiveModel(const glm::vec3& target, const glm::vec3& home, const glm::vec3& right,
                                  const glm::vec3& up, glm::vec2 input, float dt, float distance, float radius) {
     if (!(dt > 0.0f) || !std::isfinite(dt)) return target;

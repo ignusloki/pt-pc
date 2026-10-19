@@ -2,6 +2,7 @@
 
 #include "engine/assets/gltf_model.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -13,7 +14,6 @@
 namespace pt {
 namespace {
 
-// PT_MATERIAL_LEGACY=1: the ending's layer, wave, reflector and albedo view materials drawn as plain blin, for A/B runs
 bool MaterialLegacy() {
     static const bool legacy = std::getenv("PT_MATERIAL_LEGACY") != nullptr;
     return legacy;
@@ -91,7 +91,6 @@ uint32_t MaterialKindOf(const FmdlMaterial& material) {
     return gpu::kKindDeferred;
 }
 
-// 0xD49750, table 0xCA8970
 bool ModelCache::ViewReflection(const FmdlMaterial& material) {
     if (!reflection_loaded_) {
         reflection_loaded_ = true;
@@ -129,6 +128,10 @@ uint32_t ModelCache::LoadTexture(const std::string& path, uint32_t fallback, boo
         ++missing_textures_;
         return fallback;
     }
+    if (loading_textures_ && std::find(loading_textures_->begin(), loading_textures_->end(), index) == loading_textures_->end()) {
+        loading_textures_->push_back(index);
+        textures_.AddModelRef(index);
+    }
     return index;
 }
 
@@ -141,10 +144,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         const std::string* path = FindTexture(m, prefix);
         return path ? LoadTexture(*path, fallback, raw) : fallback;
     };
-    // the deferred slots: a slot the material names whose file is not in texture.qar takes Fox's default texture, the grey of
-    // TextureManager::kGrey (P.T. ships no file for the ending's plant shsb_flpl001, utility pole shsb_utpl002, catwalk
-    // shsb_ctwk001 and case shsb_case001_vrtn001; the port had drawn them with a white albedo, so the balcony plant beside the
-    // street lamp shone white where the capture shows it dark)
     auto deferred = [&](std::string_view prefix, uint32_t absent, uint32_t missing) {
         const std::string* path = FindTexture(m, prefix);
         return path ? LoadTexture(*path, missing) : absent;
@@ -153,7 +152,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
     gpu.indices = glm::vec4(scalar("MatParamIndex_0", 0.0f), scalar("MatParamIndex_1", 0.0f), scalar("MatParamIndex_2", 0.0f),
                             scalar("MatParamIndex_3", 0.0f)) / 255.0f;
     if (alpha_flags & gpu::kMatAlphaTest) {
-        // g_psSystem.m_param.w of the MASK_PASS states (0xD81690: 1.0 for alpha modes 3, 4 and 5)
         gpu.flags |= alpha_flags;
         gpu.params.x = 1.0f;
     }
@@ -187,9 +185,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         }
         return gpu;
     case gpu::kKindParallax: {
-        // P.T. draws fox3DFW_ParallaxReflection (only the bathroom mirror's silver_a uses it) with its own
-        // sh3dfw_parallax_refrection (ShShaders_ps4.lua overrides the assignment). Its Base_Tex2 is the mirror dirt, whose path
-        // 0x958FD0 hard-codes; the Mirror entity loads it (0x958070) and 0x958390 binds it with the capture
         static constexpr const char* kMirrorDirt = "/Assets/sh/environ/object/shsb/bath/shsb_bath001/sourceimages/shsb_bath001_dc_bsm_alp.ftex";
         gpu.albedo = texture("Base_Tex", TextureManager::kWhite, true);
         gpu.aux0 = texture("Height_Tex", TextureManager::kBlack, true);
@@ -207,7 +202,7 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
     }
     if (m.shader.starts_with("fox_3ddf_tempolary")) {
         gpu.albedo = texture("Base_Tex", TextureManager::kWhite);
-        if (m.shader == "fox_3ddf_tempolary_albedoview" && !MaterialLegacy()) {
+        if ((m.shader == "fox_3ddf_tempolary_albedoview" || m.shader == "fox_3ddf_tempolary_view") && !MaterialLegacy()) {
             gpu.flags |= gpu::kMatAlbedoView;
         }
         if (HasVector(m, "TempolaryBaseColor")) {
@@ -231,9 +226,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         gpu.flags |= gpu::kMatTwoSided;
     }
     if (m.technique.find("DirectiveAlpha") != std::string::npos) {
-        // fox3ddf_translucent_diralp_nc (ps 43465592acead1f4): alpha = Base_Tex.a (|N.z| - EndFadeDot) / (StartFadeDot - EndFadeDot)
-        // with N.z the view space normal's component along the view axis, tested against the pass's reference and discarded below
-        // 0 in every pass, so leaf cards seen edge on are cut (m_materials[1].xy = StartFadeDot, EndFadeDot, GrModelShaders_ps4.lua)
         gpu.flags |= gpu::kMatDirectiveAlpha;
         gpu.params.y = scalar("StartFadeDot", 1.0f);
         gpu.extra.w = scalar("EndFadeDot", 0.0f);
@@ -249,8 +241,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         gpu.aux2 = deferred("SubNormalMask_Tex", TextureManager::kWhite, TextureManager::kGrey);
         gpu.extra = glm::vec4(scalar("SubNormal_Blend", 0.0f), scalar("URepeat_UV", 1.0f), scalar("VRepeat_UV", 1.0f), 0.0f);
         if (layer) {
-            // fox3ddf_blin_layerb_subnm_mu: m_materials[2] = (SubNormal_Blend, URepeat_SubNorm_UV, VRepeat_SubNorm_UV), the
-            // sub normal at those repeats of the first UV
             gpu.extra.y = scalar("URepeat_SubNorm_UV", 1.0f);
             gpu.extra.z = scalar("VRepeat_SubNorm_UV", 1.0f);
         }
@@ -268,9 +258,6 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         gpu.params.z = scalar("MinRoughness", 1.0f);
         gpu.params.w = scalar("RoughnessFrequency", 1.0f);
     }
-    // the translucent, skin, eye and hair shaders (fox3DDF_Blin_Translucent*, _Skin*, _Eye*, _Hair*) read Translucent_Tex_LIN;
-    // a material without one gets the default grey too (ending_fx_trace: the plant's leaves bind it in that slot), so its
-    // translucency is 0.502, not 0 (the leaves of shsb_flpl001, the Ocho's skin_white_male materials)
     const bool translucent_slot = m.technique.starts_with("fox3DDF_") &&
                                   (m.technique.find("_Translucent") != std::string::npos || m.technique.find("_Skin") != std::string::npos ||
                                    m.technique.find("_Eye") != std::string::npos || m.technique.find("_Hair") != std::string::npos);
@@ -279,19 +266,12 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         gpu.flags |= gpu::kMatTranslucentTex;
     }
     if (layer) {
-        // fox3ddf_blin_layer_bl_mu (ps 6502ddf565478c15) and fox3ddf_blin_layerb_subnm_mu; m_materials[1] = (URepeat_UV,
-        // VRepeat_UV, UShift_UV, VShift_UV) place the layer on the second UV, the mask takes the third
         gpu.flags |= gpu::kMatLayer;
         gpu.aux0 = texture("Layer_Tex", TextureManager::kBlack);
         gpu.aux2 = texture("LayerMask_Tex", TextureManager::kBlack);
         gpu.albedo_factor = glm::vec4(scalar("URepeat_UV", 1.0f), scalar("VRepeat_UV", 1.0f), scalar("UShift_UV", 0.0f), scalar("VShift_UV", 0.0f));
     }
     if (m.shader == "fox_3ddf_normal_wave_directivealpha" && !MaterialLegacy()) {
-        // fox3ddf_normal_wave_diralp (vs e1e54e68265bf34b, ps 7c9a7002da0ac9c6), packing m_materials[1] = (Specular_Value,
-        // Roughness_Value, Translucent_Value), [2] = WindDir, [3] = (WindAnimTime, WindAmplitude, WeightDiffusion,
-        // WeightOffset), [4] = WindOffset, [6].z = WindRandAmplitude: the bend (WindAmplitude WindOffset +
-        // normalize(WindDir) sin(WindAnimTime + WindOffset.x) WindAmplitude WindRandAmplitude), fixed as nothing in the game
-        // writes these parameters (their names' StrCode64 are not in the eboot)
         const glm::vec3 dir(m.Vector("WindDir", glm::vec4(0.0f)));
         const glm::vec3 offset(m.Vector("WindOffset", glm::vec4(0.0f)));
         const float amplitude = scalar("WindAmplitude", 0.0f);
@@ -310,18 +290,12 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
     }
     static const bool hair_legacy = std::getenv("PT_HAIR_LEGACY") != nullptr;
     if (m.shader == "fox_3ddf_hair" && !hair_legacy) {
-        // fox3DDF_Hair (ps 3ca1dbb1cfa11613; GrModelShadersNoLnm_ps4.lua packs m_materials[2] = (Anistropic_Diffusion,
-        // HairShiftScale), [3].x = Incidence_Roughness, [4] = Incidence_Color, [5].xy = (URepeat_UV, VRepeat_UV)); its
-        // Anistropic_MainLightDir is packed into [1] but the shader never reads it. PT_HAIR_LEGACY=1 keeps the former drawing
-        // (blin with incidence) for A/B runs
         gpu.flags = (gpu.flags & ~gpu::kMatIncidence) | gpu::kMatHair;
         gpu.aux0 = texture("Shift_Tex", TextureManager::kBlack);
         gpu.extra = glm::vec4(scalar("Anistropic_Diffusion", 0.0f), scalar("HairShiftScale", 0.0f), scalar("URepeat_UV", 1.0f),
                               scalar("VRepeat_UV", 1.0f));
     }
     if (m.shader.starts_with("fox_3ddf_lightcover")) {
-        // fox3ddf_lightcover (and _vr): the car lamp covers of the ending street (shsb_carr001 ca004); InternalNormalMap_Tex
-        // bends the view for the global reflection cube, CoverTranslucentMap_Tex.x mixes Base_Tex over it
         gpu.flags |= gpu::kMatLightCover;
         gpu.aux0 = texture("InternalNormalMap_Tex", TextureManager::kFlatNormal);
         gpu.aux1 = texture("CoverTranslucentMap_Tex", TextureManager::kWhite, true);
@@ -357,9 +331,18 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
                                    FmdlModel* parsed, const std::function<void(Vertex&)>* transform) {
     auto it = entries_.find(key);
     if (it != entries_.end()) {
+        if (stage_scope_ == 0) it->second.pinned = true;
         return it->second.mesh ? &it->second : nullptr;
     }
     ModelEntry entry;
+    entry.pinned = stage_scope_ == 0 || keep || transform;
+    const TextureManager::ModelScope texture_scope(textures_);
+    struct LoadingTextures {
+        ModelCache& cache;
+        std::vector<uint32_t>* previous;
+        LoadingTextures(ModelCache& c, std::vector<uint32_t>* list) : cache(c), previous(c.loading_textures_) { cache.loading_textures_ = list; }
+        ~LoadingTextures() { cache.loading_textures_ = previous; }
+    } loading(*this, &entry.textures);
     FmdlModel read;
     FmdlModel& model = parsed ? *parsed : read;
     if (!parsed) {
@@ -370,7 +353,6 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
         }
     }
     if (keep) {
-        // each submesh keeps its triangles whose vertices all pass; the index ranges are packed again
         std::vector<uint32_t> indices;
         for (SubMesh& sub : model.mesh.submeshes) {
             const uint32_t first = static_cast<uint32_t>(indices.size());
@@ -396,7 +378,6 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             model.mesh.bounds_max = glm::max(model.mesh.bounds_max, v.position);
         }
     }
-    // [0] alpha mode 5 (constant reference), [1] alpha mode 4 (dithered reference), per material
     std::vector<int32_t> alpha_tested[2] = {std::vector<int32_t>(model.materials.size(), -1), std::vector<int32_t>(model.materials.size(), -1)};
     for (const FmdlMaterial& m : model.materials) {
         entry.material_indices.push_back(textures_.AddMaterial(BuildMaterial(m, 0)));
@@ -415,9 +396,6 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             sub.pass = ClassifyMaterial(m);
             sub.material = entry.material_indices[local];
             if ((info.render_flags & 0x80) && sub.pass != RenderPass::Unlit) {
-                // MASK_PASS (GrPluginDeferredGeometryMasked, states 0xCBDF50) indexes its states with the mesh flags
-                // (0xD996C0): bit 7 alone selects alpha mode 4 of the table at 0x13D5D8C, which binds the dithered
-                // g_tex_mesh (0xD81690: alpha reference (2 bayer + 1) / 255); bit 14 selects mode 5, the constant 64 / 255
                 /* MASK_PASS: mesh flag bit 7 alone selects the dithered Bayer alpha reference, bit 14 the fixed 64/255 (states 0xCBDF50). */
                 const bool dithered = (info.render_flags & 0x4000) == 0;
                 int32_t& slot = alpha_tested[dithered ? 1 : 0][local];
@@ -430,22 +408,12 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             const uint32_t kind = MaterialKindOf(m);
             sub.kind = static_cast<uint8_t>(kind);
             sub.layer = static_cast<uint8_t>((info.render_flags >> 20) & 0xF);
-            // 0xCB3090's shadow caster sets for 0xD996C0: flags & 0x1D0 == 0, or bits 6 and 8 clear with bit 4 or 7 set, whose state
-            // table has entries only for depth bias level 0 (flags & 0xF): so bits 6 and 8 and a depth bias above level 0 keep a mesh out.
-            // The sets ignore the material: forward meshes cast too (menu_trace_rb 1180: ModelForward_Shadow, 0x245 unless bit 5)
             const uint32_t f = info.render_flags;
             sub.shadow = (f & 0x140) == 0 && ((f & 0x10) == 0 || (f & 0xF) == 0);
-            // Lisa's visible hairstyle is excluded by her authored mesh flags. Include
-            // that real alpha-cut mesh so the requested wall silhouette matches her model.
             if (LisaHairShadow(path, m)) {
                 sub.shadow = true;
                 sub.material = textures_.AddMaterial(BuildMaterial(m, gpu::kMatAlphaTest | gpu::kMatAlphaDither | gpu::kMatLisaHairShadow));
             }
-            // f060 bathroom hole cap (shsb_bath001 basic1, fox3DFW_Constant, Mask_Tex ho_bsm only): the original draws it in the
-            // G-buffer with GBuffersBase2 (ps ad9dce8d5b128146, vs 6de7a41cd54f64bd; bath_base2_4280_drawproof op1064). Its
-            // normal and specular slots keep the bindings of the preceding draw, the tile mesh: decoded BC dumps match
-            // ho_bsm (diffuse), wa06_srm (specular) and wa06_nrm (normal) pixel for pixel. That wet tile response under the
-            // flashlight is the eye-like glint inside the hole.
             if (path.find("shsb_bath001") != std::string_view::npos && m.name == "basic1" && i > 0 &&
                 local_materials[i - 1] < model.materials.size()) {
                 const FmdlMaterial& prev = model.materials[local_materials[i - 1]];
@@ -470,11 +438,6 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
         } else {
             sub.material = 0;
         }
-        // f010_dumps 1490: the forward draws that write depth are culled by the mesh: the constant (emissive) class draws with
-        // PA_SU_SC_MODE_CNTL 0x246 (back faces culled, 9ccdf5602522c343 and dd6db0957d78a2aa), while the glass class draws
-        // with 0x244. Drawn from both sides, a lamp's constant shell writes depth across the view of a camera inside it (the
-        // f120 bathroom door gap, shsb_hous001_flon002: the depth of field took the whole frame as near). PT_CONSTANT_TWO_SIDED=1
-        // keeps the former drawing.
         static const bool constant_two_sided = std::getenv("PT_CONSTANT_TWO_SIDED") != nullptr;
         const bool culled_forward = sub.kind == gpu::kKindConstant && !constant_two_sided;
         sub.double_sided = (info.render_flags & 0x20) != 0 ||
@@ -502,6 +465,53 @@ bool ModelCache::ReadMesh(const std::string& path, MeshData& out) {
     if (!LoadModelFile(vfs_, path, model)) return false;
     out = std::move(model.mesh);
     return true;
+}
+
+void ModelCache::AddStageRef(const std::string& path) {
+    if (auto it = entries_.find(path); it != entries_.end()) ++it->second.stage_refs;
+}
+
+void ModelCache::ReleaseStageRef(const std::string& path) {
+    if (auto it = entries_.find(path); it != entries_.end() && it->second.stage_refs > 0) --it->second.stage_refs;
+}
+
+bool ModelCache::Holds(const GpuMesh* mesh) const {
+    if (!mesh) return false;
+    for (const auto& [path, entry] : entries_) {
+        if (entry.mesh.get() == mesh) return true;
+    }
+    return false;
+}
+
+ModelCache::Released ModelCache::ReleaseUnused() {
+    Released released;
+    bool waited = false;
+    for (auto it = entries_.begin(); it != entries_.end();) {
+        ModelEntry& entry = it->second;
+        const bool failed = !entry.mesh;
+        if ((entry.pinned || entry.stage_refs > 0) && !failed) {
+            ++it;
+            continue;
+        }
+        if (!waited) {
+            scene_.WaitIdle();
+            waited = true;
+        }
+        if (entry.mesh) {
+            released.mesh_bytes += entry.mesh->vertices.size + entry.mesh->indices.size;
+            scene_.Destroy(*entry.mesh);
+        }
+        for (const uint32_t texture : entry.textures) {
+            if (const uint64_t bytes = textures_.ReleaseModelRef(texture)) {
+                released.texture_bytes += bytes;
+                ++released.textures;
+            }
+        }
+        ++released.models;
+        it = entries_.erase(it);
+    }
+    if (released.textures) textures_.FlushMaterials();
+    return released;
 }
 
 void ModelCache::Clear() {

@@ -53,7 +53,7 @@ ui::TextAlign VerticalAlign(const ui::UifNode& node) {
 
 }
 
-UiCanvas UiCanvas::Fit(VkExtent2D target) {
+UiCanvas UiCanvas::Fit(gpu::Extent2D target) {
     UiCanvas canvas;
     canvas.extent = glm::vec2(static_cast<float>(target.width), static_cast<float>(target.height));
     canvas.scale = std::min(canvas.extent.x / kWidth, canvas.extent.y / kHeight);
@@ -67,7 +67,6 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
     const float aw = static_cast<float>(font.font.AtlasWidth());
     const float ah = static_cast<float>(font.font.AtlasHeight());
     if (shade == ui::UiShade::Border) {
-        // 0xDDAFB0 clamps the rim's taps to 4 texels (4 x 0.5 / size, doubled); the taps are 1.2 pixels of the original's 1080p
         params.extra = glm::vec4(4.0f / aw, 4.0f / ah, static_cast<float>(batch.Extent().height) / 1080.0f, 0.0f);
 #ifdef __ANDROID__
         // Retain fractional glyph coverage on the small render surface instead of making every edge pixel opaque.
@@ -82,13 +81,25 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
             if (!g.glyph) {
                 continue;
             }
-            const glm::vec2 p0 = canvas.ToTarget(g.position) + snap;
-            const glm::vec2 p1 = canvas.ToTarget(g.position + g.size) + snap;
-            // 0xD36980: the glyph's UV rect reaches half a texel past its cell on every side
+            glm::vec2 p0 = canvas.ToTarget(g.position) + snap;
+            glm::vec2 p1 = canvas.ToTarget(g.position + g.size) + snap;
             const float border = font.crisp ? 0.0f : 0.5f;
-            const glm::vec2 uv0((static_cast<float>(g.glyph->atlas_x) - border) / aw, (static_cast<float>(g.glyph->atlas_y) - border) / ah);
-            const glm::vec2 uv1((static_cast<float>(g.glyph->atlas_x + g.glyph->width) + border) / aw,
-                                (static_cast<float>(g.glyph->atlas_y + g.glyph->height) + border) / ah);
+            glm::vec2 uv0((static_cast<float>(g.glyph->atlas_x) - border) / aw, (static_cast<float>(g.glyph->atlas_y) - border) / ah);
+            glm::vec2 uv1((static_cast<float>(g.glyph->atlas_x + g.glyph->width) + border) / aw,
+                          (static_cast<float>(g.glyph->atlas_y + g.glyph->height) + border) / ah);
+            if (font.crisp) {
+                for (int axis = 0; axis < 2; ++axis) {
+                    if (p1[axis] - p0[axis] >= 1.0f) continue;
+                    const float centre = std::floor((p0[axis] + p1[axis]) * 0.5f) + 0.5f;
+                    const float width = p1[axis] - p0[axis];
+                    const float lo = std::min(p0[axis], centre - 0.5f), hi = std::max(p1[axis], centre + 0.5f);
+                    const float per_pixel = width > 0.0f ? (uv1[axis] - uv0[axis]) / width : 0.0f;
+                    uv0[axis] += (lo - p0[axis]) * per_pixel;
+                    uv1[axis] += (hi - p1[axis]) * per_pixel;
+                    p0[axis] = lo;
+                    p1[axis] = hi;
+                }
+            }
             const ui::UiVertex a{p0, uv0, color};
             const ui::UiVertex b{{p1.x, p0.y}, {uv1.x, uv0.y}, color};
             const ui::UiVertex c{p1, uv1, color};
@@ -173,10 +184,8 @@ const UifView::World& UifView::Resolve(int index, std::vector<World>& cache, flo
     return world;
 }
 
-// A button prompt inside a text: centred on its advance and on the cap height of the line (the H of the font), the glow added under
-// it at 0.4 as the icon glows of the option screen are
-void UifView::DrawInlinePictures(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, const ui::TextStyle& style,
-                                 const ui::TextLayout& layout, const UifInlinePicture& picture, float height, glm::vec4 color) const {
+void UifView::DrawInlinePictures(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font,
+                                 const ui::TextLayout& layout, const std::vector<UifInlinePicture>& pictures, float font_height, glm::vec4 color) const {
     const auto& textures = model_->Textures();
     auto texture = [&](int index) {
         if (index < 0 || index >= static_cast<int>(textures.size())) {
@@ -193,7 +202,15 @@ void UifView::DrawInlinePictures(ui::UiBatch& batch, const UiCanvas& canvas, con
             if (g.glyph) {
                 continue;
             }
-            const glm::vec2 centre(g.position.x + g.size.x * 0.5f, g.position.y + style.font_height * cap_middle);
+            if (g.picture < 0 || static_cast<size_t>(g.picture) >= pictures.size()) {
+                continue;
+            }
+            const UifInlinePicture& picture = pictures[static_cast<size_t>(g.picture)];
+            if (picture.texture < 0) {
+                continue;
+            }
+            const float height = font_height / std::max(0.05f, picture.body_height);
+            const glm::vec2 centre(g.position.x + g.size.x * 0.5f, g.position.y + font_height * cap_middle);
             const glm::vec2 half(height * picture.width * 0.5f, height * 0.5f);
             const glm::vec2 p0 = canvas.ToTarget(centre - half);
             const glm::vec2 p1 = canvas.ToTarget(centre + half);
@@ -221,12 +238,51 @@ std::optional<glm::vec2> UifView::TextSpan(uint16_t id) const {
     return index >= 0 && index < static_cast<int>(text_spans_.size()) ? text_spans_[index] : std::nullopt;
 }
 
+std::optional<glm::vec4> UifView::TextRect(uint16_t id) const {
+    const int index = model_ ? model_->IndexOfId(id) : -1;
+    return index >= 0 && index < static_cast<int>(text_rects_.size()) ? text_rects_[index] : std::nullopt;
+}
+
+std::optional<glm::vec4> UifView::MeasureText(uint16_t id, std::string_view text, int language, UiFontType type, float scale) const {
+    const int index = model_ && assets_ ? model_->IndexOfId(id) : -1;
+    if (index < 0) return std::nullopt;
+    const ui::UifNode& node = model_->Nodes()[index];
+    UiFont* font = assets_->Font(type, language);
+    if (!font) return std::nullopt;
+    std::vector<World> cache(model_->Nodes().size());
+    const World& world = Resolve(index, cache, 1.0f, glm::vec2(0.0f));
+    const glm::vec2 own = states_[index].scale;
+    const float text_scale = std::sqrt(std::abs(glm::determinant(glm::mat2(world.transform)))) / std::max(1e-4f, std::sqrt(std::abs(own.x * own.y))) * scale;
+    ui::TextStyle style;
+    style.font = &font->font;
+    if (const UiFontStyle* s = assets_->FontStyleByHash(node.font_name, language)) {
+        style.font_width = s->width;
+        style.font_height = s->height;
+        style.text_space = s->text_space;
+        style.line_space = s->line_space;
+    }
+    style.font_width *= text_scale;
+    style.font_height *= text_scale;
+    style.text_space *= text_scale;
+    const ui::TextLayout layout = ui::LayoutText(text, style, 0.0f);
+    float top = 1e9f;
+    float bottom = -1e9f;
+    for (const ui::TextLine& line : layout.lines) {
+        for (const ui::LaidGlyph& g : line.glyphs) {
+            top = std::min(top, g.position.y);
+            bottom = std::max(bottom, g.position.y + g.size.y);
+        }
+    }
+    return glm::vec4(layout.width, layout.line_height, top, bottom);
+}
+
 void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, float root_alpha, glm::vec2 root_offset) {
     if (!model_ || !assets_) {
         return;
     }
     const auto& nodes = model_->Nodes();
     text_spans_.resize(nodes.size());
+    text_rects_.assign(nodes.size(), std::nullopt);
     std::vector<World> cache(nodes.size());
     std::vector<int> order;
     for (size_t i = 0; i < nodes.size(); ++i) {
@@ -278,7 +334,7 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
             }
             batch.Draw(vertices, params, ui::UiShade::Material, blend);
         } else if (state.text && !state.text->empty()) {
-            const int font_language = language;
+            const int font_language = state.font_language.value_or(language);
             const UiFontStyle* style = assets_->FontStyleByHash(node.font_name, font_language);
             const UiFontType type = state.font_type.value_or(style && style->name.starts_with("sbt") ? UiFontType::Movie : UiFontType::System);
             UiFont* font = assets_->Font(type, font_language);
@@ -299,12 +355,11 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
             text_style.text_space *= text_scale;
             text_style.line_space *= text_scale;
             if (state.text_line_pitch) text_style.line_space = *state.text_line_pitch - text_style.font_height * font->font.LineFactor();
-            const UifInlinePicture* picture = state.inline_picture && state.inline_picture->texture >= 0 ? &*state.inline_picture : nullptr;
-            // the picture's disc or keycap is one em high, with a quarter em of space on both sides
-            const float picture_height = picture ? text_style.font_height / std::max(0.05f, picture->body_height) : 0.0f;
-            if (picture) {
-                text_style.inline_advance = picture_height * picture->body_width + 0.5f * text_style.font_height;
+            const std::vector<UifInlinePicture>& pictures = state.inline_pictures;
+            for (const UifInlinePicture& picture : pictures) {
+                text_style.inline_advances.push_back(text_style.font_height / std::max(0.05f, picture.body_height) * picture.body_width + 0.5f * text_style.font_height);
             }
+            if (!pictures.empty()) text_style.inline_advance = text_style.inline_advances.front();
             const glm::vec2 a = canvas.FromUnits(Apply(world.transform, glm::vec2(node.box_min) * node.size));
             const glm::vec2 b = canvas.FromUnits(Apply(world.transform, glm::vec2(node.box_max) * node.size));
             const glm::vec2 lo = (glm::min(a, b) - canvas.origin) / canvas.scale;
@@ -320,9 +375,24 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
                     text_style.font_height *= fit;
                     text_style.text_space *= fit;
                     text_style.line_space *= fit;
+                    text_style.inline_advance *= fit;
+                    for (float& advance : text_style.inline_advances) advance *= fit;
                     layout = ui::LayoutText(*state.text, text_style, wrap);
                 }
                 if (layout.rtl && state.mirror_rtl) hi.x = end;
+            }
+            if (state.text_fit) {
+                const float room = *state.text_fit;
+                if (room > 0.0f && layout.width > room) {
+                    const float fit = room / layout.width;
+                    text_style.font_width *= fit;
+                    text_style.font_height *= fit;
+                    text_style.text_space *= fit;
+                    text_style.line_space *= fit;
+                    text_style.inline_advance *= fit;
+                    for (float& advance : text_style.inline_advances) advance *= fit;
+                    layout = ui::LayoutText(*state.text, text_style, wrap);
+                }
             }
             const ui::TextAlign h = HorizontalAlign(node);
             const ui::TextAlign v = VerticalAlign(node);
@@ -379,9 +449,19 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
                 const float units = UiCanvas::kUnit * std::max(1e-4f, glm::length(glm::vec2(world.transform[0])));
                 text_spans_[index] = left <= right ? std::optional<glm::vec2>(glm::vec2(left - origin, right - origin) / units) : std::nullopt;
             }
+            {
+                glm::vec4 rect(1e9f, 1e9f, -1e9f, -1e9f);
+                for (const ui::TextLine& line : layout.lines) {
+                    for (const ui::LaidGlyph& g : line.glyphs) {
+                        rect = glm::vec4(glm::min(glm::vec2(rect), g.position), glm::max(glm::vec2(rect.z, rect.w), g.position + g.size));
+                    }
+                }
+                if (rect.x <= rect.z) text_rects_[index] = rect;
+            }
             DrawText(batch, canvas, *font, layout, world.color, blend);
-            if (picture) {
-                DrawInlinePictures(batch, canvas, *font, text_style, layout, *picture, picture_height, world.color);
+            if (!pictures.empty()) {
+                const float shown = layout.line_height / std::max(0.01f, font->font.LineFactor());
+                DrawInlinePictures(batch, canvas, *font, layout, pictures, shown > 0.0f ? shown : text_style.font_height, world.color);
             }
         }
     }

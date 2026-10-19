@@ -1,4 +1,4 @@
-# The Extras page's third person row with a pad: the cursor reaches it past the free camera and photo mode rows (greyed
+# The Extras tab's third person row with a pad: the cursor reaches it past the free camera and photo mode rows (greyed
 # headless; the archive row before them), right turns it on (the game logs `third person: on`) and pt.ini gets [camera] third_person = 1.
 # pt.exe --headless --virtual-pads --audio-offline --no-save --settings <empty pt.ini> --frames 4000 --input-script tests/pad/third_person_menu.txt
 10 pattach 0 ps4
@@ -10,40 +10,28 @@
 20 swait 40
 20 sexpect pcrow pc_display_mode
 20 stap 0 r1
-20 swait 4
-20 sexpect pcrow pc_volume
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
+20 swait 10
+20 sexpect pctab pc_section_upscaling 0
+20 sui pcfocus pc_dead_zone
 20 swait 4
 20 sexpect pcrow pc_dead_zone
-20 stap 0 down
+20 sui pcfocus pc_reset
 20 swait 4
 20 sexpect pcrow pc_reset
-20 stap 0 down
+20 sui pcfocus pc_loop_browser
 20 swait 4
-20 sexpect pcrow pc_extras
-20 stap 0 cross
-20 swait 20
+20 sexpect pctab pc_extras 0
 20 sexpect pcrow pc_loop_browser
-20 stap 0 down
+20 sui pcfocus pc_archive
 20 swait 4
 20 sexpect pcrow pc_archive
-20 stap 0 down
+20 sui pcfocus pc_freecam
 20 swait 4
 20 sexpect pcrow pc_freecam
-20 stap 0 down
+20 sui pcfocus pc_photo_mode
 20 swait 4
 20 sexpect pcrow pc_photo_mode
-20 stap 0 down
+20 sui pcfocus pc_third_person
 20 swait 4
 20 sexpect pcrow pc_third_person
 20 sexpect pcvalue pc_third_person 0

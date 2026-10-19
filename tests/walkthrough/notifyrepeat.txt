@@ -1,0 +1,10 @@
+# one notice in the start room: shown and faded out there, then the door into the loop (a stage change); the log must show it once
+sstep 15
+sui notice pc_gameplus_notice 2
+swait 700
+slog
+goto 0 0 12.5
+swait 10
+sfree
+swait 900
+slog

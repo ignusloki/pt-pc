@@ -12,6 +12,7 @@
 #include <volk.h>
 
 #include "engine/render/upscale/frame_generation.h"
+#include "engine/render/upscale/metalfx_hdr.h"
 #include "engine/render/upscale/upscale.h"
 
 #include <algorithm>
@@ -680,11 +681,19 @@ private:
                 // the HUD-less copy of the previous and this frame, and the upscaler's depth and motion of this frame
                 const vk::Image& current = hudless_[current_];
                 const vk::Image& previous = hudless_[previous_];
-                interpolator.colorTexture = export_texture(current);
-                interpolator.prevColorTexture = export_texture(previous);
+                id<MTLTexture> native_current = export_texture(current);
+                id<MTLTexture> native_previous = export_texture(previous);
+                id<MTLTexture> native_output = export_texture(interp_);
+                const bool hdr = UsesHdrTransport();
+                if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous, prepare_.output_brightness)) {
+                    LogError("frame generation: encoding HDR input failed");
+                    return nullptr;
+                }
+                interpolator.colorTexture = hdr ? hdr_transport_.Current() : native_current;
+                interpolator.prevColorTexture = hdr ? hdr_transport_.Previous() : native_previous;
                 interpolator.depthTexture = export_texture(VkOf(prepare_.depth));
                 interpolator.motionTexture = export_texture(VkOf(prepare_.motion));
-                interpolator.outputTexture = export_texture(interp_);
+                interpolator.outputTexture = hdr ? hdr_transport_.Interpolated() : native_output;
                 // colour is already the jitter-resolved output of the temporal upscaler; these full-output-size frames are not
                 // jittered inputs, so do not apply the lower-resolution scene jitter to the frame interpolator
                 interpolator.jitterOffsetX = 0.0f;
@@ -696,9 +705,15 @@ private:
                 interpolator.farPlane = 100000.0f;
                 interpolator.fieldOfView = glm::degrees(prepare_.fov_y);
                 interpolator.aspectRatio = static_cast<float>(display_.width) / static_cast<float>(std::max(1u, display_.height));
-                interpolator.shouldResetHistory = reset_ ? YES : NO;
+                const bool brightness_changed = hdr && hdr_brightness_ != prepare_.output_brightness;
+                interpolator.shouldResetHistory = reset_ || brightness_changed ? YES : NO;
+                hdr_brightness_ = hdr ? prepare_.output_brightness : 0.0f;
                 reset_ = false;
                 [interpolator encodeToCommandBuffer:command];
+                if (hdr && !hdr_transport_.DecodeOutput(command, native_current, native_previous, native_output, prepare_.output_brightness)) {
+                    LogError("frame generation: decoding HDR output failed");
+                    return nullptr;
+                }
                 const VkDevice vk_device = ctx_.device;
                 const VkSemaphore vk_semaphore = completion_semaphore_;
                 const uint64_t vk_value = metal_signal_value_;
@@ -722,6 +737,10 @@ private:
             }
         }
         return nullptr;
+    }
+
+    bool UsesHdrTransport() const {
+        return ctx_.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT && format_ == VK_FORMAT_R16G16B16A16_SFLOAT;
     }
 
     bool CreateInterpolator(VkExtent2D render) {
@@ -750,10 +769,15 @@ private:
             descriptor.inputHeight = render.height;
             descriptor.outputWidth = display_.width;
             descriptor.outputHeight = display_.height;
-            id interpolator = [descriptor newFrameInterpolatorWithDevice:device];
+            id<MTLFXFrameInterpolator> interpolator = [descriptor newFrameInterpolatorWithDevice:device];
             [descriptor release];
             if (!interpolator) {
                 LogError("frame generation: MetalFX would not create the frame interpolator");
+                return false;
+            }
+            if (UsesHdrTransport() && !hdr_transport_.Init(device, display_.width, display_.height,
+                                                          interpolator.colorTextureUsage, interpolator.outputTextureUsage)) {
+                [interpolator release];
                 return false;
             }
             if (interpolator_) {
@@ -761,8 +785,10 @@ private:
             }
             interpolator_ = interpolator;
             interp_render_ = render;
+            hdr_brightness_ = 0.0f;
             LogInfo("frame generation: interpolator for {}x{} motion and depth -> {}x{} colour", render.width, render.height, display_.width,
                     display_.height);
+            if (UsesHdrTransport()) LogInfo("frame generation: HDR brightness travels in RGB with the display transfer; custom gain is restored after interpolation");
             return true;
         }
         return false;
@@ -775,6 +801,8 @@ private:
     }
 
     void DestroyTargets() {
+        hdr_transport_.Release();
+        hdr_brightness_ = 0.0f;
         for (vk::Image& image : hudless_) {
             ctx_.DestroyImage(image);
         }
@@ -797,6 +825,8 @@ private:
     vk::Context& ctx_;
     PFN_vkExportMetalObjectsEXT export_fn_ = nullptr;
     id interpolator_ = nil;
+    MetalFxHdrTransport hdr_transport_;
+    float hdr_brightness_ = 0.0f;
     id<MTLSharedEvent> event_ = nil;
     id<MTLCommandQueue> queue_ = nil;
     VkSemaphore input_semaphore_ = VK_NULL_HANDLE;

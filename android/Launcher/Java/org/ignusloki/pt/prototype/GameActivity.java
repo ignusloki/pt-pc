@@ -36,7 +36,7 @@ public final class GameActivity extends SDLActivity {
             UP = 4, DOWN = 5, LEFT = 6, RIGHT = 7, COLUMN = 8, INVERT_Y = 9, INVERT_X = 10;
     private final java.util.ArrayList<TouchControl> controls = new java.util.ArrayList<>();
     private final java.util.ArrayList<Stick> sticks = new java.util.ArrayList<>();
-    private int menuMode; // 0: gameplay, 1: original settings, 2: PC settings
+    private int menuMode; // 0: gameplay, 1: original settings, 2: PC columns, 3: PC tabs
     private Vibrator phoneVibrator;
     private boolean phoneRumbleForeground;
     private int phoneRumbleAmplitude;
@@ -218,9 +218,9 @@ public final class GameActivity extends SDLActivity {
         for (TouchControl view : controls) {
             int kind = view.kind;
             boolean visible = menu || kind == MENU || kind == ACCEPT || kind == ZOOM;
-            if (kind == COLUMN) visible = menuMode == 2;
+            if (kind == COLUMN) visible = menuMode >= 2;
             if (kind == INVERT_Y || kind == INVERT_X) visible = original;
-            if (kind == ZOOM && menuMode == 2) visible = false;
+            if (kind == ZOOM && menuMode >= 2) visible = false;
             view.setVisibility(visible ? View.VISIBLE : View.GONE);
             view.setAlpha(1f);
             view.downButton = -1;
@@ -234,7 +234,7 @@ public final class GameActivity extends SDLActivity {
                 case DOWN: title = original ? "Language\n▼" : "Down"; break;
                 case LEFT: title = original ? "Bright −" : "Left"; break;
                 case RIGHT: title = original ? "Bright +" : "Right"; break;
-                case COLUMN: title = "Column"; break;
+                case COLUMN: title = menuMode == 3 ? "Tab" : "Column"; break;
                 case INVERT_Y: title = "Flip Y"; break;
                 default: title = "Flip X";
             }

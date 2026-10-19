@@ -2,6 +2,8 @@
 #include "engine/render/texture_manager.h"
 #include "engine/render/vk_context.h"
 #include "engine/render/vk.h"
+#include "engine/render/vk/vk_device.h"
+#include "engine/render/gpu/gpu_vk_native.h"
 #include <cstdio>
 #include <fstream>
 
@@ -16,8 +18,9 @@ int main(int argc, char** argv) {
     pt::vk::Context ctx;
     if (!ctx.Init(nullptr, true)) return 2;
     pt::TextureManager textures;
-    if (!textures.Init(ctx)) return 2;
-    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]));
+    pt::gpu::vk::Device device(ctx);
+    if (!textures.Init(device)) return 2;
+    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]), pt::kEnhancedColourKinds);
     bool loaded = false;
     const uint32_t index = textures.LoadFox(qar, argv[4], &loaded);
     check(loaded, "original uploaded");
@@ -28,7 +31,7 @@ int main(int argc, char** argv) {
     set_info.bindingCount = 1; set_info.pBindings = &binding;
     VkDescriptorSetLayout result_layout;
     vkCreateDescriptorSetLayout(ctx.device, &set_info, nullptr, &result_layout);
-    const VkDescriptorSetLayout layouts[] = {textures.SetLayout(), result_layout};
+    const VkDescriptorSetLayout layouts[] = {pt::gpu::vk::Native(textures.BindingLayout()), result_layout};
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 4};
     VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout_info.setLayoutCount = 2; layout_info.pSetLayouts = layouts;
@@ -66,7 +69,7 @@ int main(int argc, char** argv) {
     vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
     auto sample = [&](uint32_t scale, const char* name) {
         ctx.Submit([&](VkCommandBuffer cmd) {
-            const VkDescriptorSet sets[] = {textures.Set(), result};
+            const VkDescriptorSet sets[] = {pt::gpu::vk::Native(textures.BindingSet()), result};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 2, sets, 0, nullptr);
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &index);
@@ -86,7 +89,7 @@ int main(int argc, char** argv) {
     sample(1, "original descriptor");
     textures.SetEnhancedTextures(true); sample(2, "enhanced descriptor");
     textures.SetAnisotropy(16); sample(2, "enhanced descriptor after anisotropy");
-    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]));
+    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]), pt::kEnhancedColourKinds);
     sample(2, "same texture configuration keeps enhanced descriptors active");
     textures.SetEnhancedTextures(false); sample(1, "original descriptor restored");
     textures.SetEnhancedTextures(true); sample(2, "enhanced descriptor restored");

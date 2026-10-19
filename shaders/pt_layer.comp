@@ -1,0 +1,393 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#ifndef PT_D3D12
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#endif
+#include "common.glsl"
+#include "rt_shadow.glsl"
+#include "rt_full.glsl"
+#include "pt_path.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+#include "rt_full_images.glsl"
+#include "pt_images.glsl"
+
+View v;
+
+float Cutoff() {
+    return 1.0e-4 / max(v.exposure.x, 1.0e-12);
+}
+
+vec3 Clamp(vec3 c) {
+    if (any(isnan(c)) || any(isinf(c))) {
+        return vec3(0.0);
+    }
+    float bright = Luma709(c) * v.exposure.x;
+    return bright > pass.f0.w ? c * (pass.f0.w / bright) : c;
+}
+
+float LayerEnd(float t) {
+    return t - max(1.0e-3, 2.0e-4 * t);
+}
+
+bool FindGlass(vec3 eye, vec3 dir, float t_end, inout float t_glass, out RtSurfaceHit glass_hit) {
+    float t_start = 0.0;
+    for (int k = 0; k < 3; ++k) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, kPtLayerMask, eye, t_start, dir, t_end);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) {
+            break;
+        }
+        float t = rayQueryGetIntersectionTEXT(rq, true);
+        uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                        rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+        if (materials[hs.material].kind == KIND_GLASS) {
+            glass_hit = hs;
+            t_glass = t;
+            return true;
+        }
+        t_start = t + 1.0e-3;
+    }
+    return false;
+}
+
+void Trace(ivec2 pixel, ivec2 size) {
+    g_pt_first_lights = 4u;
+    g_pt_seen_emissive = true;
+    uint rng = RtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u) ^ RtHash(uint(pass.f0.z) * 26699u + 23u);
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    vec3 eye = v.eye.xyz;
+    vec2 ndc = PixelNdc(v, vec2(pixel) + 0.5);
+    vec3 dir = normalize(mat3(v.inv_view) * normalize(vec3(ndc * v.projection_param.xy, 1.0)));
+    float t_surface = 200.0;
+    vec3 world = vec3(0.0);
+    if (depth > 0.0) {
+        vec3 c = ViewPosition(v, ndc, depth);
+        world = (v.inv_view * vec4(c, 1.0)).xyz;
+        t_surface = length(world - eye);
+    }
+    float reach = pass.f0.x;
+    uint bounces = uint(pass.f0.y + 0.5);
+    vec4 result = vec4(0.0);
+    float t_mirror = t_surface;
+    RtSurfaceHit mirror_hit;
+    bool mirror = false;
+    {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, 4u, eye, 0.0, dir, LayerEnd(t_surface));
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+            uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                            rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+            if (materials[hs.material].kind == KIND_PARALLAX) {
+                mirror = true;
+                mirror_hit = hs;
+                t_mirror = rayQueryGetIntersectionTEXT(rq, true);
+            }
+        }
+    }
+    RtSurfaceHit glass_hit;
+    float t_glass = t_mirror;
+    bool glass = FindGlass(eye, dir, LayerEnd(t_mirror), t_glass, glass_hit);
+    float first;
+    if (glass) {
+        Material m = materials[glass_hit.material];
+        vec3 I = dir;
+        vec3 Rw = reflect(I, glass_hit.normal);
+        vec3 h = Rw - I;
+        float nv = Saturate(dot(h * inversesqrt(max(dot(h, h), 1.0e-12)), Rw));
+        float schlick = exp2(nv * (-5.5546875 * nv - 6.984375));
+        float f0 = Img(RES_MATERIAL, SMP_POINT_CLAMP, vec2(m.indices.x, 0.75)).x;
+        float F = Saturate(f0 + schlick - f0 * schlick);
+        float a = Saturate(F * textureLod(PT_TEX2D(m.albedo), glass_hit.uv, 0.0).x);
+        vec3 p = eye + dir * t_glass;
+        vec3 d = Rw;
+        g_pt_first_mask = kPtSurfaceMask | 2u;
+        vec3 L = Clamp(PtTracePath(p + glass_hit.normal * 0.002, d, vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
+        g_pt_first_mask = kPtSurfaceMask;
+        vec3 tint = (1.0 - F) * m.albedo_factor.w * max(m.albedo_factor.rgb, vec3(0.0));
+        if (Luma709(tint) > 1.0e-4 && a > 0.0) {
+            vec3 Ng = dot(glass_hit.normal, dir) > 0.0 ? -glass_hit.normal : glass_hit.normal;
+            PtMaterial s;
+            s.albedo = tint;
+            s.roughness = 1.0;
+            s.specular = 0.0;
+            s.material_u = m.indices.x;
+            s.translucency = 0.0;
+            PtMaterialRows(s);
+            vec3 G = PtNextEventN(p, Ng, -dir, s, p + Ng * 0.002, pass.ids.y, Cutoff(), 4u, rng);
+            float unused;
+            g_pt_seen_emissive = false;
+            G += tint * Clamp(PtTracePath(p + Ng * 0.002, PtCosineDirection(Ng, vec2(RtRandom(rng), RtRandom(rng))), vec3(1.0), bounces, reach,
+                                          2.0, pass.ids.y, Cutoff(), rng, unused));
+            g_pt_seen_emissive = true;
+            L += Clamp(G);
+        }
+        result = vec4(L, 4.0 + a);
+    } else if (mirror) {
+        Material m = materials[mirror_hit.material];
+        vec3 p = eye + dir * t_mirror;
+        vec3 N = mirror_hit.normal;
+        vec4 dirt = m.params.w > 0.5 ? textureLod(PT_TEX2D(m.aux2), clamp(mirror_hit.uv, 0.0, 1.0), 0.0) : vec4(0.0);
+        g_pt_first_mask = kPtSurfaceMask | 2u;
+        vec3 R = Clamp(PtTracePath(p + N * 0.002, reflect(dir, N), vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
+        g_pt_first_mask = kPtSurfaceMask;
+        vec3 D = vec3(0.0);
+        if (dirt.a > 0.02) {
+            PtMaterial s;
+            s.albedo = SrgbDecode(dirt.rgb);
+            s.roughness = 1.0;
+            s.specular = 0.0;
+            s.material_u = m.indices.x;
+            s.translucency = 0.0;
+            PtMaterialRows(s);
+            D = PtNextEventN(p, N, -dir, s, p + N * 0.002, pass.ids.y, Cutoff(), 4u, rng);
+            g_pt_seen_emissive = false;
+            D += s.albedo * Clamp(PtTracePath(p + N * 0.002, PtCosineDirection(N, vec2(RtRandom(rng), RtRandom(rng))), vec3(1.0), bounces, reach,
+                                              2.0, pass.ids.y, Cutoff(), rng, first));
+            g_pt_seen_emissive = true;
+        }
+        float e = max(v.exposure.x, 1.0e-12);
+        vec3 mixed = mix(SrgbEncode(min(R * e, vec3(1.0))), min(D * e, vec3(1.0)), Saturate(dirt.a));
+        result = vec4(SrgbDecode(mixed) / e, 6.0 + 1.0);
+        if ((uint(pass.f1.w + 0.5) & 2u) != 0u) {
+            result.rgb = mix(R, D, Saturate(dirt.a));
+        }
+    } else if (depth > 0.0 && (uint(pass.f1.w + 0.5) & 1u) != 0u) {
+        vec3 n_view = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+        vec3 N = normalize(mat3(v.inv_view) * n_view);
+        float roughness = ImgFetch(IMG_MATERIAL, pixel).x;
+        vec3 c = ViewPosition(v, ndc, depth);
+        vec3 ng = normalize(mat3(v.inv_view) * RtFaceNormal(v, pixel, size, c));
+        float a = PtCoatAmount(N, ng, n_view, pass.f1.xyz, roughness, pass.f2.x, pass.f2.y);
+        if (a > 0.0) {
+            vec3 V = -dir;
+            vec3 d = PtCoatDirection(N, ng, V, roughness, vec2(RtRandom(rng), RtRandom(rng)));
+            if (dot(d, ng) <= 0.0) {
+                d = normalize(d - 2.0 * dot(d, ng) * ng);
+            }
+            vec3 L = Clamp(PtTracePath(world + ng * max(0.003, 0.0015 * c.z), d, vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
+            bool hit = first < reach || max(L.r, max(L.g, L.b)) > 0.0;
+            result = hit ? vec4(L, 2.0 + a) : vec4(0.0, 0.0, 0.0, 2.0);
+        }
+    }
+    float peak = max(result.r, max(result.g, result.b));
+    vec3 stored = glass ? (peak > 60000.0 ? result.rgb * (60000.0 / peak) : result.rgb) : min(result.rgb, vec3(64.0));
+    imageStore(pt_layer_raw, pixel, vec4(stored, result.a));
+}
+
+bool PreviousSecond() {
+    return (pass.ids.w & 1u) != 0u;
+}
+
+void Temporal(ivec2 pixel, ivec2 size) {
+    vec4 raw = imageLoad(pt_layer_raw, pixel);
+    float kind = floor(raw.a * 0.5);
+    bool second = !PreviousSecond();
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    vec2 ndc = (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
+    float t_layer = 0.0;
+    if (kind >= 2.0 && depth <= 0.0) {
+        vec3 dir = normalize(mat3(v.inv_view) * normalize(vec3(ndc * v.projection_param.xy, 1.0)));
+        RtSurfaceHit hit;
+        t_layer = -1.0;
+        if (!FindGlass(v.eye.xyz, dir, 200.0, t_layer, hit)) {
+            t_layer = 0.0;
+        }
+    }
+    if (kind < 1.0 || (depth <= 0.0 && t_layer <= 0.0)) {
+        if (second) imageStore(pt_layer_history1, pixel, vec4(raw.rgb, 1.0)); else imageStore(pt_layer_history0, pixel, vec4(raw.rgb, 1.0));
+        return;
+    }
+    float roughness = depth > 0.0 ? ImgFetch(IMG_MATERIAL, pixel).x : 0.0;
+    float max_frames = kind >= 3.0 ? 6.0 : kind >= 2.0 ? 16.0 : mix(8.0, 24.0, Saturate(roughness / 0.5));
+    vec3 lo = raw.rgb;
+    vec3 hi = raw.rgb;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec4 c = imageLoad(pt_layer_raw, clamp(pixel + ivec2(x, y), ivec2(0), size - 1));
+            if (floor(c.a * 0.5) == kind) {
+                lo = min(lo, c.rgb);
+                hi = max(hi, c.rgb);
+            }
+        }
+    }
+    vec3 spread = hi - lo;
+    lo = max(vec3(0.0), lo - 0.5 * spread);
+    hi = hi + 0.5 * spread;
+    vec3 world;
+    if (depth > 0.0) {
+        float z = ViewZ(v, depth);
+        world = (v.inv_view * vec4(ndc * v.projection_param.xy * z, z, 1.0)).xyz;
+    } else {
+        world = v.eye.xyz + normalize(mat3(v.inv_view) * normalize(vec3(ndc * v.projection_param.xy, 1.0))) * t_layer;
+    }
+    bool reflected = kind >= 2.0;
+    if (reflected) {
+        vec3 dir = normalize(mat3(v.inv_view) * normalize(vec3(ndc * v.projection_param.xy, 1.0)));
+        float t_end = depth > 0.0 ? LayerEnd(length(world - v.eye.xyz)) : 200.0;
+        float t_hit = -1.0;
+        RtSurfaceHit hit;
+        if (kind >= 3.0) {
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, 4u, v.eye.xyz, 0.0, dir, t_end);
+            while (rayQueryProceedEXT(rq)) {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                    rayQueryConfirmIntersectionEXT(rq);
+                }
+            }
+            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+                t_hit = rayQueryGetIntersectionTEXT(rq, true);
+                hit = RtFullSurface(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true), rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
+                                    rayQueryGetIntersectionBarycentricsEXT(rq, true), rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+            }
+        } else if (!FindGlass(v.eye.xyz, dir, t_end, t_hit, hit)) {
+            t_hit = -1.0;
+        }
+        if (t_hit > 0.0) {
+            vec3 p = v.eye.xyz + dir * t_hit;
+            vec3 r = reflect(dir, hit.normal);
+            float t_far = 100.0;
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsOpaqueEXT, kPtSurfaceMask | 2u, p + hit.normal * 0.002, 0.0, r, t_far);
+            while (rayQueryProceedEXT(rq)) {
+            }
+            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+                t_far = rayQueryGetIntersectionTEXT(rq, true);
+            }
+            world = v.eye.xyz + dir * (t_hit + t_far);
+        } else {
+            reflected = false;
+        }
+    }
+    vec3 history = vec3(0.0);
+    float count = 0.0;
+    vec4 previous = pass.m * vec4(world, 1.0);
+    if ((pass.ids.w & 2u) == 0u && previous.w > 1.0e-4) {
+        vec2 at = ((previous.xy / previous.w - pass.f2.zw) * 0.5 + 0.5) * v.viewport.xy - 0.5;
+        ivec2 base = ivec2(floor(at));
+        vec2 f = at - vec2(base);
+        float weights[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        float sum = 0.0;
+        vec3 color_sum = vec3(0.0);
+        float count_sum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 p = base + offsets[i];
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) {
+                continue;
+            }
+            float previous_z = PreviousSecond() ? imageLoad(rt_depth_history1, p).x : imageLoad(rt_depth_history0, p).x;
+            if (reflected) {
+            } else if (depth <= 0.0) {
+                if (previous_z > 0.0) {
+                    continue;
+                }
+            } else if (!(previous_z > 0.0) || abs(previous_z - previous.w) > 0.03 * previous.w) {
+                continue;
+            }
+            vec4 h = PreviousSecond() ? imageLoad(pt_layer_history1, p) : imageLoad(pt_layer_history0, p);
+            sum += weights[i];
+            color_sum += weights[i] * h.rgb;
+            count_sum += weights[i] * h.a;
+        }
+        if (sum > 0.05) {
+            history = clamp(color_sum / sum, lo, hi);
+            count = count_sum / sum;
+        }
+    }
+    if (kind < 2.0 && raw.a <= 2.0) {
+        vec4 kept = vec4(history, count);
+        if (second) imageStore(pt_layer_history1, pixel, kept); else imageStore(pt_layer_history0, pixel, kept);
+        return;
+    }
+    count = min(count + 1.0, max_frames);
+    vec4 result = vec4(mix(history, raw.rgb, 1.0 / count), count);
+    if (second) imageStore(pt_layer_history1, pixel, result); else imageStore(pt_layer_history0, pixel, result);
+}
+
+void Spatial(ivec2 pixel, ivec2 size) {
+    vec4 raw = imageLoad(pt_layer_raw, pixel);
+    float kind = floor(raw.a * 0.5);
+    bool written_second = !PreviousSecond();
+    vec4 center = written_second ? imageLoad(pt_layer_history1, pixel) : imageLoad(pt_layer_history0, pixel);
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    bool background = depth <= 0.0;
+    if (kind < 1.0 || (background && kind < 2.0)) {
+        imageStore(pt_layer_raw, pixel, vec4(center.rgb, raw.a));
+        return;
+    }
+    bool pane = kind >= 2.0 && kind < 3.0;
+    float z = background ? 1.0 : ViewZ(v, depth);
+    vec3 n = background ? vec3(0.0, 0.0, -1.0) : DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+    float roughness = background ? 0.0 : ImgFetch(IMG_MATERIAL, pixel).x;
+    int radius = kind >= 3.0 ? 1 : kind >= 2.0 ? 2 : (roughness > 0.6 ? 2 : 1);
+    float l_center = Luma709(center.rgb);
+    vec3 sum = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
+            ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+            float code = imageLoad(pt_layer_raw, p).a;
+            if (floor(code * 0.5) != kind) {
+                continue;
+            }
+            if (kind < 2.0 && code <= 2.0 && (x != 0 || y != 0)) {
+                continue;
+            }
+            float dk = ImgFetch(IMG_DEPTH, p).x;
+            if (!pane && (dk <= 0.0) != background) {
+                continue;
+            }
+            vec3 c = written_second ? imageLoad(pt_layer_history1, p).rgb : imageLoad(pt_layer_history0, p).rgb;
+            float w = exp(-float(x * x + y * y) / 4.0);
+            if (x != 0 || y != 0) {
+                if (!background && !pane) {
+                    w *= exp(-abs(ViewZ(v, dk) - z) / (0.01 * z + 0.002));
+                    w *= pow(max(dot(n, DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz)), 0.0), 32.0);
+                }
+                w *= exp(-abs(Luma709(c) - l_center) / (0.5 * l_center + 1.0e-4));
+            }
+            sum += w * c;
+            weight_sum += w;
+        }
+    }
+    imageStore(pt_layer_raw, pixel, vec4(weight_sum > 1.0e-6 ? sum / weight_sum : center.rgb, raw.a));
+}
+
+void main() {
+    v = frame.views[pass.ids.x];
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(v.viewport.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+    if (pass.ids.z == 0u) {
+        Trace(pixel, size);
+    } else if (pass.ids.z == 1u) {
+        Temporal(pixel, size);
+    } else {
+        Spatial(pixel, size);
+    }
+}

@@ -1,0 +1,10 @@
+# Coffee with Lisa (Game+ tier 4): one f160 loop's rush. Into the corridor, wait for Lisa to appear, walk at her and face her
+# until she dashes, and let her reach the player
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 3.0
+slisa 7200
+glisa 600
+flisa 200
+swait 300
+slog

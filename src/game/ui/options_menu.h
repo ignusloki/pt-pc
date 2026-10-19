@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -10,6 +11,7 @@
 #include "engine/platform/input.h"
 #include "engine/ui/uia.h"
 #include "game/ui/archive_view.h"
+#include "game/ui/dialog_view.h"
 #include "game/ui/pc_settings_page.h"
 #include "game/ui/uia_player.h"
 #include "game/ui/ui_icons.h"
@@ -33,18 +35,28 @@ struct MenuInput {
     bool back = false;
     bool open_pc = false;
     bool switch_column = false;
-    // L1 (the menu's H key): the street walk's "Return to the house" on the original page
+    bool tab_prev = false;
+    bool tab_next = false;
+    bool tab_from_e = false;
+    bool donate = false;
     bool street_return = false;
     uint32_t held_dirs = 0;
     // Discrete touch-menu taps do not need a held/released gamepad cycle.
     uint32_t pressed_dirs = 0;
+    uint32_t music = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     bool click = false;
     bool right_click = false;
+    float wheel = 0.0f;
 };
 
-MenuInput MapMenuInput(const InputState& input, uint32_t previous_held);
+inline constexpr uint32_t kMenuMusicBack = kMusicPressBack;
+inline constexpr uint32_t kMenuMusicForward = kMusicPressForward;
+inline constexpr uint32_t kMenuMusicRestart = kMusicPressRestart;
+inline constexpr uint32_t kMenuMusicLoop = kMusicPressLoop;
+
+MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t previous_dirs = 0);
 
 class OptionsMenu {
 public:
@@ -57,6 +69,7 @@ public:
     void SetPcSource(PcSettingsSource* source) { pc_source_ = source; }
     Page CurrentPage() const { return page_; }
     const PcSettingsPage& PcPage() const { return pc_; }
+    PcSettingsPage& PcPageForScript() { return pc_; }
     void Update(Game& game, const MenuInput& input, float dt);
     void Draw(ui::UiBatch& batch, const UiCanvas& canvas);
     void AdvancePresentation(float dt);
@@ -66,19 +79,17 @@ public:
     bool FirstBoot() const { return first_boot_; }
     bool InputReady() const { return state_ == State::Active && switch_frame_ < 0.0f; }
     void OpenPcSettings(Game& game);
+    bool PictureFullScreen() const { return state_ == State::Active && page_ == Page::Pc && pc_.FullScreen(); }
     bool TakeClosed() { return std::exchange(just_closed_, false); }
     bool TakeResume() { return std::exchange(resume_, false); }
-    // "Return to the house" was confirmed on the original page during the street walk: the menu closes, then the walk ends
     bool TakeStreetReturn() { return std::exchange(street_return_, false); }
     int TextLanguage() const { return text_language_; }
     int Selector() const { return selector_; }
-    // the device whose buttons the prompts show (the input device's pick), and the family they last showed
     void SetPromptStyle(const PromptStyle& style) { prompt_style_ = style; }
     PromptDevice Prompts() const { return shown_prompts_; }
-    // the option screen's model (with the PC page's nodes), for the photo mode's panel drawn in its look
     const ui::UifModel* Model() const { return model_; }
-    // the selection bar's alpha this many 60 Hz frames after the cursor moved (the subtitle selection's flash)
     float SelectionFlash(float frame) const;
+    std::string DialogKind(int* focus) const;
 
 private:
     struct Animation {
@@ -122,7 +133,8 @@ private:
     uint16_t quit_label_ = 0;
     bool quit_confirming_ = false;
     bool quit_focused_ = false;
-    // the street walk's "Return to the house" line (shown only while Game::StreetWalkActive)
+    dialog::Nav ask_nav_;
+    float ask_flash_ = 0.0f;
     uint16_t street_label_ = 0;
     uint16_t street_icon_ = 0;
     uint16_t street_glow_ = 0;
@@ -131,11 +143,11 @@ private:
     bool street_shown_ = false;
     bool street_confirming_ = false;
     bool street_return_ = false;
-    void StreetReturn(Game& game);
+    bool leave_date_ = false;
+    void OpenAsk(Game& game, bool quit, uint32_t held);
+    void UpdateAsk(Game& game, const MenuInput& input, float dt);
     uint16_t entry_icon_ = 0;
     uint16_t entry_glow_ = 0;
-    // PC: the selection bar behind PC Settings, Back and Quit while the pointer is over them (the language list's bar), so
-    // they read as buttons; Button names which one the pointer is over
     enum class Button { None, PcSettings, Back, Quit, StreetReturn };
     Button ButtonAt(glm::vec2 units) const;
     uint16_t entry_bar_ = 0;
@@ -170,13 +182,13 @@ private:
     void CancelPhotoZoom();
     bool zoom_released_ = false;
     bool zoom_started_ = false;
+    float zoom_elapsed_ = 0.0f;
     decltype(ui::UifMaterial::textures) fragment_brain_textures_;
     decltype(ui::UifMaterial::textures) clean_brain_textures_;
     bool close_pending_ = false;
     bool resume_ = false;
     bool resume_sent_ = false;
     float clock_ = 0.0f;
-    // the black at the sides of a screen wider than 16:9 (ultrawide), faded in and out with the menu
     float pillar_alpha_ = 0.0f;
 };
 

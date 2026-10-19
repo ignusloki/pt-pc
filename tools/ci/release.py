@@ -1,6 +1,6 @@
-"""Builds a release on the runner PC:
+"""
 
-    python tools/ci/release.py --dest C:\\Projects\\pt-port-rt-releases --out <dir> --version 1.0.0
+    python tools/ci/release.py --dest <releases folder> --out <dir> --version 1.0.0
 
 It builds the developer build pt, the release game pt_release (PT_RELEASE_LOCKS, the loop browser locked until the game is
 finished once), its portable zip, the release setup. Update metadata comes directly from the GitHub Releases API
@@ -13,10 +13,16 @@ The updater discovers its release asset. --linux-only skips the Windows steps an
 
 The large files stay on the PC under --dest/<stamp> (or --dest/--name); --out gets a short report (release.json, release.log).
 --version is this release's version (PT_VERSION, shown by the game and the setup and compared by the update check).
-Builds go through the machine-wide limiter C:/Projects/pt-port/shared/ptslot.py.
+PT_SLOT names a wrapper script the builds go through.
+
+The in-game update (docs/updates.md, "Signed update manifest"): after the setups are built and stamped, the update manifest (the
+version, each setup's size and SHA-256 before the trailer, the files its payload installs and where they lie) is signed with the
+release key (tools/ci/release_signing.py, --signing-keys, default %USERPROFILE%\\pt-release-keys) and appended with its signature
+to each setup (tools/ci/signed_trailer.py). The release carries no separate manifest file: only the setups, the portable zips and
+the macOS zips. A run without the key fails; the key is never copied into the release or the repository.
 
 The installer needs the LGPL LibOrbisPkg source: --liborbis, else the first LibOrbisPkg-* folder under this repository's
-dump/ or C:\\Projects\\pt-port-rt\\dump or C:\\Projects\\pt-port\\dump. It is copied into build/, patched there
+dump/ (one or two levels down). It is copied into build/, patched there
 (tools/patch_liborbis_readers.py, net10.0) and the extraction helper is published from it (dotnet publish, win-x64).
 """
 from __future__ import annotations
@@ -50,6 +56,8 @@ p.add_argument("--linux-sysroot", type=pathlib.Path, default=pathlib.Path(os.env
                help="the Debian sysroot of tools/linux/make_sysroot.py (default: PT_LINUX_SYSROOT or pt-linux-env/sysroot beside the checkout)")
 p.add_argument("--linux-only", action="store_true", help="only the Linux setup (--linux-setup), from the Windows package a previous run left under --name")
 p.add_argument("--game", type=pathlib.Path, default=REPO / "game" / "CUSA01127", help="game files, for the loop browser previews")
+p.add_argument("--signing-keys", type=pathlib.Path, default=None,
+               help="the folder with the release signing key (default: PT_RELEASE_KEYS or %%USERPROFILE%%\\pt-release-keys)")
 a = p.parse_args()
 if a.linux_only and not (a.linux_setup and a.name):
     sys.exit("--linux-only needs --linux-setup and --name (the folder of the Windows run)")
@@ -58,14 +66,14 @@ if not re.fullmatch(r"\d+(\.\d+)*(-[0-9A-Za-z.]+)?", a.version):
 if a.legacy_update_manifest and a.version != "1.0.2":
     sys.exit("--legacy-update-manifest is only allowed for the 1.0.2 transition")
 os.environ["PT_VERSION"] = a.version
-PTSLOT = pathlib.Path(r"C:\Projects\pt-port\shared\ptslot.py")
+SLOT = pathlib.Path(os.environ["PT_SLOT"]) if os.environ.get("PT_SLOT") else None
 
 
 def build(target):
-    """a build through the machine-wide limiter (docs: phase 2 rules), 4 jobs"""
+    """a build, 4 jobs"""
     argv = ["cmd", "/c", r"tools\build_pt.bat", "release", "release", target]
     env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL="4", NUMBER_OF_PROCESSORS="4")
-    return [sys.executable, str(PTSLOT), "build", "--", *argv] if PTSLOT.exists() else argv, env
+    return [sys.executable, str(SLOT), "build", "--", *argv] if SLOT and SLOT.exists() else argv, env
 
 
 a.out.mkdir(parents=True, exist_ok=True)
@@ -105,12 +113,16 @@ def build_linux(target):
     # forward slashes: the sysroot path reaches pkg-config's output, which CMake parses (a backslash is an escape there)
     deps = pathlib.Path(os.environ.get("PT_DEPS") or BUILD / "_deps").as_posix()
     env = dict(os.environ, PT_LINUX_SYSROOT=a.linux_sysroot.as_posix(), PT_DEPS=deps)
-    return [sys.executable, str(PTSLOT), "build", "--", *argv] if PTSLOT.exists() else argv, env
+    return [sys.executable, str(SLOT), "build", "--", *argv] if SLOT and SLOT.exists() else argv, env
 
 
 def rezip(root: pathlib.Path) -> pathlib.Path:
     """the portable folder zipped again (as tools/package.py does) after the previews were added"""
     import zipfile
+    sys.path.insert(0, str(REPO / "tools"))
+    from package import FILE_LIST, file_list
+    # the package's own file list again, with the files added since (tools/package.py)
+    (root / FILE_LIST).write_bytes(file_list({x.relative_to(root).as_posix(): x for x in root.rglob("*") if x.is_file()}))
     archive = root.with_suffix(".zip")
     archive.unlink(missing_ok=True)
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
@@ -120,11 +132,33 @@ def rezip(root: pathlib.Path) -> pathlib.Path:
     return archive
 
 
+def add_extractor(portable: pathlib.Path, extractor: pathlib.Path, source_zip: pathlib.Path, licence: pathlib.Path) -> None:
+    """The PKG extraction helper in a portable zip under extractor/, as the setup's payload installs it (prepare_native_installer.py):
+    the game's first-run screen extracts a chosen PKG with it (src/game/first_run.h), in the portable game as in the installed one."""
+    import zipfile
+    with zipfile.ZipFile(portable) as z:
+        root = pathlib.PurePosixPath(z.namelist()[0]).parts[0]
+        if any(name.startswith(f"{root}/extractor/") for name in z.namelist()):
+            return
+    files = {f"extractor/{f.relative_to(extractor).as_posix()}": f for f in sorted(extractor.rglob("*")) if f.is_file() and f.suffix.lower() != ".pdb"}
+    files["extractor/LibOrbisPkg-corresponding-source.zip"] = source_zip
+    files["extractor/LICENSE-LibOrbisPkg.txt"] = licence
+    with zipfile.ZipFile(portable, "a", zipfile.ZIP_DEFLATED) as z:
+        for name, file in files.items():
+            info = zipfile.ZipInfo.from_file(file, f"{root}/{name}")
+            info.compress_type = zipfile.ZIP_DEFLATED
+            if name == "extractor/PT.PkgExtract":
+                info.create_system = 3  # Unix, so unzip keeps the executable bit of the Linux helper
+                info.external_attr = 0o100755 << 16
+            with open(file, "rb") as data:
+                z.writestr(info, data.read())
+
+
 def liborbis_source() -> pathlib.Path:
     """a private copy of the LGPL LibOrbisPkg source, patched: the source elsewhere is never changed"""
     liborbis = a.liborbis
     if not liborbis:
-        for root in (REPO / "dump", pathlib.Path(r"C:\Projects\pt-port-rt\dump"), pathlib.Path(r"C:\Projects\pt-port\dump")):
+        for root in (REPO / "dump",):
             hits = sorted(root.glob("*/LibOrbisPkg*/LibOrbisPkg/PFS/PFSCReader.cs")) + sorted(root.glob("LibOrbisPkg*/LibOrbisPkg/PFS/PFSCReader.cs")) \
                 if root.exists() else []
             if hits:
@@ -187,6 +221,12 @@ if not a.linux_only:
     extractor = publish_extractor("win-x64")
     run("installer payload", [sys.executable, "tools/prepare_native_installer.py", "--runtime", runtime, "--extractor", extractor,
                               "--source", source])
+    # the payload's file list, kept with the release for the signed update manifest (also for a later --linux-only run)
+    payload_listing = REPO / "dump" / "installer-20261002" / "native" / "payload-manifest.json"
+    if "pt-updater.exe" not in json.loads(payload_listing.read_text(encoding="utf-8")):
+        report["error"] = "the Windows payload has no pt-updater.exe (the in-game update)"
+        finish(1)
+    shutil.copy2(payload_listing, dest / "windows-payload-manifest.json")
     # the setup target exists only when the payload did at configure time, and the version is read then: reconfigure, then build it
     os.utime(REPO / "CMakeLists.txt")
     argv, env = build("pt_setup")
@@ -199,6 +239,7 @@ if not a.linux_only:
     # extracted CUSA01127 folder; its data folder is made next to pt.exe at the first start
     portable = dest / "P.T.PC.Port-portable-windows.zip"
     shutil.copy2(runtime, portable)
+    add_extractor(portable, extractor, REPO / "dump" / "installer-20261002" / "native" / "extractor-source.zip", source / "LICENSE.txt")
     report["portable"] = str(portable)
     report["files"] = [report["installer"], report["portable"]]
 else:
@@ -238,12 +279,32 @@ if a.linux_setup:
     extractor = publish_extractor("linux-x64")
     run("linux payload", [sys.executable, "tools/prepare_native_installer.py", "--runtime", runtime, "--extractor", extractor, "--source", source,
                           "--out", linux / "payload"])
+    add_extractor(linux_portable, extractor, linux / "payload" / "extractor-source.zip", source / "LICENSE.txt")
     linux_setup = dest / a.linux_setup
     linux_setup.unlink(missing_ok=True)
     run("attach linux payload", [sys.executable, "tools/linux/attach_payload.py", "--setup", LINUX_BUILD / "pt_setup_linux", "--payload",
                                  linux / "payload" / "payload.bin", "--out", linux_setup])
     report["linux_installer"] = str(linux_setup)
     report["files"].append(str(linux_setup))
+# the signed update manifest of the in-game update (docs/updates.md): every package of this release folder
+sys.path.insert(0, str(REPO / "tools" / "ci"))
+import release_signing  # noqa: E402
+packages, listings = {}, {}
+if (dest / SETUP_NAME).is_file() and (dest / "windows-payload-manifest.json").is_file():
+    packages["windows"], listings["windows"] = dest / SETUP_NAME, dest / "windows-payload-manifest.json"
+if a.linux_setup and a.linux_setup == "P.T.PC.Port.Setup-linux" and (dest / a.linux_setup).is_file():
+    linux_listing = dest / "linux" / "payload" / "payload-manifest.json"
+    if "pt-updater" not in json.loads(linux_listing.read_text(encoding="utf-8")):
+        report["error"] = "the Linux payload has no pt-updater (the in-game update)"
+        finish(1)
+    packages["linux"], listings["linux"] = dest / a.linux_setup, linux_listing
+if packages:
+    keys = a.signing_keys or release_signing.DEFAULT_KEYS
+    # signed and embedded in every setup (a later --linux-only run embeds it again, for both setups); no file of its own
+    data = release_signing.embed_signed(a.version, packages, listings, release_signing.release_seed(keys))
+    report["update_manifest"] = f"embedded in {', '.join(p.name for p in packages.values())} ({len(data)} bytes)"
+    for leftover in ("pt-update-manifest.json", "pt-update-manifest.json.sig"):
+        (dest / leftover).unlink(missing_ok=True)
 # GitHub release metadata supplies updates. Only platform packages are published.
 if a.legacy_update_manifest:
     from legacy_update_manifest import write_manifest

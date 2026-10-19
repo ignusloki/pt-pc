@@ -129,8 +129,10 @@ void FloorLevel::NextFloor() {
     if (ModLua* mods = game_.ModScripts()) {
         mods->FloorEnter(CurrentFloorName(), loop_count_);
     }
+    game_.LatchGamePlus();
     game_.ApplyStageTransform();
     game_.OnFloorReached(CurrentFloorName(), loop_count_);
+    game_.LisaDateFloorEntered(current, CurrentFloorName());
     game_.OnBrowseFloorEntered();
     RelocateGimmicks();
     ResetBaby();
@@ -218,9 +220,6 @@ void FloorLevel::RelocateGimmicks() {
             objects.PlayGimmickMotion(GimmickType::CeilLamp, "CeilLampStrong", false);
         } else if (floor == "f120") {
             objects.PlayGimmickMotion(GimmickType::CeilLamp, "CeilLamp", true);
-            // issue #43: on PS4 the fake crash loop's sink is empty. Played through, the original's ResetToLocators finds the
-            // baby's maze B locator first (the f110 stage is still in its list) and the record is hidden once that stage
-            // unloads; the port placed it in the new hallway. Kept off on f120 whatever the way in (the loop browser too)
             objects.SetGimmickEnabled(GimmickType::Baby, false);
         } else if (floor == "ending") {
             for (GimmickType type : {GimmickType::Ocho, GimmickType::Baby, GimmickType::CeilLamp, GimmickType::Freezer, GimmickType::Bag}) {
@@ -232,9 +231,6 @@ void FloorLevel::RelocateGimmicks() {
             game_.SetFloorLighting(setup->light_row);
         }
     }
-    // a floor past a puzzle's own is only reached with the puzzle solved (f050's X mark, f090's hello, f110's peephole): a save or
-    // a loop browser pick whose cleared flags lag behind (a session resumed on f120 showed the final loop's photo without its X,
-    // Discord report 11 October) takes the solved state the floor implies
     {
         const bool past_xmark = floor == "f070" || floor == "f080" || floor == "f090" || floor == "f100" || floor == "f110" ||
                                 floor == "f120" || floor == "f160";

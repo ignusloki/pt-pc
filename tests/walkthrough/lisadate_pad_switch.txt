@@ -1,0 +1,3 @@
+# a virtual switch pad, the prompts' device once it is pressed (Coffee with Lisa's prompt captures)
+sattach 0 switch
+swait 30

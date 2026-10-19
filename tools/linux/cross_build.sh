@@ -1,6 +1,6 @@
 #!/bin/sh
 # Cross builds the Linux x86-64 game on Windows (Git Bash) with LLVM clang/lld and a Debian sysroot (docs/linux.md).
-#   PT_LINUX_SYSROOT=C:/Projects/pt-linux-env/sysroot PT_DEPS=C:/Projects/pt-port/build/release/_deps tools/linux/cross_build.sh [target]
+#   PT_LINUX_SYSROOT=<sysroot> PT_DEPS=<a Windows build's _deps> tools/linux/cross_build.sh [target]
 # Wayland is off in this cross build only: SDL needs the host tool wayland-scanner, which has no Windows build. A native
 # Linux build (cmake -G Ninja -B build/linux) has X11 and Wayland.
 set -e
@@ -16,7 +16,13 @@ if [ -n "$PT_DEPS" ] && [ -d "$PT_DEPS/sdl3-src" ]; then
     up=$(echo "$dep" | tr a-z A-Z)
     [ -d "$PT_DEPS/$dep-src" ] && SHARED="$SHARED -DFETCHCONTENT_SOURCE_DIR_$up=$PT_DEPS/$dep-src"
   done
+  # the upscaler SDK files (DLSS's Linux libraries, the FidelityFX sources) next to the Windows build's
+  [ -d "$PT_DEPS/upscaler-sdks" ] && SHARED="$SHARED -DPT_UPSCALER_SDK_DIR=$PT_DEPS/upscaler-sdks"
 fi
+# DLSS and FSR (cmake/UpscalersLinux.cmake) are on unless PT_UPSCALERS=0; a build folder configured before Linux had them
+# keeps them cached off, so the value is set again below when it differs
+UPSCALERS=ON
+[ "${PT_UPSCALERS:-1}" = 0 ] && UPSCALERS=OFF
 SCANNER="$REPO/tools/linux/wayland-scanner.cmd"
 if [ -n "$PT_NO_WAYLAND" ]; then
   WAYLAND="-DSDL_WAYLAND=OFF"
@@ -30,7 +36,9 @@ fi
 if [ ! -f "$BUILD/CMakeCache.txt" ]; then
   "$CMAKE" -G Ninja -S "$REPO" -B "$BUILD" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/toolchains/linux-x86_64-clang-cross.cmake" -DPT_LINUX_SYSROOT="$PT_LINUX_SYSROOT" \
-    -DSDL_KMSDRM=OFF $WAYLAND $SHARED
+    -DSDL_KMSDRM=OFF -DPT_UPSCALERS=$UPSCALERS $WAYLAND $SHARED
+elif ! grep -q "^PT_UPSCALERS:BOOL=$UPSCALERS\$" "$BUILD/CMakeCache.txt"; then
+  "$CMAKE" -B "$BUILD" -DPT_UPSCALERS=$UPSCALERS $SHARED
 fi
 # SDL records the library names it dlopens at configure time: they must be versioned sonames (libX11.so.6, not libX11.so, which
 # only the -dev packages have) and the Wayland, PulseAudio, PipeWire and ALSA backends must be in

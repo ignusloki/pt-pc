@@ -175,4 +175,23 @@ bool WritePipelineCacheFileAtomic(const std::filesystem::path& path, const Pipel
     return true;
 }
 
+bool PipelineCacheSavePolicy::Due(uint64_t count, std::chrono::steady_clock::time_point now) {
+    if (count != seen_count) {
+        seen_count = count;
+        seen_at = now;
+    }
+    if (count == saved_count) {
+        requested = false;
+        return false;
+    }
+    if (requested) return true;
+    return now - seen_at >= settle && (saved_at == std::chrono::steady_clock::time_point{} || now - saved_at >= spacing);
+}
+
+void PipelineCacheSavePolicy::Saved(uint64_t count, std::chrono::steady_clock::time_point now) {
+    saved_count = count;
+    saved_at = now;
+    requested = false;
+}
+
 }

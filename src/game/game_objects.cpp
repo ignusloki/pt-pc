@@ -153,10 +153,6 @@ void OchoLogic::BuildSpawns() {
 
 void OchoLogic::Sense(float dt) {
     const Player& player = game_.GetPlayer();
-    // 0x1287F80 reads the player service's position (+0x10, vfunc +0x18) and rotation (+0x40, vfunc +0x28), which 0x9406C0
-    // builds from the character's transform record: the body yaw that follows the camera, not the camera yaw it publishes at
-    // +0x54. The block is double buffered (Player::PublishedFeet), so the readers get the previous original frame's: it changes
-    // once per frame, and the Ocho update after the player's publish still sees the frame before
     player_pos_ = player.PublishedFeet();
     player_yaw_ = player.PublishedBodyFoxYaw();
     player_forward_ = glm::vec3(std::sin(player_yaw_), 0.0f, std::cos(player_yaw_));
@@ -169,9 +165,6 @@ void OchoLogic::Sense(float dt) {
     facing_ = std::abs(Wrap(FoxYawOf(d) - player_yaw_));
 }
 
-// The body update (ShGimmick vtable+0x50, 0x954270) composes the RIG_ROOT delta onto the node after the logic
-// (vtable+0x48, 0x954170) has run, in every state and while hidden (0x12571B0 only masks drawing); only a
-// disabled gimmick (0x1257070 sets the entry's bit 1) skips it. See docs/formats/motion.md.
 void OchoLogic::ApplyRootMotion(const glm::vec3& translation, const glm::quat& rotation) {
     world_ = world_ * glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation);
     game_.Objects().SetOchoTransform(world_);
@@ -186,9 +179,6 @@ void OchoLogic::Show(bool visible) {
     game_.Objects().ShowOcho(visible);
 }
 
-// Appear (0x1289830) and the KillChase kill (0x12873F0) pick the views by the spawn's variant flag (spawn +0x3C):
-// 0 hides the body in view 1 and shows it in view 0, 1 hides it in view 0 and shows it in view 1, so spawn 2, the
-// bathroom point, shows Lisa in the mirror capture only (view index 1 of 0x959070, +0x51C of the view)
 void OchoLogic::SelectSpawnViews() {
     game_.Objects().GetGimmick(GimmickType::Ocho).hidden_views = spawns_[spawn_].variant ? 1u : 2u;
 }
@@ -229,7 +219,6 @@ void OchoLogic::ResetState() {
     }
 }
 
-// 0x12875F0, once when the gimmick object is created at boot; the port runs it again for a new session (Game::ResetSessionState)
 void OchoLogic::Setup() {
     ResetState();
     has_killed_ = false;
@@ -249,6 +238,7 @@ void OchoLogic::RelocateForReset() {
 }
 
 void OchoLogic::LogicControl(int s) {
+    if (s == 4 && state_ != 4) game_.OnLisaRush("dash");
     timer_a_ = 0.0f;
     StopVoice();
     ResetState();
@@ -336,9 +326,6 @@ void OchoLogic::UpdateWarp() {
         if (appear_request_) {
             Appear();
             appear_request_ = false;
-            // the distance and facing were sensed at the frame's start, with her at the spot she was hidden at (the last spawn,
-            // often the one beside the phone table): tested against those, she dashed the moment she appeared 8 m away, the
-            // player facing the hidden spot within its 4 m. The test takes the spawn she now stands at
             Sense(0.0f);
         }
         if (Detect()) {
@@ -351,7 +338,6 @@ void OchoLogic::UpdateWarp() {
             wait_ = static_cast<float>(Random() % 50) + 40.0f;
             visible_ = false;
             Show(false);
-            // The timed reveal is over, but its 65-second herald bed should finish on its own.
             StopVoice();
         }
     }
@@ -362,8 +348,6 @@ void OchoLogic::UpdateChase() {
     PlaceAt(position, player_rotation_);
     const Player& player = game_.GetPlayer();
     if (player.Walking()) {
-        // 0x12888D0: her steps and breath play on her slot of the gimmick sound control, which follows her while the steps
-        // play (+0xC0 position, +0x78 on both handles), so they keep 3 m behind the player instead of where they started
         if (!game_.IsSoundPlaying(steps_sound_)) {
             if (timer_b_ > 0.5f) {
                 steps_sound_ = game_.PostSoundIdOnOcho(kStepsPlay, position);
@@ -389,11 +373,7 @@ void OchoLogic::UpdateChase() {
 }
 
 bool OchoLogic::UpdateLookBack() {
-    // 0x1289070: one sample per update, before the mean; the update runs once per game frame (OchoLogic::Update)
     ring_[ring_count_++ % ring_.size()] = player_yaw_;
-    // The eboot takes the plain mean of the raw samples (yaw in -pi..pi) and wraps yaw - mean. Facing +-pi (down the hallway toward
-    // the start room) a still player whose yaw flips between +pi and -pi gets a mean near 0 and a deviation near pi: an arm, then
-    // the kill on a slight mouse movement. Players asked to keep the original's behaviour, so the port takes the same plain mean.
     float sum = 0.0f;
     for (float v : ring_) {
         sum += v;
@@ -421,8 +401,6 @@ bool OchoLogic::UpdateLookBack() {
     return false;
 }
 
-// the dash step grows by 1.2 * dt and is moved whole once per game frame; the port spreads the frame's move over its two
-// ticks (half now, half in the next tick) so she does not jump at 30 Hz, and ends each frame where the eboot puts her
 void OchoLogic::UpdateDash(float frame_dt) {
     dash_step_ += 1.2f * frame_dt;
     const glm::vec3 p = glm::vec3(world_[3]) + dash_rest_;
@@ -440,11 +418,10 @@ void OchoLogic::UpdateDash(float frame_dt) {
 }
 
 void OchoLogic::Kill() {
+    game_.OnLisaRush("kill");
     has_killed_ = true;
     game_.Floor().SetLisaKilled(true);
     game_.Floor().SetPending(8);
-    // placed with the player transform the Ocho reads (Sense): lisa_kill's demo camera stays 27.9 degrees from the port's when the
-    // demo stood at the camera yaw, from 3860 to the game over (the camera on the floor, heights and pitch the same)
     game_.Demos().SetDemoTransform("gc_p07_030", player_rotation_, player_pos_);
     game_.Demos().Play("gc_p07_030");
     LogInfo("ocho: kill");
@@ -457,8 +434,6 @@ void OchoLogic::Update(float dt) {
         dash_rest_ = glm::vec3(0.0f);
         return;
     }
-    // the Ocho component's update (0x12873F0) runs once per game frame with the frame delta: its timers, the look-back ring,
-    // the dash step and the chase placement all go by frames
     frame_dt_ += dt;
     if (!game_.GameFrameTick()) {
         if (state_ == 4 && dash_rest_ != glm::vec3(0.0f)) {
@@ -510,10 +485,6 @@ uint32_t GameObjects::Random() {
     return rng_;
 }
 
-// A new session's records: the session state goes back to what the records hold before the first floor, while what
-// ResolveModels read from the parts at boot (the model, its mesh in the model cache, which never drops a model, and the
-// parts' invisibleMeshNames) stays. Dropping the mesh here left Baby, CeilLamp, Freezer, Bag and Ocho undrawn after every
-// loop browser pick and progress reset until the program restarted.
 void GameObjects::Reset() {
     for (size_t i = 0; i < gimmicks_.size(); ++i) {
         Gimmick& g = gimmicks_[i];
@@ -692,10 +663,6 @@ bool GameObjects::GimmickCommand(Gimmick& gimmick, const GameCommand& command) {
         return true;
     }
     if (command.id == "CallSound") {
-        // 0x954E60: with a connect point the record keeps its name (record +0x98) and posts on the ShGimmick sound control's
-        // slot at its transform; UpdateInstance (0x954270) then moves the slot to that connect point every update while the
-        // sound plays (body vfunc +0x2B8, the body's world matrix when the point is missing), so the f080 fridge's baby cry
-        // loop at CNP_FRZ_INNER swings with the fridge
         const std::string cnp = command.String("cnp").value_or("");
         if (!cnp.empty()) {
             gimmick.sound_cnp = cnp;
@@ -709,7 +676,6 @@ bool GameObjects::GimmickCommand(Gimmick& gimmick, const GameCommand& command) {
         return true;
     }
     if (command.id == "PostSoundEvent") {
-        // 0x954E60: on the sound control's slot, which 0x954270 keeps at the record's connect point or body as above
         const glm::vec3 at = SoundPosition(gimmick);
         const std::string sound = command.String("soundId").value_or("");
         LogInfo("sound: {} at ({:.2f} {:.2f} {:.2f}) on {}", sound, at.x, at.y, at.z, gimmick.name);
@@ -762,8 +728,6 @@ void GameObjects::SetGimmickEnabled(GimmickType type, bool enabled) {
     }
     g.shown = enabled;
     g.enabled = enabled;
-    // 0x1253590: disabling also stops the record's own sounds (sound control +0x08, the CallSound and PostSoundEvent handle), such as
-    // the fridge's baby cry loop when f100 switches the Freezer off, and the bag's talk (the motion event's dialogue)
     if (!enabled) {
         game_.Demos().Gimmicks().StopSounds(type);
     }
@@ -778,9 +742,6 @@ void GameObjects::SetGimmickEnabled(GimmickType type, bool enabled) {
     g.hidden_views = 0;
 }
 
-// 0x1253990 (record PlayMotion, from the native PlayMotion command 0x954B10, which Lua and Ocho's LogicControl 0x1287040 send,
-// the return to idle in 0x954270 and the bag's talk 0x9545C0): body +0x150 plays the key, then the sound control's slot 0
-// position becomes the body's position (body +0x98 gives its world matrix, interface +0xC0 0x95DF30 stores the translation)
 void GameObjects::MotionStarted(const Gimmick& g) {
     dialogue_position_ = glm::vec3(g.world[3]);
 }
@@ -843,9 +804,6 @@ void GameObjects::RelocateGimmicks(StageManager& stages) {
     for (Gimmick& g : gimmicks_) {
         g.placed = false;
     }
-    // The first locator found wins, so check "next" first: during a door transition the incoming hallway
-    // already carries the locator while the player still stands in "current"; "current" is the fallback
-    // once the old copy unloads.
     for (const char* label : {"next", "current"}) {
         Stage* stage = stages.Find(label);
         if (!stage) {
@@ -889,8 +847,6 @@ void GameObjects::HideRecordsWithoutLocator() {
             }
         }
     }, false);
-    // 0x953FE0 (flag 0x40 of RemoveLocators): body hide (+0xA8) and deactivate (+0x58), so the record's motion and its events stop
-    // until 0x953A80 activates it again (StartGame, NextFloor)
     for (Gimmick& g : gimmicks_) {
         if (!found[static_cast<size_t>(g.type)]) {
             if (g.active) {
@@ -909,7 +865,6 @@ void GameObjects::ResetToLocators() {
         if (!g.enabled) {
             continue;
         }
-        // 0x953A80: an enabled record with a locator gets its body activated (+0x50) and, unless it is Ocho, shown at the locator
         if (g.placed) {
             g.active = true;
         }
@@ -919,8 +874,6 @@ void GameObjects::ResetToLocators() {
         if (g.motion.empty() && g.type != GimmickType::Bag) {
             g.motion = g.name;
         }
-        // 0x953F7D: the sound control's slot 0 takes the locator transform of every record placed, so the last one in record
-        // order holds it (Ocho's locator too)
         if (g.placed) {
             dialogue_position_ = glm::vec3(g.locator[3]);
             const glm::vec3 z(g.locator[2]);
@@ -936,9 +889,6 @@ void GameObjects::UpdateFreezer(Gimmick& g, float dt) {
     }
     g.freezer_timer += dt;
     const Player& player = game_.GetPlayer();
-    // The port's camera pitch is positive upwards; the native X rotation uses
-    // the opposite sign. Preserve the native 38-degree look-up threshold. 0x1253370 reads the player service: the pitch and
-    // the position the player published in the previous frame
     if (g.freezer_timer >= 0.4f && g.freezer_timer <= 0.7f && player.PublishedPitch() >= 0.6632251f) {
         glm::vec3 open(g.world[3]);
         game_.Demos().Gimmicks().ConnectPointWorld(GimmickType::Freezer, "CNP_FRZ_OPEN", open);
@@ -956,8 +906,6 @@ void GameObjects::UpdateFreezer(Gimmick& g, float dt) {
     }
 }
 
-// 0x9545C0: the record is projected only while Zoom is held and not locked (the pad test of the armed nazo actions,
-// ~pad+0x28 & held & 1), so Lisa's speed-up and the bag's talk both need the zoom
 void GameObjects::UpdateInView(Gimmick& g, float dt) {
     if (!g.enabled) {
         return;
@@ -969,8 +917,6 @@ void GameObjects::UpdateInView(Gimmick& g, float dt) {
         g.anim_rate += target <= g.anim_rate ? -3.0f * dt : 3.0f * dt;
         g.anim_rate = std::clamp(g.anim_rate, 1.0f, target);
     } else if (g.type == GimmickType::Bag) {
-        // BagTalk (interpolation 8, no return to idle) only while its motion layer holds no request: the bag talks once
-        // per session, after the first kill by Lisa
         if (in_view && game_.Floor().LisaKilled() && !g.motion_requested) {
             LogInfo("gimmick: Bag talks (zoom after Lisa's kill)");
             PlayGimmickMotion(GimmickType::Bag, "BagTalk", false);
@@ -983,8 +929,6 @@ void GameObjects::UpdateInView(Gimmick& g, float dt) {
 
 void GameObjects::Update(float dt) {
     for (Gimmick& g : gimmicks_) {
-        // the body update phases (0x95E880, 0x95E8E0, 0x95E940, 0x95E9A0, 0x95EAB0) run only when the model flags +0x9C & 3 == 1:
-        // components active and not suspended by SetEnabled(false) (+0x68)
         if (!g.motion.empty() && g.active && g.enabled) {
             g.motion_time += dt * g.anim_rate;
             const float length = game_.Demos().Gimmicks().MotionSeconds(g.motion);
@@ -995,7 +939,6 @@ void GameObjects::Update(float dt) {
                     g.motion_time = 0.0f;
                     MotionStarted(g);
                 } else if (length > 0.0f && !game_.Demos().Gimmicks().MotionLoops(g.motion)) {
-                    // 0xAA7580: a clip without the loop bit stops at its end and holds the last frame (BagTalk, OchoDash)
                     g.motion_time = length;
                 }
             }
@@ -1003,7 +946,6 @@ void GameObjects::Update(float dt) {
         if (g.type == GimmickType::Ocho || g.type == GimmickType::Bag) {
             UpdateInView(g, dt);
         }
-        // 0x954270: while anything plays on the record's sound control slot, the slot follows the connect point
         if (!g.sound_handles.empty() && game_.Audio()) {
             std::erase_if(g.sound_handles, [&](uint32_t id) { return !game_.Audio()->IsPlaying(id); });
             if (!g.sound_handles.empty()) {
@@ -1013,20 +955,17 @@ void GameObjects::Update(float dt) {
         if (g.type == GimmickType::Freezer) {
             UpdateFreezer(g, dt);
         }
-        // the Archive's models (archive.h): a gimmick drawn in play opens its entries
         const uint32_t bit = 1u << static_cast<uint32_t>(g.type);
         if (!(archive_noted_ & bit) && g.enabled && g.shown && g.mesh && (g.type == GimmickType::Ocho || g.placed) && g.hidden_views == 0) {
             archive_noted_ |= bit;
             game_.NoteArchive("gimmick:" + g.name);
         }
     }
-    // the Archive's theater (archive_theater.h) holds Lisa still: her logic would chase and kill its session's player
     if (!game_.Config().theater || game_.Theater().ocho) {
         ocho_.Update(dt);
     }
     game_.Demos().Gimmicks().Update(dt);
     UpdateOchoRootMotion();
-    // PT_GIMMICK_TRACE: a line whenever a record's draw flags change, to follow a record that stops drawing across resets
     static const bool trace = std::getenv("PT_GIMMICK_TRACE") != nullptr;
     if (trace) {
         static std::array<std::string, static_cast<size_t>(GimmickType::Count)> last;
@@ -1062,8 +1001,6 @@ void GameObjects::UpdateOchoRootMotion() {
     glm::quat end_q(1.0f, 0.0f, 0.0f, 0.0f);
     const bool seam = wrapped && gimmick_anim.RigRootLoop(GimmickType::Ocho, start_t, start_q, end_t, end_q);
     if (continued && g.enabled && (!wrapped || seam)) {
-        // 0xAA2760: rotation delta conj(prev) * now, translation delta rotated into the previous root frame; across
-        // the loop seam 0xAD4A90 and 0xAD5E70 carry the previous root over it: (end - prev) + (now - start)
         glm::vec3 step = translation - ocho_root_translation_;
         glm::quat turn = glm::conjugate(ocho_root_rotation_) * rotation;
         if (seam) {
@@ -1089,7 +1026,8 @@ bool Drawable(const Gimmick& g) {
 
 void GameObjects::DrawnCharacters(std::vector<glm::vec3>& feet) const {
     for (const Gimmick& g : gimmicks_) {
-        if (g.type == GimmickType::Ocho && Drawable(g) && (g.hidden_views & 1u) == 0) {
+        if (g.type == GimmickType::Ocho && Drawable(g) && (g.hidden_views & 1u) == 0 &&
+            !(game_.Demos().IsPlaying("gc_p00_020"))) {
             feet.push_back(glm::vec3(g.world[3]));
         }
     }
@@ -1107,6 +1045,9 @@ bool GameObjects::GimmickDrawn(std::string_view name) const {
 void GameObjects::CollectDraws(std::vector<DrawItem>& out) const {
     for (const Gimmick& g : gimmicks_) {
         if (!Drawable(g)) {
+            continue;
+        }
+        if (g.type == GimmickType::Ocho && game_.Demos().IsPlaying("gc_p00_020")) {
             continue;
         }
         DrawItem item;

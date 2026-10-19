@@ -1,6 +1,5 @@
 #include "engine/platform/controller_feedback.h"
 
-
 namespace pt {
 
 ControllerFeedbackFeatures FeaturesForRumbleProfile(int profile, bool rumble_enabled) {

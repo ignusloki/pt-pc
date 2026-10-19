@@ -19,18 +19,26 @@
 namespace pt {
 namespace {
 
-// the project's public DSN key (Sentry: Settings > Projects > pt-port > Client Keys); it only allows sending events
 constexpr const char* kMinidumpUrl =
     "https://o4512234559111168.ingest.de.sentry.io/api/4512234589192272/minidump/?sentry_key=59acba0456e2617d53ad958a3be13210";
 constexpr size_t kMaxLogBytes = 4u << 20;
 constexpr int kMaxPerStart = 3;
 
 std::string ReadFile(const std::filesystem::path& path, size_t limit) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) return {};
-    std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    // a log that is too long keeps its end, where the crash is
-    if (data.size() > limit) data.erase(0, data.size() - limit);
+    const auto length = in.tellg();
+    if (length < 0) return {};
+    const bool dump = path.extension() == ".dmp";
+    if (dump && static_cast<uint64_t>(length) > limit) {
+        LogWarn("crash report: {} exceeds the upload limit, not truncated", pt::os::PathToUtf8(path.filename()));
+        return {};
+    }
+    const size_t bytes = std::min<uint64_t>(static_cast<uint64_t>(length), limit);
+    in.seekg(length - static_cast<std::streamoff>(bytes));
+    std::string data(bytes, '\0');
+    in.read(data.data(), static_cast<std::streamsize>(bytes));
+    if (!in) return {};
     return data;
 }
 
@@ -63,15 +71,42 @@ std::string JsonEscape(const std::string& text) {
     return out;
 }
 
+std::string CrashVersionFromLog(const std::filesystem::path& log, const std::string& build, const std::string& dump_name) {
+    if (ReadFile(log, kMaxLogBytes).find(dump_name) == std::string::npos) return "unknown";
+    std::ifstream header(log, std::ios::binary);
+    std::string line, logged_build, logged_version;
+    for (int i = 0; i < 32 && std::getline(header, line); ++i) {
+        if (const size_t p = line.find("pt-port version "); p != std::string::npos) {
+            const size_t start = p + 16;
+            logged_version = line.substr(start, line.find(' ', start) - start);
+        }
+        if (const size_t p = line.find("crash reporting: build "); p != std::string::npos) {
+            const size_t start = p + 23;
+            logged_build = line.substr(start, line.find(',', start) - start);
+        }
+    }
+    return logged_build == build && !logged_version.empty() ? logged_version : "unknown";
+}
+
 void Upload(std::vector<std::filesystem::path> dumps, std::string version) {
     for (const std::filesystem::path& dump : dumps) {
         std::vector<http::FormPart> parts;
-        parts.push_back({"upload_file_minidump", pt::os::PathToUtf8(dump.filename()), "application/octet-stream", ReadFile(dump, 256u << 20)});
+        const std::string data = ReadFile(dump, 256u << 20);
+        if (data.empty()) continue;
+        parts.push_back({"upload_file_minidump", pt::os::PathToUtf8(dump.filename()), "application/octet-stream", data});
         std::filesystem::path log = dump;
         log.replace_extension(".log");
-        if (Exists(log)) parts.push_back({"pt.log", "pt.log", "text/plain", ReadFile(log, kMaxLogBytes)});
-        // the event's release and platform, so Sentry groups the reports by version
-        parts.push_back({"sentry", "", "", "{\"release\":\"pt-port@" + JsonEscape(version) + "\",\"tags\":{\"os\":\"" +
+        std::string crash_version = "unknown";
+        const std::string filename = pt::os::PathToUtf8(dump.filename());
+        const std::string build = filename.size() > 29 ? filename.substr(9, filename.size() - 29) : "unknown";
+        if (Exists(log)) {
+            crash_version = CrashVersionFromLog(log, build, filename);
+            if (crash_version != "unknown") {
+                parts.push_back({"pt.log", "pt.log", "text/plain", ReadFile(log, kMaxLogBytes)});
+            }
+        }
+        parts.push_back({"sentry", "", "", "{\"release\":\"pt-port@" + JsonEscape(crash_version) + "\",\"tags\":{\"build\":\"" +
+                                             JsonEscape(build) + "\",\"uploader_version\":\"" + JsonEscape(version) + "\",\"os\":\"" +
 #ifdef _WIN32
                                              "windows"
 #elif defined(__APPLE__)
@@ -100,12 +135,13 @@ void PreserveCrashLog(const std::filesystem::path& log_path) {
     if (!std::filesystem::is_regular_file(log_path, ec)) return;
     const auto log_time = std::filesystem::last_write_time(log_path, ec);
     if (ec) return;
+    const std::string session_log = ReadFile(log_path, kMaxLogBytes);
     const std::filesystem::path dir = log_path.has_parent_path() ? log_path.parent_path() : std::filesystem::path(".");
     for (const std::filesystem::path& dump : Dumps(dir)) {
         std::filesystem::path log = dump;
         log.replace_extension(".log");
         if (Exists(log)) continue;
-        // the dump is written while that session's log is still open, so the log's last write comes at or after it
+        if (session_log.find(pt::os::PathToUtf8(dump.filename())) == std::string::npos) continue;
         const auto dump_time = std::filesystem::last_write_time(dump, ec);
         if (ec || log_time < dump_time - std::chrono::minutes(1)) continue;
         std::filesystem::copy_file(log_path, log, ec);
@@ -158,14 +194,12 @@ void OfferCrashUpload(const std::filesystem::path& dir, const std::string& versi
 }
 
 namespace {
-// the same project and key as kMinidumpUrl, through Sentry's envelope endpoint (an event with attachments, no dump needed)
 constexpr const char* kEnvelopeUrl =
     "https://o4512234559111168.ingest.de.sentry.io/api/4512234589192272/envelope/?sentry_key=59acba0456e2617d53ad958a3be13210";
 std::atomic<int> g_log_report{0};
 }
 
 void SendLogReport(const std::filesystem::path& log, const std::filesystem::path& dir, const std::string& version) {
-    // one at a time; a sent or failed report can be sent again
     if (g_log_report.exchange(static_cast<int>(LogReportState::Sending)) == static_cast<int>(LogReportState::Sending)) return;
     LogInfo("log report: sending pt.log{} to the developer", Dumps(dir).empty() ? "" : " and the newest crash dump");
     std::thread([log, dir, version] {
@@ -186,11 +220,12 @@ void SendLogReport(const std::filesystem::path& log, const std::filesystem::path
         const std::string text = ReadFile(log, kMaxLogBytes);
         body += "{\"type\":\"attachment\",\"length\":" + std::to_string(text.size()) + ",\"filename\":\"pt.log\",\"content_type\":\"text/plain\"}\n" + text + "\n";
         if (const std::vector<std::filesystem::path> dumps = Dumps(dir); !dumps.empty()) {
-            // the newest dump (the names hold the time) with that session's log when it was kept
             const std::filesystem::path& dump = dumps.back();
             const std::string data = ReadFile(dump, 64u << 20);
-            body += "{\"type\":\"attachment\",\"length\":" + std::to_string(data.size()) + ",\"filename\":\"" + JsonEscape(pt::os::PathToUtf8(dump.filename())) +
-                    "\",\"attachment_type\":\"event.minidump\"}\n" + data + "\n";
+            if (!data.empty()) {
+                body += "{\"type\":\"attachment\",\"length\":" + std::to_string(data.size()) + ",\"filename\":\"" + JsonEscape(pt::os::PathToUtf8(dump.filename())) +
+                        "\",\"attachment_type\":\"event.minidump\"}\n" + data + "\n";
+            }
             std::filesystem::path crash_log = dump;
             crash_log.replace_extension(".log");
             if (Exists(crash_log)) {

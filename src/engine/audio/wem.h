@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -56,6 +57,8 @@ class Media {
 public:
     static std::shared_ptr<Media> Create(uint32_t id, std::shared_ptr<const std::vector<uint8_t>> storage, size_t offset, size_t size,
                                          std::string* error);
+    static std::shared_ptr<Media> CreateGenerated(uint32_t channels, uint32_t sample_rate, uint64_t frames,
+                                                  std::function<std::unique_ptr<MediaReader>()> open, uint32_t channel_mask = 0);
     ~Media();
 
     uint32_t Id() const { return id_; }
@@ -78,6 +81,7 @@ private:
     WemInfo info_;
     uint64_t frames_ = 0;
     std::unique_ptr<WwiseVorbisStream> vorbis_;
+    std::function<std::unique_ptr<MediaReader>()> open_;
 };
 
 }

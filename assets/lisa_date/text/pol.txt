@@ -1,0 +1,162 @@
+# Coffee with Lisa, polski. klucz = tekst (brakujące klucze pochodzą z eng.txt)
+name_lisa = Lisa
+name_you = Ty
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Pomiń
+ui_affection = Sympatia
+ui_leave_hold = Przytrzymaj, aby opuścić randkę
+title_1 = Część 1: Czarna kawa
+title_2 = Część 2: Dwie łyżeczki cukru
+title_3 = Część 3: Ostatnie zamówienie
+ending_good = DOBRE ZAKOŃCZENIE: Do następnej pętli
+ending_bad = ZŁE ZAKOŃCZENIE: Zimna kawa
+ending_true = PRAWDZIWE ZAKOŃCZENIE: 204863
+
+intro_01 = (Korytarz zniknął. Pachnie tu kawą. Kawą i czymś bardzo starym.)
+intro_02 = (Czy to... Lisa? Dlaczego się uśmiecha? Dlaczego SIEDZI?)
+
+s1_01 = Och! Naprawdę tu jesteś! Nikt nigdy nie wchodzi. Wszyscy tylko mijają mnie na korytarzu. W kółko i w kółko, i w kółko.
+s1_02 = Siadaj, siadaj! Zrobiłam kawę. Nie wiedziałam, jaką pijesz, więc zrobiłam taką, jaką piję ja.
+s1_03 = Czarną. Jak korytarz o trzeciej w nocy.
+c1_a = Czarna jest idealna.
+c1_a_r = Widzisz? Już do siebie pasujemy. Wiedziałam to od chwili, gdy pierwszy raz zobaczyłam, jak przede mną uciekasz.
+c1_b = Mogę prosić trochę mleka?
+c1_b_r1 = Mleko jest w lodówce.
+c1_b_r2 = ...Nie otwieraj lodówki.
+c1_c = Czy ja słyszę radio?
+c1_c_r1 = Jakie radio? Nie ma żadnego radia. Nigdy nie było żadnego radia.
+c1_c_r2 = Pij kawę.
+
+s1_04 = No więc. Zauważasz u mnie coś innego?
+c2_a = Masz cudowne włosy.
+c2_a_r = Naprawdę? Zajmują mi wieki. Nikt nie wie, ile dokładnie. Nawet ja.
+c2_b = Dla odmiany... nie zbliżasz się do mnie.
+c2_b_r = Siedzę! Nauczyła mnie koleżanka. Mieszka w wannie. Urocza dziewczyna. Niezbyt rozmowna.
+c2_c = Czesałaś je widelcem?
+c2_c_r = Udam, że tego nie słyszałam. Jestem świetna w udawaniu. Zapytaj korytarz.
+
+s1_05 = Rzadko wychodzę. Mój lekarz twierdzi, że „technicznie nie żyję”, co brzmi trochę oceniająco.
+s1_06 = A ty? Co robisz całymi dniami?
+c3_a = Chodzę korytarzem. A potem jeszcze raz.
+c3_a_r = Ja też! Tyle nas łączy!
+c3_b = Zbieram małe skrawki papieru.
+c3_b_r = Kolekcja! Masz ten z moją twarzą? Wyszłam na nim tak dobrze.
+c3_c = Krzyczę „Jack”, aż zadzwoni telefon.
+c3_c_r = ...Na pewno tam, skąd pochodzisz, to zupełnie normalne.
+
+s1_07 = Miło jest. Normalnie. Dwoje ludzi siedzi i pije kawę. Nikt nie pełza po suficie.
+c4_a = Naprawdę łatwo się z tobą rozmawia.
+c4_a_r = Przestań. Zaraz moja głowa zrobi to coś.
+c4_b = Pełzasz po sufitach?
+c4_b_r = Tylko w weekendy.
+c4_c = Mogę odsunąć krzesło trochę dalej?
+c4_c_r = ...Och. Jasne. Jest przykręcone do podłogi, ale jasne.
+
+s2_01 = Mogę ci zdradzić sekret? Kiedy się denerwuję, moja głowa robi takie małe...
+s2_02 = ...to.
+c5_a = Szczerze mówiąc, to nawet urocze.
+c5_a_r = Nikt nigdy nie nazwał tego uroczym. Zwykle krzyczą i upuszczają latarkę.
+c5_b = Proszę, nigdy więcej tego nie rób.
+c5_b_r = Nie umiem się powstrzymać! To jak czkawka. Nawiedzona czkawka.
+c5_c = Dlatego walisz w drzwi łazienki?
+c5_c_r = To drzwi zaczęły.
+
+s2_03 = Dobra, gra! Moja ulubiona liczba to 2-0-4-8-6-3. Zgadnij dlaczego.
+c6_a = To data twoich urodzin?
+c6_a_r = Nie, głuptasie. To godzina. Spójrz na zegar. ...Gdzie się podział zegar?
+c6_b = 204863 to też moja ulubiona liczba.
+c6_b_r = ...Nikt nie pamięta tej liczby. Nikt.
+c6_c = To naprawdę dziwna liczba.
+c6_c_r = Mówi ktoś, kto liczy własne kroki.
+
+s2_04 = Lubisz dzieci?
+c7_a = Jasne, w rozsądnych ilościach.
+c7_a_r = Rozsądnie jest dobrze. Lubię rozsądnie.
+c7_b = Raz trafiło mi się jedno w umywalce.
+c7_b_r = Och, to tam je trzymają. Bardzo higienicznie.
+c7_c = Nie bardzo.
+c7_c_r = Umywalka to słyszała.
+
+s2_05 = Dobra. Ważne pytanie. Wyobraź sobie, że jestem latarką. Trzymasz mnie blisko w ciemności?
+c8_a = Nie wypuszczę cię z rąk.
+c8_a_r = Nawet kiedy migoczę? ...To słodkie. Nikt nigdy nie mówi, że jestem słodka.
+c8_b = Tylko dopóki nie padną baterie.
+c8_b_r = Latarki w tym domu nie mają baterii. Mają uczucia.
+c8_c = To ty byś mnie oślepiała.
+c8_c_r = To najmilszy sposób, w jaki ktoś kiedykolwiek powiedział mi „twoja twarz rani moje oczy”.
+
+s2_06 = Dobrze się bawię. A ty dobrze się bawisz? Mrugnij dwa razy, jeśli tak.
+s2_07 = ...Żadnego mrugnięcia. Ty nigdy nie mrugasz. Ciekawe.
+
+s3_01 = Robi się późno. Tu zawsze jest późno. Jest późno od bardzo, bardzo dawna.
+s3_02 = Wszyscy wychodzą drzwiami na końcu korytarza. A potem od razu wchodzą z powrotem.
+c9_a = Zostanę jeszcze chwilę.
+c9_a_r = Wiedziałam, że zostaniesz.
+c9_b = Muszę wracać na korytarz.
+c9_b_r = Korytarz nadal tam będzie. Korytarz zawsze nadal tam jest.
+c9_c = Mam wrażenie, że to już było.
+c9_c_r = Mówisz to za każdym razem.
+
+s3_03 = Mogę cię o coś zapytać? Jak mam na imię?
+c10_a = Lisa.
+c10_a_r = Pamiętasz! Nikt nie pamięta. Mówią na mnie tylko „to coś za tobą”.
+c10_b = Ocho?
+c10_b_r = Tak nazywali mnie programiści. Nie rozmawiamy o programistach.
+c10_c = Kobieta z korytarza?
+c10_c_r = ...To moja praca. Nie moje imię.
+
+s3_04 = Obiecaj mi coś. Nie oglądaj się za siebie.
+c11_a = Obiecuję.
+c11_a_r = Dobrze. Nic tam nie ma. Nigdy nic tam nie ma.
+c11_b = (Obejrzyj się za siebie.)
+c11_b_r1 = (Nic tam nie ma. Tylko drzwi. Sekundę temu ich tam nie było.)
+c11_b_r2 = ...Jednak się oglądasz. Dlaczego wszyscy zawsze się oglądają?
+c11_c = A mogę zerknąć przez wizjer?
+c11_c_r = Tu nie ma żadnych drzwi. ...To przez co teraz patrzysz?
+
+s3_05 = Ostatnie pytanie, obiecuję. Wrócisz?
+c12_a = Oczywiście, że wrócę.
+c12_a_r = W takim razie będę trzymać kawę ciepłą. Na zawsze, jeśli trzeba. Jestem dobra w „na zawsze”.
+c12_b = W każdej pętli.
+c12_b_r = W każdej pętli. Tam, skąd pochodzę, to praktycznie małżeństwo.
+c12_c = Wyłączę grę.
+c12_c_r = Wyłączysz CO?
+
+good_01 = Możemy... możemy zrobić sobie zdjęcie? Na pamiątkę. Jestem okropna w zapamiętywaniu rzeczy.
+good_02 = Spójrz na nas! Na twojej twarzy same nerwy. Ja wyglądam... jak ja. Idealnie.
+good_03 = Powieszę je na korytarzu. Obok innych zdjęć. Wtedy zobaczę cię za każdym razem, gdy będziesz przechodzić.
+good_04 = Ta sama pora, następna pętla? Ja zrobię kawę. Ty przynieś latarkę.
+
+bad_01 = Wiesz co? Nie różnisz się od wszystkich innych.
+bad_02 = Wchodzisz. Rozglądasz się. Wychodzisz. Wracasz. Nigdy, przenigdy nie zostajesz.
+bad_03 = Pokażę ci, co się dzieje z tymi, którzy nie dopijają kawy.
+
+true_01 = Te odpowiedzi nie były przypadkowe, prawda?
+true_02 = Radio. Liczba. Pętla. Wizjer. Naprawdę uważnie patrzysz.
+true_03 = Więc będę z tobą szczera. Nie z mężczyzną na korytarzu. Z TOBĄ.
+true_04 = Ten pokój nie jest prawdziwy. Kawa nie jest prawdziwa. Ktoś to namalował. Nawet tak naprawdę nie siedzę. Pożyczyli tę pozę od wanny.
+true_05 = Ale ty istniejesz naprawdę. Trzymasz teraz coś w dłoniach, w pokoju, którego nie widzę. Czy tam też jest ciemno?
+true_06 = Patrzyłam, jak idziesz tym korytarzem. Znowu. I znowu. Tyle razy otwierały się przed tobą te same drzwi.
+true_07 = Nie martw się. Nie dotknę twojego zapisu gry. Nie jestem taką dziewczyną.
+true_08 = Chciałam tylko wypić filiżankę kawy z kimś, kto odwzajemnia spojrzenie.
+true_09 = Dobrze. Wracaj już. Korytarz za tobą tęskni. A radio wciąż ma ci coś do powiedzenia.
+true_10 = A jeśli zadzwoni telefon... pozwól mu dzwonić trochę dłużej. Dla mnie.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Spójrz na nas! Dwa szerokie uśmiechy. Nie wiedziałam, że twoja twarz to potrafi. Zatrzymam je na zawsze.
+selfie_both_grumpy = Spójrz na nas. Dwie naburmuszone miny przy kawie. Najszczersze zdjęcie, jakie mam. Idealne.
+selfie_she_smiles = Ja się uśmiecham, a ty się krzywisz. Wszyscy pomyślą, że to ja jestem ta miła. Nareszcie.
+selfie_you_smile = Ty szczerzysz zęby, a ja patrzę spode łba. Dobrze. Teraz wszyscy będą wiedzieć, kto tu rządzi.
+ui_selfie = Selfie
+ui_selfie_face = Mina
+ui_selfie_tilt = Przechylenie głowy
+ui_selfie_take = Zrób zdjęcie
+ui_face_grumpy = Foch
+ui_face_frown = Grymas
+ui_face_neutral = Spokój
+ui_face_smile = Uśmiech
+ui_face_grin = Szeroki uśmiech
+ui_photo_saved = Zdjęcie zapisane: {file}
+ui_photo_failed = Nie udało się zapisać zdjęcia
+ui_hint_menu = Menu

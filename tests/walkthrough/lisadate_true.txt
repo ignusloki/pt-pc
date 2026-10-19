@@ -1,0 +1,37 @@
+# Coffee with Lisa: the radio, the number, the loop and the peephole (TRUE)
+slisadate
+swait 420
+slisachoice 3
+swait 30
+sshot {shots}/true_01_radio.png
+swait 2
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 2
+swait 20
+sshot {shots}/true_02_number.png
+swait 2
+slisachoice 1
+slisachoice 1
+slisachoice 3
+slisachoice 1
+slisachoice 3
+slisachoice 1
+slisaline true_04
+swait 100
+sshot {shots}/true_03_corrupt.png
+swait 2
+slisaline true_07
+swait 40
+sshot {shots}/true_04_corrupt.png
+swait 2
+slisaadvance
+swait 200
+sshot {shots}/true_05_ending.png
+swait 2
+slisawait
+sexpect lisadate 0
+swait 30
+sshot {shots}/true_06_back.png

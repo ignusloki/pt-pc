@@ -1,0 +1,28 @@
+# The top banner takes its lines one at a time (src/game/ui/notice_queue.h): the update notice (--fake-update), the enhanced textures lines
+# and the Game+ tier asked for in the same moment come one after the other, each for its whole 7.5 s, none on top of another or of the subtitle
+# at the bottom. PT_TEST_TEXTURE_SCREEN=5000 makes up a generation of 1500 maps (the start's screen, skipped at frames 5 and 9 with Return;
+# then its "being prepared" line, and "ready" when the maps are made). The log's "notice: shown" and "notice: ended ... after 7.5 s" lines
+# give the order and the times.
+# PT_TEST_TEXTURE_SCREEN=5000 pt.exe --headless --render-all --virtual-pads --audio-offline --no-save --no-mods --start-floor f010
+#   --fake-update 99.0.0 --width 1280 --height 720 --frames 8000 --input-script tests/pad/notices.txt
+5 ktap Return
+9 ktap Return
+20 sui subs 1 0
+20 sstep 15
+20 swait 20
+20 sui notice pc_gameplus_notice 2
+20 swait 5
+20 sui notice pc_gameplus_notice 2
+20 swait 100
+20 sshot notices_first.png
+20 sui subtitle tria1000_1a1010
+20 swait 340
+20 sshot notices_second_with_subtitle.png
+20 swait 450
+20 sshot notices_third.png
+20 swait 450
+20 sshot notices_fourth.png
+20 swait 450
+20 sshot notices_fifth.png
+20 swait 600
+20 sshot notices_none.png

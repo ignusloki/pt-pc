@@ -2,24 +2,29 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 struct SDL_AudioStream;
 
 namespace pt::audio {
 
+class SpatialOutput;
+
 class AudioOutput {
 public:
+    static void SetPreferSpatial(bool prefer) { prefer_spatial_ = prefer; }
+
     using RenderFunction = std::function<void(float* interleaved, uint32_t frames, uint32_t channels)>;
 
-    AudioOutput() = default;
+    AudioOutput();
     ~AudioOutput();
     AudioOutput(const AudioOutput&) = delete;
     AudioOutput& operator=(const AudioOutput&) = delete;
 
     bool Open(uint32_t sample_rate, bool surround, RenderFunction render);
     void Close();
-    bool IsOpen() const { return stream_ != nullptr; }
+    bool IsOpen() const { return stream_ != nullptr || spatial_ != nullptr; }
     uint32_t Channels() const { return channels_; }
 
 private:
@@ -30,6 +35,8 @@ private:
     RenderFunction render_;
     std::vector<float> buffer_;
     uint32_t channels_ = 2;
+    std::unique_ptr<SpatialOutput> spatial_;
+    static inline bool prefer_spatial_ = false;
 };
 
 }

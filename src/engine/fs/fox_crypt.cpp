@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/fs/fox_crypt.h"
 
 #include <cctype>
@@ -47,7 +48,7 @@ bool DecryptPackageEntry(std::span<const uint8_t> data, std::string_view file_na
     }
     std::string lower(file_name.substr(file_name.find_last_of('/') == std::string_view::npos ? 0 : file_name.find_last_of('/') + 1));
     for (char& c : lower) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        c = static_cast<char>(pt::AsciiLower(c));
     }
     const uint64_t key64 = ~StrCode64(lower);
     uint8_t key[8];

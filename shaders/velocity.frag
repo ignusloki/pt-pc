@@ -16,7 +16,7 @@ layout(location = 0) out vec4 out_color;
 
 void main() {
     Material m = materials[draw.ids.y];
-    float alpha = (m.flags & MAT_CONSTANT_COLOR) != 0u ? 1.0 : texture(textures[nonuniformEXT(m.albedo)], in_uv0).a;
+    float alpha = (m.flags & MAT_CONSTANT_COLOR) != 0u ? 1.0 : texture(PT_TEX2D(m.albedo), in_uv0).a;
     vec4 dither = MeshDither(gl_FragCoord.xy, frame.views[draw.ids.x].temporal);
     if (draw.tint.a - dither.x < 0.0 || alpha - m.params.x * AlphaReference(m.flags, dither) < 0.0) {
         discard;

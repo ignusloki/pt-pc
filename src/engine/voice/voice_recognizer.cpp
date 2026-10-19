@@ -1,7 +1,6 @@
 #include "engine/voice/voice_recognizer.h"
 
 #include <whisper.h>
-// This pinned runtime header defines the version checked before registering a backend DLL.
 #include <ggml-backend-impl.h>
 
 #include <algorithm>
@@ -32,12 +31,11 @@
 namespace pt {
 namespace {
 
-constexpr int kChunk = 512; // the Silero window at 16 kHz (32 ms)
+constexpr int kChunk = 512;
 constexpr const char* kDefaultWhisperModel = "ggml-base.en-q5_1.bin";
 constexpr const char* kDefaultRescueModel = "ggml-small.en-q5_1.bin";
 constexpr const char* kVadModel = "ggml-silero-v6.2.0.bin";
 
-// PT_VOICE_MODEL=<file in the voice folder>: another whisper model, for measurements (formats/voice.md)
 std::string WhisperModelName() {
     const char* name = std::getenv("PT_VOICE_MODEL");
     return name && name[0] ? name : kDefaultWhisperModel;
@@ -83,7 +81,6 @@ struct MemoryLoader {
     }
     static void Close(void*) {}
 
-    // a wide path, so a user folder outside the ANSI code page still loads (whisper's own loaders take char paths)
     bool Open(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) return false;
@@ -96,9 +93,6 @@ struct MemoryLoader {
     whisper_model_loader Loader() { return {this, Read, Eof, Close}; }
 };
 
-// whisper.cpp and ggml are DLLs in voice/ (cmake/Dependencies.cmake), loaded here so that pt.exe itself holds no code
-// beyond x86-64 SSE2; the CPU code is the ggml-cpu-* variant with the best score for this CPU, or PT_VOICE_CPU=<name>
-// (x64, sse42, sandybridge, haswell, ...) to force one, which tools/voice_check.py uses to test the SSE2 path.
 struct WhisperApi {
 #define PT_WHISPER_FUNCTIONS(X)                                                                      \
     X(whisper_context_default_params) X(whisper_free) X(whisper_full) X(whisper_full_default_params)     \
@@ -116,7 +110,6 @@ struct WhisperApi {
 WhisperApi g_api;
 std::mutex g_api_mutex;
 
-// whisper.dll, ggml.dll and ggml-cpu-*.dll on Windows; libwhisper.so, libggml.so and libggml-cpu-*.so on Linux
 #ifdef _WIN32
 using Library = HMODULE;
 constexpr const char* kLibraryPrefix = "";
@@ -144,7 +137,6 @@ constexpr const char* kLibraryExtension = ".dylib";
 constexpr const char* kLibraryExtension = ".so";
 #endif
 constexpr const char* kModuleExtension = ".so";
-// RTLD_GLOBAL, so that libwhisper.so finds the libggml.so loaded before it
 Library LoadNear(const std::filesystem::path& path) { return dlopen(std::filesystem::absolute(path).c_str(), RTLD_NOW | RTLD_GLOBAL); }
 void* Symbol(Library library, const char* name) { return dlsym(library, name); }
 void Unload(Library library) { dlclose(library); }
@@ -155,6 +147,26 @@ std::string LoadError() {
 #endif
 
 std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) + name + kLibraryExtension; }
+
+void TestLoaderStall() {
+#ifdef _WIN32
+    const char* text = std::getenv("PT_VOICE_LOAD_STALL_MS");
+    const int ms = text ? std::atoi(text) : 0;
+    if (ms <= 0) return;
+    using Lock = LONG(NTAPI*)(ULONG, ULONG*, ULONG_PTR*);
+    using Unlock = LONG(NTAPI*)(ULONG, ULONG_PTR);
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto lock = reinterpret_cast<Lock>(reinterpret_cast<void*>(GetProcAddress(ntdll, "LdrLockLoaderLock")));
+    const auto unlock = reinterpret_cast<Unlock>(reinterpret_cast<void*>(GetProcAddress(ntdll, "LdrUnlockLoaderLock")));
+    if (!lock || !unlock) return;
+    LogInfo("voice: test loader stall of {} ms", ms);
+    ULONG state = 0;
+    ULONG_PTR cookie = 0;
+    lock(0, &state, &cookie);
+    Sleep(static_cast<DWORD>(ms));
+    unlock(0, cookie);
+#endif
+}
 
 std::filesystem::path RuntimeDirectory(const std::filesystem::path& model_dir) {
 #ifdef __ANDROID__
@@ -168,6 +180,7 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
     const std::filesystem::path dir = RuntimeDirectory(model_dir);
     std::lock_guard lock(g_api_mutex);
     if (g_api.ready) return true;
+    TestLoaderStall();
     failure = VoiceRecognizer::Failure::Runtime;
     const Library base = LoadNear(dir / LibraryName("ggml-base"));
     std::string error = base ? "" : LoadError();
@@ -190,13 +203,12 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
         LogError("voice: missing export in {} or {}", LibraryName("whisper"), LibraryName("ggml"));
         return false;
     }
-    g_api.whisper_log_set(WhisperLog, nullptr); // ggml's log too, so loading the CPU code below logs through it
-    // the CPU variant: each ggml-cpu-* library scores what this CPU can run (0 when it cannot), as ggml_backend_load_all does
+    g_api.whisper_log_set(WhisperLog, nullptr);
     const char* forced = std::getenv("PT_VOICE_CPU");
     std::filesystem::path best;
     bool registered = false;
     int best_score = 0;
-    int candidates = 0; // ggml-cpu-* libraries present, how many of them loaded
+    int candidates = 0;
     int loaded = 0;
     std::string load_error;
     std::error_code ec;
@@ -224,9 +236,6 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
         }
     }
     if (!best.empty()) {
-        // ggml_backend_load accepts a narrow path and constructs std::filesystem::path from it. On Windows that
-        // interprets UTF-8 bytes through the active code page, so it cannot load a backend below a Unicode profile.
-        // Load the module with the platform's native path API, register its exported backend, and retain the module.
         g_api.cpu_backend = LoadNear(best);
         using InitBackend = ggml_backend_reg_t (*)();
         const auto init_backend = g_api.cpu_backend
@@ -244,7 +253,6 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
             Unload(reinterpret_cast<Library>(g_api.cpu_backend));
             g_api.cpu_backend = nullptr;
         }
-        // three different faults, three messages: only the last one is the CPU's
         const std::string where = os::PathToUtf8(dir);
         const std::string note = forced ? std::format(" (PT_VOICE_CPU={})", forced) : "";
         if (candidates == 0) {
@@ -287,8 +295,6 @@ void WriteSegment(const std::filesystem::path& folder, const std::vector<float>&
     for (const float s : audio) u16(static_cast<uint16_t>(static_cast<int16_t>(std::lround(std::clamp(s, -1.0f, 1.0f) * 32767.0f))));
 }
 
-// Lower case ASCII letters and digits, apostrophes dropped, anything else a space. The accented Latin letters Whisper
-// writes for an accented "Jack" (Jäk, Džek, Ĵek, Çek) fold to their base letters first.
 std::string Lower(std::string_view text) {
     static constexpr std::pair<std::string_view, std::string_view> kFold[] = {
         {"\xC3\xA0", "a"}, {"\xC3\xA1", "a"}, {"\xC3\xA2", "a"}, {"\xC3\xA3", "a"}, {"\xC3\xA4", "a"}, {"\xC3\xA5", "a"},
@@ -318,11 +324,6 @@ std::string Lower(std::string_view text) {
     return out;
 }
 
-// "Jack" by its sound: an onset of j, dj, dz, dzh or zh, an a or e vowel (a, e, ae, ah, eh, aa) and a k coda (k, c,
-// ck, kk, q, cq, kh). That is how Whisper writes the word from accents that front the vowel or soften the j: Jek,
-// Jeck, Djack, Dzhek, Jäk, Džek (Turkish, Slavic, German, Scandinavian speakers). No English word has this shape except
-// "jack" itself, so "check", "deck", "Zack", "jet" and "jerk" stay out ("Jake" is taken separately, as a short transcript). A y onset ("Yek") is not taken: the
-// model writes it for "yak" as well.
 bool SoundsLikeJack(std::string_view w) {
     auto take = [&](std::initializer_list<std::string_view> options) {
         for (const std::string_view o : options) {
@@ -339,17 +340,11 @@ bool SoundsLikeJack(std::string_view w) {
 
 enum class Spelling { None, Word, Short };
 
-// "Jack" as Whisper spells it: Jack, Jacks, Jacked, Jak, Jac, Jacques count in any transcript up to the word limit. The
-// spellings that are also other words count only in a transcript of at most three words: Jacket, Jackie ("jack"
-// first), Jock (the vowel of a Canadian or Scottish "Jack") and the accented forms of SoundsLikeJack. Only "Jack": the
-// original's grammar holds that one word (EnglishUS.gnd) and its detection compares the result with strcmp("Jack")
-// (0x927090), so "Jarith", which some players say, is not the word (formats/voice.md).
 /* Only "Jack" counts: the original's grammar holds that one word and its check is a strcmp (0x927090), so "Jarith" misses there too. */
 Spelling KeywordSpelling(std::string_view w) {
     for (const char* word : {"jack", "jacks", "jacked", "jak", "jac", "jaq", "jakk", "jacc", "jaque", "jaques", "jacque", "jacques"}) {
         if (w == word) return Spelling::Word;
     }
-    // Jake: the lengthened vowel of a "Jack" said at a Turkish or Slavic microphone (a tester heard back "Jake" for it)
     if (w.starts_with("jack") || w.starts_with("jacq") || w == "jock" || w == "jake" || w == "jakes" || SoundsLikeJack(w)) return Spelling::Short;
     return Spelling::None;
 }
@@ -374,7 +369,6 @@ void FirstStepLogits(whisper_context* ctx, whisper_state*, const whisper_token_d
     step->probability = sum > 0.0 ? static_cast<float>(p / sum) : 0.0f;
 }
 
-
 }
 
 VoiceRecognizer::VoiceRecognizer() = default;
@@ -384,8 +378,6 @@ VoiceRecognizer::~VoiceRecognizer() {
 }
 
 bool VoiceRecognizer::MatchesKeyword(std::string_view text, int max_words, int* word_count) {
-    // words are counted once each: a short clip can make the decoder repeat itself ("Hey Jack Hey Jack ..."), while
-    // someone talking (the radio) uses many different words
     const std::string lower = Lower(text);
     std::vector<std::string_view> words;
     Spelling found = Spelling::None;
@@ -404,8 +396,6 @@ bool VoiceRecognizer::MatchesKeyword(std::string_view text, int max_words, int* 
     return (found == Spelling::Word && count <= max_words) || (found == Spelling::Short && count <= 3);
 }
 
-// PT_VOICE_TUNE=name=value,...: overrides of Settings for measurements (tools/voice_check.py, formats/voice.md), numbers only:
-// start, end, startp, endp, preroll, minspeech, maxsegment, floor, maxgain, maxwords, jackp, threads, prio, bridge, beam
 static void ApplyTune(VoiceRecognizer::Settings& s) {
     const char* text = std::getenv("PT_VOICE_TUNE");
     if (!text) return;
@@ -504,7 +494,6 @@ bool VoiceRecognizer::Feed(std::span<const int16_t> samples) {
             std::lock_guard lock(mutex_);
             input_.insert(input_.end(), samples.begin(), samples.end());
             fed_ += samples.size();
-            // the worker is loading or far behind: keep the newest 8 s, as a gap cannot join two words into one
             const size_t limit = 8 * kSampleRate;
             if (input_.size() > limit) {
                 const size_t drop = input_.size() - limit;
@@ -563,7 +552,7 @@ bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
         failure_ = failure;
         return false;
     }
-    failure_ = Failure::Model; // until both models are loaded
+    failure_ = Failure::Model;
     MemoryLoader file;
     if (!file.Open(model_dir / kVadModel)) {
         LogError("voice: cannot read {}", os::PathToUtf8(model_dir / kVadModel));
@@ -578,8 +567,6 @@ bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
         LogError("voice: VAD model load failed");
         return false;
     }
-    // whisper_vad_init leaves the LSTM state buffer uninitialized and only whisper_vad_reset_state clears it: without this
-    // the streaming VAD sometimes starts from garbage and gives one constant probability (0.349) for every window
     /* whisper_vad_init leaves the LSTM state uninitialised; without this reset the VAD sometimes returns a constant 0.349 for every window. */
     g_api.whisper_vad_reset_state(vad_);
     if (!file.Open(model_dir / WhisperModelName())) {
@@ -604,7 +591,6 @@ bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
         }
     }
     if (settings.rescue == 4) {
-        // the second opinion: a larger model that only sees the short utterances the first one did not take for the word
         const std::string name = settings.rescue_model.empty() ? std::string(kDefaultRescueModel) : settings.rescue_model;
         MemoryLoader second_file;
         if (second_file.Open(model_dir / name)) {
@@ -647,7 +633,7 @@ void VoiceRecognizer::Run(std::filesystem::path model_dir) {
 #elif defined(__APPLE__)
     pthread_set_qos_class_self_np(settings.priority < 0 ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED, 0);
 #else
-    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), settings.priority < 0 ? 10 : 0); // this thread only: nice 10
+    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), settings.priority < 0 ? 10 : 0);
 #endif
     const bool loaded = LoadModels(model_dir);
     if (!loaded) FreeModels();
@@ -712,7 +698,6 @@ void VoiceRecognizer::ProcessChunk(const float* raw) {
     for (int i = 0; i < kChunk; ++i) energy += static_cast<double>(raw[i]) * raw[i];
     const float db = static_cast<float>(10.0 * std::log10(energy / kChunk + 1e-12));
     if (!in_speech_) {
-        // the noise floor (10th percentile of the last 3 s outside speech) sets the gain that lifts a quiet microphone
         level_history_.push_back(db);
         if (level_history_.size() > static_cast<size_t>(3 * kSampleRate / kChunk)) level_history_.pop_front();
         std::vector<float> sorted(level_history_.begin(), level_history_.end());
@@ -745,7 +730,6 @@ void VoiceRecognizer::ProcessChunk(const float* raw) {
             ++candidate_voiced_chunks_;
             speech_gap_chunks_ = 0;
         } else if (settings.bridge_onset && speech_chunks_ > 0 && speech_gap_chunks_ == 0 && p >= voiced_probability) {
-            // One moderate VAD frame may split the onset of a short word; still require two high frames to open it.
             ++speech_gap_chunks_;
             ++candidate_voiced_chunks_;
         } else {
@@ -781,7 +765,6 @@ void VoiceRecognizer::CloseSegment(bool forced) {
     std::vector<float> audio = std::move(segment_);
     segment_.clear();
     const float voiced = static_cast<float>(voiced_chunks_) * kChunk / kSampleRate;
-    // A 100 ms minimum is quantized in 32 ms frames: 96 ms is the closest representable duration.
     const int min_voiced_chunks = std::max(1, static_cast<int>(std::floor(settings.min_speech_seconds * kSampleRate / kChunk)));
     if (voiced_chunks_ < min_voiced_chunks) {
         if (VoiceDiagnosticsEnabled()) {
@@ -793,13 +776,12 @@ void VoiceRecognizer::CloseSegment(bool forced) {
         return;
     }
     if (!forced) {
-        // keep 0.2 s of the trailing silence
         const size_t tail = static_cast<size_t>(silence_chunks_) * kChunk;
         const size_t keep_tail = static_cast<size_t>(0.2f * kSampleRate);
         if (tail > keep_tail && audio.size() > tail) audio.resize(audio.size() - (tail - keep_tail));
     }
     Result result = Transcribe(std::move(audio));
-    if (result.text.empty() && result.decode_ms == 0.0f) return; // digital silence (a muted or absent device)
+    if (result.text.empty() && result.decode_ms == 0.0f) return;
     const uint32_t count = ++utterances_;
     LogInfo("voice: utterance {} ({:.2f} s{}) heard '{}', p(jack) {:.3f}, decoded in {:.0f} ms{}", count, result.seconds,
             forced ? ", cut" : "", result.text, result.jack_probability, result.decode_ms, result.detected ? ": the word" : "");
@@ -810,8 +792,6 @@ void VoiceRecognizer::CloseSegment(bool forced) {
     if (results_.size() > 64) results_.erase(results_.begin());
 }
 
-// One whisper_full over normalized audio of at least 1.5 s: greedy or beam search, an optional initial prompt, and the
-// first token's probability for the keyword (FirstStepLogits)
 VoiceRecognizer::Decoded VoiceRecognizer::Decode(whisper_context* ctx, const std::vector<int>& jack_tokens, const std::vector<float>& audio, const char* prompt, int beam, float temperature, int best_of) {
     Decoded out;
     whisper_full_params params = g_api.whisper_full_default_params(beam > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
@@ -830,18 +810,13 @@ VoiceRecognizer::Decoded VoiceRecognizer::Decode(whisper_context* ctx, const std
     params.temperature_inc = 0.0f;
     params.greedy.best_of = best_of;
     if (prompt && prompt[0]) params.initial_prompt = prompt;
-    // the encoder over 7.7 s (384 of its 1500 positions, 50 a second) rather than the full 30 s window: 4 to 5 times
-    // faster at the same accuracy on the test set, while 256 positions or fewer make the decoder repeat itself
     params.audio_ctx = std::clamp(static_cast<int>(audio.size() * 50 / kSampleRate) + 64, 384, 1500);
     FirstStep first;
     first.tokens = &jack_tokens;
     params.logits_filter_callback = FirstStepLogits;
     params.logits_filter_callback_user_data = &first;
-    // Shutdown (leaving f160, quitting) does not wait for a decode in progress
     params.abort_callback = [](void* self) { return static_cast<VoiceRecognizer*>(self)->abort_.load(); };
     params.abort_callback_user_data = this;
-    // No initial prompt by default: "Jack. Jarith." as the prompt lifts the test set's detection from 74% to 88% but turns
-    // the rhymes into the word too (false accepts 0.8% -> 5.3%: deck 4/8, Zack 3/8, check 1/8; formats/voice.md)
     if (g_api.whisper_full(ctx, params, audio.data(), static_cast<int>(audio.size())) != 0) {
         if (!abort_) LogWarn("voice: whisper_full failed");
         return out;
@@ -857,7 +832,6 @@ VoiceRecognizer::Result VoiceRecognizer::Transcribe(std::vector<float> audio) {
     Result result;
     result.seconds = static_cast<float>(audio.size()) / kSampleRate;
     const auto started = std::chrono::steady_clock::now();
-    // level: the 99.9th percentile of |x| to 0.7, so a microphone at -60 dBFS reaches the model as loud as one at -20
     std::vector<float> magnitude(audio.size());
     for (size_t i = 0; i < audio.size(); ++i) magnitude[i] = std::abs(audio[i]);
     const size_t at = std::min(magnitude.size() - 1, magnitude.size() * 999 / 1000);
@@ -866,13 +840,11 @@ VoiceRecognizer::Result VoiceRecognizer::Transcribe(std::vector<float> audio) {
     if (peak < 1e-5f) return result;
     const float scale = std::min(0.7f / peak, 3000.0f);
     for (float& s : audio) s = std::clamp(s * scale, -1.0f, 1.0f);
-    // whisper_full skips input under 1 s; the model expects silence after the speech anyway
     /* whisper_full drops input under 1 s; pad to 1.5 s with silence, which the model expects after speech anyway. */
     const size_t minimum = static_cast<size_t>(1.5f * kSampleRate);
     if (audio.size() < minimum) audio.resize(minimum, 0.0f);
 
-    // PT_VOICE_DUMP=<folder>: every segment as the model gets it, a 16 kHz wav, for a player's report of a missed word
-    if (const char* dump = std::getenv("PT_VOICE_DUMP")) WriteSegment(std::filesystem::path(dump), audio);
+    if (const std::string dump = os::GetEnv("PT_VOICE_DUMP"); !dump.empty()) WriteSegment(os::PathFromUtf8(dump), audio);
     Decoded first = Decode(whisper_, jack_tokens_, audio, settings.prompt.c_str(), settings.beam, 0.0f, 1);
     if (!first.ok) return result;
     result.text = first.text;
@@ -880,7 +852,6 @@ VoiceRecognizer::Result VoiceRecognizer::Transcribe(std::vector<float> audio) {
     int words = 0;
     result.detected = MatchesKeyword(result.text, settings.max_words, &words);
     if (!result.detected && words <= 3 && result.jack_probability >= settings.jack_token_probability) result.detected = true;
-    // a second look at a short utterance that did not make the word (settings.rescue, off by default)
     if (!result.detected && settings.rescue > 0 && words <= settings.rescue_words && result.seconds <= settings.rescue_seconds &&
         result.jack_probability >= settings.rescue_probability) {
         Decoded second;

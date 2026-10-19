@@ -1,5 +1,3 @@
-// Compile with tools/motion_blur_check.py: tests the production UpdateMotion body
-// with its camera/history state, without creating a Vulkan device.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -59,8 +57,13 @@ int main() {
     check("entering the street initializes fresh rates", std::abs(scene.blur_rates_.x - 3.6f) < 1e-4f);
     camera.yaw += 0.01f;
     scene.UpdateMotion(camera, dt);
-    const float expected = 3.6f + (0.6f - 3.6f) * (1.0f - std::exp(-dt / 0.1f));
-    check("street retains its 100 ms camera smoothing", std::abs(scene.blur_rates_.x - expected) < 1e-4f);
+    const float expected = 3.6f + (0.6f - 3.6f) * (1.0f - std::exp(-dt * 30.0f));
+    check("street smooths the camera over one 30 Hz frame", std::abs(scene.blur_rates_.x - expected) < 1e-4f);
+    const float turning = scene.blur_rates_.x;
+    for (int i = 0; i < 6; ++i) {
+        scene.UpdateMotion(camera, dt);
+    }
+    check("street blur has decayed to 5 percent 100 ms after the view stops", std::abs(scene.blur_rates_.x) < 0.0501f * turning);
     scene.lighting.screen.smooth_camera_motion_blur = false;
     scene.UpdateMotion(camera, dt);
     check("leaving the street immediately discards residual blur",

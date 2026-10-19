@@ -1,8 +1,5 @@
 #pragma once
 
-// The operating system layer: everything the engine needs from Windows or Linux beyond SDL (docs/linux.md). Each call has
-// one implementation per platform in os.cpp; nothing else in the engine includes windows.h or POSIX headers for these.
-
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -14,7 +11,6 @@
 
 namespace pt::os {
 
-// SDL and external text paths use UTF-8; filesystem paths retain the platform's native encoding.
 inline std::filesystem::path PathFromUtf8(std::string_view text) {
     return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
@@ -23,16 +19,16 @@ inline std::string PathToUtf8(const std::filesystem::path& path) {
     return std::string(reinterpret_cast<const char*>(text.data()), text.size());
 }
 
-// fopen with a Unicode path (Windows needs the wide call for paths outside the ANSI code page)
 FILE* OpenFile(const std::filesystem::path& path, const char* mode);
-// fseek with 64-bit offsets
+bool SameFileName(const std::filesystem::path& a, const std::filesystem::path& b);
+bool IsLink(const std::filesystem::path& path);
+bool IsLinkReparseTag(uint32_t tag);
+std::filesystem::path ExecutableFile();
 int SeekFile(FILE* file, int64_t offset, int origin);
-// an environment variable, empty when unset
 std::string GetEnv(const char* name);
 uint32_t ProcessId();
+void LowerCurrentThreadPriority();
 
-// Runs a program without a console or shell, its output and errors into `log`, its input empty, at below-normal priority.
-// Waits until it ends, `cancel` turns true (then it is killed) or `timeout` passes (killed, timed_out set).
 struct ProcessResult {
     bool started = false;
     bool timed_out = false;
@@ -42,7 +38,40 @@ struct ProcessResult {
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout);
 
-// An exclusive lock on a file, held until destroyed: a second holder (another running copy of the game) fails to get it.
+bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir);
+bool ProcessAlive(uint64_t pid);
+
+struct ForegroundWindow {
+    uint64_t handle = 0;
+    uint32_t pid = 0;
+    std::string title;
+    std::string window_class;
+    std::string process;
+};
+ForegroundWindow GetForegroundWindowInfo(bool details = true);
+bool IsForegroundWindow(void* window);
+bool ForegroundIsOwnProcess();
+bool ActivateWindow(void* window);
+void AllowForeground(uint32_t pid);
+
+class ChildProcess {
+public:
+    ChildProcess() = default;
+    ~ChildProcess();
+    ChildProcess(const ChildProcess&) = delete;
+    ChildProcess& operator=(const ChildProcess&) = delete;
+    bool Start(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir);
+    bool Started() const { return handle_ != kNone; }
+    bool Running(int* exit_code = nullptr);
+
+private:
+    static constexpr intptr_t kNone = -1;
+    intptr_t handle_ = kNone;
+};
+
+std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path);
+std::wstring QuoteWindowsArgument(const std::wstring& arg);
+
 class FileLock {
 public:
     explicit FileLock(const std::filesystem::path& path);
@@ -56,8 +85,13 @@ private:
     intptr_t handle_ = -1;
 };
 
-// Windows: whether the display the window is on shows HDR (Settings > Display > Use HDR), read from DXGI; nullopt when it
-// cannot be told (no DXGI, another system). Vulkan drivers offer the HDR swapchain formats with HDR off as well
 std::optional<bool> WindowDisplayHdr(void* hwnd);
+
+struct DisplayHdrInfo {
+    bool hdr = false;
+    float max_luminance = 0.0f;
+    float min_luminance = 0.0f;
+};
+std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd);
 
 }

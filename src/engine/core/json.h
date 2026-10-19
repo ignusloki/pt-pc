@@ -10,9 +10,6 @@ namespace pt::json {
 
 struct Member;
 
-// A small JSON document model for the mods' glTF models and level.json (RFC 8259; comments and trailing commas let through).
-// An object's members are a struct declared after Value: a std::pair holding Value inside Value does not compile with
-// libstdc++ (Linux), which requires the pair's types complete
 struct Value {
     enum class Type { Null, Bool, Number, String, Array, Object };
     Type type = Type::Null;
@@ -27,12 +24,10 @@ struct Value {
     bool IsString() const { return type == Type::String; }
     bool IsArray() const { return type == Type::Array; }
     bool IsObject() const { return type == Type::Object; }
-    // the member of an object, or nullptr
     const Value* Find(std::string_view key) const;
     double Number(std::string_view key, double fallback) const;
     std::string String(std::string_view key, std::string_view fallback = {}) const;
     bool Bool(std::string_view key, bool fallback) const;
-    // the element of an array, or nullptr
     const Value* At(size_t index) const;
     size_t Size() const;
 };

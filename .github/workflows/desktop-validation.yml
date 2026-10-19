@@ -2,7 +2,7 @@ name: Desktop validation
 
 on:
   push:
-    branches: [codex/upstream-macos-integration]
+    branches: [codex/macos-arm64-port, codex/upstream-1.0.4-integration]
   pull_request:
   workflow_dispatch:
 

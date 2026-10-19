@@ -1,12 +1,47 @@
-// The local reflection blend (rendering.md 12.16): reflect_blend.frag, and reflect_blend_rt.frag with PT_RT_REFLECTIONS (12.21).
-// With PT_REFLECT_LAYER (reflect_layer.frag, reflect_layer_rt.frag; a PC addition for the temporal upscalers, 12.16) the pass
-// writes the reflection on its own instead of mixing it into the scene: premultiplied colour and amount, and where its history
-// lies, for reflect_temporal.frag, which accumulates it and does the mix.
 #include "common.glsl"
 #ifdef PT_RT_REFLECTIONS
-// the traced hits' colour (reflect_make_rt.frag's second target), through the ray tracing set
 layout(set = 2, binding = 2) uniform sampler2D rt_reflection_color;
 #include "reflection_mix.glsl"
+#endif
+#ifdef PT_RT_REFLECTIONS
+const int kGlossTaps = 12;
+const float kGlossStretch = 2.5;
+
+vec4 RtTap(vec2 base, vec2 tap_uv, vec2 map_scale) {
+    vec4 screen_map = ImgLod(IMG_REFMAP, SMP_LINEAR_WRAP, tap_uv / map_scale, 0.0);
+    vec4 traced = textureLod(rt_reflection_color, tap_uv / map_scale, 0.0);
+    vec2 coordinate = RtScreenCoordinate(screen_map);
+    vec3 screen_hit = ImgLod(IMG_HDR_COPY, SMP_LINEAR_WRAP, base + map_scale * (2.0 * coordinate - 1.0), 0.0).rgb;
+    return RtReflectionContribution(screen_map, traced, screen_hit);
+}
+
+vec4 RtGlossyContribution(View v, vec2 uv, vec2 lookup, vec2 map_scale, float roughness, vec4 center_map, float turn_frame, vec3 plane, bool full) {
+    vec2 coordinate = RtScreenCoordinate(center_map);
+    bool on_screen = center_map.w > 1.0e-4 && center_map.z > 0.0;
+    float length_on_screen = on_screen ? length(map_scale * (2.0 * coordinate - 1.0)) : 0.4;
+    float spread = (0.003 + 0.02 * Saturate(roughness)) * clamp(length_on_screen / 0.25, 0.25, 1.2);
+    vec2 radius = vec2(spread * 0.4 * v.viewport.x * v.viewport.w, spread);
+    if (full) {
+        vec3 view_ray = normalize(vec3((uv * 2.0 - 1.0) * v.projection_param.xy, 1.0));
+        float stretch = min(1.0 / max(abs(dot(view_ray, plane)), 1.0e-3), kGlossStretch);
+        radius = vec2(spread * v.viewport.y * v.viewport.z, spread * stretch);
+    }
+    float turn = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * mod(turn_frame, 64.0), vec2(0.06711056, 0.00583715))));
+    vec3 sum = vec3(0.0);
+    float covered = 0.0;
+    for (int i = 0; i < kGlossTaps; ++i) {
+        float r = sqrt((float(i) + 0.5) / float(kGlossTaps));
+        float a = turn + float(i) * 2.39996323;
+        vec2 offset = radius * r * vec2(cos(a), sin(a));
+        vec4 c = full ? RtTap(uv + offset, lookup + offset, map_scale) : RtTap(uv, lookup + offset, map_scale);
+        sum += c.rgb * c.a;
+        covered += c.a;
+    }
+    if (!(covered > 1.0e-4)) {
+        return vec4(0.0);
+    }
+    return vec4(sum / covered, covered / float(kGlossTaps));
+}
 #endif
 #ifdef PT_REFLECT_LAYER
 #ifndef PT_RT_REFLECTIONS
@@ -28,15 +63,10 @@ layout(location = 0) out vec4 out_color;
 #ifdef PT_REFLECT_LAYER
 layout(location = 1) out vec4 out_history;
 
-// out_color with no reflection: amount 0 on a floor (the temporal pass may keep its history there), -1 on anything else
 vec4 NoReflection(vec3 N, vec3 plane) {
     return vec4(0.0, 0.0, 0.0, dot(N, plane) >= 0.9 ? 0.0 : -1.0);
 }
 
-// Where the reflection at uv was last frame, as an offset from uv: the reflected point's virtual image (the mirror image of the
-// hit across the horizontal floor) lies on the pixel's own ray, as far as the floor plus the hit's distance from the floor point,
-// and the previous unjittered view projection (pass.m) puts it on last frame's screen. The offset follows the upscaler's motion
-// convention (unjittered now to unjittered then). z: 1 for a reflection's own motion, 0 for the floor's (no hit to go by).
 vec4 HistoryOffset(View v, vec2 uv, vec2 hit_uv, bool has_hit) {
     vec2 ndc = uv * 2.0 - 1.0;
     vec3 P = ReflectionViewPosition(ndc, v.projection_param.xy, v.jitter.xy, ViewZ(v, ReflectionFloorDepth(v, uv)));
@@ -76,9 +106,14 @@ void main() {
     vec4 refl = ImgLod(IMG_REFMAP, SMP_LINEAR_WRAP, (uv + 0.15 * vec2(-tilt.x, tilt.y)) / map_scale, 0.0);
     float valid = refl.y < 0.0 || refl.y > 1.0 || refl.x > 1.0 || refl.x < 0.0 ? 0.0 : refl.w;
 #ifdef PT_RT_REFLECTIONS
-    // traced hits off screen: their colour, premultiplied by their weight (reflect_make_rt.frag)
-    vec4 traced = textureLod(rt_reflection_color, (uv + 0.15 * vec2(-tilt.x, tilt.y)) / map_scale, 0.0);
-    if (!(valid > 0.0) && !(traced.a > 1.0e-4)) {
+    vec2 lookup = uv + 0.15 * vec2(-tilt.x, tilt.y);
+#ifdef PT_REFLECT_LAYER
+    float turn_frame = floor(v.exposure.w * 60.0 + 0.5);
+#else
+    float turn_frame = 0.0;
+#endif
+    vec4 contribution = RtGlossyContribution(v, uv, lookup, map_scale, material.x, refl, turn_frame, plane, pass.ids.z != 0u);
+    if (!(contribution.a > 1.0e-4)) {
 #ifdef PT_REFLECT_LAYER
         out_color = NoReflection(N, plane);
         out_history = HistoryOffset(v, uv, uv, false);
@@ -104,8 +139,6 @@ void main() {
     float strength = Saturate(pass.f1.z * smooth_term * max(1.0, min(4.0, lean * 3.0 + 2.0)) + pass.f1.w);
 #ifdef PT_RT_REFLECTIONS
     vec2 coordinate = RtScreenCoordinate(refl);
-    vec3 screen_hit = ImgLod(IMG_HDR_COPY, SMP_LINEAR_WRAP, uv + map_scale * (2.0 * coordinate - 1.0), 0.0).rgb;
-    vec4 contribution = RtReflectionContribution(refl, traced, screen_hit);
     float amount = strength * facing * contribution.a;
 #else
     float amount = strength * facing * refl.z * valid;
@@ -119,19 +152,14 @@ void main() {
 #endif
 #ifdef PT_REFLECT_LAYER
     amount = max(amount, 0.0);
-    // premultiplied in the original's encoded space (see the mix below)
     out_color = vec4(SrgbEncode(min(hit, vec3(1.0))) * amount, amount);
 #ifdef PT_RT_REFLECTIONS
-    // a traced hit off screen has no screen position: its history follows the floor
     bool on_screen = refl.w > 1.0e-4 && refl.z > 0.0 && all(greaterThanEqual(coordinate, vec2(0.0))) && all(lessThanEqual(coordinate, vec2(1.0)));
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * coordinate - 1.0), on_screen);
 #else
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * refl.xy - 1.0), true);
 #endif
 #else
-    // the original blends into its 8-bit target (ReflectMapBlend, CB 8_8_8_8 UNORM over the sRGB-encoded tonemapped image): the
-    // mix runs on the encoded values, not on linear light (sink_decal_f060 4190: a linear mix brightened the basin left of the
-    // drain where the flashlight's hot spot reflects over the dark blood, a band the original keeps dim)
     out_color = vec4(SrgbDecode(mix(SrgbEncode(min(base.rgb, vec3(1.0))), SrgbEncode(min(hit, vec3(1.0))), amount)), base.a);
 #endif
 }

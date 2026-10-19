@@ -14,6 +14,9 @@ from pathlib import Path
 import make_app
 import make_setup
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from prepare_native_installer import source_archive
+
 REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_status_test",
@@ -21,7 +24,11 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_voice_match_test", "pt_installer_update_test", "pt_unicode_paths_test", "pt_user_data_test",
          "pt_fast_walk_test", "pt_display_modes_test", "pt_pipeline_cache_store_test", "pt_blur_sway_test",
          "pt_microphone_async_test", "pt_archive_model_camera_test", "pt_audio_channel_layout_test",
-         "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_texture_cache_test", "pt_upscaler_gpu_test")
+         "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_texture_cache_test", "pt_upscaler_gpu_test",
+         "pt_archive_unlock_test", "pt_device_start_test", "pt_dialog_nav_test", "pt_notice_queue_test", "pt_gyro_test",
+         "pt_sound_captions_test", "pt_lisa_date_test", "pt_camera_blend_test", "pt_rendering_api_test",
+         "pt_enhanced_manifest_test", "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test",
+         "pt_key_layout_test", "pt_hdr_output_test", "pt_macos_hdr_test", "pt_metalfx_hdr_test")
 
 
 def run(*args):
@@ -143,17 +150,26 @@ def main():
     # using the SDK's metadata without selecting its host-specific runtime.
     sdk_packs = subprocess.check_output(["dotnet", "msbuild", str(REPO / "installer/Extractor/Extractor.csproj"),
                                          "-getProperty:NetCoreTargetingPackRoot"], cwd=REPO, text=True).strip()
-    run("dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
+    publish_command = ["dotnet", "publish", REPO / "installer/Extractor/Extractor.csproj", "-c", "Release", "-r", "osx-" + args.arch,
         "--self-contained", "true", f"-p:LibOrbisSource={source}", f"-p:NetCoreTargetingPackRoot={microsoft_packs}",
         f"-p:PrunePackageTargetingPackRoots={sdk_packs}",
-        "--artifacts-path", dotnet_artifacts, "-o", extractor)
+        "--artifacts-path", dotnet_artifacts]
+    run(*publish_command, "-o", extractor)
     copy_runtime_notices(extractor, dotnet_artifacts, "osx-" + args.arch)
+    # App code folders cannot contain unsigned managed DLLs. Embed them and the official runtime in one signed helper.
+    app_extractor = build / f"extractor-app-osx-{args.arch}-{uuid.uuid4().hex}"
+    run(*publish_command, "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", app_extractor)
+    notices = app_extractor.with_name(app_extractor.name + "-notices")
+    notices.mkdir()
+    shutil.copy2(source / "LICENSE.txt", notices / "LICENSE-LibOrbisPkg.txt")
+    shutil.copy2(source_archive(source, notices, "osx-" + args.arch), notices / "LibOrbisPkg-corresponding-source.zip")
+    (notices / "extractor-source.zip").unlink()
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
         f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
     game_args = ["--game", args.game.resolve()] if args.game else []
     run(sys.executable, REPO / "tools/macos/make_app.py", "--build", build, "--exe", build / "pt_release",
-        "--out", output, "--identity", args.identity, *game_args)
+        "--out", output, "--identity", args.identity, "--extractor", app_extractor, *game_args)
     archive = output / f"pt-port-{make_app.version(build)}-macos-{args.arch}.zip"
     if not args.skip_tests:
         verify_packaged_voice(output / (make_app.APP_NAME + ".app"), output)

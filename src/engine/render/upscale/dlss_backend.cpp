@@ -4,6 +4,7 @@
 
 #include <nvsdk_ngx_helpers_vk.h>
 #include <nvsdk_ngx_vk.h>
+#include <nvsdk_ngx_helpers_dlssd_vk.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -11,6 +12,13 @@
 #include <iterator>
 #include <string>
 #include <system_error>
+
+#ifndef _WIN32
+#include <dlfcn.h>
+#include <link.h>
+
+#include <cstdlib>
+#endif
 
 #include "engine/core/log.h"
 #include "engine/render/upscale/upscale_platform.h"
@@ -25,6 +33,11 @@ constexpr const char* kInstanceExtensions[] = {VK_KHR_GET_PHYSICAL_DEVICE_PROPER
 constexpr const char* kDeviceExtensions[] = {VK_NVX_BINARY_IMPORT_EXTENSION_NAME, VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME,
                                              VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
 
+#ifdef _WIN32
+constexpr const char* kDlssRuntime = "nvngx_dlss.dll";
+constexpr const char* kRayReconstructionRuntime = "nvngx_dlssd.dll";
+constexpr const char* kExecutable = "pt.exe";
+
 const std::wstring& DataPath() {
     static const std::wstring path = [] {
         std::error_code ec;
@@ -34,6 +47,48 @@ const std::wstring& DataPath() {
     }();
     return path;
 }
+
+std::filesystem::path FindRuntime(const char* name) {
+    std::error_code ec;
+    const std::filesystem::path path = ExecutableDir() / name;
+    return std::filesystem::exists(path, ec) ? path : std::filesystem::path();
+}
+#else
+constexpr const char* kDlssRuntime = "libnvidia-ngx-dlss.so.*";
+constexpr const char* kRayReconstructionRuntime = "libnvidia-ngx-dlssd.so.*";
+constexpr const char* kExecutable = "pt";
+constexpr const char* kNgxCore = "libnvidia-ngx.so.1";
+
+const std::wstring& DataPath() {
+    static const std::wstring path = [] {
+        std::error_code ec;
+        std::filesystem::path dir;
+        if (const char* cache = std::getenv("XDG_CACHE_HOME"); cache && *cache) {
+            dir = std::filesystem::path(cache) / "pt-port-ngx";
+        } else if (const char* home = std::getenv("HOME"); home && *home) {
+            dir = std::filesystem::path(home) / ".cache" / "pt-port-ngx";
+        } else {
+            dir = std::filesystem::temp_directory_path(ec) / "pt-port-ngx";
+        }
+        std::filesystem::create_directories(dir, ec);
+        return dir.wstring();
+    }();
+    return path;
+}
+
+std::filesystem::path FindRuntime(const char* pattern) {
+    const std::string stem = std::string(pattern).substr(0, std::string(pattern).size() - 1);
+    std::filesystem::path best;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(ExecutableDir(), ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.starts_with(stem) && name.size() > stem.size() && (best.empty() || name > best.filename().string())) {
+            best = it->path();
+        }
+    }
+    return best;
+}
+#endif
 
 const std::wstring& FeaturePath() {
     static const std::wstring path = ExecutableDir().wstring();
@@ -73,9 +128,6 @@ NVSDK_NGX_PerfQuality_Value QualityValue(UpscaleQuality quality) {
     }
 }
 
-// the model is the NGX render preset of every quality mode; Default lets NGX pick per mode (K for DLAA, quality and balanced, M for
-// performance, L for ultra performance in SDK 310.9.1). L and M are the second generation transformer (FP8), about twice the
-// cost of K on RTX 20 and 30 GPUs, which have no FP8 (upscaling.md)
 uint32_t PresetValue(DlssModel model) {
     switch (model) {
     case DlssModel::K: return NVSDK_NGX_DLSS_Hint_Render_Preset_K;
@@ -114,8 +166,8 @@ public:
             reason = "needs an NVIDIA RTX GPU";
             return false;
         }
-        if (!std::filesystem::exists(ExecutableDir() / L"nvngx_dlss.dll")) {
-            reason = "nvngx_dlss.dll is missing next to pt.exe";
+        if (FindRuntime(kDlssRuntime).empty()) {
+            reason = std::format("{} is missing next to {}", kDlssRuntime, kExecutable);
             return false;
         }
         for (const char* name : kDeviceExtensions) {
@@ -132,6 +184,19 @@ public:
         if (!Supported(reason)) {
             return false;
         }
+#ifndef _WIN32
+        if (void* core = dlopen(kNgxCore, RTLD_NOW | RTLD_LOCAL)) {
+            link_map* map = nullptr;
+            const char* where = dlinfo(core, RTLD_DI_LINKMAP, &map) == 0 && map && map->l_name && *map->l_name ? map->l_name : kNgxCore;
+            LogInfo("dlss: NGX core {} (NVIDIA driver), DLSS runtime {}", where, FindRuntime(kDlssRuntime).string());
+            dlclose(core);
+        } else {
+            const char* error = dlerror();
+            LogWarn("dlss: cannot load the driver's {}: {}", kNgxCore, error ? error : "unknown error");
+            reason = std::format("the NVIDIA driver's NGX library ({}) is missing", kNgxCore);
+            return false;
+        }
+#endif
         const NVSDK_NGX_FeatureCommonInfo common = FeatureInfo();
         NVSDK_NGX_Result result = NVSDK_NGX_VULKAN_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(),
                                                                        ctx_.instance, ctx_.physical, ctx_.device, vkGetInstanceProcAddr,
@@ -164,13 +229,22 @@ public:
             reason = needs_driver ? std::format("driver too old, DLSS needs {}.{} or newer", major, minor) : "DLSS is not supported on this GPU";
             return false;
         }
+        CheckRayReconstruction();
         return true;
+    }
+
+    bool RayReconstructionAvailable(std::string& reason) override {
+        reason = rr_reason_;
+        return rr_available_;
     }
 
     bool Create(VkCommandBuffer cmd, const UpscaleCreate& create) override {
         ReleaseFeature();
         if (!params_) {
             return false;
+        }
+        if (create.ray_reconstruction) {
+            return CreateRayReconstruction(cmd, create);
         }
         const uint32_t preset = PresetValue(create.dlss_model);
         for (const char* mode : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
@@ -187,9 +261,6 @@ public:
         p.Feature.InPerfQualityValue = QualityValue(create.quality);
         p.InFeatureCreateFlags =
             NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted;
-        // DLSS's own exposure (guide 3.9/3.10: MidGray / (AverageLuma * (1 - MidGray)) over the frame) instead of the game's eye
-        // adaptation, which leaves P.T.'s dark frames far below mid grey: with it model K trails the handy light's spot over a still
-        // wall less (upscaling.md, Flashlight); PT_DLSS_AUTO_EXPOSURE=0 passes the game's value as before
         static const bool auto_exposure = [] {
             const char* e = std::getenv("PT_DLSS_AUTO_EXPOSURE");
             return !e || std::atoi(e) != 0;
@@ -211,10 +282,12 @@ public:
         return true;
     }
 
-
     bool Dispatch(const UpscaleDispatch& d) override {
         if (!feature_) {
             return false;
+        }
+        if (ray_reconstruction_) {
+            return DispatchRayReconstruction(d);
         }
         NVSDK_NGX_Resource_VK color = Resource(d.color, VK_IMAGE_ASPECT_COLOR_BIT, false);
         NVSDK_NGX_Resource_VK depth = Resource(d.depth, VK_IMAGE_ASPECT_DEPTH_BIT, false);
@@ -256,6 +329,132 @@ public:
     void Release() override { ReleaseFeature(); }
 
 private:
+    void CheckRayReconstruction() {
+        rr_available_ = false;
+        if (FindRuntime(kRayReconstructionRuntime).empty()) {
+            rr_reason_ = std::format("{} is missing next to {}", kRayReconstructionRuntime, kExecutable);
+            return;
+        }
+        int available = 0;
+        NVSDK_NGX_Parameter_GetI(params_, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &available);
+        if (!available) {
+            int needs_driver = 0;
+            unsigned int major = 0;
+            unsigned int minor = 0;
+            NVSDK_NGX_Parameter_GetI(params_, NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver, &needs_driver);
+            NVSDK_NGX_Parameter_GetUI(params_, NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor, &major);
+            NVSDK_NGX_Parameter_GetUI(params_, NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor, &minor);
+            rr_reason_ = needs_driver ? std::format("driver too old, DLSS Ray Reconstruction needs {}.{} or newer", major, minor)
+                                      : "DLSS Ray Reconstruction is not supported on this GPU";
+            LogInfo("dlss: ray reconstruction unavailable: {}", rr_reason_);
+            return;
+        }
+        rr_reason_.clear();
+        rr_available_ = true;
+#ifdef _WIN32
+        LogInfo("dlss: ray reconstruction available");
+#else
+        LogInfo("dlss: ray reconstruction available ({})", FindRuntime(kRayReconstructionRuntime).string());
+#endif
+    }
+
+    bool CreateRayReconstruction(VkCommandBuffer cmd, const UpscaleCreate& create) {
+        if (!rr_available_) {
+            return false;
+        }
+        for (const char* mode : {NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality}) {
+            NVSDK_NGX_Parameter_SetUI(params_, mode, NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default);
+        }
+        NVSDK_NGX_DLSSD_Create_Params p{};
+        p.InDenoiseMode = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
+        p.InRoughnessMode = NVSDK_NGX_DLSS_Roughness_Mode_Packed;
+        p.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;
+        p.InWidth = create.render.width;
+        p.InHeight = create.render.height;
+        p.InTargetWidth = create.display.width;
+        p.InTargetHeight = create.display.height;
+        p.InPerfQualityValue = QualityValue(create.quality);
+        p.InFeatureCreateFlags =
+            NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted;
+        p.InEnableOutputSubrects = false;
+        const NVSDK_NGX_Result result = NGX_VULKAN_CREATE_DLSSD_EXT1(ctx_.device, cmd, 1, 1, &feature_, params_, &p);
+        if (NVSDK_NGX_FAILED(result) || !feature_) {
+            LogError("dlss: ray reconstruction creation failed ({:#x}) for {}x{} -> {}x{}", static_cast<uint32_t>(result), create.render.width,
+                     create.render.height, create.display.width, create.display.height);
+            feature_ = nullptr;
+            return false;
+        }
+        ray_reconstruction_ = true;
+        LogInfo("dlss: ray reconstruction created for {}x{} -> {}x{}, quality value {}", create.render.width, create.render.height,
+                create.display.width, create.display.height, static_cast<int>(p.InPerfQualityValue));
+        return true;
+    }
+
+    bool DispatchRayReconstruction(const UpscaleDispatch& d) {
+        if (!d.diffuse_albedo.Valid() || !d.specular_albedo.Valid() || !d.normal_roughness.Valid()) {
+            if (!error_logged_) {
+                LogError("dlss: ray reconstruction has no guide buffers this frame");
+                error_logged_ = true;
+            }
+            return false;
+        }
+        NVSDK_NGX_Resource_VK color = Resource(d.color, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK depth = Resource(d.depth, VK_IMAGE_ASPECT_DEPTH_BIT, false);
+        NVSDK_NGX_Resource_VK motion = Resource(d.motion, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK exposure = Resource(d.exposure, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK output = Resource(d.output, VK_IMAGE_ASPECT_COLOR_BIT, true);
+        NVSDK_NGX_Resource_VK diffuse_albedo = Resource(d.diffuse_albedo, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK specular_albedo = Resource(d.specular_albedo, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK normal_roughness = Resource(d.normal_roughness, VK_IMAGE_ASPECT_COLOR_BIT, false);
+        NVSDK_NGX_Resource_VK hit_distance{};
+        NVSDK_NGX_Resource_VK before_transparency{};
+        NVSDK_NGX_VK_DLSSD_Eval_Params e{};
+        e.pInColor = &color;
+        e.pInOutput = &output;
+        e.pInDepth = &depth;
+        e.pInMotionVectors = &motion;
+        e.pInDiffuseAlbedo = &diffuse_albedo;
+        e.pInSpecularAlbedo = &specular_albedo;
+        e.pInNormals = &normal_roughness;
+        e.pInRoughness = nullptr;
+        if (d.specular_hit_distance.Valid()) {
+            hit_distance = Resource(d.specular_hit_distance, VK_IMAGE_ASPECT_COLOR_BIT, false);
+            e.pInSpecularHitDistance = &hit_distance;
+        }
+        if (d.color_before_transparency.Valid()) {
+            before_transparency = Resource(d.color_before_transparency, VK_IMAGE_ASPECT_COLOR_BIT, false);
+            e.pInColorBeforeTransparency = &before_transparency;
+        }
+        glm::mat4 world_to_view = d.world_to_view;
+        glm::mat4 view_to_clip = d.view_to_clip;
+        e.pInWorldToViewMatrix = &world_to_view[0][0];
+        e.pInViewToClipMatrix = &view_to_clip[0][0];
+        e.InJitterOffsetX = d.jitter.x;
+        e.InJitterOffsetY = d.jitter.y;
+        e.InRenderSubrectDimensions = {d.render.width, d.render.height};
+        e.InReset = d.reset ? 1 : 0;
+        e.InMVScaleX = d.motion_scale.x;
+        e.InMVScaleY = d.motion_scale.y;
+        e.pInExposureTexture = &exposure;
+        e.InPreExposure = d.pre_exposure;
+        e.InExposureScale = 1.0f;
+        e.InFrameTimeDeltaInMsec = d.frame_ms;
+        const NVSDK_NGX_Result result = NGX_VULKAN_EVALUATE_DLSSD_EXT(d.cmd, feature_, params_, &e);
+        if (NVSDK_NGX_FAILED(result)) {
+            if (!error_logged_) {
+                LogError("dlss: ray reconstruction evaluate failed ({:#x})", static_cast<uint32_t>(result));
+                error_logged_ = true;
+            }
+            return false;
+        }
+        return true;
+    }
+
     std::string MissingExtension(const NVSDK_NGX_FeatureCommonInfo& common) const {
         const NVSDK_NGX_FeatureDiscoveryInfo discovery = Discovery(&common);
         uint32_t count = 0;
@@ -286,6 +485,7 @@ private:
             NVSDK_NGX_VULKAN_ReleaseFeature(feature_);
             feature_ = nullptr;
         }
+        ray_reconstruction_ = false;
     }
 
     void Shutdown() {
@@ -305,6 +505,9 @@ private:
     bool initialized_ = false;
     NVSDK_NGX_Parameter* params_ = nullptr;
     NVSDK_NGX_Handle* feature_ = nullptr;
+    bool ray_reconstruction_ = false;
+    bool rr_available_ = false;
+    std::string rr_reason_ = "not checked";
     bool error_logged_ = false;
 };
 

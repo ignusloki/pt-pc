@@ -11,17 +11,14 @@ namespace pt::audio {
 struct ControllerPcmBlock {
     static constexpr uint32_t kMaxFrames = 256;
     uint32_t frames = 0;
-    // the selected events for the speaker; haptic adds the haptic-only events (the player's footsteps) to them for the actuators
     std::array<float, kMaxFrames * 2> stereo{};
     std::array<float, kMaxFrames * 2> haptic{};
 };
 
-// Single audio-render producer and single game-thread consumer. Overflow drops the newest block.
 class ControllerPcmQueue {
 public:
     static constexpr size_t kCapacity = 8;
 
-    // without a haptic mix the speaker mix stands for it
     bool TryPush(const float* stereo, uint32_t frames, const float* haptic = nullptr);
     bool TryPop(ControllerPcmBlock& block);
     uint32_t DroppedBlocks() const { return dropped_.load(std::memory_order_relaxed); }
@@ -38,7 +35,6 @@ public:
     static constexpr size_t kMaxEvents = 16;
     void SetEvent(uint32_t event_id);
     void SetEvents(std::span<const uint32_t> event_ids);
-    // events that reach the actuators only, never the speaker
     void SetHapticEvents(std::span<const uint32_t> event_ids);
     void BeginBlock(uint32_t frames);
     bool HasSelectedEvents() const;

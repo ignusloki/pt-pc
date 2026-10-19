@@ -1,0 +1,4 @@
+# a profile's save read at the start (game step 15 in the start room): its Game+ tier from the save's finish count
+sstep 15
+swait 30
+sexpect gameplustier 1

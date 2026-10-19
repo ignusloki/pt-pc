@@ -16,8 +16,6 @@ public:
     Microphone(const Microphone&) = delete;
     Microphone& operator=(const Microphone&) = delete;
     bool Open(int sample_rate, const std::string& device_name = {});
-    // Opens the device on a worker thread: some systems take 20 s and more to open a recording endpoint, and the game froze
-    // for that long on entering f160 and on every close of the pause menu there. Called each frame until it is not Pending.
     enum class AsyncState { Pending, Opened, Failed };
     AsyncState OpenAsync(int sample_rate, const std::string& device_name = {});
     void Close();

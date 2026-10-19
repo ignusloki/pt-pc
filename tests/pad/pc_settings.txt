@@ -1,6 +1,9 @@
-# The PC settings page with a pad alone: cross on the option screen opens it, the d-pad moves the cursor and changes the
-# setting under it (v-sync, the upscaler, which enables Quality, and its quality), cross changes it too, circle and
-# OPTIONS return to the option screen, and OPTIONS there closes the menu.
+# The PC settings with a pad alone: cross on the option screen opens them on their first tab (Display), the d-pad moves the cursor
+# and changes the setting under it (v-sync), cross changes it too; R1 and L1 switch tabs (Upscaling: the upscaler enables Quality and
+# its quality changes), up from the first row puts the cursor on the tab strip where left and right switch tabs and down returns to
+# the rows; the Share/View button (after the page's first half second) is the footer's Donate on Patreon (headless: logged); circle and
+# OPTIONS return to the option screen, the PC settings come back on the last tab while the menu stays open and on the first tab once
+# it was closed, and OPTIONS there closes the menu.
 # pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/pc_settings.txt
 10 pattach 0 ps4
 20 sstep 15
@@ -12,6 +15,7 @@
 20 stap 0 cross
 20 swait 40
 20 sexpect page 1
+20 sexpect pctab pc_section_display 0
 20 sexpect pcrow pc_display_mode
 20 stap 0 down
 20 swait 4
@@ -26,34 +30,9 @@
 20 stap 0 cross
 20 swait 4
 20 sexpect pcvalue pc_vsync 1
-20 stap 0 up
-20 swait 4
-20 stap 0 up
-20 swait 4
-20 stap 0 up
-20 swait 4
-20 stap 0 up
-20 swait 4
-20 stap 0 up
-20 swait 4
-20 sexpect pcrow pc_reset
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 sexpect pcrow pc_vsync
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
-20 stap 0 down
-20 swait 4
+20 stap 0 r1
+20 swait 10
+20 sexpect pctab pc_section_upscaling 0
 20 sexpect pcrow pc_upscaler
 20 sexpect pcvalue pc_upscaler 0
 20 sexpect pcenabled pc_quality 0
@@ -72,6 +51,35 @@
 20 swait 4
 20 sexpect pcvalue pc_upscaler 0
 20 sexpect pcenabled pc_quality 0
+20 stap 0 up
+20 swait 4
+20 sexpect pctab pc_section_upscaling 1
+20 stap 0 right
+20 swait 10
+20 sexpect pctab pc_graphics 1
+20 stap 0 left
+20 swait 10
+20 sexpect pctab pc_section_upscaling 1
+20 stap 0 down
+20 swait 4
+20 sexpect pctab pc_section_upscaling 0
+20 sexpect pcrow pc_upscaler
+20 stap 0 l1
+20 swait 10
+20 sexpect pctab pc_section_display 0
+20 stap 0 l1
+20 swait 10
+20 sexpect pctab pc_extras 0
+20 stap 0 r1
+20 swait 10
+20 sexpect pctab pc_section_display 0
+20 sexpect pcdonate 0
+20 stap 0 share
+20 swait 10
+20 sexpect pcdonate 1
+20 sexpect page 1
+20 stap 0 r1
+20 swait 10
 20 stap 0 circle
 20 swait 40
 20 sexpect page 0
@@ -81,6 +89,7 @@
 20 stap 0 cross
 20 swait 40
 20 sexpect page 1
+20 sexpect pctab pc_section_upscaling 0
 20 stap 0 options
 20 swait 40
 20 sexpect page 0
@@ -89,5 +98,11 @@
 20 swait 90
 20 sexpect menu 0
 20 sexpect paused 0
+20 stap 0 options
+20 swait 70
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 sexpect pctab pc_section_display 0
 20 slog
 20 squit

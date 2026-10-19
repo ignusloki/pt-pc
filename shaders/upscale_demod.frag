@@ -1,6 +1,4 @@
 #version 460
-// Remove the smooth flashlight beam before temporal reconstruction. Shadow visibility stays in
-// the input so the upscaler can accumulate soft-ray noise and shadow-map tap changes.
 #include "common.glsl"
 #include "lighting.glsl"
 
@@ -16,12 +14,6 @@ layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_factor;
 
-// The beam's incident radiance factor along a pixel's view ray (1 outside the beam). It is taken at a fixed distance on the ray,
-// never at the G-buffer surface: F then depends only on the direction on screen and changes smoothly everywhere. With the
-// surface's F, every depth edge (the wall's corner before the far corridor, a plant's leaves, Lisa, the sky) was a step of F,
-// and the upscaler mixing pixels divided by different F came back from the multiply by the filtered F as a thin white or
-// sharp outline along the edge; the largest F of a pixel and its neighbours only narrowed it. Any smooth F is exact here (the
-// remodulation multiplies by the same F): it only has to carry the beam's moving circle and cookie out of the history.
 const float kBeamProbeDistance = 2.0;
 
 float BeamFactor(ivec2 pixel) {

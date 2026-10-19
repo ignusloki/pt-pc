@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/ui/asset_browser.h"
 
 #include <imgui.h>
@@ -14,7 +15,7 @@ bool ContainsNoCase(std::string_view text, std::string_view needle) {
         return true;
     }
     auto it = std::search(text.begin(), text.end(), needle.begin(), needle.end(),
-                          [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
+                          [](char a, char b) { return pt::AsciiLower(a) == pt::AsciiLower(b); });
     return it != text.end();
 }
 

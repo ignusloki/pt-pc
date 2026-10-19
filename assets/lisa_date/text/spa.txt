@@ -1,0 +1,162 @@
+# Café con Lisa, español. clave = texto (las claves que faltan salen de eng.txt)
+name_lisa = Lisa
+name_you = Tú
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Saltar
+ui_affection = Afecto
+ui_leave_hold = Mantén para dejar la cita
+title_1 = Parte 1: Café solo
+title_2 = Parte 2: Dos de azúcar
+title_3 = Parte 3: La última ronda
+ending_good = FINAL BUENO: Misma hora, próximo bucle
+ending_bad = FINAL MALO: Café frío
+ending_true = FINAL VERDADERO: 204863
+
+intro_01 = (El pasillo ha desaparecido. Aquí huele a café. A café, y a algo muy antiguo.)
+intro_02 = (¿Esa es... Lisa? ¿Por qué sonríe? ¿Por qué está SENTADA?)
+
+s1_01 = ¡Oh! Has entrado de verdad. Nunca entra nadie. Solo pasan por delante de mí en el pasillo. Una y otra y otra vez.
+s1_02 = ¡Siéntate, siéntate! He hecho café. No sabía cómo lo tomas, así que lo he hecho como lo tomo yo.
+s1_03 = Solo. Y negro, como el pasillo a las tres de la mañana.
+c1_a = Solo está perfecto.
+c1_a_r = ¿Ves? Ya somos compatibles. Lo supe la primera vez que huiste de mí.
+c1_b = ¿Me pones un poco de leche?
+c1_b_r1 = La leche está en la nevera.
+c1_b_r2 = ...No abras la nevera.
+c1_c = ¿Eso que oigo es una radio?
+c1_c_r1 = ¿Qué radio? Aquí no hay ninguna radio. Nunca ha habido ninguna radio.
+c1_c_r2 = Bébete el café.
+
+s1_04 = Bueno. ¿Notas algo distinto en mí?
+c2_a = Tu pelo está precioso.
+c2_a_r = ¿De verdad? Me lleva siglos. Nadie sabe cuánto tiempo. Ni siquiera yo.
+c2_b = Por una vez... no vienes hacia mí.
+c2_b_r = ¡Estoy sentada! Me enseñó una amiga. Vive en una bañera. Un encanto. No habla mucho.
+c2_c = ¿Te has peinado con un tenedor?
+c2_c_r = Voy a fingir que no has dicho eso. Se me da muy bien fingir. Pregúntale al pasillo.
+
+s1_05 = No salgo mucho. Mi médico dice que "técnicamente no estoy viva", y eso me parece un poco criticón.
+s1_06 = ¿Y tú? ¿Qué haces todo el día?
+c3_a = Recorro un pasillo. Luego otra vez.
+c3_a_r = ¡Yo también! ¡Tenemos tanto en común!
+c3_b = Colecciono trocitos de papel.
+c3_b_r = ¡Una colección! ¿Tienes el de mi cara? Salgo guapísima en ese.
+c3_c = Grito "Jack" al micro hasta que suena.
+c3_c_r = ...Seguro que eso es muy normal de donde tú vienes.
+
+s1_07 = Qué bien se está. Normal. Dos personas, sentadas, tomando café. Nadie arrastrándose por ningún techo.
+c4_a = Es muy fácil hablar contigo.
+c4_a_r = Para. Que mi cabeza va a hacer lo de siempre.
+c4_b = ¿Te arrastras por los techos?
+c4_b_r = Solo los fines de semana.
+c4_c = ¿Puedo apartar un poco mi silla?
+c4_c_r = ...Ah. Claro. Está atornillada al suelo, pero claro.
+
+s2_01 = ¿Te cuento un secreto? Cuando me pongo nerviosa, mi cabeza hace un poquito...
+s2_02 = ...esto.
+c5_a = La verdad es que es bastante mono.
+c5_a_r = Nadie lo había llamado mono nunca. Normalmente gritan y se les cae la linterna.
+c5_b = Por favor, no vuelvas a hacer eso.
+c5_b_r = ¡No lo puedo evitar! Es como el hipo. Un hipo embrujado.
+c5_c = ¿Por eso aporreas la puerta del baño?
+c5_c_r = Empezó la puerta.
+
+s2_03 = ¡Vale, un juego! Mi número favorito es el 2-0-4-8-6-3. Adivina por qué.
+c6_a = ¿Es tu cumpleaños?
+c6_a_r = ¡Qué va! Es la hora. Mira el reloj. ...¿Dónde se ha metido el reloj?
+c6_b = El 204863 también es mi favorito.
+c6_b_r = ...Nadie recuerda el número. Nadie.
+c6_c = Es un número rarísimo.
+c6_c_r = Dijo la persona que cuenta sus propios pasos.
+
+s2_04 = ¿Te gustan los niños?
+c7_a = Claro, en cantidades razonables.
+c7_a_r = Razonable está bien. Me gusta lo razonable.
+c7_b = Una vez encontré uno en un lavabo.
+c7_b_r = Ah, ahí es donde los guardan. Es muy higiénico.
+c7_c = La verdad es que no.
+c7_c_r = El lavabo te ha oído.
+
+s2_05 = Vale. Pregunta importante. Si yo fuera una linterna, ¿me abrazarías fuerte en la oscuridad?
+c8_a = Nunca te soltaría.
+c8_a_r = ¿Aunque parpadee? ...Qué cielo eres. Nadie me dice nunca que soy un cielo.
+c8_b = Solo hasta que se gasten las pilas.
+c8_b_r = Las linternas de esta casa no tienen pilas. Tienen sentimientos.
+c8_c = Serías tú quien me deslumbrara.
+c8_c_r = Es la forma más bonita en que alguien me ha dicho "tu cara me hace daño a los ojos".
+
+s2_06 = Me lo estoy pasando bien. ¿Y tú? Parpadea dos veces si te lo estás pasando bien.
+s2_07 = ...No has parpadeado. Nunca parpadeas. Interesante.
+
+s3_01 = Se está haciendo tarde. Aquí siempre es tarde. Lleva siendo tarde muchísimo tiempo.
+s3_02 = Todos se van por la puerta del fondo del pasillo. Y luego vuelven a entrar enseguida.
+c9_a = Me quedaré un poco más.
+c9_a_r = Sabía que te quedarías.
+c9_b = Debería volver al pasillo.
+c9_b_r = El pasillo seguirá ahí. El pasillo siempre sigue ahí.
+c9_c = Siento que ya he estado aquí antes.
+c9_c_r = Eso lo dices cada vez.
+
+s3_03 = ¿Puedo preguntarte algo? ¿Cómo me llamo?
+c10_a = Lisa.
+c10_a_r = ¡Te acuerdas! Nadie se acuerda. Solo me llaman "la cosa que tienes detrás".
+c10_b = ¿Ocho?
+c10_b_r = Así me llamaban los programadores. De los programadores no se habla.
+c10_c = ¿La mujer del pasillo?
+c10_c_r = ...Ese es mi trabajo. No mi nombre.
+
+s3_04 = Prométeme una cosa. No mires detrás de ti.
+c11_a = Te lo prometo.
+c11_a_r = Bien. Ahí no hay nada. Nunca hay nada.
+c11_b = (Mira detrás de ti.)
+c11_b_r1 = (No hay nada. Solo una puerta. Hace un segundo no estaba ahí.)
+c11_b_r2 = ...Has mirado. ¿Por qué todo el mundo mira siempre?
+c11_c = ¿Y si mejor miro por la mirilla?
+c11_c_r = Aquí no hay ninguna puerta. ...Entonces, ¿a través de qué estás mirando ahora mismo?
+
+s3_05 = Última pregunta, lo prometo. ¿Volverás?
+c12_a = Claro que volveré.
+c12_a_r = Entonces mantendré el café caliente. Para siempre, si hace falta. El "para siempre" se me da bien.
+c12_b = En cada bucle.
+c12_b_r = En cada bucle. De donde yo vengo, eso es casi un matrimonio.
+c12_c = Voy a apagar el juego.
+c12_c_r = ¿Apagar el QUÉ?
+
+good_01 = ¿Podemos... podemos hacernos una foto? Para recordarlo. Se me da fatal recordar cosas.
+good_02 = ¡Míranos! A ti te tiemblan las manos. Yo parezco... yo. Es perfecto.
+good_03 = La colgaré en el pasillo. Junto a las otras fotos. Así te veré cada vez que pases.
+good_04 = ¿Misma hora, próximo bucle? Yo hago el café. Tú traes la linterna.
+
+bad_01 = ¿Sabes qué? Eres igual que todos los demás.
+bad_02 = Entras. Miras alrededor. Te vas. Vuelves. Nunca, jamás, te quedas.
+bad_03 = Deja que te enseñe lo que les pasa a los que no se terminan el café.
+
+true_01 = Elegiste esas respuestas a propósito, ¿verdad?
+true_02 = La radio. El número. El bucle. La mirilla. Has prestado atención.
+true_03 = Así que voy a ser sincera. No con el hombre del pasillo. CONTIGO.
+true_04 = Esta habitación no es real. El café no es real. Alguien lo pintó. Ni siquiera estoy sentada de verdad. Tomaron prestada la postura de una bañera.
+true_05 = Pero tú eres real. Ahora mismo tienes algo entre las manos, en una habitación que no puedo ver. ¿Allí también está oscuro?
+true_06 = Te vi recorrer ese pasillo. Otra vez. Y otra. Abriste esa misma puerta tantísimas veces.
+true_07 = No te preocupes. No tocaré tu partida guardada. No soy ese tipo de chica.
+true_08 = Solo quería un café con alguien que me devolviera la mirada.
+true_09 = Vale. Vuelve ya. El pasillo te echa de menos. Y la radio todavía tiene algo que contarte.
+true_10 = Y si suena un teléfono... déjalo sonar un poco más. Por mí.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = ¡Míranos! Dos sonrisas enormes. No sabía que tu cara podía hacer eso. Me la quedo para siempre.
+selfie_both_grumpy = Míranos. Dos caras de pocos amigos con un café. Es la foto más sincera que tengo. Es perfecta.
+selfie_she_smiles = Yo sonrío y tú frunces el ceño. Todo el mundo pensará que la buena soy yo. Por fin.
+selfie_you_smile = Tú sonríes de oreja a oreja y yo te fulmino con la mirada. Bien. Ahora sabrán quién manda aquí.
+ui_selfie = Selfi
+ui_selfie_face = Expresión
+ui_selfie_tilt = Inclinar la cabeza
+ui_selfie_take = Hacer la foto
+ui_face_grumpy = Enfado
+ui_face_frown = Ceño fruncido
+ui_face_neutral = Neutral
+ui_face_smile = Sonrisa
+ui_face_grin = Gran sonrisa
+ui_photo_saved = Foto guardada: {file}
+ui_photo_failed = No se pudo guardar la foto
+ui_hint_menu = Menú

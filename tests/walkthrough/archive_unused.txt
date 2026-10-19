@@ -1,0 +1,40 @@
+sstep 15
+swait 30
+sexpect archive radio_01 1
+sexpect archive radio_02 1
+sexpect archive radio_03 1
+sexpect archive radio_05 1
+sexpect archive riddle_1 1
+sexpect archive riddle_2 1
+sexpect archive coffee_lisa 0
+sexpect archive radio_06 0
+sexpect archive radio_07 0
+sexpect archive radio_08 0
+sexpect archive sub05 0
+sexpect archive sub06 0
+sexpect archive sub08 0
+sexpect archive sub10 0
+sexpect archive crash_7 1
+sexpect archive crash_4 0
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 30
+sui menukey down
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_unused
+squit

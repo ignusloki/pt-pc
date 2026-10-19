@@ -317,7 +317,6 @@ ACCENT_POSITIVE = {
     'ac_fast': "<prosody rate='x-fast'>Jack</prosody>", 'ac_whisper': "<prosody volume='x-soft' rate='slow'>Jack</prosody>",
     'ac_shout': "<prosody volume='x-loud'>Jack!</prosody>", 'ac_plain': 'Jack', 'ac_hey': 'Hey Jack',
 }
-# what the player of C:/Users/r1otp/Downloads/pt (10).log was heard saying, and other near sounds: all must stay rejected
 ACCENT_NEGATIVE = {
     'pl_jorif_diga': 'Jorif diga', 'pl_jorith': 'Jorith', 'pl_shk_back': 'shk back', 'pl_possessed': 'Possessed, okay',
     'pl_jarus': 'JARUS!', 'pl_jourissa': 'Jourissa', 'pl_jrest': 'J r est', 'pl_james': 'James', 'pl_hey_you': 'Hey you',

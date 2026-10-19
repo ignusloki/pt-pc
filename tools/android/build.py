@@ -58,7 +58,7 @@ def stage_runtime(build, ndk, sdl_source):
         if not library.is_file():
             raise RuntimeError(f"Missing native library: {library}")
         shutil.copy2(library, native / library.name)
-    for directory, source in (("shaders", build / "shaders"), ("fonts", REPO / "assets/fonts"), ("voice", build / "voice")):
+    for directory, source in (("shaders", build / "shaders"), ("fonts", REPO / "assets/fonts"), ("voice", build / "voice"), ("lisa_date", REPO / "assets/lisa_date")):
         target = assets / "runtime" / directory
         target.mkdir(parents=True, exist_ok=True)
         for path in source.rglob("*"):

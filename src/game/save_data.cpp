@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/platform/os.h"
 #include "game/save_data.h"
 
@@ -44,7 +45,7 @@ GameOptions DefaultOptionsForLocale(std::string_view locale) {
     options.subtitle_language = 0;
     std::string tag(locale);
     for (char& ch : tag) {
-        ch = ch == '_' ? '-' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        ch = ch == '_' ? '-' : static_cast<char>(pt::AsciiLower(ch));
     }
     const std::string primary = tag.substr(0, tag.find('-'));
     if (primary == "en") {
@@ -64,7 +65,6 @@ GameOptions DefaultOptionsForLocale(std::string_view locale) {
     } else if (primary == "tr") {
         options.subtitle_language = 7;
     } else if (primary == "zh") {
-        // Simplified Chinese only (zh-Hans, zh-CN, zh-SG); Traditional falls to the default as an unknown language
         const bool traditional = tag.find("hant") != std::string::npos || tag.find("-tw") != std::string::npos ||
                                  tag.find("-hk") != std::string::npos || tag.find("-mo") != std::string::npos;
         if (!traditional) {
@@ -101,7 +101,6 @@ std::string SystemLanguageTag() {
     return "en-US";
 }
 
-// An already-empty store is reset successfully; failed deletion keeps the current save job configured.
 bool SaveStore::Reset() {
     if (!Enabled()) return false;
     for (int i=0;i<2;++i) {
@@ -134,8 +133,6 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     if (in) {
         in.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
     }
-    // the PC file has no checksum of its own (the PS4's savedata layer checks the data and reports 0xD); a file that cannot be
-    // read whole is the broken data of this format
     /* No checksum in the PC file; the PS4 savedata layer did that job, so a short read is the only corruption we can detect. */
     if (!in || in.gcount() != static_cast<std::streamsize>(buffer.size())) {
         LogWarn("save: {} is broken (cannot read {} bytes)", pt::os::PathToUtf8(path), buffer.size());
@@ -164,11 +161,8 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     std::memcpy(floor, buffer.data() + 0x40, 7);
     file.progress.floor = floor;
     file.progress.photo_word = Get<uint32_t>(buffer, 0x5C);
-    // Tagged port extension in padding; original saves remain first-playthrough saves.
     /* 'NGP1' at 0x70, bytes the original always leaves zero, so a save from the PS4 never reads as finished. */
     file.progress.game_plus = Get<uint32_t>(buffer, 0x70) == 0x3150474E;
-    // the port's finish count next to its tag (0x74, zero in the original's buffer)
-    // the low 16 bits; bits 16 to 23 hold the tier the Game+ notice last showed (0 in saves from before it)
     const uint32_t finish_word = Get<uint32_t>(buffer, 0x74);
     file.progress.finishes = file.progress.game_plus ? std::max<uint32_t>(1, finish_word & 0xFFFFu) : 0;
     file.progress.gameplus_announced = file.progress.game_plus ? (finish_word >> 16) & 0xFFu : 0;
@@ -179,7 +173,6 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     return slot;
 }
 
-// The newest valid slot is read; with no valid slot the newest file there is (by its write time) gives the result.
 SaveLoadResult SaveStore::LoadDetailed() {
     SaveLoadResult result;
     if (!Enabled()) {
@@ -218,7 +211,6 @@ bool SaveStore::Save(const SaveFile& file) {
     if (!Enabled()) {
         return false;
     }
-    // PT_SAVE_FAIL=nospace:N or error:N fails the next N writes that way (the save dialogs' test)
     static int forced_left = -1;
     static SaveWriteStatus forced = SaveWriteStatus::Failed;
     if (forced_left < 0) {
@@ -261,7 +253,6 @@ bool SaveStore::Save(const SaveFile& file) {
     const bool ok = static_cast<bool>(out);
     last_write_ = SaveWriteStatus::Ok;
     if (!ok) {
-        // the job's result 9 is the system's out-of-space error; on PC a failed write with less free space than a save needs
         std::error_code space_error;
         const auto space = std::filesystem::space(directory_, space_error);
         last_write_ = !space_error && space.available < 64 * 1024 ? SaveWriteStatus::NoSpace : SaveWriteStatus::Failed;

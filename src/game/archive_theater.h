@@ -27,29 +27,14 @@ class InputScript;
 struct ArchiveEntry;
 struct Stage;
 
-// The Archive's theater (docs/gameplay.md 14.7): a cutscene or a model of the Archive shown in a game session of its own, a second
-// Game over the same loaded data, while the player's game stays paused behind the menu that opened it. Nothing of the player's
-// session is read or written: the theater's game has no save, its traps and Lisa's logic stop once its demo is placed, and it is
-// thrown away when the viewer ends.
-//
-// Cutscenes play as the game plays them, with their sound, subtitles, lights and the scripts that answer their messages: the
-// preface and the openings run the boot's own steps; a hallway demo enters its loop through the start room's door as a loop browser
-// pick does (Game::PrepareTheaterLoop, the walk of the loop browser's previews), then plays at the place the level data gives it (the
-// trap or script that starts it in play, its demo center locator) with the player in that trap when the demo has no camera; the
-// ending loads the ending as the f160 exit does. Models stand at the start room's player start in museum light, alone in
-// the picture: a gimmick in its own motion, any other model as its file holds it.
 class ArchiveTheater {
 public:
     struct Settings {
-        // a sound system of its own (the player's is paused with the menu); with a device when the game has a window
         bool sound = false;
         bool open_device = false;
         float volume = 1.0f;
-        // tests: --demo-rate
         float demo_rate = 1.0f;
-        // the player's subtitle and language options
         GameOptions options;
-        // The same held exposure for interactive inspection and thumbnail capture.
         float model_ev = kArchiveModelEv;
     };
 
@@ -59,21 +44,18 @@ public:
     ArchiveTheater& operator=(const ArchiveTheater&) = delete;
 
     bool Start();
-    // one game tick; `input` is the player's (the model viewer turns with it)
     void Update(float dt, const InputState& input);
     void UpdateModelCamera(float dt, const FreeCameraControls& input);
     bool Finished() const { return phase_ == Phase::Done; }
-    // the viewer is left (the menu's back)
     void Stop();
     Game& Sandbox() { return *game_; }
     GameSound* Sound() { return sound_.get(); }
     const ArchiveEntry& Entry() const { return entry_; }
-    // something is on screen; before that (the session loading) the picture is black
     bool Showing() const;
     bool ModelView() const { return model_mode_; }
+    bool FreeView() const { return free_started_; }
     Camera ViewCamera() const;
     void CollectDraws(std::vector<DrawItem>& out);
-    // After the scene builder and VFX prepare their lighting; cutscenes retain their own lights.
     void ApplyModelLighting(SceneLighting& lighting) const;
 
 private:
@@ -86,6 +68,7 @@ private:
     void StartModel();
     void UpdateModel(float dt, const InputState& input);
     bool FindPlacement(const std::string& demo, glm::mat4& transform, glm::vec3* viewpoint);
+    void UpdateFreeView();
     void Finish(const char* why);
 
     Vfs& vfs_;
@@ -104,11 +87,13 @@ private:
     bool demo_seen_ = false;
     double phase_time_ = 0.0;
     bool teaser_fast_ = false;
-    // a demo without a camera: the view turns to what it moves (UpdateAim)
     bool aim_ = false;
     bool aim_started_ = false;
     glm::vec3 look_target_{0.0f};
-    // the model viewer
+    bool free_view_ = false;
+    bool free_started_ = false;
+    Camera free_camera_;
+    glm::vec3 free_origin_{0.0f};
     bool model_mode_ = false;
     Camera model_camera_;
     glm::vec3 model_camera_origin_{0.0f};
@@ -117,7 +102,6 @@ private:
     const void* model_mesh_ = nullptr;
     std::vector<DrawItem> model_draws_;
     glm::vec3 spot_{0.0f};
-    // a gimmick's offset from the spot: its bounds' foot on the floor
     glm::mat4 model_offset_{1.0f};
     float spot_yaw_ = 0.0f;
     glm::vec3 target_{0.0f};

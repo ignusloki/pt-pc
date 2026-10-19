@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/platform/http.h"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <type_traits>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -28,7 +30,6 @@ std::optional<int64_t> ParseHttpDate(const std::string& text) {
         if (std::strcmp(month, kMonths[i]) == 0) mon = i;
     }
     if (mon < 0 || year < 1970) return std::nullopt;
-    // days from civil (proleptic Gregorian), no time zone involved
     const int y = year - (mon < 2);
     const int era = (y >= 0 ? y : y - 399) / 400;
     const int yoe = y - era * 400;
@@ -37,6 +38,38 @@ std::optional<int64_t> ParseHttpDate(const std::string& text) {
     const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     const int64_t days = int64_t(era) * 146097 + doe - 719468;
     return days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+std::string UrlScheme(std::string_view url) {
+    const auto colon = url.find("://");
+    if (colon == std::string_view::npos) return {};
+    std::string scheme(url.substr(0, colon));
+    std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    return scheme == "https" || scheme == "http" ? scheme : std::string();
+}
+
+std::string UrlHost(std::string_view url) {
+    if (UrlScheme(url).empty()) return {};
+    std::string_view rest = url.substr(url.find("://") + 3);
+    rest = rest.substr(0, rest.find_first_of("/?#"));
+    if (rest.find('@') != std::string_view::npos) return {};
+    if (!rest.empty() && rest.front() == '[') return {};
+    rest = rest.substr(0, rest.find(':'));
+    std::string host(rest);
+    std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    return host;
+}
+
+namespace {
+std::string Resolve(const std::string& base, const std::string& location) {
+    if (!UrlScheme(location).empty()) return location;
+    if (location.starts_with("//")) return UrlScheme(base) + ":" + location;
+    if (!location.starts_with("/")) return {};
+    const auto start = base.find("://") + 3;
+    const auto path = base.find('/', start);
+    return base.substr(0, path) + location;
+}
+bool Redirect(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
 }
 
 #ifdef _WIN32
@@ -111,6 +144,131 @@ std::optional<Response> Get(const Request& request) {
     return response;
 }
 
+FetchResult Fetch(const FetchRequest& request) {
+    FetchResult result;
+    std::string url = request.url;
+    for (int hop = 0; hop < 6; ++hop) {
+        if (!request.allow || !request.allow(url)) {
+            result.error = "refused address " + UrlScheme(url) + "://" + UrlHost(url);
+            return result;
+        }
+        const bool secure = UrlScheme(url) == "https";
+        const std::wstring wide = Widen(url);
+        URL_COMPONENTS parts{sizeof(parts)};
+        wchar_t host[256] = {}, path[4096] = {};
+        parts.lpszHostName = host;
+        parts.dwHostNameLength = 256;
+        parts.lpszUrlPath = path;
+        parts.dwUrlPathLength = 4096;
+        parts.dwExtraInfoLength = 1;
+        if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts) || (parts.nScheme != INTERNET_SCHEME_HTTPS && parts.nScheme != INTERNET_SCHEME_HTTP)) {
+            result.error = "invalid address";
+            return result;
+        }
+        std::wstring resource(path, parts.dwUrlPathLength);
+        if (parts.lpszExtraInfo && parts.dwExtraInfoLength) resource.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
+        Handle session{WinHttpOpen(L"pt-port", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+        if (!session.h) {
+            result.error = "no network";
+            return result;
+        }
+        WinHttpSetTimeouts(session.h, request.timeout_ms, request.timeout_ms, request.timeout_ms, request.timeout_ms);
+        Handle connection{WinHttpConnect(session.h, host, parts.nPort, 0)};
+        if (!connection.h) {
+            result.error = "could not connect";
+            return result;
+        }
+        Handle req{WinHttpOpenRequest(connection.h, L"GET", resource.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                      secure ? WINHTTP_FLAG_SECURE : 0)};
+        if (!req.h) {
+            result.error = "could not connect";
+            return result;
+        }
+        DWORD off = WINHTTP_DISABLE_REDIRECTS;
+        WinHttpSetOption(req.h, WINHTTP_OPTION_DISABLE_FEATURE, &off, sizeof(off));
+        const std::wstring range = request.range.empty() ? std::wstring() : L"Range: " + Widen(request.range) + L"\r\n";
+        if (!WinHttpSendRequest(req.h, range.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : range.c_str(), range.empty() ? 0 : DWORD(-1), nullptr, 0, 0, 0) ||
+            !WinHttpReceiveResponse(req.h, nullptr)) {
+            result.error = "no answer from " + UrlHost(url) + " (error " + std::to_string(GetLastError()) + ")";
+            return result;
+        }
+        DWORD status = 0, bytes = sizeof(status);
+        if (!WinHttpQueryHeaders(req.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &bytes, nullptr)) {
+            result.error = "invalid answer";
+            return result;
+        }
+        result.status = int(status);
+        if (Redirect(result.status)) {
+            wchar_t location[4096] = {};
+            DWORD size = sizeof(location);
+            if (!WinHttpQueryHeaders(req.h, WINHTTP_QUERY_LOCATION, nullptr, location, &size, nullptr)) {
+                result.error = "redirect without a target";
+                return result;
+            }
+            const std::wstring target(location, size / sizeof(wchar_t));
+            const int n = WideCharToMultiByte(CP_UTF8, 0, target.data(), int(target.size()), nullptr, 0, nullptr, nullptr);
+            std::string narrow(size_t(n), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, target.data(), int(target.size()), narrow.data(), n, nullptr, nullptr);
+            url = Resolve(url, narrow);
+            if (url.empty()) {
+                result.error = "invalid redirect";
+                return result;
+            }
+            continue;
+        }
+        if (!request.range.empty() && result.status == 200) {
+            result.range_ignored = true;
+            result.error = UrlHost(url) + " does not serve parts of a file";
+            return result;
+        }
+        if (result.status != (request.range.empty() ? 200 : 206)) {
+            result.error = "HTTP " + std::to_string(result.status) + " from " + UrlHost(url);
+            return result;
+        }
+        result.final_url = url;
+        uint64_t total = 0;
+        wchar_t length[32] = {};
+        DWORD length_size = sizeof(length);
+        if (WinHttpQueryHeaders(req.h, WINHTTP_QUERY_CONTENT_LENGTH, nullptr, length, &length_size, nullptr)) total = _wcstoui64(length, nullptr, 10);
+        if (total > request.max_bytes) {
+            result.error = "the file is larger than expected";
+            return result;
+        }
+        std::vector<char> buffer(256 * 1024);
+        if (request.progress) request.progress(0, total);
+        for (;;) {
+            if (request.cancelled && request.cancelled()) {
+                result.error = "cancelled";
+                return result;
+            }
+            DWORD read = 0;
+            if (!WinHttpReadData(req.h, buffer.data(), DWORD(buffer.size()), &read)) {
+                result.error = "the download stopped (error " + std::to_string(GetLastError()) + ")";
+                return result;
+            }
+            if (read == 0) break;
+            if (result.bytes + read > request.max_bytes) {
+                result.error = "the file is larger than expected";
+                return result;
+            }
+            if (request.write && !request.write(buffer.data(), read)) {
+                result.error = "could not store the download";
+                return result;
+            }
+            result.bytes += read;
+            if (request.progress) request.progress(result.bytes, total);
+        }
+        if (total && result.bytes != total) {
+            result.error = "the download is incomplete";
+            return result;
+        }
+        result.ok = true;
+        return result;
+    }
+    result.error = "too many redirects";
+    return result;
+}
+
 std::optional<Response> PostForm(const std::string& url_text, const std::vector<FormPart>& form, int timeout_ms) {
     const std::string boundary = "----pt-port-crash-7f3a9c2e5b1d";
     std::string body;
@@ -179,15 +337,15 @@ std::optional<Response> PostBody(const std::string&, const std::string&, const s
 }
 
 namespace {
-// The few libcurl entry points used, with the option numbers of curl.h (stable ABI since libcurl 7)
 using CURL = void;
 struct curl_slist;
 enum : int {
-    kOptWriteData = 10001, kOptUrl = 10002, kOptUserAgent = 10018, kOptHttpHeader = 10023, kOptHeaderData = 10029,
+    kOptWriteData = 10001, kOptRange = 10007, kOptUrl = 10002, kOptUserAgent = 10018, kOptHttpHeader = 10023, kOptHeaderData = 10029,
     kOptWriteFunction = 20011, kOptHeaderFunction = 20079, kOptFollowLocation = 52, kOptMaxRedirs = 68, kOptNoSignal = 99,
-    kOptTimeoutMs = 155, kOptConnectTimeoutMs = 156, kOptProtocolsStr = 10318,
+    kOptTimeoutMs = 155, kOptConnectTimeoutMs = 156, kOptProtocolsStr = 10318, kOptLowSpeedLimit = 19, kOptLowSpeedTime = 20,
 };
 constexpr int kInfoResponseCode = 0x200002;
+constexpr int kInfoRedirectUrl = 0x100000 + 31;
 struct Curl {
     void* library = nullptr;
     CURL* (*easy_init)() = nullptr;
@@ -236,9 +394,8 @@ size_t OnHeader(char* data, size_t size, size_t count, void* user) {
     auto* response = static_cast<Response*>(user);
     std::string line(data, size * count);
     std::string lower = line;
-    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
     if (lower.starts_with("http/")) {
-        // a new response (after a redirect): forget the previous one's headers
         response->date.reset();
         response->aged = false;
     } else if (lower.starts_with("date:")) {
@@ -279,6 +436,137 @@ std::optional<Response> Get(const Request& request) {
     if (result != 0 || sink.overflow || status == 0) return std::nullopt;
     response.status = int(status);
     return response;
+}
+
+namespace {
+struct FetchSink {
+    const FetchRequest* request;
+    FetchResult* result;
+    int status = 0;
+    uint64_t total = 0;
+    bool failed = false;
+    bool range_ignored = false;
+    std::string error;
+};
+size_t OnFetchHeader(char* data, size_t size, size_t count, void* user) {
+    auto* sink = static_cast<FetchSink*>(user);
+    std::string line(data, size * count);
+    std::string lower = line;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    if (lower.starts_with("http/")) {
+        const auto space = line.find(' ');
+        sink->status = space == std::string::npos ? 0 : std::atoi(line.c_str() + space + 1);
+        sink->total = 0;
+    } else if (lower.starts_with("content-length:")) {
+        sink->total = std::strtoull(line.c_str() + 15, nullptr, 10);
+    }
+    return size * count;
+}
+size_t OnFetchBody(char* data, size_t size, size_t count, void* user) {
+    auto* sink = static_cast<FetchSink*>(user);
+    const size_t n = size * count;
+    const FetchRequest& request = *sink->request;
+    if (!request.range.empty() && sink->status == 200) {
+        sink->failed = true;
+        sink->range_ignored = true;
+        sink->error = "the server does not serve parts of a file";
+        return 0;
+    }
+    if (sink->status != (request.range.empty() ? 200 : 206)) return n;
+    const bool cancelled = request.cancelled && request.cancelled();
+    if (cancelled || sink->result->bytes + n > request.max_bytes || sink->total > request.max_bytes) {
+        sink->failed = true;
+        sink->error = cancelled ? "cancelled" : "the file is larger than expected";
+        return 0;
+    }
+    if (request.write && !request.write(data, n)) {
+        sink->failed = true;
+        sink->error = "could not store the download";
+        return 0;
+    }
+    sink->result->bytes += n;
+    if (request.progress) request.progress(sink->result->bytes, sink->total);
+    return n;
+}
+}
+
+FetchResult Fetch(const FetchRequest& request) {
+    static Curl curl;
+    FetchResult result;
+    if (!curl.Ready()) {
+        result.error = "libcurl is not installed";
+        return result;
+    }
+    std::string url = request.url;
+    for (int hop = 0; hop < 6; ++hop) {
+        if (!request.allow || !request.allow(url)) {
+            result.error = "refused address " + UrlScheme(url) + "://" + UrlHost(url);
+            return result;
+        }
+        CURL* handle = curl.easy_init();
+        if (!handle) {
+            result.error = "libcurl failed";
+            return result;
+        }
+        FetchSink sink{&request, &result};
+        curl.easy_setopt(handle, kOptUrl, url.c_str());
+        curl.easy_setopt(handle, kOptProtocolsStr, UrlScheme(url) == "http" ? "http" : "https");
+        curl.easy_setopt(handle, kOptUserAgent, "pt-port");
+        curl.easy_setopt(handle, kOptNoSignal, 1L);
+        curl.easy_setopt(handle, kOptConnectTimeoutMs, long(request.timeout_ms));
+        curl.easy_setopt(handle, kOptLowSpeedLimit, 1L);
+        curl.easy_setopt(handle, kOptLowSpeedTime, long(std::max(1, request.timeout_ms / 1000)));
+        curl.easy_setopt(handle, kOptFollowLocation, 0L);
+        curl.easy_setopt(handle, kOptWriteFunction, &OnFetchBody);
+        curl.easy_setopt(handle, kOptWriteData, &sink);
+        curl.easy_setopt(handle, kOptHeaderFunction, &OnFetchHeader);
+        curl.easy_setopt(handle, kOptHeaderData, &sink);
+        const std::string range = request.range.starts_with("bytes=") ? request.range.substr(6) : request.range;
+        if (!range.empty()) curl.easy_setopt(handle, kOptRange, range.c_str());
+        if (request.progress) request.progress(0, 0);
+        const int code = curl.easy_perform(handle);
+        long status = 0;
+        curl.easy_getinfo(handle, kInfoResponseCode, &status);
+        std::string location;
+        if (Redirect(int(status))) {
+            char* target = nullptr;
+            curl.easy_getinfo(handle, kInfoRedirectUrl, &target);
+            if (target) location = target;
+        }
+        curl.easy_cleanup(handle);
+        result.status = int(status);
+        if (sink.failed) {
+            result.error = sink.error;
+            result.range_ignored = sink.range_ignored;
+            return result;
+        }
+        if (code != 0) {
+            result.error = "no answer from " + UrlHost(url) + " (curl " + std::to_string(code) + ")";
+            return result;
+        }
+        if (Redirect(result.status)) {
+            url = Resolve(url, location);
+            if (url.empty()) {
+                result.error = "invalid redirect";
+                return result;
+            }
+            continue;
+        }
+        if (result.status != (request.range.empty() ? 200 : 206)) {
+            result.range_ignored = !request.range.empty() && result.status == 200;
+            result.error = "HTTP " + std::to_string(result.status) + " from " + UrlHost(url);
+            return result;
+        }
+        if (sink.total && result.bytes != sink.total) {
+            result.error = "the download is incomplete";
+            return result;
+        }
+        result.final_url = url;
+        result.ok = true;
+        return result;
+    }
+    result.error = "too many redirects";
+    return result;
 }
 
 #endif

@@ -1,0 +1,162 @@
+# Coffee with Lisa, italiano. chiave = testo (le chiavi mancanti arrivano da eng.txt)
+name_lisa = Lisa
+name_you = Tu
+name_glitch = Lisa
+ui_auto = Auto
+ui_skip = Salta
+ui_affection = Affetto
+ui_leave_hold = Tieni premuto per lasciare l'appuntamento
+title_1 = Parte 1: Caffè nero
+title_2 = Parte 2: Due zollette
+title_3 = Parte 3: Ultimo giro
+ending_good = FINALE BUONO: Stessa ora, prossimo loop
+ending_bad = FINALE CATTIVO: Caffè freddo
+ending_true = VERO FINALE: 204863
+
+intro_01 = (Il corridoio è sparito. Qui c'è odore di caffè. Caffè, e qualcosa di molto vecchio.)
+intro_02 = (Quella è... Lisa? Perché sorride? Perché è SEDUTA?)
+
+s1_01 = Oh! Ce l'hai fatta a entrare. Non entra mai nessuno. Mi passano accanto nel corridoio. Ancora e ancora e ancora.
+s1_02 = Siediti, siediti! Ho fatto il caffè. Non sapevo come lo prendi, quindi l'ho fatto come lo prendo io.
+s1_03 = Nero. Come il corridoio alle tre di notte.
+c1_a = Nero è perfetto.
+c1_a_r = Visto? Siamo già compatibili. L'ho capito la prima volta che ti ho visto scappare da me.
+c1_b = Posso avere un po' di latte?
+c1_b_r1 = Il latte è nel frigo.
+c1_b_r2 = ...Non aprire il frigo.
+c1_c = Sento una radio, o sbaglio?
+c1_c_r1 = Quale radio? Non c'è nessuna radio. Non c'è mai stata nessuna radio.
+c1_c_r2 = Bevi il caffè.
+
+s1_04 = Allora. Noti qualcosa di diverso in me?
+c2_a = I tuoi capelli sono stupendi.
+c2_a_r = Davvero? Ci metto una vita. Nessuno sa quanto. Nemmeno io.
+c2_b = Per una volta... non mi vieni incontro.
+c2_b_r = Sono seduta! Me l'ha insegnato un'amica. Vive in una vasca da bagno. Ragazza adorabile. Non parla molto.
+c2_c = Li hai pettinati con una forchetta?
+c2_c_r = Farò finta che tu non l'abbia detto. Sono bravissima a fare finta. Chiedi al corridoio.
+
+s1_05 = Non esco molto. Il mio medico dice che sono "tecnicamente non viva", e lo trovo un po' giudicante.
+s1_06 = E tu? Cosa fai tutto il giorno?
+c3_a = Percorro un corridoio. Poi lo rifaccio.
+c3_a_r = Anch'io! Abbiamo così tanto in comune!
+c3_b = Colleziono pezzettini di carta.
+c3_b_r = Una collezione! Hai anche quello con la mia faccia? Lì sono venuta benissimo.
+c3_c = Urlo "Jack" finché squilla un telefono.
+c3_c_r = ...Sono sicura che da dove vieni tu sia normalissimo.
+
+s1_07 = Che bello. Normale. Due persone sedute a bere un caffè. Nessuno che striscia sul soffitto.
+c4_a = È davvero facile parlare con te.
+c4_a_r = Smettila. La mia testa sta per fare quella cosa.
+c4_b = Tu strisci sui soffitti?
+c4_b_r = Solo nel weekend.
+c4_c = Posso spostare la sedia un po' più in là?
+c4_c_r = ...Oh. Certo. È avvitata al pavimento, ma certo.
+
+s2_01 = Posso dirti un segreto? Quando sono nervosa, la mia testa fa un piccolo...
+s2_02 = ...così.
+c5_a = Sinceramente, è un po' carino.
+c5_a_r = Nessuno l'ha mai chiamato carino. Di solito urlano e lasciano cadere la torcia.
+c5_b = Ti prego, non farlo mai più.
+c5_b_r = Non ci posso fare niente! È come il singhiozzo. Un singhiozzo infestato.
+c5_c = Per questo picchi sulla porta del bagno?
+c5_c_r = Ha cominciato quella porta.
+
+s2_03 = Ok, un gioco! Il mio numero preferito è 2-0-4-8-6-3. Indovina perché.
+c6_a = È il tuo compleanno?
+c6_a_r = Ma no! È l'ora. Guarda l'orologio. ...Dov'è finito l'orologio?
+c6_b = 204863 è anche il mio numero preferito.
+c6_b_r = ...Nessuno si ricorda il numero. Nessuno.
+c6_c = È un numero davvero strano.
+c6_c_r = Detto da chi conta i propri passi.
+
+s2_04 = Ti piacciono i bambini?
+c7_a = Certo, in quantità ragionevoli.
+c7_a_r = Ragionevole è bello. Mi piace il ragionevole.
+c7_b = Ne ho trovato uno in un lavandino.
+c7_b_r = Oh, è lì che li tengono. Molto igienico.
+c7_c = Non proprio.
+c7_c_r = Il lavandino ti ha sentito.
+
+s2_05 = Ok. Domanda importante. Se fossi una torcia, mi terresti stretta al buio?
+c8_a = Non ti lascerei mai andare.
+c8_a_r = Anche quando sfarfallo? ...Sei dolce. Nessuno mi dice mai che sono dolce.
+c8_b = Solo finché non si scaricano le pile.
+c8_b_r = Le torce di questa casa non hanno pile. Hanno sentimenti.
+c8_c = Saresti tu ad accecare me.
+c8_c_r = È il modo più carino in cui qualcuno mi abbia mai detto "la tua faccia mi fa male agli occhi".
+
+s2_06 = Mi sto divertendo. Tu ti stai divertendo? Sbatti le palpebre due volte se ti stai divertendo.
+s2_07 = ...Non hai sbattuto le palpebre. Non lo fai mai. Interessante.
+
+s3_01 = Si sta facendo tardi. Qui è sempre tardi. È tardi da tantissimo tempo.
+s3_02 = Tutti escono dalla porta in fondo al corridoio. E poi rientrano subito.
+c9_a = Resto ancora un po'.
+c9_a_r = Lo sapevo.
+c9_b = Dovrei tornare nel corridoio.
+c9_b_r = Il corridoio sarà ancora lì. Il corridoio è sempre ancora lì.
+c9_c = Ho già vissuto questo momento.
+c9_c_r = Lo dici ogni volta.
+
+s3_03 = Posso chiederti una cosa? Come mi chiamo?
+c10_a = Lisa.
+c10_a_r = Te lo ricordi! Nessuno se lo ricorda. Mi chiamano solo "la cosa dietro di te".
+c10_b = Ocho?
+c10_b_r = Così mi chiamavano i programmatori. Dei programmatori non si parla.
+c10_c = La donna del corridoio?
+c10_c_r = ...Quello è il mio lavoro. Non il mio nome.
+
+s3_04 = Promettimi una cosa. Non guardarti alle spalle.
+c11_a = Te lo prometto.
+c11_a_r = Bene. Non c'è niente lì. Non c'è mai niente lì.
+c11_b = (Guardati alle spalle.)
+c11_b_r1 = (Non c'è niente. Solo una porta. Un secondo fa non c'era.)
+c11_b_r2 = ...Hai guardato. Perché guardano sempre tutti?
+c11_c = Posso guardare dallo spioncino?
+c11_c_r = Qui non c'è nessuna porta. ...Allora da cosa stai guardando adesso?
+
+s3_05 = Ultima domanda, promesso. Tornerai?
+c12_a = Certo che tornerò.
+c12_a_r = Allora terrò il caffè caldo. Per sempre, se serve. Con il per sempre sono brava.
+c12_b = A ogni loop.
+c12_b_r = A ogni loop. Da dove vengo io, è praticamente un matrimonio.
+c12_c = Adesso spengo il gioco.
+c12_c_r = Spegni il COSA?
+
+good_01 = Possiamo... possiamo farci una foto? Per ricordarcelo. Sono pessima a ricordare le cose.
+good_02 = Guardaci! Tu hai l'aria agitata. Io sembro... me. È perfetta.
+good_03 = La appenderò nel corridoio. Accanto alle altre foto. Così ti vedrò ogni volta che passi.
+good_04 = Stessa ora, prossimo loop? Il caffè lo faccio io. Tu porta la torcia.
+
+bad_01 = Sai una cosa? Sei proprio come tutti gli altri.
+bad_02 = Entri. Ti guardi intorno. Te ne vai. Torni. Non resti mai, mai.
+bad_03 = Lascia che ti mostri cosa succede a chi non finisce il caffè.
+
+true_01 = Le hai scelte apposta, vero?
+true_02 = La radio. Il numero. Il loop. Lo spioncino. Hai fatto attenzione.
+true_03 = Quindi sarò sincera con te. Non con l'uomo nel corridoio. Con TE.
+true_04 = Questa stanza non è vera. Il caffè non è vero. Qualcuno l'ha dipinto. Non sono nemmeno seduta davvero. La posa l'hanno presa in prestito da una vasca.
+true_05 = Ma tu esisti davvero. In questo momento stai tenendo qualcosa in mano, in una stanza che non vedo. È buio anche lì?
+true_06 = Ti ho guardato percorrere quel corridoio. Ancora. E ancora. Hai aperto quella stessa porta tantissime volte.
+true_07 = Non preoccuparti. Non toccherò il tuo salvataggio. Non sono quel tipo di ragazza.
+true_08 = Volevo solo un caffè con qualcuno che ricambiasse lo sguardo.
+true_09 = Va bene. Ora torna indietro. Al corridoio manchi. E la radio ha ancora qualcosa da dirti.
+true_10 = E se squilla un telefono... lascialo squillare un po' di più. Per me.
+
+# the selfie (script `selfie`): her reaction to the faces in the photo, the photo mode panel, the saved photo, the music notice
+selfie_both_grin = Guardaci! Due sorrisi enormi. Non sapevo che la tua faccia sapesse farlo. La tengo per sempre.
+selfie_both_grumpy = Guardaci. Due musi lunghi davanti a un caffè. È la foto più sincera che ho. È perfetta.
+selfie_she_smiles = Io sorrido e tu fai il broncio. Tutti penseranno che la gentile sono io. Finalmente.
+selfie_you_smile = Tu sorridi da un orecchio all'altro e io ti fulmino con lo sguardo. Bene. Così sapranno chi comanda qui.
+ui_selfie = Selfie
+ui_selfie_face = Espressione
+ui_selfie_tilt = Inclinazione della testa
+ui_selfie_take = Scatta la foto
+ui_face_grumpy = Broncio
+ui_face_frown = Cipiglio
+ui_face_neutral = Neutrale
+ui_face_smile = Sorriso
+ui_face_grin = Gran sorriso
+ui_photo_saved = Foto salvata: {file}
+ui_photo_failed = Impossibile salvare la foto
+ui_hint_menu = Menu

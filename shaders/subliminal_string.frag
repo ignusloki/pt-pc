@@ -3,9 +3,9 @@
 #include "tonemap_curve.glsl"
 
 layout(push_constant) uniform PassPush {
-    uvec4 ids;   // string texture, scene after motion blur
-    vec4 f0;     // position, envelope, frame width in 16:9 frames
-    vec4 f1;     // bloom enabled, exposure
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
     vec4 f2;
     mat4 m;
 } pass;
@@ -17,10 +17,9 @@ void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     float across = pass.f0.w > 0.0 ? pass.f0.w : 1.0;
     vec2 uv = vec2((in_uv.x - 0.5) * across + 0.5, in_uv.y);
-    float a = texture(textures[nonuniformEXT(pass.ids.x & 0x3FFFFFFFu)], pass.f0.xy + uv).a;
+    float a = texture(PT_TEX2D(pass.ids.x & 0x3FFFFFFFu), pass.f0.xy + uv).a;
     float ink = 0.1 * clamp(pass.f0.z * a, 0.0, 1.0);
 
-    // Preserve pre-tonemap additive ink, adding only its contribution after camera blur.
     vec3 hdr = ImgFetch(IMG_HDR, pixel).rgb * pass.f1.y;
     vec3 encoded = SrgbEncode(clamp(hdr, 0.0, 1.0)) + max(ImgFetch(IMG_FLARE, pixel).rgb, vec3(0.0));
     vec2 bloom_uv = in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);

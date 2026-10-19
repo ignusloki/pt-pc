@@ -3,6 +3,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -10,6 +11,7 @@
 
 #include "engine/core/log.h"
 #include "engine/core/pathcode.h"
+#include "engine/fs/io_stats.h"
 #include "engine/fs/mods.h"
 
 namespace pt {
@@ -53,17 +55,17 @@ bool ReadChunked(const std::vector<uint8_t>& file, size_t block, uint32_t unpack
 
 }
 
-VkFormat FtexTexture::Format() const {
+gpu::Format FtexTexture::Format() const {
     switch (pixel_format) {
-    case 0: return Srgb() ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8A8_UNORM;
-    case 1: return VK_FORMAT_R8_UNORM;
-    case 2: return Srgb() ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
-    case 3: return Srgb() ? VK_FORMAT_BC2_SRGB_BLOCK : VK_FORMAT_BC2_UNORM_BLOCK;
-    case 4: return Srgb() ? VK_FORMAT_BC3_SRGB_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
-    case 5: return VK_FORMAT_BC5_UNORM_BLOCK;
-    case 6: return VK_FORMAT_R32_SFLOAT;
-    case 8: return Srgb() ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
-    default: return VK_FORMAT_UNDEFINED;
+    case 0: return Srgb() ? gpu::Format::B8G8R8A8Srgb : gpu::Format::B8G8R8A8Unorm;
+    case 1: return gpu::Format::R8Unorm;
+    case 2: return Srgb() ? gpu::Format::Bc1RgbaSrgbBlock : gpu::Format::Bc1RgbaUnormBlock;
+    case 3: return Srgb() ? gpu::Format::Bc2SrgbBlock : gpu::Format::Bc2UnormBlock;
+    case 4: return Srgb() ? gpu::Format::Bc3SrgbBlock : gpu::Format::Bc3UnormBlock;
+    case 5: return gpu::Format::Bc5UnormBlock;
+    case 6: return gpu::Format::R32Sfloat;
+    case 8: return Srgb() ? gpu::Format::Bc7SrgbBlock : gpu::Format::Bc7UnormBlock;
+    default: return gpu::Format::Undefined;
     }
 }
 
@@ -80,9 +82,20 @@ std::optional<std::vector<uint8_t>> ReadTextureFile(const QarArchive& qar, const
     return qar.Read(PathCode64(name));
 }
 
+static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexTexture& out);
+
 bool LoadFtex(const QarArchive& qar, std::string_view path, FtexTexture& out) {
+    if (IoTraceOn()) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool ok = LoadFtexUntraced(qar, path, out);
+        IoTrace("texture", path, 0, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        return ok;
+    }
+    return LoadFtexUntraced(qar, path, out);
+}
+
+static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexTexture& out) {
     const std::string stem = FtexStem(path);
-    // a mod's .ftex brings its own .ftexs: the game's streams belong to the game's header
     auto header = mods::ReadOverride(stem + ".ftex");
     const bool modded = header.has_value();
     if (!modded) {
@@ -269,8 +282,6 @@ bool DecodeFtexLevel(const FtexTexture& ftex, uint32_t level, std::vector<uint8_
     return true;
 }
 
-// Opaque BC1 (c0 > c1, four colours): the endpoints span the colours along their principal axis, then least squares refines them for the
-// chosen indices
 void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
     float px[16][3];
     float mean[3] = {0.0f, 0.0f, 0.0f};
@@ -331,7 +342,6 @@ void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
             palette[2][i] = static_cast<uint8_t>((2 * palette[0][i] + palette[1][i]) / 3);
             palette[3][i] = static_cast<uint8_t>((palette[0][i] + 2 * palette[1][i]) / 3);
         }
-        // the share of endpoint 0 in the palette entries 0 to 3
         constexpr float kWeight[4] = {1.0f, 0.0f, 2.0f / 3.0f, 1.0f / 3.0f};
         float aa = 0.0f;
         float ab = 0.0f;
@@ -385,7 +395,6 @@ void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
     }
 }
 
-// The alpha half of a BC3 block, eight-value mode between the lowest and highest alpha
 void EncodeBc3AlphaBlock(const uint8_t* rgba, uint8_t* out) {
     uint8_t lo = 255;
     uint8_t hi = 0;

@@ -16,6 +16,13 @@ bool Continuous(int step) {
     return step == 9 || step == 13 || step == 15 || step == 28 || step == 31 || step == 32 || step == 33;
 }
 
+void SkippedOpeningDoor(Game& g) {
+    if (!g.Floor().IsCurrentFloorName("f000")) return;
+    g.Messages().PostDemoMessage("gc_p01_100", "Play");
+    g.Messages().PostDemoMessage("gc_p01_100", "FinishMotion");
+    LogInfo("controller: start room door set ajar as the skipped opening leaves it (gc_p01_100)");
+}
+
 }
 
 void GameController::SetStep(int step) {
@@ -39,15 +46,12 @@ void GameController::ChangeGameStep(std::string_view name) {
     } else if (name == "ResetGame") {
         SetStep(17);
     } else if (name == "Endf120") {
-        // a loop browser pick made while f120's bug screen runs: its message can come during the pick's fade, and it would end the
-        // pick's save suspension and save f120 over the player's save (seen in the preview capture: f120 shot, f160 picked)
         if (game_.LoopReloadPending()) {
             LogInfo("controller: Endf120 ignored during loop browser reset");
             return;
         }
         SetStep(17);
         replay_preface = true;
-        // the f120 checkpoint is real progress also in a browsed run: the browser's save suspension ends here
         game_.EndBrowseSuppression("Endf120 checkpoint");
         game_.Floor().SetSaveFloorName("f120");
         game_.RequestSave();
@@ -56,8 +60,6 @@ void GameController::ChangeGameStep(std::string_view name) {
     } else if (name == "GotoEnding") {
         SetStep(21);
     } else if (name == "FinishEndingRestartGame") {
-        // A menu progress reset also uses this restart; only ending step 28 unlocks Game+, and not the loop browser's
-        // "Ending" entry (saves still suspended), which would unlock it without the game being played
         if (current_ == 28 && !game_.BrowseSaveSuppressed()) game_.EnableGamePlus();
         if (current_ == 31) game_.EndStreetWalk();
         SetStep(29);
@@ -66,18 +68,12 @@ void GameController::ChangeGameStep(std::string_view name) {
     }
 }
 
-// GameController.FinishEndingRestartGame of demoScriptFinishEnding.lua, at the end of the ending demo's credits: the original restarts
-// (step 29). The port records the finished game for the loop browser's unlocks (not for the browser's own Ending entry, whose saves
-// are suspended), shows the port's own credits page (step 33, Game::StartPortCredits) and then asks whether to walk the street first
-// (step 32 waits for the answer, Game::OfferStreetWalk)
 void GameController::FinishEnding() {
-    // a loop browser pick's reset is already coming
     if (game_.LoopReloadPending()) {
         return;
     }
     if (current_ == 28 && !game_.BrowseSaveSuppressed()) {
         game_.NoteGameFinished();
-        // the finished game's save marker (Game+); since the Lua call came here instead of ChangeGameStep (a357c41) it was never set
         game_.EnableGamePlus();
     }
     if (current_ == 28) {
@@ -113,8 +109,6 @@ void GameController::FloorTick(float dt) {
 
 void GameController::Update(float dt) {
     dt_ = dt;
-    // 0x9231D0: ctx+0x110 (Lua SaveGame) requests save 9, ctx+0x111 (Lua DisableOption) acquires S_DISABLE_GAME_PAUSE("ResetGame");
-    // each does only its own (gc_p02_080's DisableOption at frame 5396 writes no save, the Endf120 at 5875 does)
     if (save_pending_) {
         game_.RequestSave();
         save_pending_ = false;
@@ -125,7 +119,6 @@ void GameController::Update(float dt) {
         LogInfo("controller: DisableOption, pause menu blocked (no save)");
     }
     if (current_ >= 0 && requested_ != current_) {
-        // 0x9231D0: one step per 30 Hz game frame
         step_wait_ += dt;
         if (step_wait_ + 0.001f < kGameFrame) {
             if (Continuous(current_)) {
@@ -187,7 +180,6 @@ void GameController::RunStep(int step) {
     case 6:
         g.Scripts().CallStateFunction("OnStartOption");
         g.Floor().RelocateGimmicks();
-        // the speedrun results page's "Return to menu" (a PC extra) shows the first boot's option screen after the ending's restart
         if ((g.TakeOptionsAfterRestart() || first_boot) && g.ShowOptionMenuOnFirstBoot()) {
             g.Status().Release(kPauseFlag, kPauseHolder);
             option_menu_open_ = g.OptionsUiAvailable();
@@ -245,17 +237,15 @@ void GameController::RunStep(int step) {
     case 12:
         Lock(true);
         if (g.BrowseEntryPending()) {
-            // a browsed loop skips the stand-up demo (whose Finish sends StartGame) and leaves through the door at step 14.
-            // SetupOpeningOcho (step 11) has shown the start room's static Lisa (shsb_hous001_ocho001) behind the door on f000,
-            // and only the demo's hideOcho message (gc_p00_020 frame 522) hides her again: post it as the demo would
             g.Messages().PostDemoMessage("gc_p00_020", "hideOcho");
+            SkippedOpeningDoor(g);
             LogInfo("controller: loop browser skips the opening demo");
             SetStep(14);
             return;
         }
         if (g.Config().theater && !g.Theater().opening) {
-            // the Archive's theater (archive_theater.h) goes straight to play, as a browsed loop does
             g.Messages().PostDemoMessage("gc_p00_020", "hideOcho");
+            SkippedOpeningDoor(g);
             SetStep(14);
             return;
         }
@@ -266,8 +256,8 @@ void GameController::RunStep(int step) {
         FloorTick(dt_);
         return;
     case 14:
-        // the start room's opening reached in play unlocks the loop browser's first entry (Game::OnFloorReached)
         if (g.Floor().IsCurrentFloorName("f000")) g.OnFloorReached("f000", 1);
+        g.LatchGamePlus();
         g.Scripts().CallStateFunction("OnPreGame");
         g.Floor().OnStartGame();
         g.SpeedrunStartGame();
@@ -276,9 +266,6 @@ void GameController::RunStep(int step) {
         SetStep(15);
         return;
     case 15:
-        // after OnPreGame's fade in: a browsed loop walks out of the start room as its door trap would play it, once OnPreGame's
-        // messages (SetupFlashLight) are read on the start room's floor (Game::BrowseEnterHallway)
-        // (not on the ticks a requested reset waits for its step: those still belong to the session the pick was made in)
         if (requested_ == 15 && g.BrowseEntryPending()) g.BrowseEnterHallway();
         if (pad_enable_pending_) {
             for (char set : {'A', 'B', 'C'}) {
@@ -313,10 +300,12 @@ void GameController::RunStep(int step) {
         if (!g.Stages().IsAllUnloaded()) {
             return;
         }
-        // The port can unload before game_over's delayed Stop_ALL (800 ms).
-        // Finish that reset action before loading a new room and its demo audio.
         if (g.Audio() && g.Audio()->IsEventPlaying("Set_state_game_over")) {
             return;
+        }
+        if (release_after_ending_ || g.VideoMemoryTight()) {
+            g.ReleaseUnusedAssets(release_after_ending_ ? "reset after the ending" : "reset with the video memory short");
+            release_after_ending_ = false;
         }
         if (restart_objects_pending_) {
             g.Demos().Gimmicks().ResetSession();
@@ -336,9 +325,6 @@ void GameController::RunStep(int step) {
     case 21:
         g.SpeedrunEnding();
         g.Scripts().CallStateFunction("OnPreEndingStopGame");
-        // 0x922690 closes the pause menu (0x90D6B0 -> 0x9208C0: world resumed, option menu close requested) before the ending
-        // loads. The port pauses the controller with the world while the menu is open, so this only meets a menu opened in the
-        // same tick; the close keeps the original's order.
         if (GameUi* ui = GameUi::Active(); ui && ui->MenuOpen() && !g.Config().theater) {
             ui->CloseMenu();
             LogInfo("controller: GotoEnding closes the pause menu");
@@ -358,12 +344,11 @@ void GameController::RunStep(int step) {
         if (!g.Stages().IsAllUnloaded()) {
             return;
         }
-        // OnPreEndingStopGame posted Set_state_game_over, whose Stop_ALL runs 800 ms later (200 ms fade). The original's
-        // unload and ending.fpk load take longer than that; the port's can end within a few frames, and the delayed stop then
-        // ended gc_p06_010_final's stream about a second after it started (the loop browser's ending played silent).
         if (g.Audio() && g.Audio()->IsEventPlaying("Set_state_game_over")) {
             return;
         }
+        g.ReleaseUnusedAssets("ending load");
+        release_after_ending_ = true;
         SetStep(25);
         return;
     case 25:
@@ -377,12 +362,12 @@ void GameController::RunStep(int step) {
         SetStep(27);
         return;
     case 27:
+        g.FloorEnvironment();
         g.Effects().subtitles_enabled = true;
         g.Scripts().CallStateFunction("OnEnding");
         if (g.Floor().IsCurrentFloorName("ending") && !g.BrowseSaveSuppressed()) {
             g.NoteBrowseReached(kBrowseEnding);
         }
-        // the loop browser's street entry: the walk starts in place of the demo OnEnding queued (its sound has not started)
         if (g.StreetPending() && g.StartStreetWalk()) {
             return;
         }
@@ -398,9 +383,6 @@ void GameController::RunStep(int step) {
         return;
     case 30:
         restart_objects_pending_ = true;
-        // 0x9229F0 does not touch g_SaveFloorName (0x1C85500): its only writers are GoNextFloor (0x923A70, 0x925500), Endf120
-        // (0x924FB0) and the static default f000 (0x925620), so this save keeps the floor of the last of those (f120 after a
-        // run through Endf120, f000 in a session booted from a save past it). The PC progress reset sets f000 itself.
         g.Scripts().CallStateFunction("OnRestartGame");
         g.Floor().SetFloorLevel("f000");
         g.Floor().ResetLoopCount();
@@ -409,20 +391,14 @@ void GameController::RunStep(int step) {
         SetStep(17);
         return;
     case 31:
-        // the street walk after the ending (Game::StartStreetWalk): the pause menu works, nothing else of the game runs
         g.Status().Release(kPauseFlag, kPauseHolder);
         Lock(false);
         g.UpdateStreetWalk(dt_);
         return;
     case 32:
-        // the end of the credits: the street walk is offered (Game::OfferStreetWalk); the menu that asks pauses the game, the answer
-        // starts the walk or the ending's restart (step 29)
         g.UpdateStreetOffer();
         return;
     case 33:
-        // the port's credits page after the ending's credits (Game::StartPortCredits); then the street question (step 32) or the
-        // ending's restart (step 29), as the end of the credits went before it. Only once the step is current: a continuous
-        // step also runs while the next one waits
         if (requested_ == 33 && g.UpdatePortCredits(dt_)) {
             SetStep(g.OfferStreetWalk() ? 32 : 29);
         }

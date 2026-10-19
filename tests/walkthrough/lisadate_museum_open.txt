@@ -1,0 +1,32 @@
+# Coffee with Lisa's Museum row with release locks: open once its unlock key (an ending reached in play) is in pt.ini, and then its
+# hall, the Game+ extras, is on the halls page (the tenth, the second row's last), counting it as a bonus
+sstep 15
+swait 30
+sexpect archive coffee_lisa 1
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 30
+sui menukey down
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sexpect pcrow pc_archive_hall_gameplus
+sui menukey accept
+swait 30
+sexpect archive coffee_lisa 1
+sshot {shots}/museum_gameplus.png
+swait 10
+squit

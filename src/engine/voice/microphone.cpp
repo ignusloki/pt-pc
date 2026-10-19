@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/voice/microphone.h"
 
 #include <SDL3/SDL.h>
@@ -9,6 +10,7 @@
 #include <thread>
 
 #include "engine/core/log.h"
+#include "engine/platform/device_start.h"
 #include "engine/platform/sdl_diag.h"
 #include "engine/platform/android.h"
 
@@ -48,8 +50,9 @@ bool Microphone::Open(int sample_rate, const std::string& device_name) {
     Close();
     ReapOpenWorkers(true);
     sample_rate_ = sample_rate;
-    if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})", SDL_GetError(), SdlCompiledAudioDrivers());
+    if (!devices::EnsureAudio()) {
+        LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})",
+                 devices::AudioStarting() ? "the audio devices are still starting" : SDL_GetError(), SdlCompiledAudioDrivers());
         return false;
     }
     stream_ = OpenStream(sample_rate, device_name);
@@ -65,8 +68,9 @@ Microphone::AsyncState Microphone::OpenAsync(int sample_rate, const std::string&
         // A cancelled driver call can still be opening its endpoint. Wait without blocking the game before starting another.
         if (!cancelled_opens_.empty()) return AsyncState::Pending;
         sample_rate_ = sample_rate;
-        if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-            LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})", SDL_GetError(), SdlCompiledAudioDrivers());
+        if (!devices::EnsureAudio()) {
+            LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})",
+                     devices::AudioStarting() ? "the audio devices are still starting" : SDL_GetError(), SdlCompiledAudioDrivers());
             return AsyncState::Failed;
         }
         pending_ = std::make_shared<PendingOpen>();
@@ -104,7 +108,7 @@ SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& devi
     const std::string& desired_device = device_name;
     if (!desired_device.empty()) {
         auto lower = [](std::string text) {
-            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(pt::AsciiLower(static_cast<char>(c))); });
             return text;
         };
         const std::string wanted = lower(desired_device);
@@ -140,7 +144,6 @@ SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& devi
 
 void Microphone::Close() {
     if (pending_) {
-        // the worker drops the stream it opens after this
         std::lock_guard lock(pending_->mutex);
         pending_->cancelled = true;
         if (pending_->stream) SDL_DestroyAudioStream(pending_->stream);

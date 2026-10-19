@@ -1,0 +1,24 @@
+# Coffee with Lisa's music (the owner's track, src/game/lisa_date/lisa_date_audio.h): the date waits on its first line past the
+# loop's first seam (B 86.583 s back to A 33.553 s, about 90 s in), then plays to its GOOD ending, where the pass runs on past B
+# into the outro and the ending card stays up until the music has ended by itself
+slisadate
+swait 5700
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisachoice 1
+slisaline good_02
+swait 2
+slisaadvance
+swait 2
+sexpect lisadate 1
+swait 9600
+sexpect lisadate 0

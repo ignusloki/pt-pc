@@ -52,6 +52,16 @@ target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
 set_source_files_properties(src/engine/platform/macos_permissions.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")
 
+target_sources(pt_engine PRIVATE src/engine/render/macos_hdr.mm)
+set_source_files_properties(src/engine/render/macos_hdr.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(pt_engine PUBLIC "-framework AppKit" "-framework QuartzCore")
+
+add_executable(pt_macos_hdr_test tests/macos_hdr_test.mm)
+target_compile_options(pt_macos_hdr_test PRIVATE "-fobjc-arc")
+target_link_libraries(pt_macos_hdr_test PRIVATE pt_engine "-framework Metal")
+add_custom_command(TARGET pt_macos_hdr_test POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:pt_macos_hdr_test>/libMoltenVK.dylib" VERBATIM)
+
 # MetalFX scaling is optional at runtime. Its framework and Objective-C++ source remain Apple-only.
 if(NOT pt_moltenvk_dylib MATCHES "[.]dylib$" OR NOT EXISTS "${pt_moltenvk_dylib}")
   message(FATAL_ERROR "PT_MOLTENVK_LIBRARY must name an existing libMoltenVK.dylib")
@@ -60,10 +70,12 @@ option(PT_METALFX "Build the Apple MetalFX upscaler and available frame interpol
 if(PT_METALFX)
   find_library(PT_METAL_FRAMEWORK Metal REQUIRED)
   find_library(PT_METALFX_FRAMEWORK MetalFX REQUIRED)
-  target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm)
+  target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm src/engine/render/upscale/metalfx_hdr.mm)
   target_compile_definitions(pt_engine PUBLIC PT_WITH_METALFX=1)
   target_link_libraries(pt_engine PUBLIC ${PT_METAL_FRAMEWORK} ${PT_METALFX_FRAMEWORK})
 endif()
+add_executable(pt_metalfx_hdr_test tests/metalfx_hdr_test.mm)
+target_link_libraries(pt_metalfx_hdr_test PRIVATE pt_engine)
 foreach(game pt pt_release)
   set_target_properties(${game} PROPERTIES BUILD_RPATH "@executable_path;@executable_path/../Frameworks")
 endforeach()
