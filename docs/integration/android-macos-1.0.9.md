@@ -80,3 +80,57 @@ Phone checks must use the exact signed APK and preserve both installed apps'
 profiles. Fresh import, full playthrough, physical controllers, keyword speech,
 final-puzzle rumble and native Intel gameplay are separate coverage limits;
 they are not established by compilation or the automated suites above.
+
+## Signed-package result
+
+Merge commit: `9ee943ab4c4cab112bba41a68fbca5bfa18a97bc` (both requested
+parents retained). The signed Release candidate above built from that clean
+commit. Its installed APK SHA-256 matches the local package exactly:
+`8a241d9a964a6ca3b61700f67f684eb206252b37239297324fd101fd5f5cb69f`.
+It retains the beta certificate, app ID, API 29 minimum and API 36 target, all
+23 ARM64 libraries, 16 KiB ELF/ZIP alignment, and no original game archives.
+Both new SBC and zstd notices are present in the APK.
+
+Galaxy S22 SM-S901B/DS / Exynos 2200 / Xclipse 920 / Android 16 observations:
+
+- Code 11 -> 12 update succeeds without uninstalling or clearing data. Imported
+  files remain ready; touch and microphone remain On and subtitles remain 150%.
+  The beta data directory is unchanged. The prototype's version, update time
+  and data directory are unchanged. No progress-reset operation was performed.
+- Native gameplay renders, with the expected three gameplay buttons and sticks.
+  Menus show edge navigation instead. Direct PC Settings, Tab navigation,
+  960x443, cap 30, disabled HDR and the retained Low preset are visible. Retired
+  Enhanced Textures and background pause/mute rows are absent.
+- The microphone test opens and shows a working capture page/input-level meter.
+  The log confirms lazy `ggml-cpu-android_armv9.0_1` selection (score 55) and the
+  built-in phone microphone through AAudio at 16 kHz mono. No spoken keyword was
+  supplied, so this establishes capture/runtime initialization, not recognition.
+  The trigger preference was briefly toggled during navigation and restored to
+  its original Off value before leaving the test. Column replaces Tab on the
+  microphone subpage.
+- Android Settings -> Back and Home -> Recents -> the existing P.T. card restore
+  rendered gameplay. Native PID **30218** survives both; surface-restoration
+  generations **1** and **2** are logged. The newer upstream behavior returns
+  directly to gameplay rather than the old background-pause option menu.
+- Normal Quit returns to the launcher with exit code **0**. Save diagnostic log
+  succeeds as `Download/PT-Android-merged-S22-20261019.txt`. Its exported native
+  log tail contains no warning/error entries and the GPU report is complete.
+  Export is bounded to the last 64 KiB of native log; this is not an audit of
+  every startup log line.
+- Stationary scene/menu samples remain around 30 fps at 960x443, with GPU times
+  near 19 ms and occasional CPU frame spikes. No full-game performance claim
+  follows from these checks.
+
+The installed-package, lifecycle and diagnostic evidence is in
+`build/android-merge-validation/merged-verification.json`, alongside screenshots
+and `merged-S22-diagnostics.txt`. Mac release compilation was also repeated after
+committing the merge. The exact APK is retained in
+`dist/android/merge-validation/PT-1.0.9-android-merge.1-arm64.apk`.
+
+The accepted Mac installer was not replaced or repackaged after the merge;
+manual Mac gameplay, native Intel and Windows/Linux builds were not repeated.
+The automated Mac checks and Android phone checks above define this merge's
+verified scope. A future Android update for a phone with this test candidate
+must use a version code above **12**. The Android branch/release tags and upstream
+`main` are unchanged. The merge and this evidence remain local: no push, tag,
+release publication or workflow dispatch is part of this task.
