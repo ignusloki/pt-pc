@@ -39,13 +39,28 @@ Android feature-policy checks), shared job-pool and all nine simulated Vulkan
 capability scenarios pass. Android preset tests also cover save/reload of each
 preset with enhanced textures and ray tracing unavailable.
 
-Local candidate: `1.0.8-android-sync.1`, version code **8**, using beta app ID
+Local candidate: `1.0.8-android-sync.2`, version code **9**, using beta app ID
 `org.ignusloki.pt.beta` and the existing beta signing certificate. Build with
 `tools/android/build.py`, the retained SDK/JDK, `--liborbis`, and private signing
-paths. Outputs belong in `dist/android/main-sync-1/`. Preserve both installed
+paths. Outputs belong in `dist/android/main-sync-2/`. Preserve both installed
 apps and their profiles; install the signed beta only as an update.
 
 Signed APK packaging, installed-package checks and device observations will be
 recorded after the candidate build. A successful native compile is not runtime
 validation. No Vulkan 1.1/1.2 fallback, wider-phone support, sustained-performance
 or final-puzzle rumble claim follows from this integration.
+
+## First signed-package finding
+
+The sync.1 APK (source `7946a1a`, code 8) installed and launched the .NET
+launcher, but the native game returned code 1 during scene initialization.
+The S22 diagnostic export records `scene renderer: bloom chain on render
+passes`, followed by `scene renderer: pipeline creation failed`.
+
+The shared required-pipeline list included `bloom_kawase_`, although compute bloom
+is selected only inside an Apple platform guard. Android therefore always had
+an empty optional handle. Remove that optional handle from the required list;
+retain the existing compute-creation fallback and destruction logic. This also
+keeps desktop builds that use render-pass bloom viable. The fix neither enables
+compute bloom on Android nor relaxes a GPU requirement. Verify the replacement
+signed APK on the phone before treating the integration as runtime-tested.

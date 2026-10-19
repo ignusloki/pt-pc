@@ -527,8 +527,9 @@ bool SceneRenderer::CreatePipelines() {
     post.depth_compare = gpu::CompareOp::Always;
     vfx_depth_down_ = gpu_->CreateGraphicsPipeline(post);
 
+    // Compute bloom is optional: creation failure or unsupported platforms use the render-pass chain.
     const gpu::PipelineHandle all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
-                              reflect_colour_, kawase_, bloom_kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, hdr_boost_pipeline_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
+                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, hdr_boost_pipeline_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
                               mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, mb_decode_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
                               debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
                               reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_, backdrop_, date_resolve_, date_resolve_out_};
