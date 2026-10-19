@@ -22,6 +22,7 @@
 #include <mutex>
 #include <vector>
 
+#include "engine/core/crash_report.h"
 #include "engine/core/log.h"
 #include "engine/render/renderer.h"
 #include "engine/render/upscale/upscale_platform.h"
@@ -105,6 +106,20 @@ VkResult SubmitToPresentQueue(uint32_t count, const VkSubmitInfo* submits, VkFen
 PFN_vkQueuePresentKHR g_ffx_queue_present = nullptr;
 PFN_vkQueueWaitIdle g_ffx_queue_wait_idle = nullptr;
 PFN_vkDeviceWaitIdle g_ffx_device_wait_idle = nullptr;
+PFN_vkGetSemaphoreCounterValue g_ffx_counter_value = nullptr;
+std::atomic<vk::Context*> g_ffx_context{nullptr};
+
+VKAPI_ATTR VkResult VKAPI_CALL FfxCounterValue(VkDevice device, VkSemaphore semaphore, uint64_t* value) {
+    const VkResult result = g_ffx_counter_value(device, semaphore, value);
+    if (result != VK_SUCCESS) {
+        LogError("frame generation: SDK timeline query failed ({})", static_cast<int>(result));
+        if (vk::Context* ctx = g_ffx_context.load(); ctx && ctx->device == device) {
+            ctx->CheckDeviceLost(result, "FSR SDK timeline query");
+        }
+        FatalError(std::format("FSR GPU timeline query failed ({}). See pt.log and the crash dump.", static_cast<int>(result)), false);
+    }
+    return result;
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL FfxQueuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
     std::lock_guard<std::mutex> lock(g_queue_mutex);
@@ -394,6 +409,8 @@ public:
             FreeLibrary(module_);
             module_ = nullptr;
         }
+        vk::Context* expected = &ctx_;
+        g_ffx_context.compare_exchange_strong(expected, nullptr);
         generating_ = false;
     }
 
@@ -489,15 +506,29 @@ public:
         if (!present_fence_) {
             VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
             fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            vkCreateFence(ctx_.device, &fence, nullptr, &present_fence_);
+            const VkResult created = vkCreateFence(ctx_.device, &fence, nullptr, &present_fence_);
+            ctx_.CheckDeviceLost(created, "FSR present fence creation");
+            if (created != VK_SUCCESS) {
+                LogError("frame generation: present fence creation failed ({})", static_cast<int>(created));
+                FatalError(std::format("FSR presentation fence creation failed ({}). See pt.log.", static_cast<int>(created)), false);
+            }
         }
-        if (present_fence_) {
-            vkWaitForFences(ctx_.device, 1, &present_fence_, VK_TRUE, UINT64_MAX);
-            vkResetFences(ctx_.device, 1, &present_fence_);
+        const VkResult waited = vkWaitForFences(ctx_.device, 1, &present_fence_, VK_TRUE, UINT64_MAX);
+        ctx_.CheckDeviceLost(waited, "FSR present fence wait");
+        if (waited != VK_SUCCESS) {
+            FatalError(std::format("FSR presentation fence wait failed ({}). See pt.log.", static_cast<int>(waited)), false);
+        }
+        const VkResult reset = vkResetFences(ctx_.device, 1, &present_fence_);
+        ctx_.CheckDeviceLost(reset, "FSR present fence reset");
+        if (reset != VK_SUCCESS) {
+            FatalError(std::format("FSR presentation fence reset failed ({}). See pt.log.", static_cast<int>(reset)), false);
         }
         const VkResult result = replace_.pOutQueuePresentKHR(queue, &info);
-        if (present_fence_) {
-            vkQueueSubmit(ctx_.queue, 0, nullptr, present_fence_);
+        ctx_.CheckDeviceLost(result, "FSR SDK present");
+        const VkResult submitted = vkQueueSubmit(ctx_.queue, 0, nullptr, present_fence_);
+        ctx_.CheckDeviceLost(submitted, "FSR present fence submit");
+        if (submitted != VK_SUCCESS) {
+            FatalError(std::format("FSR presentation fence submission failed ({}). See pt.log.", static_cast<int>(submitted)), false);
         }
         if (result != VK_SUCCESS && present_errors_++ < 8) {
             LogWarn("frame generation: present returned {} (frame {})", static_cast<int>(result), frame_id_);
@@ -643,10 +674,12 @@ private:
             return false;
         }
         /* The SDK's presenter thread presents while the game thread may wait for idle; Vulkan wants both externally synchronised, so the DLL's imports get our mutex. */
+        g_ffx_context.store(&ctx_);
         if (!PatchImport(module_, "vkQueuePresentKHR", &FfxQueuePresent, g_ffx_queue_present) ||
             !PatchImport(module_, "vkQueueWaitIdle", &FfxQueueWaitIdle, g_ffx_queue_wait_idle) ||
-            !PatchImport(module_, "vkDeviceWaitIdle", &FfxDeviceWaitIdle, g_ffx_device_wait_idle)) {
-            reason = "amd_fidelityfx_vk.dll does not import its present and wait functions from vulkan-1.dll";
+            !PatchImport(module_, "vkDeviceWaitIdle", &FfxDeviceWaitIdle, g_ffx_device_wait_idle) ||
+            !PatchImport(module_, "vkGetSemaphoreCounterValue", &FfxCounterValue, g_ffx_counter_value)) {
+            reason = "amd_fidelityfx_vk.dll does not import its present, wait and timeline functions from vulkan-1.dll";
             return false;
         }
         uint64_t count = 0;

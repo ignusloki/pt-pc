@@ -76,6 +76,26 @@ void SceneRenderer::CreatePathPipelines(gpu::Format light_format) {
     resolve.fragment = "pt_resolve_rr.frag";
     resolve.blends = {gpu::BlendMode::Additive, gpu::BlendMode::Additive};
     pt_resolve_rr_ = gpu_->CreateGraphicsPipeline(resolve);
+    if (gpu_->Info().backend == gpu::Backend::D3D12) {
+        resolve.fragment = "pt_fsr_resolve.frag";
+        resolve.blends = {};
+        fsr_rr_resolve_ = gpu_->CreateGraphicsPipeline(resolve);
+        guides.fragment = "pt_fsr_prepare.frag";
+        guides.colors = {kRrGuideFormat, kRrGuideFormat, kRrGuideFormat, kRrGuideFormat,
+                         gpu::Format::R32Sfloat, kRrGuideFormat};
+        fsr_rr_prepare_ = gpu_->CreateGraphicsPipeline(guides);
+        gpu::GraphicsPipelineDesc fsr_motion;
+        fsr_motion.layout = layout_;
+        fsr_motion.fragment = "pt_fsr_motion.frag";
+        fsr_motion.colors = {kRrGuideFormat};
+        fsr_motion.depth = kDepthTargetFormat;
+        fsr_rr_motion_trace_ = gpu_->CreateGraphicsPipeline(fsr_motion);
+        fsr_motion.vertex = "upscale_velocity.vert";
+        fsr_motion.fragment = "pt_fsr_velocity.frag";
+        fsr_motion.mesh_input = true;
+        fsr_motion.depth_test = true;
+        fsr_rr_velocity_ = gpu_->CreateGraphicsPipeline(fsr_motion);
+    }
     if (!pt_rr_guides_ || !pt_indirect_rr_ || !pt_resolve_rr_) {
         for (gpu::PipelineHandle* p : {&pt_rr_guides_, &pt_indirect_rr_, &pt_resolve_rr_}) {
             if (*p) {
@@ -93,7 +113,7 @@ void SceneRenderer::CreatePathPipelines(gpu::Format light_format) {
 
 void SceneRenderer::DestroyPathPipelines() {
     for (gpu::PipelineHandle* p : {&pt_direct_, &pt_indirect_, &pt_filter_, &pt_layer_, &pt_resolve_, &pt_resolve_multiply_, &pt_layer_out_, &pt_reference_, &pt_reference_out_, &pt_gbuffer_, &pt_decal_,
-                          &pt_rr_guides_, &pt_indirect_rr_, &pt_resolve_rr_, &rt_rr_guides_}) {
+                          &pt_rr_guides_, &pt_indirect_rr_, &pt_resolve_rr_, &rt_rr_guides_, &fsr_rr_prepare_, &fsr_rr_resolve_, &fsr_rr_motion_trace_, &fsr_rr_velocity_}) {
         if (*p) {
             gpu_->DestroyPipeline(*p);
             *p = {};
@@ -115,7 +135,9 @@ void SceneRenderer::DestroyPathTargets() {
 }
 
 void SceneRenderer::DestroyRrTargets() {
-    for (RenderTarget* t : {&rr_diffuse_albedo_, &rr_specular_albedo_, &rr_normal_roughness_, &rr_hit_distance_}) {
+    for (RenderTarget* t : {&rr_diffuse_albedo_, &rr_specular_albedo_, &rr_normal_roughness_, &rr_hit_distance_,
+                          &fsr_rr_input_[0], &fsr_rr_input_[1], &fsr_rr_input_[2], &fsr_rr_input_[3],
+                          &fsr_rr_depth_, &fsr_rr_motion_, &fsr_rr_normal_}) {
         gpu_->DestroyImage(t->image);
         *t = RenderTarget{};
     }
@@ -145,10 +167,18 @@ bool SceneRenderer::RayReconstructionAvailable(std::string& reason) {
         reason = rt_ ? "the guide pass is missing" : "needs ray tracing";
         return false;
     }
-    if (!UpscaleHost::Get().Available(UpscalerKind::Dlss, reason, false)) {
+    if (upscale.kind != UpscalerKind::Dlss && upscale.kind != UpscalerKind::Fsr4) {
+        reason = "needs DLSS Ray Reconstruction or FSR 4 Ray Regeneration";
         return false;
     }
-    UpscaleBackend* backend = UpscaleHost::Get().Backend(UpscalerKind::Dlss);
+    if (upscale.kind == UpscalerKind::Fsr4 && !raytracing.path_traced) {
+        reason = "FSR Ray Regeneration needs Path traced lighting";
+        return false;
+    }
+    if (!UpscaleHost::Get().Available(upscale.kind, reason, false)) {
+        return false;
+    }
+    UpscaleBackend* backend = UpscaleHost::Get().Backend(upscale.kind);
     return backend && backend->RayReconstructionAvailable(reason);
 }
 
@@ -173,7 +203,7 @@ bool SceneRenderer::EnsurePathTargets() {
         views32[i] = pt_images32_[i].image.view;
     }
     for (uint32_t i = 0; i < RayTracing::kPathImages16 && ok; ++i) {
-        ok = CreateTarget(pt_images16_[i], gpu::Format::R16G16B16A16Sfloat, i == 0 || i >= 8 ? extent_ : half, usage, gpu::Aspect::Color);
+        ok = CreateTarget(pt_images16_[i], gpu::Format::R16G16B16A16Sfloat, i == 0 || i >= 7 ? extent_ : half, usage, gpu::Aspect::Color);
         views16[i] = pt_images16_[i].image.view;
     }
     if (!ok) {
@@ -210,6 +240,8 @@ void SceneRenderer::SetupPathLights() {
         const bool hidden = (l.hidden_views & 1u) != 0;
         const bool handy_fill = l.id >= kHandyReflectionId && l.id < kHandyReflectionId + 4;
         g.shadow_cone.w = hidden || handy_fill ? -1.0f : 1.0f;
+        const uint32_t casters = l.id == kMirrorLightId ? 32u : 128u;
+        g.info.x = static_cast<int>(casters | (l.cast_shadow ? 1u << 24 : 0u) | ((l.light_fitting & 63u) << 25));
     }
     std::unordered_map<uint64_t, uint32_t> now;
     std::vector<uint64_t> ids(std::min<size_t>(light_count_, light_sources_.size()));
@@ -249,13 +281,14 @@ void SceneRenderer::RecordPathTrace(gpu::CommandList& cmd, const ViewSetup& view
     push.ids = glm::uvec4(view.index, light_count_, static_cast<uint32_t>(frame_counter_ & 0xFFFFFFu), 0u);
     static const float reuse = EnvFloat("PT_PATH_RESTIR", 0.0f, 0.0f, 3.0f);
     static const float direct_samples = EnvFloat("PT_PATH_DIRECT_SAMPLES", kDirectSamples, 1.0f, 16.0f);
+    static const float foliage_transmission = EnvFloat("PT_PATH_FOLIAGE_TRANSMISSION", 1.0f, 0.0f, 1.0f);
     static const float fill_unshadowed = [] {
         const char* value = std::getenv("PT_PATH_FILL");
         return value && std::string_view(value) == "unshadowed" ? 1.0f : 0.0f;
     }();
     push.f0 = glm::vec4(kSpatialRadius * static_cast<float>(extent_.height) / 1080.0f, static_cast<float>(history), reuse, fill_unshadowed);
     push.f1 = glm::vec4(rt_full_previous_jitter_, 0.0f, 0.0f);
-    push.f2 = glm::vec4(std::floor(direct_samples), 0.0f, 0.0f, 0.0f);
+    push.f2 = glm::vec4(std::floor(direct_samples), foliage_transmission, 0.0f, 0.0f);
     push.m = rt_full_previous_;
     const uint32_t groups_x = (extent_.width + 7) / 8;
     const uint32_t groups_y = (extent_.height + 7) / 8;
@@ -322,11 +355,14 @@ void SceneRenderer::RecordPathTrace(gpu::CommandList& cmd, const ViewSetup& view
         const bool coat = toggles.local_reflections && lighting_->screen.local_reflections;
         const ScreenSettings& screen = lighting_->screen;
         static const float layer_bounces = EnvFloat("PT_PATH_LAYER_BOUNCES", 3.0f, 1.0f, 8.0f);
-        for (uint32_t mode = 0; mode < 3; ++mode) {
+        const bool fsr_rr = rr_frame_ && (up_.kind == UpscalerKind::Fsr4 || fsr_rr_input_check_);
+        for (uint32_t mode = 0; mode < 3u; ++mode) {
             push.ids = glm::uvec4(view.index, light_count_, mode, history);
             push.f0 = glm::vec4(reach, std::floor(layer_bounces), static_cast<float>(frame_counter_ & 0xFFFFFFu), clamp_light);
             static const bool mirror_linear = std::getenv("PT_PATH_MIRROR_LINEAR") != nullptr;
-            push.f1 = glm::vec4(0.0f, 1.0f, 0.0f, (coat ? 1.0f : 0.0f) + (mirror_linear ? 2.0f : 0.0f));
+            const bool dlss_rr = rr_frame_ && up_.kind == UpscalerKind::Dlss;
+            push.f1 = glm::vec4(0.0f, 1.0f, 0.0f, (coat ? 1.0f : 0.0f) + (mirror_linear ? 2.0f : 0.0f) + (fsr_rr ? 4.0f : 0.0f) +
+                               (dlss_rr ? 8.0f : 0.0f));
             push.f2 = glm::vec4(screen.reflect_scale, screen.reflect_bias, rt_full_previous_jitter_);
             push.m = rt_full_previous_;
             PushConstants(cmd, &push, sizeof(push));
@@ -385,11 +421,12 @@ void SceneRenderer::RecordPathLayers(gpu::CommandList& cmd, const ViewSetup& vie
     cmd.UseTargets({{&diffuse_, gpu::Layout::ShaderReadOnly}, {&specular_, gpu::Layout::ShaderReadOnly}});
     if (rr_frame_) {
         RecordRrGuides(cmd, view);
+        if (up_.kind == UpscalerKind::Fsr4 || fsr_rr_input_check_) RecordFsrRayRegeneration(cmd, view);
     }
 }
 
 void SceneRenderer::RecordRrGuides(gpu::CommandList& cmd, const ViewSetup& view) {
-    cmd.UseTargets({{&pt_images16_[8], gpu::Layout::General}, {&rt_full_images_[10], gpu::Layout::General},
+    cmd.UseTargets({{&pt_images16_[7], gpu::Layout::General}, {&pt_images16_[8], gpu::Layout::General}, {&rt_full_images_[10], gpu::Layout::General},
                      {&depth_, gpu::Layout::DepthReadOnly}, {&normal_, gpu::Layout::ShaderReadOnly},
                      {&material_, gpu::Layout::ShaderReadOnly}, {&albedo_, gpu::Layout::ShaderReadOnly},
                      {&rr_diffuse_albedo_, gpu::Layout::ColorAttachment}, {&rr_specular_albedo_, gpu::Layout::ColorAttachment},
@@ -400,7 +437,7 @@ void SceneRenderer::RecordRrGuides(gpu::CommandList& cmd, const ViewSetup& view)
     const gpu::BindingSetHandle rt_set = rt_->Set(renderer_->FrameIndex());
     cmd.BindSets(gpu::BindPoint::Graphics, rt_->Layout(), 2, {&rt_set, 1});
     gpu::PassPush push;
-    push.ids = glm::uvec4(view.index, 0u, 0u, 0u);
+    push.ids = glm::uvec4(view.index, up_.kind == UpscalerKind::Dlss ? 1u : 0u, 0u, 0u);
     Fullscreen(cmd, pt_rr_guides_, push);
     cmd.EndPass();
     cmd.UseTargets({{&rr_diffuse_albedo_, gpu::Layout::ShaderReadOnly}, {&rr_specular_albedo_, gpu::Layout::ShaderReadOnly},

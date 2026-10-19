@@ -3,6 +3,10 @@
 # bundle (tools/macos/make_app.py) carries it in Contents/Frameworks. PT_MOLTENVK_LIBRARY takes a local one instead.
 # One build per CPU architecture, arm64 on Apple silicon and x86_64 on Intel: ggml's CPU variants (the voice recognizer) are
 # chosen from the target's processor, so a universal build would only get one architecture's variants. The default is the host's.
+target_link_libraries(pt_engine PUBLIC "-framework CoreFoundation")
+configure_file("${google_sbc_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/google-libsbc-LICENSE.txt" COPYONLY)
+configure_file("${zstd_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/zstd-BSD.txt" COPYONLY)
+
 if(CMAKE_OSX_ARCHITECTURES MATCHES ";")
   message(FATAL_ERROR "Build macOS for one architecture at a time (CMAKE_OSX_ARCHITECTURES=arm64 or x86_64), not \"${CMAKE_OSX_ARCHITECTURES}\"; docs/macos.md")
 endif()

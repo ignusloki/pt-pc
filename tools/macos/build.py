@@ -24,11 +24,12 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_voice_match_test", "pt_installer_update_test", "pt_unicode_paths_test", "pt_user_data_test",
          "pt_fast_walk_test", "pt_display_modes_test", "pt_pipeline_cache_store_test", "pt_blur_sway_test",
          "pt_microphone_async_test", "pt_archive_model_camera_test", "pt_audio_channel_layout_test",
-         "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_texture_cache_test", "pt_upscaler_gpu_test",
+         "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_dualshock_audio_test", "pt_upscaler_gpu_test",
          "pt_archive_unlock_test", "pt_device_start_test", "pt_dialog_nav_test", "pt_notice_queue_test", "pt_gyro_test",
          "pt_sound_captions_test", "pt_lisa_date_test", "pt_camera_blend_test", "pt_rendering_api_test",
-         "pt_enhanced_manifest_test", "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test",
-         "pt_key_layout_test", "pt_hdr_output_test", "pt_macos_hdr_test", "pt_metalfx_hdr_test")
+         "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test", "pt_pc_settings_refresh_test",
+         "pt_key_layout_test", "pt_hdr_output_test", "pt_composite_output_test", "pt_point_shadow_projection_test",
+         "pt_macos_data_path_test", "pt_macos_hdr_test", "pt_metalfx_hdr_test")
 
 
 def run(*args):
@@ -127,6 +128,7 @@ def main():
         "pt_installer_update_test": [fixtures / "installer"],
         "pt_unicode_paths_test": [fixtures / "unicode"],
         "pt_user_data_test": [fixtures / "user-data"],
+        "pt_macos_data_path_test": [fixtures / "macos-data-path"],
     }
     if not args.skip_tests:
         for test in TESTS:

@@ -121,6 +121,7 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         input.tab_prev = text == "tabprev";
         input.tab_next = text == "tabnext";
         input.donate = text == "donate";
+        input.update = text == "update";
         input.music = text == "musicback" ? kMenuMusicBack : text == "musicforward" ? kMenuMusicForward : text == "musicrestart" ? kMenuMusicRestart
                     : text == "musicloop" ? kMenuMusicLoop : 0u;
         if (ui) {
@@ -247,6 +248,7 @@ void GameUi::QueueMenuInput(const MenuInput& input) {
     q.tab_next |= input.tab_next;
     q.tab_from_e |= input.tab_from_e;
     q.donate |= input.donate;
+    q.update |= input.update;
     q.street_return |= input.street_return;
     q.held_dirs |= input.held_dirs;
     q.music |= input.music;
@@ -415,6 +417,8 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
             OpenMenu(game, true);
         } else if (port_credits_time_ >= 0.0f) {
         } else if (game.StreetOfferPending()) {
+            OpenMenu(game, false, OptionsMenu::Page::Pc);
+        } else if (std::exchange(update_question_, false)) {
             OpenMenu(game, false, OptionsMenu::Page::Pc);
         } else if ((menu_input.close || pc_request) && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
             OpenMenu(game, false, pc_request ? OptionsMenu::Page::Pc : OptionsMenu::Page::Original);
@@ -725,10 +729,6 @@ void GameUi::DrawSaveDialog(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec
 std::string GameUi::DialogKind(int* focus) const {
     *focus = 0;
     if (!save_dialog_text_.empty()) return "save";
-    if (textures_asking_) {
-        *focus = textures_nav_.Focus();
-        return "textures";
-    }
     return menu_.DialogKind(focus);
 }
 
@@ -737,27 +737,6 @@ bool GameUi::PointerUnits(const InputState& input, glm::vec2* units) const {
     const glm::vec2 virtual_px = (input.pointer - canvas_.origin) / canvas_.scale;
     *units = glm::vec2(virtual_px.x - UiCanvas::kWidth * 0.5f, UiCanvas::kHeight * 0.5f - virtual_px.y) / UiCanvas::kUnit;
     return true;
-}
-
-GameUi::TexturesAnswer GameUi::AnswerTexturesQuestion(const InputState& input) {
-    TexturesAnswer answer;
-    MenuInput menu_input = MapMenuInput(input, 0);
-    menu_input.accept = menu_input.accept || input.confirm;
-    glm::vec2 units;
-    if (PointerUnits(input, &units)) {
-        menu_input.pointer_valid = true;
-        menu_input.pointer = units;
-    }
-    if (textures_nav_fresh_) {
-        textures_nav_fresh_ = false;
-        textures_nav_.Open(0, menu_input.held_dirs);
-        dialog_flash_ = 0.0f;
-        return answer;
-    }
-    answer.result = textures_nav_.Update(menu_input, 2, language_, true);
-    if (textures_nav_.Moved()) dialog_flash_ = 0.0f;
-    answer.yes = answer.result == dialog::Result::Chosen && textures_nav_.Chosen() == 0;
-    return answer;
 }
 
 void GameUi::SwapTracked() {
@@ -959,6 +938,50 @@ void GameUi::DrawSpeedrun(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
     speedrun_bottom_ = y;
 }
 
+void GameUi::DrawFpsCounter(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full) {
+    UiFont* font = assets_.Font(UiFontType::Movie, language_);
+    if (!font || canvas.scale <= 0.0f || fps_rendered_ <= 0) return;
+    ui::TextStyle style;
+    style.font = &font->font;
+    if (const UiFontStyle* s = assets_.FontStyle(kSubtitleFont, language_)) {
+        style.font_width = s->width;
+        style.font_height = s->height;
+        style.text_space = s->text_space;
+        style.line_space = s->line_space;
+    }
+    ui::NormalizeSubtitleStyle(style);
+    constexpr float kScale = 0.75f;
+    style.font_width *= kScale;
+    style.font_height *= kScale;
+    style.text_space *= kScale;
+    const float pitch = ui::LayoutText("0", style, 0.0f).width;
+    const float bar = LetterboxBar(full, letterbox_);
+    const float top = std::max(22.0f, (bar - canvas.origin.y) / canvas.scale + 12.0f);
+    float right = UiCanvas::kWidth - 34.0f;
+    struct Part {
+        std::string text;
+        glm::vec4 color;
+        bool digits;
+    };
+    std::vector<Part> parts;
+    parts.push_back({" FPS", glm::vec4(1.0f, 1.0f, 1.0f, 0.55f), false});
+    const bool generated = fps_presented_ > fps_rendered_;
+    parts.push_back({std::to_string(generated ? fps_presented_ : fps_rendered_), glm::vec4(1.0f, 1.0f, 1.0f, 0.9f), true});
+    if (generated) {
+        parts.push_back({"/", glm::vec4(1.0f, 1.0f, 1.0f, 0.45f), false});
+        parts.push_back({std::to_string(fps_rendered_), glm::vec4(1.0f, 1.0f, 1.0f, 0.6f), true});
+    }
+    const float left_limit = UiCanvas::kWidth * 0.86f;
+    for (const Part& part : parts) {
+        ui::TextLayout layout = ui::LayoutText(part.text, style, 0.0f);
+        const float width = part.digits ? pitch * static_cast<float>(std::max<size_t>(part.text.size(), 2)) : layout.width;
+        const float x = std::max(left_limit, right - width);
+        ui::PlaceText(layout, {x, top}, {x + width, top + layout.height}, ui::TextAlign::End, ui::TextAlign::Start, ui::TextAlign::End);
+        DrawText(batch, canvas, *font, layout, part.color, ui::UiBlend::Alpha, ui::UiShade::Border);
+        right = x;
+    }
+}
+
 void GameUi::ShowUpdateNotice(std::string note) {
     if (update_notice_given_ || note.empty()) return;
     update_notice_given_ = true;
@@ -972,7 +995,7 @@ void GameUi::ShowNotice(std::string note) {
 
 void GameUi::UpdateUpdateNotice(Game& game, float dt) {
     const bool allowed = game.Controller().Step() == 15 && !game.Demos().HasActiveCamera() && !menu_suspended_ && !update_notice_held_ &&
-                         !lisa_date_ && fade_.a < 0.5f && !(menu_.IsOpen() && (menu_.FirstBoot() || menu_.PictureFullScreen())) && !ShaderScreenShown() && !TexturesScreenShown() &&
+                         !lisa_date_ && fade_.a < 0.5f && !(menu_.IsOpen() && (menu_.FirstBoot() || menu_.PictureFullScreen())) && !ShaderScreenShown() &&
                          save_dialog_text_.empty();
     const bool was_done = notices_.Done();
     const std::string before = notices_.Current();
@@ -1004,39 +1027,6 @@ void GameUi::DrawUpdateNotice(ui::UiBatch& batch, const UiCanvas& canvas, glm::v
     ui::TextLayout layout = ui::LayoutTextInBox(text, style, glm::vec2(0.0f), hi - lo);
     ui::PlaceText(layout, lo, hi, ui::TextAlign::Center, ui::TextAlign::Center, ui::TextAlign::Start, true);
     DrawText(batch, canvas, *font, layout, glm::vec4(1.0f, 1.0f, 1.0f, 0.55f * fade), ui::UiBlend::Alpha);
-}
-
-void GameUi::DrawTexturesScreen(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full) {
-    batch.Quad(glm::vec2(0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), ui::UiDrawParams::Plain(TextureManager::kWhite),
-               ui::UiShade::Solid, ui::UiBlend::Alpha);
-    UiFont* font = assets_.Font(UiFontType::PcSystem, language_);
-    if (!font) return;
-    const float middle = UiCanvas::kHeight * 0.5f;
-    const float left = UiCanvas::kWidth * 0.15f, right = UiCanvas::kWidth * 0.85f;
-    if (textures_asking_) {
-        dialog::View view;
-        view.text = std::string(PcText("pc_boot_textures_ask", language_));
-        view.choices = {std::string(PcText("pc_save_move_yes", language_)), std::string(PcText("pc_save_move_no", language_))};
-        view.focus = textures_nav_.Focus();
-        view.language = language_;
-        view.back_label = std::string(PcText("pc_back", language_));
-        view.flash = menu_.SelectionFlash(dialog_flash_);
-        view.dim = 0.0f;
-        dialog::Draw(batch, canvas, assets_, menu_.Model(), prompts_, view);
-        return;
-    }
-    DrawPromptText(batch, canvas, assets_, *font, PcNoteText(textures_screen_, language_), prompts_, 18.0f, {left, middle - 28.0f}, {right, middle - 2.0f},
-                   ui::TextAlign::Center, ui::TextAlign::Center, glm::vec4(1.0f, 1.0f, 1.0f, 0.75f), true);
-    const glm::vec2 bar_lo = canvas.origin + glm::vec2(UiCanvas::kWidth * 0.35f, middle + 6.0f) * canvas.scale;
-    const glm::vec2 bar_hi = canvas.origin + glm::vec2(UiCanvas::kWidth * 0.65f, middle + 9.0f) * canvas.scale;
-    const ui::UiDrawParams plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
-    batch.Quad(bar_lo, bar_hi, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f, 1.0f, 1.0f, 0.2f), plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
-    const glm::vec2 fill_hi(bar_lo.x + (bar_hi.x - bar_lo.x) * std::clamp(textures_progress_, 0.0f, 1.0f), bar_hi.y);
-    if (fill_hi.x > bar_lo.x) {
-        batch.Quad(bar_lo, fill_hi, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f, 1.0f, 1.0f, 0.8f), plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
-    }
-    DrawPromptText(batch, canvas, assets_, *font, PcText("pc_boot_textures_skip", language_), prompts_, 16.0f, {left, middle + 32.0f}, {right, middle + 58.0f},
-                   ui::TextAlign::Center, ui::TextAlign::Center, glm::vec4(1.0f, 1.0f, 1.0f, 0.55f), true);
 }
 
 void GameUi::DrawLisaVignette(ui::UiBatch& batch, glm::vec2 full, float strength) {
@@ -1175,9 +1165,6 @@ void GameUi::Record(gpu::CommandList& cmd, gpu::ImageViewHandle target, gpu::Ext
                               DrawText(batch, canvas, *font, layout, glm::vec4(1.0f, 1.0f, 1.0f, 0.75f), ui::UiBlend::Alpha);
                           }});
     }
-    if (!textures_screen_.empty() && canvas.scale > 0.0f) {
-        layers.push_back({kShaderScreenPriority, [&] { DrawTexturesScreen(batch, canvas, full); }});
-    }
     if (save_icon_.Visible()) {
         layers.push_back({SaveIcon::kPriority, [&] { save_icon_.Draw(batch, canvas); }});
     }
@@ -1192,6 +1179,9 @@ void GameUi::Record(gpu::CommandList& cmd, gpu::ImageViewHandle target, gpu::Ext
     }
     if (speedrun_view_.shown && !menu_.IsOpen()) {
         layers.push_back({kSpeedrunPriority, [&] { DrawSpeedrun(batch, canvas, full); }});
+    }
+    if (fps_shown_ && !menu_.IsOpen() && !vr_hud_) {
+        layers.push_back({kSpeedrunPriority, [&] { DrawFpsCounter(batch, canvas, full); }});
     }
     if (UpdateNoticeShown() && !vr_hud_) {
         layers.push_back({kUpdateNoticePriority, [&] { DrawUpdateNotice(batch, canvas, full); }});

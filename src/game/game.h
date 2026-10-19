@@ -174,8 +174,6 @@ public:
     int TakePhotoModeRequest() { const int r = photo_request_; photo_request_ = 0; return r; }
     void RequestFreeCamera(bool on) { freecam_request_ = on ? 1 : 2; }
     int TakeFreeCameraRequest() { return std::exchange(freecam_request_, 0); }
-    void RequestEnhancedTextures(bool on) { enhanced_request_ = on ? 1 : 2; }
-    int TakeEnhancedTexturesRequest() { return std::exchange(enhanced_request_, 0); }
     void RequestNeuralRendering(int value) { neural_request_ = value + 1; }
     int TakeNeuralRenderingRequest() { return std::exchange(neural_request_, 0); }
     void RequestPhotoCamera(const glm::vec4& offset_look) { photo_camera_request_ = offset_look; }
@@ -300,6 +298,7 @@ public:
     bool StreetPending() const { return street_pending_; }
     bool OfferStreetWalk();
     bool StreetOfferPending() const { return street_offer_ == StreetOffer::Asking; }
+    void RequestMenuClose() { menu_close_request_ = true; }
     void AnswerStreetOffer(bool walk);
     void UpdateStreetOffer();
     void StartPortCredits();
@@ -418,6 +417,7 @@ public:
     uint32_t SaveIoCount() const { return save_io_count_; }
     bool SaveIoLoading() const { return save_io_loading_; }
     uint32_t SaveLoads() const { return save_loads_; }
+    bool ResumedThresholdArtifact() const { return resumed_threshold_ && floor_.CurrentFloorName() == "f100"; }
     bool ShowOptionMenuOnFirstBoot() const { return true; }
     bool OptionsUiAvailable() const { return options_ui_; }
     void SetOptionsUiAvailable(bool available) { options_ui_ = available; }
@@ -479,7 +479,6 @@ private:
     glm::vec3 handy_direction_{0.0f};
     int photo_request_ = 0;
     int freecam_request_ = 0;
-    int enhanced_request_ = 0;
     int neural_request_ = 0;
     std::optional<glm::vec4> photo_camera_request_;
     std::optional<std::pair<glm::vec3, glm::vec3>> photo_view_request_;
@@ -544,6 +543,7 @@ private:
     uint32_t save_io_count_ = 0;
     bool save_io_loading_ = false;
     uint32_t save_loads_ = 0;
+    bool resumed_threshold_ = false;
     GameOptions options_;
     bool options_ui_ = false;
     int previous_foot_steps_ = 0;

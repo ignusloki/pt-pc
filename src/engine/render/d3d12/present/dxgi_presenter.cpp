@@ -185,6 +185,18 @@ PresentResult DxgiPresenter::Present(const FrameInputs& in, uint64_t& consumed_v
     consumed_value = fence_value_;
     const bool tear = !desc_.vsync && (flags_ & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
     const HRESULT hr = swapchain_->Present(desc_.vsync ? 1 : 0, tear ? DXGI_PRESENT_ALLOW_TEARING : 0);
+    if (!present_status_seen_ || hr != last_present_status_) {
+        if (present_status_logs_ < 32) {
+            ++present_status_logs_;
+            LogInfo("dxgi: presentation status {:#010x} at submitted frame {}, {}x{}, format {}{}", static_cast<uint32_t>(hr), in.frame_id,
+                    desc_.width, desc_.height, static_cast<int>(desc_.format), hr == DXGI_STATUS_OCCLUDED ? " (occluded)" : "");
+        } else if (present_status_logs_ == 32) {
+            ++present_status_logs_;
+            LogInfo("dxgi: presentation status detail limit reached");
+        }
+        last_present_status_ = hr;
+        present_status_seen_ = true;
+    }
     device_.DrainDebugMessages();
     ++presents_;
     if (hr == S_OK) {

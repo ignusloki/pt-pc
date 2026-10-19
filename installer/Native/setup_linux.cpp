@@ -38,7 +38,7 @@ std::string HashFile(const fs::path& file) {
     std::ifstream input(file, std::ios::binary);
     std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
     unsigned char digest[32];
-    if (!input.eof() && !input) throw std::runtime_error("Could not verify file integrity.");
+    if (!input.eof() && !input) throw std::runtime_error("Could not read or hash this file to verify its integrity: " + PathUtf8(file));
     pt::integrity::Sha256(bytes.data(), bytes.size(), digest);
     return HexDigest(digest);
 }

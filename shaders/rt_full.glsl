@@ -4,6 +4,12 @@ const uint kRtMirrorLightMask = 32u;
 uint RtFullCasters(Light l) {
     return (uint(l.info.x) & 0xFFu) == kRtMirrorLightMask ? kRtMirrorLightMask : kRtFullMask;
 }
+
+#include "rt_fitting_policy.glsl"
+
+bool RtFittingPasses(uint record, Light l, vec3 hit) {
+    return RtFittingAllows(rt_records[record].flags, uint(l.info.x), uint(l.scales.w), distance(hit, l.position.xyz));
+}
 const uint kRtFullOriginalShadow = 1u << 24u;
 const uint kRtSurfaceMask = 8u;
 const uint kRtReflectMask = 4u;
@@ -34,7 +40,7 @@ float RtRandom(inout uint state) {
 
 float RtFullReach(Light l, vec3 origin, vec3 dir, float dist) {
     float t_max = dist - min(0.2, 0.5 * dist);
-    if (l.position.w > 0.5) {
+    if (l.position.w > 0.5 && (uint(l.info.x) & (1u << 24u)) != 0u) {
         vec3 axis = normalize(l.direction.xyz);
         float rate = -dot(dir, axis);
         if (rate > 1.0e-6) {
@@ -59,6 +65,8 @@ bool RtFullOccluded(Light l, vec3 origin, vec3 target) {
     rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsTerminateOnFirstHitEXT, RtFullCasters(l), origin, 0.0, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            !RtFittingPasses(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), l,
+                             origin + dir * rayQueryGetIntersectionTEXT(rq, false)) &&
             RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
                            rayQueryGetIntersectionBarycentricsEXT(rq, false))) {
             rayQueryConfirmIntersectionEXT(rq);

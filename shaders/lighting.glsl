@@ -76,10 +76,9 @@ float PointShadow(Light l, View v, vec3 view_pos, vec3 frag) {
     vec2 local = vec2(0.5 * ((p.x * 0.99902344 + s) * 0.5) + 0.5, 0.5 - 0.5 * p.y * 0.99902344);
     float zref = 1.0 - len * l.cone.z;
     vec2 texel = 1.0 / ImgSize(IMG_SHADOW);
-    vec2 uv = l.shadow_rect.xy + local * l.shadow_rect.zw;
-    float half_width = l.shadow_rect.z * 0.5;
-    vec2 lo = vec2(l.shadow_rect.x + (s > 0.0 ? half_width : 0.0), l.shadow_rect.y) + texel;
-    vec2 hi = vec2(l.shadow_rect.x + (s > 0.0 ? l.shadow_rect.z : half_width), l.shadow_rect.y + l.shadow_rect.w) - texel;
+    vec2 uv = l.shadow_rect.xy + local * l.shadow_rect.zw - 0.5 * texel;
+    vec2 lo = l.shadow_rect.xy + 0.5 * texel;
+    vec2 hi = l.shadow_rect.xy + l.shadow_rect.zw - 0.5 * texel;
     float sh = 1.0 - 0.25 * ShadowPcf(uv, zref, lo, hi, texel, frag, v.jitter.w, v.exposure.w, v.temporal);
     return sh * sh;
 }
@@ -111,7 +110,8 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
     specular = vec3(0.0);
     if (l.info.z == 1) {
         vec3 q = (l.area * vec4(s.world, 1.0)).xyz;
-        if (1.0 - max(abs(q.z), max(abs(q.x), abs(q.y))) < 0.0) {
+        float inside = 1.0 - max(abs(q.z), max(abs(q.x), abs(q.y)));
+        if (inside < 0.0) {
             return false;
         }
     } else if (l.info.z == 2) {
@@ -176,7 +176,7 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
 #endif
     float vis = 1.0 + l.scales.z * (shadow - 1.0);
 #if defined(PT_RT_SHADOWS) || defined(PT_RT_CONTACT)
-    if (g_contact_reach > 0.0 && l.scales.w > 0.0 && (g_contact_legacy || l.scales.z > 0.0) && (dot(s.N, L) > 0.0 || s.translucency > 0.0)) {
+    if (g_contact_reach > 0.0 && (uint(l.scales.w) & 1u) != 0u && (g_contact_legacy || l.scales.z > 0.0) && (dot(s.N, L) > 0.0 || s.translucency > 0.0)) {
         vec3 n_world = normalize(mat3(v.inv_view) * s.N);
         if (g_contact_samples > 0u && !g_contact_legacy) {
             float contact = RtContactSoft(l, s.world, n_world, s.translucency > 0.0, g_contact_reach, shadow_cone, g_contact_samples, frag,

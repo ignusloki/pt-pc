@@ -52,6 +52,9 @@ bool RtRayValid(vec3 origin, vec3 dir, float t_max) {
 
 bool RtCasterOpaque(uint record, uint primitive, vec2 bary) {
     RtRecord r = rt_records[record];
+    if ((r.flags & 3u) == 1u) {
+        return true;
+    }
     RtIndexRef ib = RT_INDEX_REF(r.indices);
     RtVertexRef vb = RT_VERTEX_REF(r.vertices);
     uint base = r.first_index + 3u * primitive;

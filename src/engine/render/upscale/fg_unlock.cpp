@@ -26,8 +26,6 @@ namespace pt::fg_unlock {
 
 namespace {
 
-constexpr uint32_t kNvidia = 0x10DE;
-
 std::string Hex(const unsigned char* digest) {
     static const char* hex = "0123456789abcdef";
     std::string out(64, '0');
@@ -161,8 +159,6 @@ bool HasMarker(const std::filesystem::path& path) {
 }
 
 std::string FileSha256(const std::filesystem::path& path) { return FileSha256Impl(path, nullptr); }
-
-bool Applicable(uint32_t vendor_id, std::string_view dlssg_note) { return vendor_id == kNvidia && dlssg_note == "pc_note_dlssg_gpu"; }
 
 std::optional<Install> ParseInstall(std::string_view text) {
     metadata_json::Value root;
@@ -317,15 +313,134 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
     }
     {
         std::ofstream out(work_dir / "tool-source.txt", std::ios::binary | std::ios::trunc);
-        out << (source.which == ToolSource::Which::Pinned ? "pinned" : "latest") << "\n" << source.tag << "\n" << source.zip_sha << "\n";
+        out << (source.which == ToolSource::Which::Pinned ? "pinned" : "latest") << "\n" << source.tag << "\n" << source.zip_sha << "\n"
+            << os::PathToUtf8(zip.filename()) << "\n";
     }
     LogInfo("fg unlock: {} ready from the {} ({})", os::PathToUtf8(zip.filename()), source.note, source.tag);
     return true;
 }
 
-bool Job::Start(Kind kind, const std::filesystem::path& work_dir) {
+bool InstallLive(const std::filesystem::path& work_dir, const std::filesystem::path& game_dir, std::string& detail,
+                 const std::atomic<bool>* cancelled) {
 #ifdef _WIN32
+    std::atomic<bool> never_cancelled{false};
+    const auto& cancel = cancelled ? *cancelled : never_cancelled;
+    if (cancel.load()) { detail = "installation cancelled"; return false; }
+    auto zip = ZipPath(work_dir);
+    std::ifstream source(work_dir / "tool-source.txt");
+    std::string kind, tag, expected;
+    std::getline(source, kind); std::getline(source, tag); std::getline(source, expected);
+    std::string filename;
+    if (std::getline(source, filename) && !filename.empty()) {
+        const auto name = os::PathFromUtf8(filename);
+        if (name.has_parent_path() || name.is_absolute()) { detail = "invalid package filename"; return false; }
+        zip = work_dir / name;
+    }
+    if (expected.size() != 64 || FileSha256(zip) != expected) {
+        detail = "the verified package changed before installation";
+        return false;
+    }
+    std::error_code ec;
+    if (std::filesystem::exists(game_dir / kManifest, ec) || ProxyPresent(game_dir) || std::filesystem::exists(game_dir / kDir, ec)) {
+        detail = "an existing FG package must be removed before a first live install";
+        return false;
+    }
+    const auto proxy = ChooseProxy(game_dir, {});
+    if (proxy.empty()) { detail = "all FG proxy slots are occupied"; return false; }
+    const auto stage = work_dir / "live-stage";
+    std::filesystem::create_directories(stage, ec);
+    wchar_t system[MAX_PATH]{};
+    GetSystemDirectoryW(system, MAX_PATH);
+    const auto tar = os::RunProcess(std::filesystem::path(system) / L"tar.exe",
+        {"-xf", os::PathToUtf8(zip), "-C", os::PathToUtf8(stage)}, stage, work_dir / "live-tar.log", cancel, std::chrono::minutes(2));
+    if (tar.exit_code != 0) { detail = "the verified package could not be extracted"; return false; }
+    json::Value manifest;
+    if (!json::Reader(ReadText(stage / "manifest.json", 1 << 20)).Parse(manifest) || !manifest.object) {
+        detail = "the package manifest is missing"; return false;
+    }
+    const auto files = manifest.members.find("files");
+    if (files == manifest.members.end()) { detail = "the package manifest has no files"; return false; }
+    struct File { std::filesystem::path source, dest; std::string name, hash; };
+    std::vector<File> selected;
+    const std::string proxy_source = proxy == "version.dll" ? proxy : "alternatives/" + proxy;
+    for (const auto& f : files->second.items) {
+        const auto name = MemberText(f, "path");
+        if (name != proxy_source && name != kIni && name.rfind(std::string(kDir) + "/", 0) != 0) continue;
+        const auto relative = os::PathFromUtf8(name);
+        if (relative.is_absolute() || name.find("..") != std::string::npos || name.find(':') != std::string::npos) {
+            detail = "unsafe package path"; return false;
+        }
+        const std::string dest = name == proxy_source ? proxy : name;
+        const auto hash = MemberText(f, "sha256");
+        if (hash.size() != 64 || FileSha256(stage / relative) != hash || std::filesystem::exists(game_dir / dest, ec)) {
+            detail = "package file failed verification or destination is occupied: " + dest; return false;
+        }
+        selected.push_back({stage / relative, game_dir / dest, dest, hash});
+    }
+    if (selected.size() < 5 || std::none_of(selected.begin(), selected.end(), [&](const File& f) { return f.name == proxy; })) {
+        detail = "the package is incomplete"; return false;
+    }
+    std::stable_sort(selected.begin(), selected.end(), [&](const File& a, const File& b) { return (a.name == proxy) < (b.name == proxy); });
+    std::vector<std::filesystem::path> placed;
+    auto rollback = [&] {
+        for (const auto& p : placed) std::filesystem::remove(p, ec);
+        std::filesystem::remove_all(game_dir / kDir, ec);
+        std::filesystem::remove(game_dir / kManifest, ec);
+    };
+    for (const auto& f : selected) {
+        if (cancel.load()) { detail = "installation cancelled"; rollback(); return false; }
+        std::filesystem::create_directories(f.dest.parent_path(), ec);
+        if (!std::filesystem::copy_file(f.source, f.dest, std::filesystem::copy_options::none, ec)) {
+            detail = "cannot install " + f.name + ": " + ec.message(); rollback(); return false;
+        }
+        placed.push_back(f.dest);
+    }
+    if (cancel.load()) { detail = "installation cancelled"; rollback(); return false; }
+    std::ofstream out(game_dir / kManifest, std::ios::binary | std::ios::trunc);
+    out << "{\"complete\":true,\"tool_tag\":\"" << tag << "\",\"runtime\":\""
+        << MemberText(manifest, "runtime_model") << "\",\"proxy\":\"" << proxy << "\",\"files\":[";
+    for (size_t i = 0; i < selected.size(); ++i) {
+        if (i) out << ',';
+        out << "{\"name\":\"" << selected[i].name << "\",\"sha256\":\"" << selected[i].hash << "\"}";
+    }
+    out << "]}";
+    out.close();
+    if (!out) { detail = "cannot write the install record"; rollback(); return false; }
+    detail = "installed verified package " + tag + " while the game remained running";
+    LogInfo("fg unlock: {}", detail);
+    return true;
+#else
+    detail = "live FG installation requires Windows"; return false;
+#endif
+}
+
+bool LoadLiveProxy(const std::filesystem::path& game_dir, std::string& detail) {
+#ifdef _WIN32
+    const auto install = ReadInstall(game_dir);
+    if (!install || !Usable(*install)) { detail = "the FG install is incomplete"; return false; }
+    const auto path = game_dir / install->proxy;
+    if (!HasMarker(path)) { detail = "the installed proxy is not the community FG package"; return false; }
+    const HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!module) { detail = std::format("loading the FG proxy failed ({})", GetLastError()); return false; }
+    if (auto version = reinterpret_cast<DWORD(WINAPI*)(LPCWSTR, LPDWORD)>(GetProcAddress(module, "GetFileVersionInfoSizeW"))) {
+        DWORD unused{}; version((game_dir / L"pt.exe").c_str(), &unused);
+    } else if (auto time = reinterpret_cast<DWORD(WINAPI*)()>(GetProcAddress(module, "timeGetTime"))) {
+        time();
+    } else if (auto options = reinterpret_cast<DWORD(WINAPI*)()>(GetProcAddress(module, "SymGetOptions"))) {
+        options();
+    }
+    LogInfo("fg unlock: explicitly loaded {} into running process {}", os::PathToUtf8(path), GetCurrentProcessId());
+    return true;
+#else
+    detail = "live FG activation requires Windows"; return false;
+#endif
+}
+
+bool Job::Start(Kind kind, const std::filesystem::path& work_dir, const std::filesystem::path& live_install_dir) {
+#ifdef _WIN32
+    if (!live_install_dir.empty() && kind != Kind::Install) return false;
     if (state_->busy.exchange(true)) return false;
+    state_->cancel = false;
     {
         std::lock_guard lock(state_->mutex);
         const uint32_t serial = state_->status.serial;
@@ -334,15 +449,18 @@ bool Job::Start(Kind kind, const std::filesystem::path& work_dir) {
         state_->status.phase = Phase::Downloading;
         state_->status.serial = serial;
     }
-    std::thread([state = state_, work_dir] {
+    std::thread([state = state_, work_dir, live_install_dir] {
         os::LowerCurrentThreadPriority();
         auto percent = [&](int p) {
             std::lock_guard lock(state->mutex);
             state->status.percent = std::clamp(p, 0, 100);
         };
         std::string key, detail;
-        const bool ok = PrepareTool(work_dir, [&](int p) { percent(p); }, [&] { return state->cancel.load(); }, &key, &detail);
+        bool ok = PrepareTool(work_dir, [&](int p) { percent(p); }, [&] { return state->cancel.load(); }, &key, &detail);
+        const bool live = ok && !live_install_dir.empty();
+        if (live) ok = InstallLive(work_dir, live_install_dir, detail, &state->cancel);
         std::lock_guard lock(state->mutex);
+        state->status.installed_live = live && ok;
         state->status.phase = ok ? Phase::Ready : Phase::Failed;
         state->status.percent = ok ? 100 : state->status.percent;
         state->status.failure = ok ? std::string() : (key.empty() ? "pc_note_fg_unlock_failed" : key);

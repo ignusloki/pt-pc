@@ -20,11 +20,11 @@ int main() {
     using pt::game::NoticeQueue;
     const std::string update = "pc_update_notice";
     const std::string tier = std::string("pc_gameplus_notice") + pt::game::kPcNoteArgument + "2";
-    const std::string enhanced = "pc_notice_enhanced_working";
+    const std::string another_notice = "test_notice";
 
     {
         NoticeQueue queue;
-        Check(queue.Push(update) && queue.Push(tier) && queue.Push(enhanced), "three lines queue at once");
+        Check(queue.Push(update) && queue.Push(tier) && queue.Push(another_notice), "three lines queue at once");
         Check(!queue.Push(tier), "a line that is waiting is not queued again");
         std::vector<std::string> order;
         std::vector<float> lengths;
@@ -49,7 +49,7 @@ int main() {
             }
         }
         lengths.push_back(shown);
-        Check(order.size() == 3 && order[0] == update && order[1] == tier && order[2] == enhanced, "the lines come in the order they were asked");
+        Check(order.size() == 3 && order[0] == update && order[1] == tier && order[2] == another_notice, "the lines come in the order they were asked");
         Check(!early && lengths.size() == 3 && lengths[2] > NoticeQueue::kLength - 0.1f, "each line stays for its whole time");
         Check(!overlap, "a line on screen has an opacity");
         Check(queue.Idle(), "the queue is empty after the last");
@@ -101,27 +101,18 @@ int main() {
     }
     {
         NoticeQueue queue;
-        queue.Push(enhanced);
+        queue.Push(another_notice);
         for (int i = 0; i < 30; ++i) queue.Update(0.1f, true);
         queue.Update(0.1f, false);
-        Check(queue.Cut() && queue.Push(enhanced), "a cut line can come again as a new event");
+        Check(queue.Cut() && queue.Push(another_notice), "a cut line can come again as a new event");
     }
 
     {
         NoticeQueue queue;
-        queue.Push(enhanced);
+        queue.Push(another_notice);
         for (int i = 0; i < 100; ++i) queue.Update(0.1f, true);
-        Check(queue.Push(enhanced), "a finished line can come again");
+        Check(queue.Push(another_notice), "a finished line can come again");
     }
 
-    for (int language = 0; language < 14; ++language) {
-        for (const char* key : {"pc_notice_enhanced_working", "pc_notice_enhanced_ready", "pc_boot_preparing_textures", "pc_boot_textures_skip",
-                                "pc_boot_textures_ask"}) {
-            const std::string text = pt::game::PcNoteText(key, language);
-            const bool ok = !text.empty() && text != key && text.size() < (std::string(key) == "pc_boot_textures_ask" ? 300u : 140u) && text.find('-') == std::string::npos;
-            if (!ok) std::printf("FAIL: %s in language %d: %s\n", key, language, text.c_str());
-            failed += !ok;
-        }
-    }
     return failed ? 1 : 0;
 }

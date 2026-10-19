@@ -1,3 +1,6 @@
+#include "pt_foliage_shadow.glsl"
+
+#include "pt_native_projection.glsl"
 
 const uint kPtOccluderMask = 128u;
 const uint kPtSurfaceMask = 8u;
@@ -100,10 +103,25 @@ bool PtLightEval(Light l, vec3 p, vec3 N, vec3 V, PtMaterial s, float cutoff, ou
 }
 
 vec3 PtDiscPoint(Light l, vec3 p, vec2 u) {
+    if (l.position.w < 0.5 && (uint(l.scales.w) & 1u) != 0u) {
+        return l.position.xyz;
+    }
     RtDisc d = RtLightDisc(l, p, vec2(0.0), 0.0);
     float r = d.radius * sqrt(u.x);
     float a = 6.2831853 * u.y;
     return l.position.xyz + (d.u * cos(a) + d.v * sin(a)) * r;
+}
+
+vec2 PtCasterUV(uint record, uint primitive, vec2 bary) {
+    RtRecord r = rt_records[record];
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
+    uint base = r.first_index + 3u * primitive;
+    uint i0 = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i1 = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i2 = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u + 10u;
+    return vec2(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u)) * (1.0 - bary.x - bary.y) +
+           vec2(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u)) * bary.x + vec2(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u)) * bary.y;
 }
 
 bool PtCasterOpaque(uint record, uint primitive, vec2 bary, float u) {
@@ -111,20 +129,40 @@ bool PtCasterOpaque(uint record, uint primitive, vec2 bary, float u) {
     if ((r.flags & 3u) == 1u) {
         return true;
     }
+    Material m = materials[r.material];
+    float reference = (m.flags & MAT_ALPHA_DITHER) != 0u ? (1.0 + 126.0 * u) / 255.0 : 64.0 / 255.0;
+    return textureLod(PT_TEX2D(m.albedo), PtCasterUV(record, primitive, bary), 0.0).a >= max(m.params.x, 0.0) * reference;
+}
+
+float PtCasterShadowTransmission(uint record, uint primitive, vec2 bary, Light l, float strength) {
+    if (!(strength > 0.0)) {
+        return 0.0;
+    }
+    RtRecord r = rt_records[record];
+    Material m = materials[r.material];
+    bool authored_shadow = (uint(l.scales.w) & 1u) != 0u;
+    if (PtFoliageShadowTransmission(1.0, strength, m.flags, r.flags, authored_shadow) <= 0.0) {
+        return 0.0;
+    }
+    float translucency = textureLod(PT_TEX2D(m.aux1), PtCasterUV(record, primitive, bary), 0.0).y;
+    return PtFoliageShadowTransmission(translucency, strength, m.flags, r.flags, authored_shadow);
+}
+
+const float kPtFittingReach = kRtFittingReach;
+
+bool PtProjectionClipsCaster(uint record, uint primitive, mat4x3 to_world, Light l) {
+    RtRecord r = rt_records[record];
     RtIndexRef ib = RT_INDEX_REF(r.indices);
     RtVertexRef vb = RT_VERTEX_REF(r.vertices);
     uint base = r.first_index + 3u * primitive;
-    uint i0 = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u + 10u;
-    uint i1 = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u + 10u;
-    uint i2 = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u + 10u;
-    vec2 uv = vec2(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u)) * (1.0 - bary.x - bary.y) + vec2(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u)) * bary.x +
-              vec2(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u)) * bary.y;
-    Material m = materials[r.material];
-    float reference = (m.flags & MAT_ALPHA_DITHER) != 0u ? (1.0 + 126.0 * u) / 255.0 : 64.0 / 255.0;
-    return textureLod(PT_TEX2D(m.albedo), uv, 0.0).a >= max(m.params.x, 0.0) * reference;
+    uint i0 = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u;
+    uint i1 = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u;
+    uint i2 = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u;
+    vec3 a = to_world * vec4(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u), RT_VERTEX(vb, i0 + 2u), 1.0);
+    vec3 b = to_world * vec4(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u), RT_VERTEX(vb, i1 + 2u), 1.0);
+    vec3 c = to_world * vec4(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u), RT_VERTEX(vb, i2 + 2u), 1.0);
+    return PtProjectionClipsTriangle(l.position.xyz, normalize(l.direction.xyz), l.range.y, a, b, c);
 }
-
-const float kPtFittingReach = 0.3;
 
 float PtLightReach(Light l, vec3 origin, vec3 dir, float dist) {
     float t_max = dist - min(0.05, 0.5 * dist);
@@ -141,19 +179,30 @@ float PtLightReach(Light l, vec3 origin, vec3 dir, float dist) {
 const float kPtSkinSelfReach = 0.3;
 bool g_pt_origin_skinned = false;
 
-bool PtOccluded(Light l, vec3 origin, vec3 target, inout uint rng) {
+float PtVisibility(Light l, vec3 origin, vec3 target, float foliage_strength, vec3 receiver_normal) {
+    if ((uint(l.scales.w) & 4u) != 0u) {
+        vec3 q = (l.mask * vec4(origin, 1.0)).xyz;
+        if (max(abs(q.x), max(abs(q.y), abs(q.z))) <= 1.0) {
+            vec3 n = normalize(transpose(inverse(mat3(l.mask))) * receiver_normal);
+            if (n.y < -0.4 && abs(n.z) > 0.3 && abs(n.x) < 0.2) {
+                return 1.0;
+            }
+        }
+    }
     vec3 to_light = target - origin;
     float dist = length(to_light);
     if (dist <= 1.0e-4) {
-        return false;
+        return 1.0;
     }
     vec3 dir = to_light / dist;
     float t_max = PtLightReach(l, origin, dir, dist);
     if (!RtRayValid(origin, dir, t_max)) {
-        return false;
+        return 1.0;
     }
+    float visibility = 1.0;
     rayQueryEXT rq;
-    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | (g_pt_origin_skinned ? gl_RayFlagsNoOpaqueEXT : 0u);
+    bool projection_clip = l.position.w > 0.5 && l.range.y > kPtFittingReach;
+    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | ((g_pt_origin_skinned || projection_clip) ? gl_RayFlagsNoOpaqueEXT : 0u);
     rayQueryInitializeEXT(rq, rt_casters, flags, RtFullCasters(l), origin, 0.0, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
@@ -163,21 +212,36 @@ bool PtOccluded(Light l, vec3 origin, vec3 target, inout uint rng) {
         if (g_pt_origin_skinned && (rt_records[record].flags & 4u) != 0u && rayQueryGetIntersectionTEXT(rq, false) < kPtSkinSelfReach) {
             continue;
         }
+        vec3 hit = origin + dir * rayQueryGetIntersectionTEXT(rq, false);
+        if (projection_clip && PtProjectionStaticCandidate(rt_records[record].flags, true, l.range.y, kPtFittingReach) &&
+            distance(hit, l.position.xyz) < l.range.y &&
+            PtProjectionClipsCaster(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                    rayQueryGetIntersectionObjectToWorldEXT(rq, false), l)) {
+            continue;
+        }
         if ((rt_records[record].flags & 9u) == 0u) {
             rayQueryConfirmIntersectionEXT(rq);
             continue;
         }
-        if ((rt_records[record].flags & 1u) != 0u) {
-            vec3 hit = origin + dir * rayQueryGetIntersectionTEXT(rq, false);
-            if (distance(hit, l.position.xyz) < kPtFittingReach) {
+        if (RtFittingPasses(record, l, hit)) {
+            continue;
+        }
+        uint primitive = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, false);
+        if (PtCasterOpaque(record, primitive, bary, 0.5)) {
+            float transmission = PtCasterShadowTransmission(record, primitive, bary, l, foliage_strength);
+            if (transmission > 0.0) {
+                visibility *= transmission;
                 continue;
             }
-        }
-        if (PtCasterOpaque(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false), rayQueryGetIntersectionBarycentricsEXT(rq, false), 0.5)) {
             rayQueryConfirmIntersectionEXT(rq);
         }
     }
-    return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+    return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? 0.0 : visibility;
+}
+
+bool PtOccluded(Light l, vec3 origin, vec3 target, vec3 receiver_normal, inout uint rng) {
+    return PtVisibility(l, origin, target, 0.0, receiver_normal) <= 0.0;
 }
 
 bool g_pt_fill_unshadowed = false;
@@ -228,7 +292,7 @@ vec3 PtNextEventN(vec3 p, vec3 N, vec3 V, PtMaterial s, vec3 origin, uint light_
         }
         Light l = frame.lights[chosen[k]];
         vec3 target = PtDiscPoint(l, p, vec2(RtRandom(rng), RtRandom(rng)));
-        if (!PtFillUnshadowed(chosen[k]) && PtOccluded(l, origin, target, rng)) {
+        if (!PtFillUnshadowed(chosen[k]) && PtOccluded(l, origin, target, N, rng)) {
             continue;
         }
         sum += chosen_light[k] * (total / chosen_weight[k]);
@@ -294,9 +358,12 @@ float PtCoatAmount(vec3 n_world, vec3 face_world, vec3 n_view, vec3 up, float ro
     return a > 0.02 ? a : 0.0;
 }
 
-vec3 PtCoatDirection(vec3 n_world, vec3 face_world, vec3 V, float roughness, vec2 u) {
-    vec3 coat_n = normalize(mix(face_world, dot(n_world, V) > 0.0 ? n_world : face_world, 0.15));
-    return PtLobeDirection(coat_n, V, exp2(16.0 - 4.0 * roughness), u);
+vec3 PtCoatNormal(vec3 n_world, vec3 face_world, vec3 V) {
+    return normalize(mix(face_world, dot(n_world, V) > 0.0 ? n_world : face_world, 0.15));
+}
+
+vec3 PtCoatDirection(vec3 n_world, vec3 face_world, vec3 V) {
+    return reflect(-V, PtCoatNormal(n_world, face_world, V));
 }
 
 vec3 PtSpecularAlbedo(vec3 N, vec3 V, PtMaterial s) {
@@ -318,6 +385,8 @@ PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
     return s;
 }
 
+bool g_pt_mirror_view = false;
+
 bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3 radiance, inout vec3 throughput, inout uint rng, out vec3 glass_point,
             out vec3 glass_normal) {
     float t_start = 0.0;
@@ -325,9 +394,14 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
     glass_normal = vec3(0.0);
     for (int k = 0; k < 3; ++k) {
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, kPtLayerMask, origin, t_start, dir, t_end);
+        uint flags = gl_RayFlagsCullBackFacingTrianglesEXT | (g_pt_mirror_view ? gl_RayFlagsNoOpaqueEXT : 0u);
+        rayQueryInitializeEXT(rq, rt_casters, flags, kPtLayerMask, origin, t_start, dir, t_end);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+                if (g_pt_mirror_view && (rt_records[record].flags & 1024u) != 0u) {
+                    continue;
+                }
                 rayQueryConfirmIntersectionEXT(rq);
             }
         }
@@ -376,20 +450,31 @@ float PtEmissiveCap(uint bounce, float cutoff) {
     return bounce == 0u && g_pt_seen_emissive ? 32.0 * cutoff * 1.0e4 : 32.0;
 }
 uint g_pt_first_lights = 1u;
+bool g_pt_first_through_unlit = false;
 
 vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float reach, float lod, uint light_count, float cutoff, inout uint rng,
                  out float first_distance) {
     vec3 radiance = vec3(0.0);
     first_distance = reach;
+    uint through = 0u;
     for (uint bounce = 0u; bounce < bounces; ++bounce) {
         if (!RtRayValid(origin, dir, reach)) {
             break;
         }
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, bounce == 0u ? g_pt_first_mask : kPtSurfaceMask, origin, 0.0, dir, reach);
+        uint flags = g_pt_mirror_view ? gl_RayFlagsNoOpaqueEXT : gl_RayFlagsNoneEXT;
+        rayQueryInitializeEXT(rq, rt_casters, flags, bounce == 0u ? g_pt_first_mask : kPtSurfaceMask, origin, 0.0, dir, reach);
         while (rayQueryProceedEXT(rq)) {
-            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-                PtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+            if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
+                continue;
+            }
+            uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+            uint record_flags = rt_records[record].flags;
+            if (g_pt_mirror_view && (record_flags & 1024u) != 0u) {
+                continue;
+            }
+            if ((g_pt_mirror_view && (record_flags & 9u) == 0u) ||
+                PtCasterOpaque(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
                                rayQueryGetIntersectionBarycentricsEXT(rq, false), RtRandom(rng))) {
                 rayQueryConfirmIntersectionEXT(rq);
             }
@@ -399,6 +484,17 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         if (bounce == 0u) {
             first_distance = t;
         }
+#if defined(PT_D3D12) && defined(PT_INDIRECT_RENDER_SIZE)
+        uint record = 0u;
+        RtSurfaceHit hs = RtSurfaceHit(vec3(0.0), vec2(0.0), 0u);
+        bool hit_front = false;
+        if (hit) {
+            record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                               rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+            hit_front = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        }
+#endif
         vec3 glass_point;
         vec3 glass_normal;
         if (PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng, glass_point, glass_normal)) {
@@ -409,15 +505,33 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         if (!hit) {
             break;
         }
+#if !defined(PT_D3D12) || !defined(PT_INDIRECT_RENDER_SIZE)
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
         RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
                                         rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+#endif
         Material m = materials[hs.material];
+#if defined(PT_D3D12) && defined(PT_INDIRECT_RENDER_SIZE)
+        bool front = hit_front || (m.flags & MAT_TWO_SIDED) != 0u;
+#else
         bool front = rayQueryGetIntersectionFrontFaceEXT(rq, true) || (m.flags & MAT_TWO_SIDED) != 0u;
+#endif
+        bool mirror_lining = g_pt_mirror_view && bounce == 0u && (rt_records[record].flags & 4u) != 0u &&
+                             (m.flags & MAT_MIRROR_LINING) != 0u;
+        front = front || mirror_lining;
+        if (g_pt_first_through_unlit && bounce == 0u && m.kind != KIND_DEFERRED && through < 4u) {
+            origin = origin + dir * (t + max(1.0e-3, 2.0e-4 * t));
+            ++through;
+            --bounce;
+            continue;
+        }
         if (!front || m.kind != KIND_DEFERRED) {
             break;
         }
         PtMaterial s = PtHitMaterial(m, hs.uv, lod);
+        if (mirror_lining) {
+            s.albedo = mix(s.albedo, vec3(1.0), 0.035);
+        }
         vec3 p = origin + dir * t;
         vec3 N = hs.normal;
         vec3 V = -dir;

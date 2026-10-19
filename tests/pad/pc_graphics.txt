@@ -48,10 +48,6 @@
 20 sexpect pcrow pc_ray_quality
 20 sexpect pcvalue pc_ray_quality 1
 20 sexpect pcenabled pc_ray_quality 0
-20 sui pcfocus pc_enhanced_textures
-20 swait 4
-20 sexpect pcrow pc_enhanced_textures
-20 sexpect pcvalue pc_enhanced_textures 0
 20 sui pcfocus pc_anisotropy
 20 swait 4
 20 sexpect pcrow pc_anisotropy

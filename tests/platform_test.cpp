@@ -36,6 +36,13 @@ int main(int argc, char** argv) {
     check(update::CompareVersions("v0.2.0", "0.2.0") == 0, "leading v");
     check(update::CompareVersions("0.2.0-rc1", "0.2.0") < 0, "pre-release before release");
     check(update::CompareVersions("0.1", "0.1.0") == 0, "missing parts are zero");
+    check(update::CompareVersions("1.0.5.1", "1.0.5") > 0, "four-part hotfix follows the released three-part version");
+    check(update::CompareVersions("1.0.6", "1.0.5.1") > 0, "next patch follows a four-part hotfix");
+    const auto hotfix_release = update::ParseManifest(
+        R"({"tag_name":"v1.0.5.1","html_url":"https://example.org/hotfix","assets":[{"name":"P.T.PC.Port.Setup.exe","browser_download_url":"https://example.org/hotfix.exe"}]})",
+        "windows");
+    check(hotfix_release && hotfix_release->version == "v1.0.5.1" && hotfix_release->url == "https://example.org/hotfix.exe",
+          "GitHub update accepts a four-part hotfix tag and selects its installer");
     const char* manifest = R"({"version": "0.2.0", "notes": "Linux build", "url": "https://example.org/releases/latest",
         "platforms": {"windows": {"url": "https://example.org/setup.exe", "sha256": "00"}, "linux": {"url": "https://example.org/pt-linux.tar.gz"}},
         "published": 1791278700, "prerelease": false, "assets": [1, "two", {"three": 3}]})";

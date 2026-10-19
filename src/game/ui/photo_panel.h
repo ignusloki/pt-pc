@@ -63,13 +63,13 @@ struct PhotoPanelView {
 
 class PhotoPanel {
 public:
-    enum class Action { None, TakePhoto, ResetCamera };
+    enum class Action { None, TakePhoto, ResetCamera, ResetSettings };
     struct Input {
         uint32_t held_dirs = 0;
         bool accept = false;
     };
 
-    void Open(const PhotoSettings& settings);
+    void Open(const PhotoSettings& defaults);
     Action Update(Game& game, const Input& input, float dt);
     Action Update(GameAudio* audio, const Input& input, float dt);
     PhotoSettings& Settings() { return settings_; }
@@ -78,7 +78,7 @@ public:
 
 private:
     enum Row { kTakePhoto, kFocalLength, kRoll, kSpeed, kReset, kDof, kFocus, kAperture, kExposure, kBloom, kLens, kGrain,
-               kGrading, kAspect, kResolution, kFilter, kBody, kFlashlight, kRowCount };
+               kGrading, kAspect, kResolution, kFilter, kBody, kFlashlight, kResetSettings, kRowCount };
 
     void Change(GameAudio* audio, int delta);
     int Value(int row) const;
@@ -86,6 +86,8 @@ private:
     std::string ValueText(int row, int language) const;
 
     PhotoSettings settings_;
+    PhotoSettings defaults_;
+    bool initialized_ = false;
     int cursor_ = 0;
     uint32_t held_dirs_ = 0;
     float repeat_time_ = 0.0f;

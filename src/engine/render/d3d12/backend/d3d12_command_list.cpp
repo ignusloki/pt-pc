@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <stdexcept>
 
 #include "engine/core/log.h"
 
@@ -87,6 +88,22 @@ void CommandListImpl::Transition(ImageRecord& image, D3D12_RESOURCE_STATES state
 }
 
 void CommandListImpl::Transition(BufferRecord& buffer, D3D12_RESOURCE_STATES state) {
+    if (buffer.dirty_end > buffer.dirty_begin) {
+        const uint64_t begin = buffer.dirty_begin;
+        const uint64_t size = buffer.dirty_end - begin;
+        ComPtr<ID3D12Resource> upload;
+        D3D12MA::Allocation* allocation = nullptr;
+        void* mapped = nullptr;
+        if (!device_.CreateUploadBuffer(size, upload, allocation, &mapped)) {
+            throw std::runtime_error("D3D12 mapped shader input upload failed");
+        }
+        std::memcpy(mapped, buffer.host_data.data() + begin, size);
+        upload->Unmap(0, nullptr);
+        buffer.dirty_begin = buffer.dirty_end = 0;
+        Transition(buffer, D3D12_RESOURCE_STATE_COPY_DEST);
+        list_->CopyBufferRegion(buffer.resource.Get(), begin, upload.Get(), 0, size);
+        Keep(std::move(upload), allocation);
+    }
     if (buffer.heap == HeapKind::Upload || buffer.heap == HeapKind::Readback) {
         return;
     }
@@ -276,6 +293,9 @@ void CommandListImpl::BindSets(BindPoint point, PipelineLayoutHandle, uint32_t f
         const SetRecord* set = Rec<SetRecord>(sets[i]);
         if (!set || index >= kMaxSets) {
             continue;
+        }
+        for (const auto& [key, buffer] : set->uploads) {
+            Transition(*buffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         table(RootLayout::kSetViews + index, device_.Views().Gpu(set->views));
         if (set->samplers != kNone) {

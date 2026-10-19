@@ -146,6 +146,7 @@ layout(set = 1, binding = 4) uniform texture3D lut2_image;
 #define MAT_REFLECTOR 4194304u
 #define MAT_ALBEDO_VIEW 8388608u
 #define MAT_GBUFFER_BASE2 16777216u
+#define MAT_MIRROR_LINING 33554432u
 
 #define KIND_DEFERRED 0u
 #define KIND_CONSTANT 1u

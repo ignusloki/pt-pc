@@ -1,4 +1,6 @@
 #include "engine/render/d3d12/backend/d3d12_upscale.h"
+#include "engine/render/upscale/neural_native.h"
+#include "engine/render/d3d12/backend/fsr_ray_regeneration.h"
 
 #ifdef _WIN32
 
@@ -21,6 +23,7 @@
 #include "engine/core/log.h"
 #include "engine/core/resource_path.h"
 #include "engine/render/d3d12/backend/d3d12_native.h"
+#include "engine/render/d3d12/backend/reshade_native.h"
 #include "engine/render/upscale/upscale_platform.h"
 
 #if defined(PT_WITH_DLSS)
@@ -32,10 +35,17 @@
 #include <xess/xess_d3d12.h>
 #endif
 #if defined(PT_WITH_FSR)
+#if defined(PT_WITH_FSR_RR)
+#include <dx12/ffx_api_dx12.h>
+#include <ffx_api.h>
+#include <ffx_api_loader.h>
+#include <ffx_upscale.h>
+#else
 #include <ffx_api/dx12/ffx_api_dx12.h>
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_api_loader.h>
 #include <ffx_api/ffx_upscale.h>
+#endif
 #endif
 
 namespace pt::gpu::d3d12 {
@@ -67,10 +77,15 @@ const std::wstring& DataPath() {
 
 NVSDK_NGX_FeatureCommonInfo FeatureInfo() {
     static const std::wstring feature_path = ExecutableDir().wstring();
-    static const wchar_t* paths[1] = {feature_path.c_str()};
+    static const std::wstring nr_path = [] {
+        if (!nr_native::Enabled()) return std::wstring{};
+        const auto& runtime = NativeNeuralRuntime();
+        return runtime ? runtime->path.parent_path().wstring() : std::wstring{};
+    }();
+    static const wchar_t* paths[2] = {nr_path.empty() ? feature_path.c_str() : nr_path.c_str(), feature_path.c_str()};
     NVSDK_NGX_FeatureCommonInfo info{};
     info.PathListInfo.Path = paths;
-    info.PathListInfo.Length = 1;
+    info.PathListInfo.Length = nr_path.empty() ? 1 : 2;
     info.LoggingInfo.MinimumLoggingLevel = std::getenv("PT_UPSCALE_CHECK") ? NVSDK_NGX_LOGGING_LEVEL_ON : NVSDK_NGX_LOGGING_LEVEL_OFF;
     return info;
 }
@@ -110,20 +125,7 @@ public:
         if (!Supported(reason)) {
             return false;
         }
-        const NVSDK_NGX_FeatureCommonInfo common = FeatureInfo();
-        NVSDK_NGX_Result result = NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(),
-                                                                      NativeDevice(device_), &common, NVSDK_NGX_Version_API);
-        if (NVSDK_NGX_FAILED(result)) {
-            reason = "NGX did not initialise (driver without DLSS support?)";
-            LogWarn("dlss d3d12: NVSDK_NGX_D3D12_Init_with_ProjectID failed ({:#x})", static_cast<uint32_t>(result));
-            return false;
-        }
-        initialized_ = true;
-        result = NVSDK_NGX_D3D12_GetCapabilityParameters(&params_);
-        if (NVSDK_NGX_FAILED(result) || !params_) {
-            reason = "NGX capability query failed";
-            return false;
-        }
+        if (!InitializeNeuralCore(reason)) return false;
         int available = 0;
         NVSDK_NGX_Parameter_GetI(params_, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
         if (!available) {
@@ -137,6 +139,30 @@ public:
             return false;
         }
         CheckRayReconstruction();
+        return true;
+    }
+
+    bool InitializeNeuralCore(std::string& reason) override {
+        if (initialized_ && params_) return true;
+        if (device_.Info().vendor_id != kNvidiaVendor) { reason = "needs an NVIDIA RTX GPU"; return false; }
+        const NVSDK_NGX_FeatureCommonInfo common = FeatureInfo();
+        ngx_device_ = ReShadeNative(NativeDevice(device_));
+        if (ngx_device_.Get() != NativeDevice(device_)) {
+            LogInfo("dlss d3d12: NGX uses ReShade's unwrapped device with native command lists");
+        }
+        NVSDK_NGX_Result result = NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(),
+                                                                      ngx_device_.Get(), &common, NVSDK_NGX_Version_API);
+        if (NVSDK_NGX_FAILED(result)) {
+            reason = "NGX did not initialise (driver without DLSS support?)";
+            LogWarn("dlss d3d12: NVSDK_NGX_D3D12_Init_with_ProjectID failed ({:#x})", static_cast<uint32_t>(result));
+            return false;
+        }
+        initialized_ = true;
+        result = NVSDK_NGX_D3D12_GetCapabilityParameters(&params_);
+        if (NVSDK_NGX_FAILED(result) || !params_) {
+            reason = "NGX capability query failed";
+            return false;
+        }
         LogInfo("dlss d3d12: NGX initialised");
         return true;
     }
@@ -148,7 +174,8 @@ public:
 
     bool Create(VkCommandBuffer, const UpscaleCreate& create) override {
         ReleaseFeature();
-        ID3D12GraphicsCommandList* list = ListOf(create.list);
+        const auto native_list = ReShadeNative(ListOf(create.list));
+        ID3D12GraphicsCommandList* list = native_list.Get();
         if (!params_ || !list) {
             return false;
         }
@@ -196,7 +223,8 @@ public:
     }
 
     bool Dispatch(const UpscaleDispatch& d) override {
-        ID3D12GraphicsCommandList* list = ListOf(d.list);
+        const auto native_list = ReShadeNative(ListOf(d.list));
+        ID3D12GraphicsCommandList* list = native_list.Get();
         if (!feature_ || !list) {
             return false;
         }
@@ -350,15 +378,17 @@ private:
         if (initialized_) {
             device_.WaitIdle();
             if (!streamline::ActiveD3D12()) {
-                NVSDK_NGX_D3D12_Shutdown1(NativeDevice(device_));
+                NVSDK_NGX_D3D12_Shutdown1(ngx_device_.Get());
             } else {
                 LogInfo("dlss d3d12: NGX stays up for Streamline's DLSS Frame Generation (slShutdown ends it)");
             }
             initialized_ = false;
         }
+        ngx_device_.Reset();
     }
 
     gpu::Device& device_;
+    Microsoft::WRL::ComPtr<ID3D12Device> ngx_device_;
     bool initialized_ = false;
     NVSDK_NGX_Parameter* params_ = nullptr;
     NVSDK_NGX_Handle* feature_ = nullptr;
@@ -615,7 +645,7 @@ FfxApiResource FfxResource(const UpscaleImage& image, uint32_t extra_usage = 0) 
 
 class FsrD3D12 final : public UpscaleBackend {
 public:
-    FsrD3D12(gpu::Device& device, int generation) : device_(device), generation_(generation) {}
+    FsrD3D12(gpu::Device& device, int generation) : device_(device), generation_(generation), rr_(device) {}
     ~FsrD3D12() override {
         Release();
         if (module_) {
@@ -656,14 +686,28 @@ public:
         return version_id_ != 0;
     }
 
+    bool RayReconstructionAvailable(std::string& reason) override {
+        return generation_ == 4 && rr_.Available(reason);
+    }
+    bool Denoise(const RayDenoiseDispatch& d) override { return rr_.Dispatch(d); }
+    void DisableRayReconstruction(const std::string& reason) override { rr_.Disable(reason); }
+
     bool Create(VkCommandBuffer, const UpscaleCreate& create) override {
         Release();
+        if (create.ray_reconstruction && !rr_.Create(create.render)) return false;
         ffxCreateBackendDX12Desc backend{};
         backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
         backend.device = NativeDevice(device_);
         ffxCreateContextDescUpscale desc{};
         desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         desc.header.pNext = &backend.header;
+#if defined(PT_WITH_FSR_RR)
+        ffxCreateContextDescUpscaleVersion api_version{};
+        api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
+        api_version.version = FFX_UPSCALER_VERSION;
+        api_version.header.pNext = desc.header.pNext;
+        desc.header.pNext = &api_version.header;
+#endif
         desc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INVERTED | FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
         if (std::getenv("PT_UPSCALE_CHECK")) {
             desc.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
@@ -736,6 +780,7 @@ public:
     }
 
     void Release() override {
+        rr_.Release();
         if (context_) {
             device_.WaitIdle();
             fn_.DestroyContext(&context_, nullptr);
@@ -803,6 +848,7 @@ private:
     }
 
     gpu::Device& device_;
+    FsrRayRegeneration rr_;
     int generation_ = 3;
     bool probed_ = false;
     std::string reason_;

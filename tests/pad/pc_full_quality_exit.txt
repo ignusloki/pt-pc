@@ -1,0 +1,34 @@
+# An active Ultra tier must remain selectable after the individual traced effects are off.
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 stap 0 options
+20 swait 70
+20 sexpect menu 1
+20 sexpect page 0
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 stap 0 r1
+20 swait 10
+20 stap 0 r1
+20 swait 10
+20 sexpect pctab pc_graphics 0
+20 sui pcset pc_shadows 5
+20 swait 2
+20 sui pcset pc_ray_quality 2
+20 swait 2
+20 sui pcset pc_shadows 3
+20 sui pcset pc_rt_ao 1
+20 sui pcset pc_reflections 1
+20 sui pcset pc_rt_contact 1
+20 swait 2
+20 sui pcfocus pc_ray_quality
+20 swait 4
+20 sexpect pcvalue pc_ray_quality 2
+20 sexpect pcenabled pc_ray_quality 1
+20 stap 0 left
+20 swait 4
+20 sexpect pcvalue pc_ray_quality 1
+20 sexpect pcenabled pc_ray_quality 0
+20 squit

@@ -36,7 +36,9 @@ struct ToolSource {
     std::string note;
 };
 
-bool Applicable(uint32_t vendor_id, std::string_view dlssg_note);
+inline constexpr bool Applicable(int code_arch, std::string_view dlssg_note, bool installed = false) {
+    return (code_arch == 75 || code_arch == 86) && (installed || dlssg_note == "pc_note_dlssg_gpu");
+}
 
 struct Install {
     bool complete = false;
@@ -62,8 +64,14 @@ std::filesystem::path ZipPath(const std::filesystem::path& work_dir);
 bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void(int)>& percent, const std::function<bool()>& cancelled,
                  std::string* failure_key, std::string* detail);
 
+bool InstallLive(const std::filesystem::path& work_dir, const std::filesystem::path& game_dir, std::string& detail,
+                 const std::atomic<bool>* cancelled = nullptr);
+bool LoadLiveProxy(const std::filesystem::path& game_dir, std::string& detail);
+
 class Job {
 public:
+    ~Job() { Cancel(); }
+    void Cancel() { state_->cancel = true; }
     enum class Kind { Install, Remove, Reinstall };
     enum class Phase { Idle, Downloading, Ready, Failed };
     struct Status {
@@ -73,8 +81,9 @@ public:
         std::string failure;
         std::string detail;
         uint32_t serial = 0;
+        bool installed_live = false;
     };
-    bool Start(Kind kind, const std::filesystem::path& work_dir);
+    bool Start(Kind kind, const std::filesystem::path& work_dir, const std::filesystem::path& live_install_dir = {});
     Status Get() const;
     bool Busy() const;
 

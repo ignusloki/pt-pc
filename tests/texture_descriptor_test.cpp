@@ -1,4 +1,4 @@
-#include "engine/assets/enhanced_textures.h"
+#include "engine/fs/qar.h"
 #include "engine/render/texture_manager.h"
 #include "engine/render/vk_context.h"
 #include "engine/render/vk.h"
@@ -6,23 +6,27 @@
 #include "engine/render/gpu/gpu_vk_native.h"
 #include <cstdio>
 #include <fstream>
+#include <thread>
+#include <chrono>
+#include <cmath>
+#include <array>
+#include <cstdlib>
 
 int main(int argc, char** argv) {
-    if (argc != 5) { std::fprintf(stderr, "usage: pt_texture_descriptor_test <game> <runtime> <cache> <texture-stem>\n"); return 2; }
+    if (argc != 3) { std::fprintf(stderr, "usage: pt_texture_descriptor_test <game> <texture-stem>\n"); return 2; }
     int failures = 0;
     auto check = [&](bool ok, const char* name) { if (!ok) { std::printf("FAIL: %s\n", name); ++failures; } };
     pt::QarArchive qar;
     if (!qar.Open(std::filesystem::path(argv[1]) / "texture.qar")) return 2;
     pt::FtexTexture source;
-    if (!pt::LoadFtex(qar, argv[4], source)) return 2;
+    if (!pt::LoadFtex(qar, argv[2], source)) return 2;
     pt::vk::Context ctx;
     if (!ctx.Init(nullptr, true)) return 2;
     pt::TextureManager textures;
     pt::gpu::vk::Device device(ctx);
     if (!textures.Init(device)) return 2;
-    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]), pt::kEnhancedColourKinds);
     bool loaded = false;
-    const uint32_t index = textures.LoadFox(qar, argv[4], &loaded);
+    uint32_t index = textures.LoadFox(qar, argv[2], &loaded);
     check(loaded, "original uploaded");
     pt::vk::Buffer buffer;
     if (!ctx.CreateBuffer(buffer, 32, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) return 2;
@@ -84,15 +88,60 @@ int main(int argc, char** argv) {
         const auto* size = static_cast<const uint32_t*>(buffer.mapped);
         check(size[0] == source.width * scale && size[1] == source.height * scale, name);
         std::printf("%s: %u x %u\n", name, size[0], size[1]);
-        check(textures.Find(argv[4]) == index, "material texture index stable");
+        check(textures.Find(argv[2]) == index, "material texture index stable");
     };
     sample(1, "original descriptor");
-    textures.SetEnhancedTextures(true); sample(2, "enhanced descriptor");
-    textures.SetAnisotropy(16); sample(2, "enhanced descriptor after anisotropy");
-    textures.ConfigureEnhancedTextures(qar, argv[3], pt::EnhancedModelKey(argv[2]), pt::kEnhancedColourKinds);
-    sample(2, "same texture configuration keeps enhanced descriptors active");
-    textures.SetEnhancedTextures(false); sample(1, "original descriptor restored");
-    textures.SetEnhancedTextures(true); sample(2, "enhanced descriptor restored");
+    textures.SetAnisotropy(16); sample(1, "original descriptor after anisotropy");
+    VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; semaphore_info.pNext = &type;
+    VkSemaphore gate;
+    if (vkCreateSemaphore(ctx.device, &semaphore_info, nullptr, &gate) != VK_SUCCESS) return 2;
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = gate; wait.value = 1; wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.waitSemaphoreInfoCount = 1; submit.pWaitSemaphoreInfos = &wait;
+    vkQueueSubmit2(ctx.queue, 1, &submit, VK_NULL_HANDLE);
+    std::thread release_gate([&] {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO}; signal.semaphore = gate; signal.value = 1;
+        vkSignalSemaphore(ctx.device, &signal);
+    });
+    std::array<uint32_t, 16> indices;
+    for (uint32_t i = 0; i < indices.size(); ++i) {
+        std::array<uint8_t, 64> pixels;
+        for (size_t j = 0; j < pixels.size(); j += 4) {
+            pixels[j] = static_cast<uint8_t>(16 + i * 8); pixels[j + 1] = 64; pixels[j + 2] = 192; pixels[j + 3] = 255;
+        }
+        pt::TextureMip mip{4, 4, pixels};
+        indices[i] = textures.Create("delayed-upload-" + std::to_string(i), pt::gpu::Format::R8G8B8A8Unorm, std::span(&mip, 1));
+    }
+    if (!std::getenv("PT_TEXTURE_UPLOAD_WAIT")) {
+        uint64_t value = 1;
+        vkGetSemaphoreCounterValue(ctx.device, gate, &value);
+        check(value == 0, "uploads returned before GPU gate opened");
+    }
+    for (uint32_t i = 0; i < indices.size(); ++i) {
+        index = indices[i];
+        ctx.Submit([&](VkCommandBuffer cmd) {
+            const VkDescriptorSet sets[] = {pt::gpu::vk::Native(textures.BindingSet()), result};
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 2, sets, 0, nullptr);
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &index);
+            vkCmdDispatch(cmd, 1, 1, 1);
+            VkMemoryBarrier2 memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            memory.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; memory.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            memory.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT; memory.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+            VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dep.memoryBarrierCount = 1; dep.pMemoryBarriers = &memory;
+            vkCmdPipelineBarrier2(cmd, &dep);
+        });
+        vmaInvalidateAllocation(ctx.allocator, buffer.allocation, 0, 32);
+        const auto* colour = static_cast<const float*>(buffer.mapped) + 4;
+        check(std::abs(colour[0] - (16 + i * 8) / 255.0f) < 0.001f && std::abs(colour[1] - 64 / 255.0f) < 0.001f &&
+              std::abs(colour[2] - 192 / 255.0f) < 0.001f && colour[3] == 1.0f, "delayed upload sampled exact colour");
+    }
+    release_gate.join();
+    vkDestroySemaphore(ctx.device, gate, nullptr);
+    std::printf("delayed texture uploads: 16 colours checked\n");
     vkDeviceWaitIdle(ctx.device);
     vkDestroyPipeline(ctx.device, pipeline, nullptr); vkDestroyShaderModule(ctx.device, module, nullptr);
     vkDestroyDescriptorPool(ctx.device, pool, nullptr); vkDestroyPipelineLayout(ctx.device, layout, nullptr);

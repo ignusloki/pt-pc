@@ -12,6 +12,7 @@
 
 #include "engine/audio/controller_haptics.h"
 #include "engine/audio/controller_pcm_capture.h"
+#include "engine/platform/dualshock_audio.h"
 
 struct SDL_AudioStream;
 struct SDL_hid_device;
@@ -32,6 +33,14 @@ struct ControllerSpeakerEndpointName {
 
 enum class SonyPadAudio : uint8_t { None, DualShock4, DualSense };
 SonyPadAudio SonyPadAudioModel(uint16_t vendor, uint16_t product);
+bool ControllerSpeakerAudioEnabled(SonyPadAudio model, bool speaker_setting);
+
+struct ControllerSpeakerHidPath {
+    std::string_view path;
+    bool bluetooth = false;
+    bool usb = false;
+};
+std::optional<size_t> MatchDs4SpeakerHidPath(std::string_view selected, std::span<const ControllerSpeakerHidPath> devices);
 
 bool ControllerEndpointChannelsFit(SonyPadAudio model, int channels);
 
@@ -59,7 +68,7 @@ constexpr size_t kDualSenseBtHapticsFrames = 32;
 constexpr int kDualSenseBtHapticsRate = 3000;
 void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t counter, std::span<uint8_t> report);
 
-enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad, DualSenseBluetoothHaptics };
+enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad, DualSenseBluetoothHaptics, DualShock4BluetoothSpeaker };
 
 class ControllerSpeakerOutput {
 public:
@@ -69,6 +78,7 @@ public:
     ControllerSpeakerOutput& operator=(const ControllerSpeakerOutput&) = delete;
 
     bool OpenForGamepad(SDL_Gamepad* gamepad, std::string* reason = nullptr);
+    bool MatchesGamepad(SDL_Gamepad* gamepad) const;
     void Close();
     void ClearPending();
     bool IsOpen() const;
@@ -87,6 +97,9 @@ private:
     SDL_hid_device* hid_ = nullptr;
     struct HidWriter;
     std::unique_ptr<HidWriter> hid_writer_;
+    std::unique_ptr<DualShockAudioEncoder> ds4_encoder_;
+    std::string hid_path_;
+    std::string source_path_;
     std::array<float, 2> bt_sum_{};
     uint32_t bt_summed_ = 0;
     std::array<int8_t, kDualSenseBtHapticsFrames * 2> bt_frames_{};

@@ -64,7 +64,6 @@ gpu::Format FtexTexture::Format() const {
     case 4: return Srgb() ? gpu::Format::Bc3SrgbBlock : gpu::Format::Bc3UnormBlock;
     case 5: return gpu::Format::Bc5UnormBlock;
     case 6: return gpu::Format::R32Sfloat;
-    case 8: return Srgb() ? gpu::Format::Bc7SrgbBlock : gpu::Format::Bc7UnormBlock;
     default: return gpu::Format::Undefined;
     }
 }

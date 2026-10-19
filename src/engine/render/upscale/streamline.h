@@ -33,6 +33,7 @@ enum class Api : uint8_t { Vulkan, D3D12 };
 bool Start(const std::filesystem::path& data_dir, std::string& reason, Api api = Api::Vulkan);
 bool Active();
 bool ActiveD3D12();
+bool ReloadD3D12(std::string& reason);
 PFN_vkGetInstanceProcAddr InstanceProcAddr();
 void DeviceCreated(VkInstance instance, VkPhysicalDevice physical, VkDevice device);
 void Shutdown();
@@ -41,6 +42,15 @@ bool DlssSupported();
 bool RayReconstructionSupported(std::string* reason);
 bool FrameGenSupported(std::string* reason);
 bool FrameGenNeedsVsyncOff();
+constexpr uint32_t ClampFrameGenMultiplier(uint32_t requested, uint32_t max_generated) {
+    const uint32_t maximum = max_generated < 1 ? 2 : max_generated >= 3 ? 4 : max_generated + 1;
+    return requested < 2 ? 2 : requested > maximum ? maximum : requested;
+}
+void SetFrameGenMultiplier(uint32_t multiplier);
+uint32_t FrameGenMultiplier();
+uint32_t FrameGenMaxMultiplier();
+struct FrameGenCounters { uint64_t rendered = 0, presented = 0; };
+FrameGenCounters FrameGenStatistics();
 bool IsFrameGenLoaded(bool& loaded);
 /* Disables sl.dlss_g's feature hooks for this run; the Streamline plug-in module remains process-loaded. */
 bool DisableFrameGenFeature();

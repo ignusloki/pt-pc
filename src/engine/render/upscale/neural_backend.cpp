@@ -1,5 +1,6 @@
 #include "engine/render/upscale/neural_rendering.h"
 
+#include <algorithm>
 #include <memory>
 
 #if defined(PT_WITH_DLSS)
@@ -123,7 +124,7 @@ public:
         return support_;
     }
 
-    bool Create(void* cmd, uint32_t width, uint32_t height, NeuralStyle style, float intensity, float scaling_ratio) override {
+    bool Create(void* cmd, uint32_t width, uint32_t height, NeuralStyle style, float intensity, float scaling_ratio, bool small_model) override {
         Release();
         if (!params_ || !support_.available) {
             return false;
@@ -131,9 +132,9 @@ public:
         NVSDK_NGX_Parameter_SetUI(params_, kWidth, width);
         NVSDK_NGX_Parameter_SetUI(params_, kHeight, height);
         NVSDK_NGX_Parameter_SetF(params_, kScalingRatio, scaling_ratio);
-        NVSDK_NGX_Parameter_SetUI(params_, kRenderPreset, 1);
+        NVSDK_NGX_Parameter_SetUI(params_, kRenderPreset, small_model ? 0x80000000u : 1u);
         NVSDK_NGX_Parameter_SetUI(params_, kStyle, static_cast<unsigned int>(style));
-        NVSDK_NGX_Parameter_SetF(params_, kIntensity, intensity);
+        NVSDK_NGX_Parameter_SetF(params_, kIntensity, std::clamp(intensity, 0.0f, 1.0f));
         NVSDK_NGX_Parameter_SetI(params_, kUseAutoMask, 0);
         NVSDK_NGX_Parameter_SetI(params_, kDepthInverted, 1);
         const NVSDK_NGX_Result result =
@@ -146,8 +147,8 @@ public:
         }
         width_ = width;
         height_ = height;
-        LogInfo("neural rendering: feature 18 created for {}x{}, style {}, intensity {:.2f}, scaling ratio {:.3f}", width, height,
-                static_cast<int>(style), intensity, scaling_ratio);
+        LogInfo("neural rendering: feature 18 created for {}x{}, style {}, intensity {:.2f}, scaling ratio {:.3f}, {} network", width, height,
+                static_cast<int>(style), intensity, scaling_ratio, small_model ? "small" : "large");
         return true;
     }
 
@@ -178,7 +179,7 @@ public:
         NVSDK_NGX_Parameter_SetF(params_, kScalingRatio, d.scaling_ratio);
         NVSDK_NGX_Parameter_SetI(params_, kReset, d.reset ? 1 : 0);
         NVSDK_NGX_Parameter_SetUI(params_, kStyle, static_cast<unsigned int>(d.style));
-        NVSDK_NGX_Parameter_SetF(params_, kIntensity, d.intensity);
+        NVSDK_NGX_Parameter_SetF(params_, kIntensity, std::clamp(d.intensity, 0.0f, 1.0f));
         const NVSDK_NGX_Result result =
             NVSDK_NGX_VULKAN_EvaluateFeature(reinterpret_cast<VkCommandBuffer>(d.cmd), feature_, params_, nullptr);
         if (NVSDK_NGX_FAILED(result)) {

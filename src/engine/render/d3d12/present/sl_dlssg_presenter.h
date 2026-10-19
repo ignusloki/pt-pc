@@ -38,6 +38,7 @@ private:
     };
     struct Options {
         bool on = false;
+        uint32_t multiplier = 2;
         uint32_t color_w = 0, color_h = 0, input_w = 0, input_h = 0;
         DXGI_FORMAT color = DXGI_FORMAT_UNKNOWN, hudless = DXGI_FORMAT_UNKNOWN, ui = DXGI_FORMAT_UNKNOWN, motion = DXGI_FORMAT_UNKNOWN,
                     depth = DXGI_FORMAT_UNKNOWN;
@@ -46,6 +47,7 @@ private:
     };
 
     bool GetBuffers(std::string& error);
+    bool SetColorSpace(std::string& error);
     bool SetMode(const Options& wanted);
     bool ModeOff();
 

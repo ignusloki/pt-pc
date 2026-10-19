@@ -30,7 +30,7 @@ LOCAL="$OUT/build"
 rm -rf "$LOCAL"
 cp -r "$BUILD" "$LOCAL" 2>/dev/null || { note "cannot copy $BUILD"; exit 1; }
 rm -rf "$LOCAL/_deps" "$LOCAL/CMakeFiles"
-chmod +x "$LOCAL"/pt* "$LOCAL"/texture-tools/realesrgan-ncnn-vulkan 2>/dev/null
+chmod +x "$LOCAL"/pt* 2>/dev/null
 
 note "== environment"
 { uname -a; cat /etc/os-release 2>/dev/null | head -3; ldd --version 2>&1 | head -1; } >> "$SUMMARY"

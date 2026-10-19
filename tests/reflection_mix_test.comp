@@ -1,10 +1,18 @@
 #version 460
+#include "common.glsl"
+#include "reflection_blend.glsl"
 #include "reflection_mix.glsl"
 #include "flashlight_reactivity.glsl"
 #include "mirror_temporal.glsl"
 layout(local_size_x = 1) in;
 layout(std430, set = 0, binding = 0) buffer Results { vec4 values[]; } results;
 void main() {
+    results.values[29] = vec4(SrgbDecode(ReflectionBlendBase(vec3(2.5, 1.5, .5), true) * (1.0 - 1.0e-6)), 0);
+    results.values[30] = vec4(SrgbDecode(ReflectionBlendBase(vec3(2.5, 1.5, .5), false)), 0);
+    results.values[31] = vec4(SrgbDecode(ReflectionBlendBase(vec3(.2, .5, .8), true)), 0);
+    results.values[32] = vec4(SrgbDecode(ReflectionBlendBase(vec3(.2, .5, .8), false)), 0);
+    results.values[33] = vec4(SrgbDecode(ReflectionBlendBase(vec3(2.5), true) * 0.0 + SrgbEncode(vec3(.25))), 0);
+
     results.values[20] = vec4(FlashlightSurfaceNdc(vec2(.75,.25), vec2(.01,-.02)), 0, 0);
     results.values[21] = vec4(FlashlightReactive(vec3(.5,0,0), vec3(1,0,0), .8, vec3(-1,0,0), 5), 0, 0, 0);
     results.values[22] = vec4(FlashlightReactive(vec3(1,0,0), vec3(0), .8, vec3(1,0,0), 5), 0, 0, 0);

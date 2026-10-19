@@ -70,6 +70,7 @@ struct SoundNode {
     std::string play;
     std::string stop;
     bool stop_playing = false;
+    bool on_emit = false;
     float fade = 0.0f;
     uint32_t curve = 4;
 };

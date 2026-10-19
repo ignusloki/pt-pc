@@ -157,6 +157,13 @@ bool NazoManager::PeepholeTransform(glm::mat4& out) const {
             return true;
         }
     }
+    for (const AssetRef& ref : it->second) {
+        Stage* stage = game_.Stages().FindById(ref.stage_id);
+        if (const StageData* file = stage ? stage->FileOf(ref.entity) : nullptr) {
+            out = stage->ToWorld(file->file->WorldTransform(*ref.entity));
+            return true;
+        }
+    }
     return false;
 }
 

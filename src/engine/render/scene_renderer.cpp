@@ -11,6 +11,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <string_view>
 
 #include "engine/assets/ftex.h"
 #include "engine/core/log.h"
@@ -178,8 +179,8 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
         }
     }
     for (FrameSlot& slot : slots_) {
-        if (!gpu_->CreateBuffer({sizeof(gpu::FrameData), gpu::BufferUsage::StorageBuffer, true}, slot.frame_data) ||
-            !gpu_->CreateBuffer({sizeof(glm::mat4) * gpu::kMaxSkinMatrices, gpu::BufferUsage::StorageBuffer, true}, slot.skin) ||
+        if (!gpu_->CreateBuffer({sizeof(gpu::FrameData), gpu::BufferUsage::StorageBuffer, true, false, "frame data", true}, slot.frame_data) ||
+            !gpu_->CreateBuffer({sizeof(glm::mat4) * gpu::kMaxSkinMatrices, gpu::BufferUsage::StorageBuffer, true, false, "skin matrices", true}, slot.skin) ||
             !gpu_->CreateBuffer({sizeof(glm::vec2) * gpu::kLuminanceEntries, gpu::BufferUsage::StorageBuffer, true}, slot.luminance)) {
             return false;
         }
@@ -563,6 +564,7 @@ void SceneRenderer::Shutdown() {
         return;
     }
     gpu_->WaitIdle();
+    for (FrameSlot& slot : slots_) ReadUpscaleTimestamps(slot);
     sss_.Shutdown();
     if (last_timed_slot_ < Renderer::kFramesInFlight && slots_[last_timed_slot_].timed) {
         ReadTimestamps(slots_[last_timed_slot_]);
@@ -662,6 +664,7 @@ void SceneRenderer::Shutdown() {
         gpu_->DestroyBuffer(slot.dispatch);
         gpu_->DestroyQueryPool(slot.queries);
         gpu_->DestroyQueryPool(slot.upscale_queries);
+        if (slot.neural_queries) gpu_->DestroyQueryPool(slot.neural_queries);
         if (slot.light_queries) gpu_->DestroyQueryPool(slot.light_queries);
     }
     gpu_->DestroyPipelineLayout(layout_);
@@ -752,7 +755,7 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
                            gpu::Aspect::Depth) &&
               CreateTarget(diffuse_, kLightFormat, extent, dumped, c) && CreateTarget(specular_, kLightFormat, extent, dumped, c) &&
               CreateTarget(probe_acc_, kLightFormat, extent, dumped, c) &&
-              CreateTarget(hdr_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc, c) &&
+              CreateTarget(hdr_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc | gpu::ImageUsage::Storage, c) &&
               CreateTarget(hdr_copy_, kHdrFormat, extent, color | gpu::ImageUsage::TransferDst, c) &&
               CreateTarget(nr_in_, kHdrFormat, extent, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(nr_out_, kHdrFormat, extent, color | gpu::ImageUsage::Storage | gpu::ImageUsage::TransferDst, c) &&
@@ -1307,7 +1310,7 @@ bool SceneRenderer::RayTracingSupported(std::string& reason) const {
     return true;
 }
 
-float SceneRenderer::ExposureFor(float ev, const ExposureSettings& s) const {
+float SceneRenderer::ExposureCompensationFor(float ev, const ExposureSettings& s) const {
     struct Point {
         float ev;
         float comp;
@@ -1324,7 +1327,11 @@ float SceneRenderer::ExposureFor(float ev, const ExposureSettings& s) const {
         const float t = (ev - points[0].ev) / std::max(points[1].ev - points[0].ev, 1.0e-6f);
         comp = points[0].comp + t * (points[1].comp - points[0].comp);
     }
-    return std::exp2(ev + s.compensation + comp);
+    return comp;
+}
+
+float SceneRenderer::ExposureFor(float ev, const ExposureSettings& s) const {
+    return std::exp2(ev + s.compensation + ExposureCompensationFor(ev, s));
 }
 
 void SceneRenderer::ReadTimestamps(FrameSlot& slot) {
@@ -1385,6 +1392,28 @@ float SceneRenderer::MeterLuminance(const glm::vec2* texels, uint32_t count) {
 }
 
 void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings) {
+    const bool advance_exposure = std::isfinite(dt) && dt > 0.0f;
+    constexpr double kExposureFrame = 1.0 / 30.0;
+    if (advance_exposure) {
+        exposure_time_ += dt;
+    }
+    const double elapsed = exposure_time_ - exposure_updated_at_;
+    const bool exposure_tick = advance_exposure && elapsed + 1.0e-7 >= kExposureFrame;
+    if (exposure_tick) {
+        exposure_feedback_time_ = exposure_tick_times_[exposure_tick_index_];
+        exposure_tick_times_[exposure_tick_index_] = exposure_time_;
+        exposure_tick_index_ = (exposure_tick_index_ + 1) % exposure_tick_times_.size();
+        exposure_updated_at_ += std::floor((elapsed + 1.0e-7) / kExposureFrame) * kExposureFrame;
+        exposure_camera_dt_ = exposure_camera_dt_ * (59.0 / 60.0) +
+                              static_cast<double>(exposure_previous_dt_ * (1.0f / 60.0f));
+        if (!exposure_clock_started_) {
+            const uint64_t wrapped_delta = uint64_t{0} - uint64_t{1};
+            exposure_previous_dt_ = static_cast<float>(static_cast<double>(wrapped_delta) * 1.0e-6);
+            exposure_clock_started_ = true;
+        } else {
+            exposure_previous_dt_ = std::max(dt, static_cast<float>(kExposureFrame));
+        }
+    }
     if (slot.timed) {
         ReadTimestamps(slot);
     }
@@ -1438,15 +1467,26 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
         return;
     }
     stats_.luminance = measured;
-    if (!adaptation_valid_ || !toggles.adaptation || !lighting_ || !lighting_->valid) {
+    if (!advance_exposure) {
         return;
     }
+    if (!adaptation_valid_ || !toggles.adaptation || !lighting_ || !lighting_->valid) {
+        exposure_samples_.clear();
+        return;
+    }
+    exposure_samples_.push_back({slot.exposure_sample_time, measured});
+    while (exposure_samples_.size() > 1 && exposure_samples_[1].time <= exposure_feedback_time_ + 1.0e-7) {
+        exposure_samples_.pop_front();
+    }
+    if (!exposure_tick) {
+        return;
+    }
+    const float feedback = exposure_samples_.front().luminance;
     ev_ = std::clamp(ev_, settings.min_ev, settings.max_ev);
-    const float raw = measured / std::max(slot.exposure_used, 1.0e-12f);
-    const float adapted = raw * std::exp2(ev_);
+    const float adapted = feedback * std::exp2(-(settings.compensation + ExposureCompensationFor(ev_, settings)));
     const float target = std::clamp(ev_ + 0.5f * (std::log2(settings.key + 0.001f) - std::log2(adapted + 0.001f)), settings.min_ev, settings.max_ev);
     const float diff = target - ev_;
-    float step = diff * (1.0f - std::pow(0.98f, 60.0f * dt)) * settings.speed * std::min(1.0f, std::abs(diff));
+    float step = diff * (1.0f - std::pow(0.98f, 60.0f * static_cast<float>(exposure_camera_dt_))) * settings.speed * std::min(1.0f, std::abs(diff));
     if (std::abs(step) > std::abs(diff)) {
         step = diff;
     }
@@ -1454,7 +1494,7 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
         ev_ += step;
     }
     if (static const bool ev_trace = std::getenv("PT_EV_TRACE") != nullptr; ev_trace) {
-        LogInfo("ev trace: measured {:.5f} raw {:.5f} target {:.3f} ev {:.3f} dt {:.4f}", measured, raw, target, ev_, dt);
+        LogInfo("ev trace: measured {:.5f} adapted {:.5f} target {:.3f} ev {:.3f} dt {:.4f} camera_dt {:.6f} time {:.6f} sample_time {:.6f}", feedback, adapted, target, ev_, dt, exposure_camera_dt_, exposure_time_, exposure_samples_.front().time);
     }
 }
 
@@ -1488,6 +1528,24 @@ void SceneRenderer::RecordDumpCopy(gpu::CommandList& cmd, RenderTarget& target, 
 bool SceneRenderer::DumpTargets(const std::string& prefix) {
     dump_requested_ = false;
     gpu_->WaitIdle();
+    const char* selected_names = std::getenv("PT_TARGET_DUMP_NAMES");
+    auto selected = [&](std::string_view name) {
+        if (!selected_names || !*selected_names) {
+            return true;
+        }
+        std::string_view remaining(selected_names);
+        while (!remaining.empty()) {
+            const size_t comma = remaining.find(',');
+            if (remaining.substr(0, comma) == name) {
+                return true;
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            remaining.remove_prefix(comma + 1);
+        }
+        return false;
+    };
     std::ofstream index(prefix + ".targets.txt");
     auto write = [&](const char* name, const void* data, gpu::Extent3D e, gpu::Format format) {
         const size_t bytes = size_t(e.width) * e.height * DumpTexelBytes(format);
@@ -1496,12 +1554,16 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
         index << name << " " << e.width << " " << e.height << " " << static_cast<int>(format) << "\n";
     };
     RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &diffuse_, &specular_, &reactive_, &motion_, &ao_[1], &particles_,
-                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &refmap_, &reflect_layer_, &hdr_, &flare_};
+                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &refmap_, &reflect_layer_, &hdr_, &flare_,
+                               &fsr_rr_input_[0], &fsr_rr_input_[1], &fsr_rr_input_[2], &fsr_rr_input_[3],
+                               &fsr_rr_depth_, &fsr_rr_motion_, &fsr_rr_normal_, &rr_normal_roughness_, &rr_hit_distance_};
     const char* names[] = {"albedo", "normal", "material", "depth", "diffuse", "specular", "reactive", "motion", "occlusion", "particles",
-                           "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr", "flare"};
+                           "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr", "flare",
+                           "fsr_rr_direct_diffuse", "fsr_rr_direct_specular", "fsr_rr_indirect_diffuse", "fsr_rr_indirect_specular",
+                           "fsr_rr_depth", "fsr_rr_motion", "fsr_rr_normal", "rr_normal_roughness", "rr_hit_distance"};
     for (size_t i = 0; i < std::size(targets); ++i) {
         RenderTarget& target = *targets[i];
-        if (!target.Valid()) {
+        if (!target.Valid() || !selected(names[i])) {
             continue;
         }
         gpu::BufferResource buffer;
@@ -1520,7 +1582,7 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
         "rt_gi_history1", "rt_gi", "rt_gi_pong", "rt_glossy_raw", "rt_glossy_history0", "rt_glossy_history1", "rt_glossy_ping", "rt_glossy"};
     for (uint32_t i = 0; i < RayTracing::kFullImages; ++i) {
         RenderTarget& target = rt_full_images_[i];
-        if (!target.Valid()) {
+        if (!target.Valid() || !selected(kFullNames[i])) {
             continue;
         }
         gpu::BufferResource buffer;
@@ -1538,12 +1600,12 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
                                                                         "pt_reference"};
     static const char* const kPathNames16[RayTracing::kPathImages16] = {"pt_spec_unshadowed", "pt_diffuse_moments0", "pt_diffuse_moments1",
                                                                         "pt_specular_moments0", "pt_specular_moments1", "pt_variance_ping",
-                                                                        "pt_variance_pong", "pt_spare", "pt_layer_raw", "pt_layer_history0",
+                                                                        "pt_variance_pong", "pt_layer_geometry", "pt_layer_raw", "pt_layer_history0",
                                                                         "pt_layer_history1"};
     for (uint32_t i = 0; i < RayTracing::kPathImages32 + RayTracing::kPathImages16; ++i) {
         const bool wide = i < RayTracing::kPathImages32;
         RenderTarget& target = wide ? pt_images32_[i] : pt_images16_[i - RayTracing::kPathImages32];
-        if (!target.Valid()) {
+        if (!target.Valid() || !selected(wide ? kPathNames32[i] : kPathNames16[i - RayTracing::kPathImages32])) {
             continue;
         }
         gpu::BufferResource buffer;
@@ -1576,6 +1638,22 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
                                       values[i].z, values[i].w, g.shadow_cone.z, g.shadow_cone.w, g.info.x >= 0 ? (g.info.x >> 16) & 0xFF : 0,
                                       light_sources_[i]->cast_shadow ? 1 : 0, g.position.x, g.position.y, g.position.z,
                                       g.position.w > 0.5f ? "spot" : "point", g.direction.x, g.direction.y, g.direction.z, g.range.y, g.cone.x);
+                lights << std::format("gpu {} info {} {} {} {}", i, g.info.x, g.info.y, g.info.z, g.info.w);
+                const auto dump_vector = [&](const char* name, const glm::vec4& v) {
+                    lights << std::format(" {} {:.9g} {:.9g} {:.9g} {:.9g}", name, v.x, v.y, v.z, v.w);
+                };
+                dump_vector("position", g.position);
+                dump_vector("color", g.color);
+                dump_vector("range", g.range);
+                dump_vector("scales", g.scales);
+                dump_vector("direction", g.direction);
+                dump_vector("cone", g.cone);
+                dump_vector("shadow_cone", g.shadow_cone);
+                for (int column = 0; column < 4; ++column) {
+                    dump_vector("area_column", g.area[column]);
+                    dump_vector("mask_column", g.mask[column]);
+                }
+                lights << '\n';
             }
             gpu_->DestroyBuffer(buffer);
         }
@@ -1583,13 +1661,13 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
     if (dump_recorded_ && hdr_.Valid()) {
         const std::pair<const char*, gpu::BufferResource*> copies[] = {{"compose", &dump_compose_}, {"forward", &dump_forward_}, {"scene", &dump_scene_}};
         for (const auto& [name, buffer] : copies) {
-            if (buffer->mapped) {
+            if (buffer->mapped && selected(name)) {
                 gpu_->InvalidateMapped(*buffer, 0, ~0ull);
                 write(name, buffer->mapped, hdr_.image.extent, hdr_.image.format);
             }
         }
     }
-    if (dump_mirror_.mapped && mirror_.Valid()) {
+    if (dump_mirror_.mapped && mirror_.Valid() && selected("mirror")) {
         gpu_->InvalidateMapped(dump_mirror_, 0, ~0ull);
         write("mirror", dump_mirror_.mapped, mirror_.image.extent, mirror_.image.format);
         const gpu::Extent3D e = mirror_.image.extent;

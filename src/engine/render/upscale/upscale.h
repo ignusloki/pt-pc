@@ -34,6 +34,7 @@ struct UpscaleSettings {
     float sharpness = 0.0f;
     DlssModel dlss_model = DlssModel::Auto;
     FrameGenKind frame_generation = FrameGenKind::Off;
+    int dlssg_multiplier = 2;
     bool ray_reconstruction = true;
     bool operator==(const UpscaleSettings&) const = default;
 };
@@ -77,6 +78,15 @@ struct UpscaleImage {
 };
 
 struct UpscaleDispatch {
+    bool neural_enabled = false;
+    NeuralStyle neural_style = NeuralStyle::Default;
+    float neural_intensity = 1.0f;
+    bool neural_small_model = false;
+    float neural_scale = 1.0f;
+    unsigned neural_every = 1;
+    bool neural_pre = false;
+    gpu::QueryPoolHandle neural_queries;
+    uint64_t neural_output_epoch = 0;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     gpu::CommandList* list = nullptr;
     UpscaleImage color;
@@ -106,6 +116,20 @@ struct UpscaleDispatch {
     glm::mat4 view_to_clip{1.0f};
 };
 
+struct RayDenoiseDispatch {
+    gpu::CommandList* list = nullptr;
+    UpscaleImage input[4];
+    UpscaleImage output[4];
+    UpscaleImage depth, motion, normal_roughness, diffuse_albedo, specular_albedo;
+    VkExtent2D render{};
+    glm::vec2 jitter{0.0f};
+    glm::vec3 eye{0.0f};
+    glm::mat4 world_to_view{1.0f}, view_to_clip{1.0f};
+    float near_plane = 0.05f;
+    uint32_t frame_index = 0;
+    bool reset = false;
+};
+
 struct DeviceFeatureSet {
     std::vector<std::string> extensions;
     VkPhysicalDeviceFeatures core{};
@@ -128,6 +152,13 @@ struct UpscaleCreate {
 
 using D3D12UpscaleFactory = std::unique_ptr<class UpscaleBackend> (*)(UpscalerKind kind, gpu::Device& device);
 
+class PostUpscaleNeural {
+public:
+    virtual ~PostUpscaleNeural() = default;
+    virtual bool Record(const UpscaleDispatch& dispatch) = 0;
+    virtual const NeuralRenderingSupport& Status() const = 0;
+};
+
 class UpscaleBackend {
 public:
     virtual ~UpscaleBackend() = default;
@@ -137,6 +168,9 @@ public:
     virtual bool Create(VkCommandBuffer cmd, const UpscaleCreate& create) = 0;
     virtual bool Dispatch(const UpscaleDispatch& dispatch) = 0;
     virtual void Release() = 0;
+    virtual bool Denoise(const RayDenoiseDispatch&) { return false; }
+    virtual void DisableRayReconstruction(const std::string&) {}
+    virtual bool InitializeNeuralCore(std::string& reason) { reason = "native NGX is unavailable"; return false; }
     virtual float MipBias(float render_over_display) const;
     virtual bool UsesReactive() const { return true; }
     virtual bool RayReconstructionAvailable(std::string& reason) {
@@ -160,6 +194,8 @@ public:
 class UpscaleHost : public vk::ContextHooks {
 public:
     static UpscaleHost& Get();
+    bool RecordNativeNeural(const UpscaleDispatch& dispatch);
+    const NeuralRenderingSupport* NativeNeuralStatus() const;
     void SetStartupUpscaler(UpscalerKind kind) { startup_ = kind; }
     void InstanceExtensions(VkInstanceCreateInfo& info, std::vector<const char*>& extensions) override;
     void DeviceSetup(VkInstance instance, VkPhysicalDevice physical, std::vector<const char*>& extensions,
@@ -185,6 +221,7 @@ public:
     void CheckDlssFrameGenD3D12(uint32_t vendor_id, uint32_t device_id, const uint8_t (&luid)[8]);
     void FrameTick();
     void Shutdown();
+    void ReleaseD3D12Ngx();
     void SetD3D12Factory(D3D12UpscaleFactory factory) { d3d12_factory_ = factory; }
     void SetD3D12Device(gpu::Device* device) { d3d12_device_ = device; }
     bool D3D12() const { return d3d12_device_ != nullptr; }
@@ -207,6 +244,8 @@ private:
     gpu::Device* d3d12_device_ = nullptr;
     D3D12UpscaleFactory d3d12_factory_ = nullptr;
     std::unique_ptr<UpscaleBackend> backends_[static_cast<int>(UpscalerKind::Count)];
+    std::unique_ptr<PostUpscaleNeural> native_neural_;
+    NeuralRenderingSupport native_neural_failure_;
     bool probed_[static_cast<int>(UpscalerKind::Count)] = {};
     bool available_[static_cast<int>(UpscalerKind::Count)] = {};
     std::string reasons_[static_cast<int>(UpscalerKind::Count)];

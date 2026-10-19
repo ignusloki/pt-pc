@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,8 +62,10 @@ class PcSettingsSource {
 public:
     virtual ~PcSettingsSource() = default;
     virtual std::vector<PcSettingSection> Sections() = 0;
+    virtual std::optional<PcSettingRow> FooterAction() { return std::nullopt; }
     virtual std::vector<std::string> DescriptionSamples() {
         std::vector<std::string> notes;
+        if (const auto footer = FooterAction(); footer && !footer->note.empty()) notes.push_back(footer->note);
         for (const auto& section : Sections()) for (const auto& row : section.rows) if (!row.note.empty()) notes.push_back(row.note);
         return notes;
     }
@@ -92,6 +95,7 @@ public:
     virtual std::vector<std::string> PreviewFiles(int) const { return {}; }
     virtual std::string_view Credit() const { return {}; }
     virtual std::string_view Question() const { return {}; }
+    virtual bool QuestionBackShown() const { return true; }
     virtual bool FindSettingRow(std::string_view, PcSettingRow&) { return false; }
     virtual int TabCount() const { return 0; }
     virtual int Tab() const { return 0; }

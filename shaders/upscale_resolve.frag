@@ -1,5 +1,6 @@
 #version 460
 #include "common.glsl"
+#include "reflection_blend.glsl"
 
 #define IMG_UPSCALED 43
 #define IMG_MOTION 45
@@ -50,7 +51,7 @@ void main() {
     if (pass.ids.z != 0u) {
         vec4 reflection = Reflection(uv);
         if (reflection.a > 0.0) {
-            color = SrgbDecode(SrgbEncode(min(color, vec3(1.0))) * (1.0 - reflection.a) + reflection.rgb);
+            color = SrgbDecode(ReflectionBlendBase(color, pass.f1.w > 0.5) * (1.0 - reflection.a) + reflection.rgb);
         }
     }
     ivec2 size = ivec2(pass.f1.xy);

@@ -45,6 +45,8 @@ void main() {
         rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsNoneEXT, RtFullCasters(l), l.position.xyz, t_min, dir, t_min + 0.5);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                !RtFittingPasses(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), l,
+                                 l.position.xyz + dir * rayQueryGetIntersectionTEXT(rq, false)) &&
                 RtCasterOpaque(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false), rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
                                rayQueryGetIntersectionBarycentricsEXT(rq, false))) {
                 rayQueryConfirmIntersectionEXT(rq);

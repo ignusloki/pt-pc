@@ -16,6 +16,8 @@
 #include "engine/vfx/vfx_file.h"
 #include "game/game.h"
 
+namespace pt::vfx { class System; }
+
 namespace pt::game {
 
 class OneShotObjectPool {
@@ -77,6 +79,7 @@ public:
     void Shutdown();
     audio::SoundSystem& System() { return system_; }
     bool Ready() const { return ready_; }
+    void UpdateVfxEmissions(const vfx::System& effects);
 
     uint32_t PostEvent(std::string_view name, const glm::vec3* position) override;
     uint32_t PostEventId(uint32_t id, const glm::vec3* position) override;
@@ -132,7 +135,7 @@ private:
         audio::GameObjectId object = 0;
         audio::PlayingId playing = 0;
         bool visible = false;
-        float delay = 0.0f;
+        bool on_emit = false;
     };
     struct Area {
         uint32_t stage_id = 0;
@@ -175,7 +178,7 @@ private:
     void UpdateAnimObjects();
     void UpdateGimmickDialogue();
     void UpdateEmitters();
-    void UpdateVfxSounds(float dt);
+    void UpdateVfxSounds(const vfx::System* effects = nullptr);
     audio::PlayingId PostVfxEvent(const std::string& event, audio::GameObjectId object);
     void ReleaseVfxSound(VfxSound& v);
     void UpdateAreas(float dt);

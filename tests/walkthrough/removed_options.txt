@@ -1,0 +1,29 @@
+# Legacy keys must not restore removed menus, generation, or background pause.
+pattach 0 ps4
+sstep 15
+swait 30
+sexpect menu 0
+sexpect paused 0
+sfocus 0 120
+swait 5
+sexpect menu 0
+sexpect paused 0
+swait 150
+sexpect menu 0
+sexpect paused 0
+stap 0 options
+swait 70
+stap 0 cross
+swait 40
+sui pcfocus pc_display_mode
+swait 6
+sexpect pcabsent pc_focus_pause
+sexpect pcabsent pc_focus_mute
+sui pcfocus pc_texture_detail
+swait 6
+sexpect pcrow pc_texture_detail
+sexpect pcabsent pc_enhanced_textures
+sui pcfocus pc_anisotropy
+swait 6
+sexpect pcrow pc_anisotropy
+squit

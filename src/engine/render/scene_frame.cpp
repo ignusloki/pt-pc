@@ -15,6 +15,7 @@
 #include "engine/core/log.h"
 #include "engine/fs/vfs.h"
 #include "engine/render/pipeline_cache_store.h"
+#include "engine/render/point_shadow_projection.h"
 #include "engine/render/scene_renderer.h"
 
 namespace pt {
@@ -322,6 +323,8 @@ bool SceneRenderer::Visible(const Draw& draw, const ViewSetup& view) const {
 
 void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting) {
     camera_ = camera;
+    static const char* mesh_occlusion_env = std::getenv("PT_MESH_OCCLUSION");
+    mesh_occlusion_ = mesh_occlusion_env ? std::string_view(mesh_occlusion_env) == "1" : lighting.valid && lighting.screen.mesh_occlusion;
     view_count_ = 0;
     light_count_ = 0;
     probe_count_ = 0;
@@ -485,9 +488,19 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
                 continue;
             }
             Draw d;
+            d.light_fitting = item.light_fitting;
             d.mesh = item.mesh;
             d.sub = &sub;
             d.transform = item.transform;
+            if (i < 2 && mesh.name == "/Assets/sh/environ/object/shsb/house/shsb_hous001/scenes/shsb_hous001_vrtn001.fmdl") {
+                if (!resumed_threshold_artifact) d.transform[3].y -= 1.0e-4f;
+                static int logged_threshold = -1;
+                const int state = resumed_threshold_artifact ? 1 : 0;
+                if (logged_threshold != state) {
+                    LogInfo("geometry: f100 threshold {}", state ? "native overlap restored after loading the f100 save" : "clean first-play floor separation (0.1 mm)");
+                    logged_threshold = state;
+                }
+            }
             d.tint = item.tint;
             d.material = item.material_override >= 0 ? static_cast<uint32_t>(item.material_override) : sub.material;
             d.skin_base = skin_base;
@@ -504,8 +517,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
     if (dump_requested_) {
         for (const Draw& d : draws_) {
             if (glm::distance(d.center, camera.position) < d.radius + 0.3f) {
-                LogInfo("near draw: {} submesh {} pass {} kind {} hidden {:#x} centre ({:.2f} {:.2f} {:.2f}) radius {:.2f} distance {:.2f}",
-                        d.mesh->name, static_cast<int>(d.sub - d.mesh->submeshes.data()), static_cast<int>(d.sub->pass), static_cast<int>(d.sub->kind),
+                LogInfo("near draw: {} submesh {} material {} pass {} kind {} hidden {:#x} centre ({:.2f} {:.2f} {:.2f}) radius {:.2f} distance {:.2f}",
+                        d.mesh->name, static_cast<int>(d.sub - d.mesh->submeshes.data()), d.material, static_cast<int>(d.sub->pass), static_cast<int>(d.sub->kind),
                         d.hidden_views, d.center.x, d.center.y, d.center.z, d.radius, glm::distance(d.center, camera.position));
             }
         }
@@ -701,14 +714,30 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             const char* s = std::getenv("PT_DRAW_OCCLUSION");
             return !s || std::string_view(s) != "0";
         }();
-        if (draw_occlusion && toggles.draw_occlusion && !main_occluders_.volumes.empty()) {
+        const bool cull_draws = draw_occlusion && toggles.draw_occlusion;
+        if ((cull_draws || mesh_occlusion_) && !main_occluders_.volumes.empty()) {
             uint32_t hidden = 0;
             for (Draw& d : draws_) {
-                if ((d.hidden_views & 1u) != 0 || d.sub->kind == gpu::kKindSky) {
+                if ((d.hidden_views & 1u) != 0) {
                     continue;
                 }
                 const glm::vec3 half(d.radius);
-                if (lightcull::FindOccludingVolume(d.center - half, d.center + half, main_occluders_) >= 0) {
+                bool occluded = cull_draws && d.sub->kind != gpu::kKindSky &&
+                                lightcull::FindOccludingVolume(d.center - half, d.center + half, main_occluders_) >= 0;
+                // Cache upstream's tighter mesh check alongside the existing draw check, once per frame.
+                if (!occluded && mesh_occlusion_ && d.mesh) {
+                    glm::vec3 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+                    for (int c = 0; c < 8; ++c) {
+                        const glm::vec3 corner((c & 1) ? d.mesh->bounds_max.x : d.mesh->bounds_min.x,
+                                               (c & 2) ? d.mesh->bounds_max.y : d.mesh->bounds_min.y,
+                                               (c & 4) ? d.mesh->bounds_max.z : d.mesh->bounds_min.z);
+                        const glm::vec3 w = glm::vec3(d.transform * glm::vec4(corner, 1.0f));
+                        lo = glm::min(lo, w);
+                        hi = glm::max(hi, w);
+                    }
+                    occluded = lightcull::FindOccludingVolume(lo, hi, main_occluders_) >= 0;
+                }
+                if (occluded) {
                     d.occluded_views |= 1u;
                     ++hidden;
                 }
@@ -824,11 +853,31 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
                             ShadowLegacy() ? 0.0f : l.view_bias);
         g.cone = spot ? glm::vec4(l.cos_outer, l.inv_cone_range, l.cone_exponent, l.dimmer) : glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
         g.shadow_cone = glm::vec4(l.shadow_cos_outer, l.shadow_inv_cone_range, 0.0f, 0.0f);
-        g.scales = glm::vec4(l.specular_scale * lod.x, l.diffuse_scale * lod.y, l.shadow_strength * lod.z, l.cast_shadow ? 1.0f : 0.0f);
+        const SceneLight* stair_area = nullptr;
+        if (rt_path_ && l.path_stair_ceiling && !l.masked) {
+            for (const SceneLight& area : lighting.lights) {
+                if (area.stair_area && area.has_area &&
+                    (!stair_area || glm::distance(area.position, l.position) < glm::distance(stair_area->position, l.position))) {
+                    stair_area = &area;
+                }
+            }
+        }
+        const bool stair_ceiling = stair_area != nullptr;
+        static bool stair_ceiling_logged = false;
+        if (stair_ceiling && !stair_ceiling_logged) {
+            LogInfo("path lighting: chandelier stair-ceiling shadow exclusion active");
+            stair_ceiling_logged = true;
+        }
+        const uint32_t flags = (l.cast_shadow ? gpu::kLightCastsShadow : 0u) | (l.id == kHandyLightId ? gpu::kLightNoFitting : 0u) |
+                               (stair_ceiling ? gpu::kLightStairCeiling : 0u);
+        g.scales = glm::vec4(l.specular_scale * lod.x, l.diffuse_scale * lod.y, l.shadow_strength * lod.z, static_cast<float>(flags));
         const bool own_mask = l.masked && l.mask_texture >= 0;
         g.info = glm::ivec4(-1, l.masked && !own_mask ? static_cast<int>(gpu::kResMask) : -1,
                             l.has_area ? static_cast<int>(l.area_clip_mode) : 0, own_mask ? l.mask_texture + 1 : 0);
         g.area = l.has_area ? l.area_to_box : glm::mat4(0.0f);
+        if (stair_ceiling) {
+            g.mask = stair_area->area_to_box;
+        }
         if (l.masked) {
             const glm::vec3 dir = glm::normalize(l.direction);
             const glm::vec3 up = std::abs(glm::dot(dir, glm::normalize(l.up))) < 0.95f ? glm::normalize(l.up) : AnyPerpendicular(dir);
@@ -1116,18 +1165,16 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
             g.shadow = glm::translate(glm::mat4(1.0f), glm::vec3(half_texel, half_texel, 0.0f)) * v.view_projection;
             g.shadow_rect = glm::vec4(tx * tile_uv, ty * tile_uv, tile_uv, tile_uv);
         } else {
-            const float n = static_cast<float>(shadow_tile);
             const float r = src->outer_range;
-            const float k = r * n / (n - 2.0f);
-            const glm::mat4 rotation = glm::lookAt(pos, pos + glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-            const glm::mat4 light_space = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f)) * rotation;
+            const float k = PointShadowRange(r);
+            const glm::mat4 light_space = PointShadowView(pos);
             for (int side = 0; side < 2; ++side) {
                 gpu::View& v = frame_->views[view_count_];
                 v = gpu::View{};
                 v.view = light_space;
                 v.projection_param = glm::vec4(1.0f, 1.0f, 0.05f, 2.0f);
                 v.eye = glm::vec4(pos, side == 0 ? -1.0f : 1.0f);
-                v.shadow = glm::vec4(1.0f / k, 0.0f, 0.0f, 0.0f);
+                v.shadow = glm::vec4(1.0f / k, r - k, 0.0f, 0.0f);
                 ShadowView sv;
                 sv.view = view_count_++;
                 sv.light = c.light;
@@ -1138,7 +1185,7 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
                 sv.frustum = false;
                 sv.bias_constant = ShadowLegacy() ? -1.5f : 0.0f;
                 sv.bias_slope = ShadowLegacy() ? -2.0f : 0.0f;
-                sv.cull = side == 0 ? gpu::CullMode::Front : gpu::CullMode::Back;
+                sv.cull = PointShadowCullFront(side != 0) ? gpu::CullMode::Front : gpu::CullMode::Back;
                 shadow_views_.push_back(sv);
             }
             g.shadow = light_space;
@@ -1278,11 +1325,16 @@ void SceneRenderer::RecordRayTracing(gpu::CommandList& cmd) {
             mask |= 4u;
         }
         const bool see_through = d.sub->kind == gpu::kKindConstant || d.sub->kind == gpu::kKindGlass || d.sub->kind == gpu::kKindSky;
-        const bool full_occluder = RtFullAny() && (deferred || (d.sub->shadow && !see_through)) && (d.hidden_views & 1u) == 0;
+        static const bool glow_casters = [] {
+            const char* value = std::getenv("PT_RT_GLOW_CASTERS");
+            return !value || std::atoi(value) != 0;
+        }();
+        const bool glow_caster = glow_casters && d.sub->kind == gpu::kKindConstant && d.sub->shadow;
+        const bool full_occluder = RtFullAny() && (deferred || (d.sub->shadow && !see_through) || glow_caster) && (d.hidden_views & 1u) == 0;
         if (deferred && (d.hidden_views & 1u) == 0 && (rt_ao_active_ || rt_gi_active_ || rt_path_)) {
             mask |= 8u;
         }
-        bool path_fitting = false;
+        bool ray_fitting = false;
         if ((deferred && (d.hidden_views & 1u) == 0 && rt_contact_active_) || full_occluder) {
             bool fitting = false;
             if (d.radius < 0.5f) {
@@ -1297,16 +1349,22 @@ void SceneRenderer::RecordRayTracing(gpu::CommandList& cmd) {
                 const char* value = std::getenv("PT_PATH_FITTING");
                 return !value || std::atoi(value) != 0;
             }();
-            if (rt_path_ && path_fittings && full_occluder && d.radius < 0.5f) {
-                for (const SceneLight* l : light_sources_) {
-                    if (glm::distance(l->position, d.center) < d.radius + kPtFittingReach) {
-                        path_fitting = true;
-                        break;
+            if (!rt_path_ && rt_full_shadows_ && full_occluder) {
+                ray_fitting = fitting || d.light_fitting != 0;
+            }
+            if (rt_path_ && path_fittings && full_occluder) {
+                ray_fitting = d.light_fitting != 0;
+                if (d.radius < 0.5f) {
+                    for (const SceneLight* l : light_sources_) {
+                        if (glm::distance(l->position, d.center) < d.radius + kPtFittingReach) {
+                            ray_fitting = true;
+                            break;
+                        }
                     }
                 }
             }
             const bool path_layer = rt_path_ && d.sub->kind == gpu::kKindParallax;
-            if ((!fitting || path_fitting) && !path_layer) {
+            if ((!fitting || ray_fitting) && !path_layer && (!glow_caster || ray_fitting)) {
                 mask |= (deferred && (d.hidden_views & 1u) == 0 && rt_contact_active_) ? 16u : 0u;
                 mask |= full_occluder ? 128u : 0u;
             }
@@ -1326,7 +1384,9 @@ void SceneRenderer::RecordRayTracing(gpu::CommandList& cmd) {
         c.mask = static_cast<uint8_t>(mask);
         c.alpha_test = (textures_->MaterialFlags(d.material) & gpu::kMatAlphaTest) != 0;
         c.double_sided = d.sub->shadow ? d.sub->shadow_double_sided : d.sub->double_sided;
-        c.fitting = path_fitting && (mask & 128u) != 0;
+        c.fitting = ray_fitting && (mask & 128u) != 0;
+        c.mirror_hidden = (d.hidden_views & 2u) != 0;
+        c.light_fitting = c.fitting ? d.light_fitting : 0;
         rt_casters_.push_back(c);
     }
     if (static const bool log_fittings = std::getenv("PT_RT_FITTING_LOG") != nullptr; log_fittings && frame_counter_ % 120 == 0) {
@@ -1413,7 +1473,11 @@ void SceneRenderer::RecordShadows(gpu::CommandList& cmd) {
             DrawMesh(cmd, d, sv.view, 0, false, false, nullptr, sv.cull, true);
         }
         if (static const bool trace = std::getenv("PT_SHADOW_PASS_TRACE") != nullptr; trace) {
-            LogInfo("shadow pass: {} casters {:#x} draws {} indices {} at ({:.3f} {:.3f} {:.3f})", light_sources_[sv.light]->name, sv.casters, shadow_draws, shadow_indices, sv.center.x, sv.center.y, sv.center.z);
+            const SceneLight& light = *light_sources_[sv.light];
+            const glm::vec3 axis = glm::vec3(frame_->lights[sv.light].direction);
+            LogInfo("shadow pass: {} casters {:#x} draws {} indices {} at ({:.6f} {:.6f} {:.6f}) axis ({:.8f} {:.8f} {:.8f}) near {:.6f} far {:.6f} fov {:.6f} bias {:.6f} view-bias {:.6f}",
+                    light.name, sv.casters, shadow_draws, shadow_indices, sv.center.x, sv.center.y, sv.center.z,
+                    axis.x, axis.y, axis.z, light.inner_range, light.outer_range, glm::degrees(light.shadow_fov), light.shadow_bias, light.view_bias);
         }
     }
     cmd.EndPass();
@@ -2207,16 +2271,10 @@ void SceneRenderer::RecordMirrorTemporal(gpu::CommandList& cmd) {
     mirror_history_valid_ = true;
 }
 
-void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& view) {
+void SceneRenderer::RecordReflectMapMarch(gpu::CommandList& cmd, const ViewSetup& view, const glm::vec3& plane) {
     constexpr float kFarLimit = 2000.0f - 0.01f;
     constexpr float kLines = 1080.0f;
-    const glm::mat3 rotation(frame_->views[view.index].view);
-    const glm::vec3 plane = glm::normalize(rotation * glm::vec3(0.0f, 1.0f, 0.0f));
-    const glm::vec3 forward = camera_.Forward();
-    const float length = glm::length(forward);
-    const glm::vec3 horizontal = length > 1.0e-6f ? rotation * (forward / length) : glm::vec3(0.0f);
     const float aspect = static_cast<float>(extent_.width) / static_cast<float>(std::max(extent_.height, 1u));
-
     cmd.UseTargets({{&normal_, gpu::Layout::ShaderReadOnly},
                      {&depth_, gpu::Layout::DepthReadOnly},
                      {&refmap_, gpu::Layout::ColorAttachment}});
@@ -2266,6 +2324,27 @@ void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& vi
         Fullscreen(cmd, reflect_make_, push);
         cmd.EndPass();
     }
+}
+
+void SceneRenderer::RecordReflectMap(gpu::CommandList& cmd, const ViewSetup& view) {
+    const glm::mat3 rotation(frame_->views[view.index].view);
+    RecordReflectMapMarch(cmd, view, glm::normalize(rotation * glm::vec3(0.0f, 1.0f, 0.0f)));
+    reflect_map_made_ = true;
+}
+
+void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& view) {
+    const glm::mat3 rotation(frame_->views[view.index].view);
+    const glm::vec3 plane = glm::normalize(rotation * glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::vec3 forward = camera_.Forward();
+    const float length = glm::length(forward);
+    const glm::vec3 horizontal = length > 1.0e-6f ? rotation * (forward / length) : glm::vec3(0.0f);
+
+    if (!std::exchange(reflect_map_made_, false)) {
+        RecordReflectMapMarch(cmd, view, plane);
+    }
+    static const bool depth_legacy = std::getenv("PT_REFLECT_DEPTH_LEGACY") != nullptr;
+    gpu::PassPush push;
+    push.ids = glm::uvec4(view.index, 0, 0, 0);
 
     cmd.UseTargets({{&refmap_, gpu::Layout::ShaderReadOnly},
                      {&hdr_, gpu::Layout::TransferSrc},
@@ -2277,6 +2356,7 @@ void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& vi
     cmd.CopyImage(hdr_.image, gpu::Layout::TransferSrc, hdr_copy_.image, gpu::Layout::TransferDst, {&copy, 1});
     push.f0 = glm::vec4(plane, depth_legacy ? 1.0f : 0.0f);
     push.ids.z = rt_glossy_active_ ? 1u : 0u;
+    push.ids.y = rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1u : 0u;
     const ScreenSettings& screen = lighting_->screen;
     push.f1 = glm::vec4(1.0f, 1.0f, screen.reflect_scale, screen.reflect_bias);
     push.f2 = glm::vec4(horizontal, screen.reflect_edge ? 1.0f : 0.0f);
@@ -2339,7 +2419,7 @@ void SceneRenderer::RecordReflectionTemporal(gpu::CommandList& cmd, const ViewSe
                      {&hdr_, gpu::Layout::ColorAttachment}});
     cmd.BeginPass(extent_, {{&hdr_, false, {}}, {&reflect_history_[current], false, {}}});
     gpu::PassPush temporal;
-    temporal.ids = glm::uvec4(view.index, valid_history ? 1u : 0u, gpu::kImgReflectHistoryA + previous, 0u);
+    temporal.ids = glm::uvec4(view.index, valid_history ? 1u : 0u, gpu::kImgReflectHistoryA + previous, push.ids.y);
     static const bool pre_upscale = std::getenv("PT_REFLECT_PRE_UPSCALE") != nullptr;
     reflect_post_upscale_ = !pre_upscale;
     temporal.f1 = glm::vec4(exposure / std::max(reflect_history_exposure_, 1.0e-12f), 0.9f, 1.25f, reflect_post_upscale_ ? 1.0f : 0.0f);
@@ -2501,6 +2581,9 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
     if (main_view && dump_requested_ && &output == &hdr_) {
         RecordDumpCopy(cmd, output, dump_compose_);
     }
+    if (main_view && reflect_map_early_ && &output == &hdr_) {
+        RecordReflectMap(cmd, view);
+    }
     if (&output == &hdr_ && flare_depth_.Valid()) {
         cmd.UseTargets({{&depth_, gpu::Layout::TransferSrc}, {&flare_depth_, gpu::Layout::TransferDst}});
         gpu::ImageCopy copy;
@@ -2595,6 +2678,7 @@ void SceneRenderer::SettleExposure(const ExposureSettings& settings) {
     gpu_->InvalidateMapped(slot.luminance, 0, ~0ull);
     const float measured = MeterLuminance(static_cast<const glm::vec2*>(slot.luminance.mapped), slot.luminance_groups);
     adaptation_valid_ = true;
+    exposure_samples_.clear();
     if (measured < 0.0f) {
         return;
     }
@@ -2675,9 +2759,6 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     const bool upscaling = BeginUpscaleFrame(output);
     if (!EnsureTargets(upscaling ? up_.render : output, output, upscaling)) {
         bool made = false;
-        if (textures_->ReleaseEnhancedTextures("render targets")) {
-            made = EnsureTargets(upscaling ? up_.render : output, output, upscaling);
-        }
         while (!made && shadow_.Valid() && shadow_.Extent().width > 512u * 4) {
             gpu_->WaitIdle();
             gpu_->DestroyImage(shadow_.image);
@@ -2750,7 +2831,9 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     if (rt_path_) {
         rt_full_shadows_ = rt_gi_active_ = rt_glossy_active_ = false;
     }
-    rr_frame_ = rt_path_ && up_.enabled && up_.backend && up_.ray_reconstruction && pt_rr_guides_;
+    fsr_rr_input_check_ = std::getenv("PT_FSR_RR_INPUT_CHECK") && gpu_->Info().backend == gpu::Backend::D3D12 &&
+                          up_.kind == UpscalerKind::Fsr;
+    rr_frame_ = rt_path_ && up_.enabled && up_.backend && (up_.ray_reconstruction || fsr_rr_input_check_) && pt_rr_guides_;
     if (RtFullAny() && !EnsureFullTargets()) {
         rt_full_shadows_ = rt_gi_active_ = rt_glossy_active_ = rt_path_ = false;
     }
@@ -2760,8 +2843,12 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     if (rr_frame_ && (!rt_path_ || !EnsureRrTargets())) {
         rr_frame_ = false;
     }
+    if (rr_frame_ && (up_.kind == UpscalerKind::Fsr4 || fsr_rr_input_check_) && !EnsureFsrRrTargets()) {
+        up_.backend->DisableRayReconstruction("FSR Ray Regeneration inputs could not be allocated");
+        rr_frame_ = false;
+    }
     const bool traced_any = rt_active_ || rt_reflections_ || rt_contact_active_ || rt_ao_active_ || RtFullAny();
-    rr_raster_ = !rt_path_ && traced_any && up_.enabled && up_.backend && up_.ray_reconstruction && rt_rr_guides_ && vr_eye_ < 0 &&
+    rr_raster_ = up_.kind == UpscalerKind::Dlss && !rt_path_ && traced_any && up_.enabled && up_.backend && up_.ray_reconstruction && rt_rr_guides_ && vr_eye_ < 0 &&
                  EnsureRrTargets();
     if (rt_path_) {
         rt_contact_active_ = false;
@@ -2904,6 +2991,10 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         mirror_history_valid_ = false;
     }
     Stamp(cmd, 2);
+    static const bool map_after_forward = std::getenv("PT_REFLECT_MAP_AFTER_FORWARD") != nullptr;
+    reflect_map_early_ = !map_after_forward && (debug_view == DebugView::Lit || debug_view == DebugView::Ambient) &&
+                         toggles.local_reflections && lighting_->valid && lighting_->screen.local_reflections && !rt_path_;
+    reflect_map_made_ = false;
     RecordView(cmd, main_view_, hdr_, true);
     RecordReflectionSample(cmd, *lighting_);
     BindSets(cmd, gpu::BindPoint::Graphics);
@@ -2980,6 +3071,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     slot.timed = timed;
     slot.measured = true;
     slot.exposure_used = exposure_;
+    slot.exposure_sample_time = exposure_time_;
     slot.vr_eye = vr_eye_;
     stats_.ev = ev_;
     stats_.exposure = exposure_;

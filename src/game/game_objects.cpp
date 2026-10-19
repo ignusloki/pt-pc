@@ -1051,6 +1051,9 @@ void GameObjects::CollectDraws(std::vector<DrawItem>& out) const {
             continue;
         }
         DrawItem item;
+        if (g.type == GimmickType::CeilLamp) {
+            item.light_fitting = static_cast<uint32_t>(g.type) + 1;
+        }
         item.mesh = g.mesh;
         item.transform = g.world;
         if (!g.hidden_meshes.empty()) {

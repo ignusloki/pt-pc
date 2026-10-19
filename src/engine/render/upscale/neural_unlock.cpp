@@ -553,6 +553,11 @@ std::string FileSha256(const std::filesystem::path& path) {
     return Hex(digest);
 }
 
+std::string DownloadFile(const std::string& url, const std::filesystem::path& dest, uint64_t max_bytes, const std::function<void(int)>& percent,
+                         const std::function<bool()>& cancelled, std::string* error) {
+    return Download(url, dest, max_bytes, percent, cancelled, error);
+}
+
 std::filesystem::path ToolPath(const std::filesystem::path& work_dir) {
     return work_dir / ("autopilot-" + std::string(kToolVersion)) / std::string(kToolExe);
 }
@@ -783,7 +788,21 @@ bool InstallNrToggleHook() {
     void** slot = ImportSlot(addon, "USER32.dll", "GetAsyncKeyState");
     if (!slot) {
         static bool said = false;
-        if (!said) LogWarn("neural rendering: the route's add-on does not import GetAsyncKeyState by name; DLSS 5 on and off apply at the next start");
+        if (!said) {
+            LogWarn("neural rendering: the route's add-on has no supported named USER32 GetAsyncKeyState import; DLSS 5 on and off apply at the next start");
+            wchar_t name[MAX_PATH * 2]{};
+            const DWORD length = GetModuleFileNameW(addon, name, MAX_PATH * 2);
+            if (length > 0 && length < MAX_PATH * 2) {
+                const std::filesystem::path path(name);
+                std::string sha;
+                try {
+                    sha = FileSha256(path);
+                } catch (const std::exception&) {
+                }
+                LogWarn("neural rendering: loaded add-on {}, sha256 {} (the installer's version may be empty for a local build)",
+                        os::PathToUtf8(path), sha.empty() ? "unavailable" : sha);
+            }
+        }
         said = true;
         return false;
     }
@@ -817,5 +836,64 @@ bool PressNrToggle() { return false; }
 uint32_t NrTogglesStarted() { return 0; }
 uint32_t NrTogglesDelivered() { return 0; }
 #endif
+
+int RetireRouteFiles(const std::filesystem::path& game_dir, const std::filesystem::path& archive_dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path route = game_dir / "pt-dlss5-route.json", autopilot = game_dir / kManifest;
+    if (!fs::is_regular_file(route, ec) && !fs::is_regular_file(autopilot, ec)) return 0;
+    std::vector<std::pair<std::string, std::string>> recorded;
+    std::string own_reshade;
+    json::Value root;
+    if (json::Reader(ReadText(route, 1 << 20)).Parse(root) && root.object) {
+        if (const auto o = root.members.find("pt_reshade_sha256"); o != root.members.end()) own_reshade = o->second.text;
+        if (const auto f = root.members.find("files"); f != root.members.end())
+            for (const auto& e : f->second.items) {
+                const auto n = e.members.find("name"), s = e.members.find("sha256");
+                if (n != e.members.end() && !n->second.text.empty()) recorded.emplace_back(n->second.text, s != e.members.end() ? s->second.text : "");
+            }
+    }
+    if (recorded.empty())
+        if (const std::optional<Install> install = ReadInstall(game_dir))
+            for (const std::string& f : install->files) recorded.emplace_back(f, "");
+    int moved = 0;
+    std::vector<std::string> kept;
+    auto move = [&](const std::string& name) {
+        const fs::path from = game_dir / os::PathFromUtf8(name), to = archive_dir / os::PathFromUtf8(name);
+        fs::create_directories(to.parent_path(), ec);
+        fs::rename(from, to, ec);
+        if (ec) {
+            LogWarn("neural rendering: retired route file {} could not be moved: {}", name, ec.message());
+            kept.push_back(name);
+            return;
+        }
+        LogInfo("neural rendering: retired route file {} moved to {}", name, os::PathToUtf8(to));
+        ++moved;
+    };
+    for (const auto& [name, sha] : recorded) {
+        const fs::path rel = os::PathFromUtf8(name).lexically_normal();
+        if (rel.empty() || rel.is_absolute() || rel.has_root_name() || *rel.begin() == "..") continue;
+        const fs::path path = game_dir / rel;
+        if (!fs::is_regular_file(path, ec)) continue;
+        const bool is_dxgi = AsciiLowerCopy(name) == AsciiLowerCopy(std::string(kOwnReShadeFile));
+        const std::string now = FileSha256(path);
+        const bool ours = !sha.empty() ? now == sha
+                        : is_dxgi      ? (!own_reshade.empty() && now == own_reshade) || IsOwnReShade(game_dir)
+                                       : AsciiLowerCopy(name) == "renodx-dlss5.addon64";
+        if (ours) move(name);
+        else {
+            LogWarn("neural rendering: retired route file {} stays (changed since the route installed it, sha256 {})", name, now.empty() ? "unreadable" : now);
+            kept.push_back(name);
+        }
+    }
+    if (const fs::path dxgi = game_dir / kOwnReShadeFile; fs::is_regular_file(dxgi, ec)) {
+        const std::string now = FileSha256(dxgi);
+        if ((!own_reshade.empty() && now == own_reshade) || IsOwnReShade(game_dir)) move(std::string(kOwnReShadeFile));
+    }
+    for (const fs::path& m : {route, autopilot})
+        if (fs::is_regular_file(m, ec)) move(os::PathToUtf8(m.filename()));
+    LogInfo("neural rendering: retired DLSS 5 route cleaned up: {} files moved to {}, {} kept", moved, os::PathToUtf8(archive_dir), kept.size());
+    return moved;
+}
 
 }

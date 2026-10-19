@@ -7,7 +7,7 @@ namespace {
 
 bool Empty(const pt::InputState& input) {
     return input.left_stick == glm::vec2(0.0f) && input.right_stick == glm::vec2(0.0f) && input.mouse_look == glm::vec2(0.0f) &&
-           input.held == 0 && input.pressed == 0 && input.raw_held == 0 && input.raw_pressed == 0 && !input.pause && !input.confirm &&
+           input.held == 0 && input.pressed == 0 && input.raw_held == 0 && input.raw_pressed == 0 && !input.pause && !input.pause_held && !input.confirm &&
            !input.cancel && !input.pc_settings && !input.any_button && !input.from_gamepad && !input.left_stick_from_pad && !input.click &&
            !input.right_click && !input.gouge_pressed && !input.voice_keyword_pressed && !input.house_pressed && !input.pointer_valid &&
            input.pointer == glm::vec2(0.0f) && !input.vr_look && input.vr_look_angles == glm::vec2(0.0f) && input.gamepad_sensitivity == 1.0f;
@@ -29,7 +29,7 @@ int main() {
     input.pressed = 0x5678;
     input.raw_held = 0x9abc;
     input.raw_pressed = 0xdef0;
-    input.pause = input.confirm = input.cancel = input.pc_settings = input.any_button = true;
+    input.pause = input.pause_held = input.confirm = input.cancel = input.pc_settings = input.any_button = true;
     input.from_gamepad = input.left_stick_from_pad = input.click = input.right_click = input.gouge_pressed = true;
     input.voice_keyword_pressed = input.house_pressed = input.pointer_valid = true;
     input.pointer = {320.0f, 180.0f};
@@ -39,6 +39,17 @@ int main() {
 
     check("step 28 blocks outro gameplay input", pt::game::EndingOutroInputBlocked(28));
     check("step 28 clears look, sticks, buttons, menu, and VR input", Empty(pt::game::GateEndingOutroInput(28, input)));
+
+    for (const pt::PromptStyle style : {pt::PromptStyle{pt::PromptDevice::PlayStation},
+                                       pt::PromptStyle{pt::PromptDevice::Xbox, {'A', 'B', 'X', 'Y'}},
+                                       pt::PromptStyle{pt::PromptDevice::Nintendo, {'B', 'A', 'Y', 'X'}},
+                                       pt::PromptStyle{pt::PromptDevice::Steam, {'A', 'B', 'X', 'Y'}}, pt::PromptStyle{}}) {
+        input.prompts = style;
+        const pt::InputState gated = pt::game::GateEndingOutroInput(28, input);
+        check("ending skip hint keeps the active device", gated.prompts == style);
+        check("a second outro gate keeps the active device", pt::game::GateEndingOutroInput(28, gated).prompts == style);
+        check("controller prompts do not enable outro gameplay input", Empty(gated));
+    }
 
     check("step 31 street controls remain enabled", !pt::game::EndingOutroInputBlocked(31));
     const pt::InputState street = pt::game::GateEndingOutroInput(31, input);

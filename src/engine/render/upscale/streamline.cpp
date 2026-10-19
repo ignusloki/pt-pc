@@ -58,12 +58,26 @@ bool g_dlss = false;
 bool g_rr = false;
 std::string g_rr_reason = "Streamline is not loaded";
 bool g_frame_gen = false;
+uint32_t g_frame_gen_max = 1;
+uint32_t g_frame_gen_multiplier = 2;
+pt::streamline::FrameGenCounters g_frame_gen_counters;
 bool g_vsync_off = false;
 std::string g_frame_gen_reason = "Streamline is not loaded";
 uint32_t g_frame_limit = UINT32_MAX;
 bool g_reflex_d3d12 = false;
 std::wstring g_log_dir;
 bool g_verbose = false;
+void* g_d3d12_device = nullptr;
+uint8_t g_d3d12_luid[8]{};
+
+template<class Fn, class... Args>
+sl::Result FeatureCall(sl::Feature feature, const char* name, Args&&... args) {
+    void* address = nullptr;
+    if (!g_active || !g_api.feature_function) return sl::Result::eErrorInitNotCalled;
+    const auto result = g_api.feature_function(feature, name, address);
+    if (result != sl::Result::eOk || !address) return result == sl::Result::eOk ? sl::Result::eErrorFeatureMissing : result;
+    return reinterpret_cast<Fn*>(address)(std::forward<Args>(args)...);
+}
 std::wstring g_plugin_dir;
 const wchar_t* g_plugin_paths[1] = {};
 
@@ -145,7 +159,7 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason, Api api) 
         reason = "sl.interposer.dll does not carry NVIDIA's signature";
         return false;
     }
-    g_module = LoadLibraryW(interposer.wstring().c_str());
+    if (!g_module) g_module = LoadLibraryW(interposer.wstring().c_str());
     if (!g_module) {
         reason = "sl.interposer.dll could not be loaded";
         return false;
@@ -218,6 +232,8 @@ PFN_vkGetInstanceProcAddr InstanceProcAddr() {
     return g_active && g_kind == Api::Vulkan ? g_instance_proc : nullptr;
 }
 
+void QueryFrameGenLimit();
+
 void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
     if (!g_active) {
         return;
@@ -243,11 +259,12 @@ void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
     }
     LogInfo("streamline: DLSS {}, DLSS Frame Generation {}, Reflex {}, PCL {}{}", ResultName(dlss), ResultName(frame_gen), ResultName(reflex),
             ResultName(pcl), g_vsync_off ? ", frame generation needs v-sync off" : "");
+    QueryFrameGenLimit();
     if (reflex == sl::Result::eOk) {
         sl::ReflexOptions options{};
         options.mode = sl::ReflexMode::eLowLatency;
         options.frameLimitUs = 0;
-        slReflexSetOptions(options);
+        FeatureCall<PFun_slReflexSetOptions>(sl::kFeatureReflex, "slReflexSetOptions", options);
         g_frame_limit = 0;
     }
 }
@@ -261,6 +278,8 @@ void Shutdown() {
     g_active = false;
     g_token = nullptr;
     g_dlss = g_frame_gen = g_rr = false;
+    g_frame_gen_max = 1;
+    g_frame_gen_counters = {};
     g_reflex_d3d12 = false;
     g_frame_limit = UINT32_MAX;
 }
@@ -283,6 +302,39 @@ bool FrameGenSupported(std::string* reason) {
     return g_active && g_frame_gen;
 }
 
+void SetFrameGenMultiplier(uint32_t multiplier) {
+    const uint32_t wanted = std::clamp(multiplier, 2u, 4u);
+    if (wanted != g_frame_gen_multiplier) {
+        LogInfo("frame generation: DLSS multiplier requested {}x, effective {}x (runtime maximum {}x)",
+                wanted, ClampFrameGenMultiplier(wanted, g_frame_gen_max), FrameGenMaxMultiplier());
+    }
+    g_frame_gen_multiplier = wanted;
+}
+
+uint32_t FrameGenMaxMultiplier() { return ClampFrameGenMultiplier(4, g_frame_gen_max); }
+FrameGenCounters FrameGenStatistics() { return g_frame_gen_counters; }
+void AccumulateFrameGenPresentation(uint32_t presented) {
+    ++g_frame_gen_counters.rendered;
+    g_frame_gen_counters.presented += presented;
+}
+uint32_t FrameGenMultiplier() { return ClampFrameGenMultiplier(g_frame_gen_multiplier, g_frame_gen_max); }
+
+void UpdateFrameGenLimit(uint32_t max_generated) {
+    const uint32_t maximum = std::max(1u, max_generated);
+    if (maximum != g_frame_gen_max) {
+        LogInfo("frame generation: runtime supports up to {}x (menu maximum {}x)", maximum + 1, ClampFrameGenMultiplier(4, maximum));
+    }
+    g_frame_gen_max = maximum;
+}
+
+void QueryFrameGenLimit() {
+    sl::DLSSGState state{};
+    if (g_frame_gen && FeatureCall<PFun_slDLSSGGetState>(sl::kFeatureDLSS_G, "slDLSSGGetState", sl::ViewportHandle(kViewport), state, nullptr) == sl::Result::eOk) {
+        UpdateFrameGenLimit(state.numFramesToGenerateMax);
+        LogInfo("frame generation: DLSS multiplier capability {}x", FrameGenMaxMultiplier());
+    }
+}
+
 bool FrameGenNeedsVsyncOff() {
     return g_vsync_off;
 }
@@ -301,13 +353,13 @@ void BeginFrame() {
         g_token = nullptr;
         return;
     }
-    slReflexSleep(*g_token);
+    FeatureCall<PFun_slReflexSleep>(sl::kFeatureReflex, "slReflexSleep", *g_token);
     SetMarker(Marker::SimulationStart);
 }
 
 void SetMarker(Marker marker) {
     if (g_active && g_token) {
-        slPCLSetMarker(static_cast<sl::PCLMarker>(marker), *g_token);
+        FeatureCall<PFun_slPCLSetMarker>(sl::kFeaturePCL, "slPCLSetMarker", static_cast<sl::PCLMarker>(marker), *g_token);
     }
 }
 
@@ -364,7 +416,7 @@ void SetFrameLimit(uint32_t microseconds) {
     sl::ReflexOptions options{};
     options.mode = sl::ReflexMode::eLowLatency;
     options.frameLimitUs = microseconds;
-    if (slReflexSetOptions(options) == sl::Result::eOk) {
+    if (FeatureCall<PFun_slReflexSetOptions>(sl::kFeatureReflex, "slReflexSetOptions", options) == sl::Result::eOk) {
         g_frame_limit = microseconds;
     }
 }
@@ -402,6 +454,8 @@ bool DisableFrameGenFeature() {
 }
 
 void DeviceCreatedD3D12(void* d3d12_device, const uint8_t (&luid)[8]) {
+    g_d3d12_device = d3d12_device;
+    std::memcpy(g_d3d12_luid, luid, sizeof(g_d3d12_luid));
     if (!ActiveD3D12()) {
         return;
     }
@@ -430,6 +484,21 @@ void DeviceCreatedD3D12(void* d3d12_device, const uint8_t (&luid)[8]) {
     }
     LogInfo("streamline: DirectX 12 device set; DLSS Frame Generation {}, Reflex {}, PCL {}{}", ResultName(frame_gen), ResultName(reflex),
             ResultName(pcl), g_vsync_off ? ", frame generation needs v-sync off" : "");
+    QueryFrameGenLimit();
+}
+
+bool ReloadD3D12(std::string& reason) {
+    if (!ActiveD3D12() || !g_d3d12_device) {
+        reason = "Streamline has no active DirectX 12 device";
+        return false;
+    }
+    const auto log_dir = std::filesystem::path(g_log_dir);
+    Shutdown();
+    if (!Start(log_dir, reason, Api::D3D12)) return false;
+    DeviceCreatedD3D12(g_d3d12_device, g_d3d12_luid);
+    const bool ready = FrameGenSupported(&reason);
+    LogInfo("streamline: live FG reload {}{}", ready ? "ready" : "unavailable: ", reason);
+    return ready;
 }
 
 void D3D12SetReflex(bool on) {
@@ -439,7 +508,7 @@ void D3D12SetReflex(bool on) {
     sl::ReflexOptions options{};
     options.mode = on ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
     options.frameLimitUs = 0;
-    const sl::Result r = slReflexSetOptions(options);
+    const sl::Result r = FeatureCall<PFun_slReflexSetOptions>(sl::kFeatureReflex, "slReflexSetOptions", options);
     g_frame_limit = 0;
     g_reflex_d3d12 = on;
     LogInfo("streamline: Reflex {} for DLSS Frame Generation on DirectX 12 ({})", on ? "low latency" : "off", ResultName(r));
@@ -509,7 +578,7 @@ bool D3D12FrameGenSetOptions(const D3D12FrameGenOptions& o, std::string* error) 
     }
     sl::DLSSGOptions options{};
     options.mode = o.on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    options.numFramesToGenerate = std::max(1u, o.frames_to_generate);
+    options.numFramesToGenerate = ClampFrameGenMultiplier(o.frames_to_generate + 1, g_frame_gen_max) - 1;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     options.numBackBuffers = o.back_buffers;
     options.colorWidth = o.color_width;
@@ -524,7 +593,7 @@ bool D3D12FrameGenSetOptions(const D3D12FrameGenOptions& o, std::string* error) 
     options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
     options.enableUserInterfaceRecomposition = o.ui_recomposition ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     options.onErrorCallback = &D3D12OnError;
-    const sl::Result r = slDLSSGSetOptions(sl::ViewportHandle(kViewport), options);
+    const sl::Result r = FeatureCall<PFun_slDLSSGSetOptions>(sl::kFeatureDLSS_G, "slDLSSGSetOptions", sl::ViewportHandle(kViewport), options);
     if (r != sl::Result::eOk && error) {
         *error = ResultName(r);
     }
@@ -537,13 +606,15 @@ bool D3D12FrameGenGetState(D3D12FrameGenState& out) {
         return false;
     }
     sl::DLSSGState state{};
-    if (slDLSSGGetState(sl::ViewportHandle(kViewport), state, nullptr) != sl::Result::eOk) {
+    if (FeatureCall<PFun_slDLSSGGetState>(sl::kFeatureDLSS_G, "slDLSSGGetState", sl::ViewportHandle(kViewport), state, nullptr) != sl::Result::eOk) {
         return false;
     }
     out.ok = state.status == sl::DLSSGStatus::eOk;
     out.status = static_cast<uint32_t>(state.status);
     out.presented = state.numFramesActuallyPresented;
+    AccumulateFrameGenPresentation(out.presented);
     out.max_frames = state.numFramesToGenerateMax;
+    UpdateFrameGenLimit(out.max_frames);
     out.vsync_available = state.bIsVsyncSupportAvailable == sl::Boolean::eTrue;
     out.inputs_fence = state.inputsProcessingCompletionFence;
     out.inputs_fence_value = state.lastPresentInputsProcessingCompletionFenceValue;
@@ -1131,12 +1202,13 @@ private:
     }
 
     bool SetMode(sl::DLSSGMode mode) {
-        if (mode == mode_) {
+        const uint32_t multiplier = streamline::FrameGenMultiplier();
+        if (mode == mode_ && multiplier == multiplier_) {
             return true;
         }
         sl::DLSSGOptions options{};
         options.mode = mode;
-        options.numFramesToGenerate = 1;
+        options.numFramesToGenerate = multiplier - 1;
         options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
         options.numBackBuffers = static_cast<uint32_t>(ctx_.swapchain.images.size());
         options.colorWidth = ctx_.swapchain.extent.width;
@@ -1145,7 +1217,7 @@ private:
         options.hudLessBufferFormat = static_cast<uint32_t>(ctx_.swapchain.format);
         options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
         options.onErrorCallback = &DlssFrameGeneration::ApiError;
-        const sl::Result result = slDLSSGSetOptions(sl::ViewportHandle(streamline::kViewport), options);
+        const sl::Result result = FeatureCall<PFun_slDLSSGSetOptions>(sl::kFeatureDLSS_G, "slDLSSGSetOptions", sl::ViewportHandle(streamline::kViewport), options);
         if (result != sl::Result::eOk) {
             if (mode == sl::DLSSGMode::eOff && attached_ && mode_ == sl::DLSSGMode::eOn) {
                 preserve_active_mode_ = true;
@@ -1159,15 +1231,19 @@ private:
         }
         LogInfo("frame generation: DLSS Frame Generation mode {}", mode == sl::DLSSGMode::eOn ? "on" : "off");
         mode_ = mode;
+        multiplier_ = multiplier;
+        LogInfo("frame generation: DLSS multiplier {}x ({} generated per rendered frame)", multiplier, multiplier - 1);
         preserve_active_mode_ = false;
         return true;
     }
 
     void CheckState() {
         sl::DLSSGState state{};
-        if (slDLSSGGetState(sl::ViewportHandle(streamline::kViewport), state, nullptr) != sl::Result::eOk) {
+        if (FeatureCall<PFun_slDLSSGGetState>(sl::kFeatureDLSS_G, "slDLSSGGetState", sl::ViewportHandle(streamline::kViewport), state, nullptr) != sl::Result::eOk) {
             return;
         }
+        streamline::UpdateFrameGenLimit(state.numFramesToGenerateMax);
+        if (mode_ == sl::DLSSGMode::eOn) streamline::AccumulateFrameGenPresentation(state.numFramesActuallyPresented);
         presented_ += state.numFramesActuallyPresented;
         ++rendered_;
         if (state.status != sl::DLSSGStatus::eOk) {
@@ -1228,6 +1304,7 @@ private:
     VkExtent2D extent_{};
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     sl::DLSSGMode mode_ = sl::DLSSGMode::eOff;
+    uint32_t multiplier_ = 2;
     bool initialised_ = false;
     bool target_ = false;
     bool attached_ = false;
@@ -1263,6 +1340,8 @@ std::unique_ptr<FrameGeneration> CreateDlssFrameGeneration(vk::Context& ctx) {
 
 namespace pt::streamline {
 
+bool ReloadD3D12(std::string& reason) { reason = "Streamline is not in this build"; return false; }
+
 bool Start(const std::filesystem::path&, std::string& reason, Api) {
     reason = "this build has no Streamline";
     return false;
@@ -1297,6 +1376,10 @@ bool FrameGenSupported(std::string* reason) {
     return false;
 }
 bool FrameGenNeedsVsyncOff() { return false; }
+void SetFrameGenMultiplier(uint32_t) {}
+uint32_t FrameGenMultiplier() { return 2; }
+uint32_t FrameGenMaxMultiplier() { return 2; }
+FrameGenCounters FrameGenStatistics() { return {}; }
 bool IsFrameGenLoaded(bool&) { return false; }
 bool DisableFrameGenFeature() { return false; }
 void BeginFrame() {}

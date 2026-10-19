@@ -12,6 +12,9 @@ constexpr uint32_t kMaxProbes = 512;
 constexpr uint32_t kMaxSkinMatrices = 16384;
 constexpr uint32_t kImageSlots = 64;
 constexpr uint32_t kInvalid = 0xFFFFFFFFu;
+constexpr uint32_t kLightCastsShadow = 1u;
+constexpr uint32_t kLightNoFitting = 2u;
+constexpr uint32_t kLightStairCeiling = 4u;
 constexpr uint32_t kLuminanceGroups = 16384;
 constexpr uint32_t kReflectionReadback = kLuminanceGroups;
 constexpr uint32_t kLuminanceEntries = kLuminanceGroups + 2;
@@ -176,6 +179,7 @@ enum MaterialFlag : uint32_t {
     kMatReflector = 1u << 22,
     kMatAlbedoView = 1u << 23,
     kMatGBufferBase2 = 1u << 24,
+    kMatMirrorLining = 1u << 25,
 };
 
 enum MaterialKind : uint32_t {

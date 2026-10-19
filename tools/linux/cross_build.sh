@@ -12,7 +12,7 @@ BUILD="$REPO/build/linux-cross"
 set --  "$@"
 SHARED=""
 if [ -n "$PT_DEPS" ] && [ -d "$PT_DEPS/sdl3-src" ]; then
-  for dep in sdl3 zlib whisper volk vma glm imgui stb lua51 ogg vorbis bc7enc; do
+  for dep in sdl3 zlib whisper volk vma glm imgui stb lua51 ogg vorbis; do
     up=$(echo "$dep" | tr a-z A-Z)
     [ -d "$PT_DEPS/$dep-src" ] && SHARED="$SHARED -DFETCHCONTENT_SOURCE_DIR_$up=$PT_DEPS/$dep-src"
   done

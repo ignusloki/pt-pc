@@ -30,14 +30,14 @@ int main(int argc,char** argv) {
     check("ghosts by hand make High Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
     s.graphics.lens_ghosts=false;
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,true);
-    check("Ultra has every traced effect and fine detail",s.ray_tracing.shadows==2 && s.ray_tracing.reflections && s.ray_tracing.ambient_occlusion && s.ray_tracing.contact_shadows && s.graphics.enhanced_textures && s.graphics.ray_quality==4 && s.graphics.clarity==.4f);
+    check("Ultra has every traced effect and fine detail",s.ray_tracing.shadows==2 && s.ray_tracing.reflections && s.ray_tracing.ambient_occlusion && s.ray_tracing.contact_shadows && s.graphics.ray_quality==4 && s.graphics.clarity==.4f);
     check("Ultra is path traced and keeps the Ultra tier parts set",s.ray_tracing.full_shadows && s.ray_tracing.bounce_light && s.ray_tracing.glossy_reflections);
     check("Ultra preserves the complete cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
     check("Ultra detected",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Ultra);
     s.graphics.bloom=false;
     check("manual change becomes Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,false);
-    check("unsupported RT retains enhanced fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.enhanced_textures && s.graphics.ambient_occlusion && s.graphics.reflections);
+    check("unsupported RT retains raster fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.ambient_occlusion && s.graphics.reflections);
     check("unsupported Ultra keeps cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
     check("unsupported Ultra detected",pt::DetectGraphicsPreset(s,false)==pt::GraphicsPreset::Ultra);
     check("unsupported Ultra keeps the Ultra ray quality",s.graphics.ray_quality==3);
@@ -49,6 +49,20 @@ int main(int argc,char** argv) {
     }
     if(argc==2) {
         const auto path=std::filesystem::path(argv[1]);
+
+        for (const bool rt : {false, true}) {
+            for (const auto preset : {pt::GraphicsPreset::Original, pt::GraphicsPreset::Low, pt::GraphicsPreset::High, pt::GraphicsPreset::Ultra}) {
+                pt::AppSettings written;
+                pt::ApplyGraphicsPreset(written, preset, rt);
+                check("save preset for legacy options", pt::SaveAppSettings(path, written));
+                { std::ofstream out(path, std::ios::app); out << "\n[graphics]\nenhanced_textures=1\n[display]\npause_on_focus_loss=1\nmute_in_background=1\n"; }
+                pt::AppSettings loaded;
+                check("legacy options preserve preset and ordinary texture settings", pt::LoadAppSettings(path, loaded) &&
+                      pt::DetectGraphicsPreset(loaded, rt) == preset && loaded.graphics.texture_detail == written.graphics.texture_detail &&
+                      loaded.graphics.anisotropy == written.graphics.anisotropy);
+            }
+        }
+
         check("save graphics settings",pt::SaveAppSettings(path,s));
         pt::AppSettings restored;
         check("load graphics settings",pt::LoadAppSettings(path,restored));

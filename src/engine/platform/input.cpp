@@ -68,6 +68,7 @@ constexpr KeyBinding kKeyBindings[] = {
     {KeyAction::MenuTabPrev, SDL_SCANCODE_Q, 0},
     {KeyAction::MenuTabNext, SDL_SCANCODE_E, 0},
     {KeyAction::MenuDonate, SDL_SCANCODE_P, 0},
+    {KeyAction::MenuUpdate, SDL_SCANCODE_U, 0},
 };
 
 KeyLayoutFunction g_key_layout = nullptr;
@@ -792,6 +793,7 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
         if (held(KeyAction::MenuTabNext) || (tab && !shift)) menu_keys |= kMenuKeyTabNext;
         if (key(SDL_SCANCODE_E)) menu_keys |= kMenuKeyFromE;
         if (held(KeyAction::MenuDonate)) menu_keys |= kMenuKeyDonate;
+        if (held(KeyAction::MenuUpdate)) menu_keys |= kMenuKeyUpdate;
     }
     state.menu_keys_pressed = menu_keys & ~previous_menu_keys_;
     if (!(state.menu_keys_pressed & kMenuKeyTabNext)) state.menu_keys_pressed &= ~kMenuKeyFromE;
@@ -899,6 +901,7 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     if (pad_pressed & kRawL1) state.menu_keys_pressed |= kMenuKeyTabPrev;
     if (pad_pressed & kRawR1) state.menu_keys_pressed |= kMenuKeyTabNext;
     if ((pad_pressed & kRawSelect) || pad_back_edge_) state.menu_keys_pressed |= kMenuKeyDonate;
+    if (pad_pressed & kRawTriangle) state.menu_keys_pressed |= kMenuKeyUpdate;
     pad_back_edge_ = false;
     state.pause = pause_edge_ || ((pad_pressed & kRawStart) && !(pad_pressed & kRawSelect));
     state.pause_held = held(KeyAction::Menu) || (pad_raw & kRawStart) != 0;

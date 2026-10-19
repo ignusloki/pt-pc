@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <cstdlib>
+#include <optional>
 #include <tuple>
 
 #include "engine/core/log.h"
@@ -137,6 +138,7 @@ void PcSettingsPage::Build(ui::UifModel& model, int icon_atlas, int icon_glow) {
     tab_prev_text_ = Clone(model, kBackText, root_, glm::vec2(0.0f), "tab_prev");
     tab_next_text_ = Clone(model, kBackText, root_, glm::vec2(0.0f), "tab_next");
     donate_text_ = Clone(model, kBackText, root_, glm::vec2(0.0f), "donate");
+    footer_text_ = Clone(model, kBackText, root_, glm::vec2(0.0f), "update_button");
     if (icon_atlas >= 0 && icon_glow >= 0) {
         SetCell(model, back_icon_, icon_atlas, 0.5f, 1.0f);
         SetCell(model, back_glow_, icon_glow, 0.5f, 1.0f);
@@ -157,14 +159,35 @@ void PcSettingsPage::Open(PcSettingsSource* source) {
     flash_frame_ = 0.0f;
     held_dirs_ = 0;
     last_pointer_ = glm::vec2(-1.0f);
-    Refresh();
+    Refresh(false);
 }
 
-void PcSettingsPage::Refresh() {
+void PcSettingsPage::Refresh(bool preserve_focus) {
+    const PcSettingRow* previous = preserve_focus ? CurrentRow() : nullptr;
+    const std::optional<int> focused = previous ? std::optional(previous->id) : std::nullopt;
+    const bool back = preserve_focus && cursor_ == static_cast<int>(rows_.size());
     sections_ = source_ ? source_->Sections() : std::vector<PcSettingSection>{};
+    footer_ = source_ ? source_->FooterAction() : std::nullopt;
     Layout();
     LayoutTabs();
+    bool found = false;
+    if (focused) {
+        for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+            if (RowOf(rows_[i]).id == *focused) {
+                cursor_ = i;
+                found = true;
+                break;
+            }
+        }
+    } else if (back) {
+        cursor_ = static_cast<int>(rows_.size());
+    }
+    if (update_dialog_) found = footer_.has_value();
     cursor_ = std::clamp(cursor_, Tabbed() ? -1 : 0, static_cast<int>(rows_.size()));
+    const PcSettingRow* current = CurrentRow();
+    if (confirming_ && (!found || !current || !current->action || !current->enabled)) confirming_ = false;
+    if (!confirming_) update_dialog_ = false;
+    if (preserve_focus && focused && !found) preview_id_ = -1;
     Scroll();
 }
 
@@ -295,7 +318,7 @@ void PcSettingsPage::SourceChanged() {
     scroll_y_ = 0.0f;
     confirming_ = false;
     flash_frame_ = 0.0f;
-    Refresh();
+    Refresh(false);
     if (source_) {
         if (const int c = source_->TakeCursor(); c >= 0) {
             cursor_ = std::clamp(c, 0, static_cast<int>(rows_.size()));
@@ -416,10 +439,12 @@ std::string_view PcSettingsPage::ShownNote(const PcSettingRow& row) const {
 }
 
 const PcSettingRow* PcSettingsPage::CurrentRow() const {
+    if (UpdateDialogOpen()) return &*footer_;
     return cursor_ >= 0 && cursor_ < static_cast<int>(rows_.size()) ? &RowOf(rows_[cursor_]) : nullptr;
 }
 
 const PcSettingRow* PcSettingsPage::FindRow(std::string_view label) const {
+    if (footer_ && footer_->label == label) return &*footer_;
     for (const PcSettingSection& section : sections_) {
         for (const PcSettingRow& row : section.rows) {
             if (row.label == label) {
@@ -432,6 +457,7 @@ const PcSettingRow* PcSettingsPage::FindRow(std::string_view label) const {
 }
 
 bool PcSettingsPage::ShowRowPage(std::string_view label) {
+    if (footer_ && footer_->label == label) return true;
     for (const PcSettingSection& section : sections_) {
         for (const PcSettingRow& row : section.rows) {
             if (row.label == label) return true;
@@ -455,6 +481,7 @@ bool PcSettingsPage::SetValue(std::string_view label, int value) {
 
 bool PcSettingsPage::Focus(std::string_view label) {
     ShowRowPage(label);
+    if (footer_ && footer_->label == label) return true;
     for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
         if (RowOf(rows_[i]).label == label) {
             cursor_ = i;
@@ -481,6 +508,21 @@ int PcSettingsPage::RowAt(glm::vec2 units) const {
         }
     }
     return -1;
+}
+
+bool PcSettingsPage::UpdateAt(glm::vec2 units) const {
+    if (!footer_ || !Tabbed() || update_rect_.z <= update_rect_.x) return false;
+    const glm::vec2 px(640.0f + units.x * UiCanvas::kUnit, 360.0f - units.y * UiCanvas::kUnit);
+    return px.x >= update_rect_.x - 4.0f && px.x <= update_rect_.z + 4.0f && px.y >= update_rect_.y - 6.0f && px.y <= update_rect_.w + 6.0f;
+}
+
+void PcSettingsPage::OpenUpdateDialog(Game& game) {
+    if (!footer_ || !footer_->enabled) return;
+    confirming_ = true;
+    update_dialog_ = true;
+    dialog_nav_.Open(footer_->confirm_default_yes ? 0 : 1, held_dirs_);
+    flash_frame_ = 0.0f;
+    if (game.Audio()) PlayCursor(game);
 }
 
 bool PcSettingsPage::BackAt(glm::vec2 units) const {
@@ -550,6 +592,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
             return;
         }
         confirming_ = true;
+        update_dialog_ = false;
         dialog_nav_.Open(row->confirm_default_yes ? 0 : 1, held_dirs_);
         flash_frame_ = 0.0f;
         if (game.Audio()) {
@@ -658,6 +701,10 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         Donate(game);
         return Result::None;
     }
+    if (input.update && Tabbed() && footer_) {
+        OpenUpdateDialog(game);
+        return Result::None;
+    }
     if (Tabbed() && (input.tab_prev || input.tab_next)) {
         held_dirs_ = input.held_dirs;
         SwitchTab(game, input.tab_prev ? -1 : 1);
@@ -700,6 +747,12 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
                 return Result::None;
             }
         }
+    }
+    update_hover_ = input.pointer_valid && UpdateAt(input.pointer);
+    if (update_hover_ && input.click) {
+        last_pointer_ = input.pointer;
+        OpenUpdateDialog(game);
+        return Result::None;
     }
     if (input.pointer_valid) {
         if (Gallery() == PcGallery::Wall && input.click && !rows_.empty()) {
@@ -881,6 +934,7 @@ bool PcSettingsPage::DialogView(dialog::View& view, int language) const {
         view.text = PcNoteText(source_->Question(), language);
         for (const Placed& p : rows_) view.choices.push_back(std::string(PcText(RowOf(p).label, language)));
         view.focus = cursor_;
+        if (!source_->QuestionBackShown()) view.back_label.clear();
         view.dim = 0.0f;
         return true;
     }
@@ -888,6 +942,7 @@ bool PcSettingsPage::DialogView(dialog::View& view, int language) const {
     if (!row || !row->action) return false;
     view.text = PcNoteText(row->confirm_note.empty() ? std::string_view("pc_dlg_reset") : std::string_view(row->confirm_note), language);
     view.choices = {std::string(PcText("pc_save_move_yes", language)), std::string(PcText("pc_save_move_no", language))};
+    view.back_label.clear();
     view.focus = dialog_nav_.Focus();
     return true;
 }
@@ -963,7 +1018,25 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         state.color = glm::vec4(1.0f, 1.0f, 1.0f, donate_hover_ ? 1.0f : 0.8f);
     }
     text(back_text_, "pc_back");
-    const bool quit_selected = cursor_ == static_cast<int>(rows_.size()) + 1;
+    const bool quit_selected = false;
+    {
+        auto& state = view.State(footer_text_);
+        state.visible = footer_.has_value() && tabbed;
+        state.font_type = UiFontType::PcSystem;
+        const std::string shown = footer_ ? "{update} " + std::string(PcText(footer_->label, language)) +
+                                                (footer_->values.empty() ? std::string() : "  " + footer_->values.front())
+                                          : std::string();
+        state.text = shown;
+        const std::optional<glm::vec4> drawn = view.TextRect(footer_text_);
+        if (drawn) update_rect_ = *drawn;
+        if (drawn && update_latch_text_ != shown) {
+            update_latched_ = (drawn->z - drawn->x) / UiCanvas::kUnit;
+            update_latch_text_ = shown;
+        }
+        const float width = update_latch_text_ == shown ? update_latched_ : 0.0f;
+        state.offset = glm::vec2(std::round((kCenterX - 0.5f * width) * 10.0f) * 0.1f, -31.0f);
+        state.color = glm::vec4(1.0f, 1.0f, 1.0f, footer_ && !footer_->enabled ? 0.4f : update_hover_ ? 1.0f : 0.8f);
+    }
     text(quit_text_, "pc_quit");
     view.State(quit_text_).visible = false;
     const PcGallery gallery = Gallery();
@@ -1102,7 +1175,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         }
         view.State(tab_bar_group_).color = glm::vec4(1.0f, 1.0f, 1.0f, alpha);
     }
-    if (current) {
+    if (current && !UpdateDialogOpen()) {
         view.State(bar_group_).offset = rows_[cursor_].value + glm::vec2(0.0f, scroll_y_);
         if (Browser()) view.State(bar_group_).offset = glm::vec2(-27.0f, Shown(rows_[cursor_]).y);
         else if (ValueLess(*current)) {
@@ -1128,6 +1201,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     std::string_view note = current && !audio_entry ? ShownNote(*current) : std::string_view();
     if (tabbed && cursor_ < 0) note = source_->TabNote(source_->Tab());
     if (tabbed && donate_hover_) note = "pc_note_patreon";
+    if (tabbed && update_hover_ && footer_) note = footer_->note;
     if (quit_selected) note = "pc_note_quit";
     if (source_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) view.State(help_).description_samples = source_->DescriptionSamples();
     view.State(help_).text_box = gallery == PcGallery::None ? glm::vec4(92.0f, 540.0f, 1186.0f, 626.0f)

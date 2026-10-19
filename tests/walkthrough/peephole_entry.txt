@@ -1,0 +1,48 @@
+20 sloop 13
+20 sfade 1200
+20 sstep 15
+20 swait 5
+20 sfree
+20 sanchor
+20 gfile 0 -1.4 3 600
+20 gfile 0 -1.4 6.5 600
+20 sbrowsed 600
+20 sfree
+20 sfade
+20 sat f110 1
+20 sanchor next
+20 gfile 0 0 1.5 600
+20 gfile 0 0 13.6 600
+20 gfile -9.8 0 13.6 900
+20 gfile -9.8 0 1.3 900
+20 gfile -29.2 0 1.3 900
+20 gfile -29.2 0 -1.0 600
+20 sanchor nextB
+20 gfile -13.5 0 -30.2 900
+20 gfile -7.1 0 -30.2 900
+20 gfile -7.1 0 -34.5 900
+20 fent shsb_labl001_holl001_0000
+20 swait 30
+20 slog
+20 sshot {out}/front.png
+20 szoom 1
+20 swait 8
+20 slook 2.2 0.9 1
+20 sburst 22 {out}/entry
+20 swait 25
+20 slog
+20 sshot {out}/held.png
+20 szoom 0
+20 sburst 8 {out}/exit
+20 swait 40
+20 slog
+20 fent shsb_labl001_holl001_0000
+20 swait 5
+20 szoom 1
+20 swait 90
+20 sshot {out}/normal_reentry.png
+20 swait 2220
+20 slog
+20 szoom 0
+20 swait 30
+20 squit

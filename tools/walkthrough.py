@@ -34,6 +34,20 @@ F120_SAVE = ((0x6E69777470).to_bytes(8, "little") + (3).to_bytes(4, "little") + 
 ARCHIVE_BACKFILL_COUNT = r"museum: 73 / 107 found \(68%\), bonus 0"
 
 SCENARIOS = {
+    "removed_options": {
+        "start_floor": "f010",
+        "frames": 5000,
+        "args": ["--virtual-pads", "--audio-offline"],
+        "work_files": {"pt.ini": b"[display]\npause_on_focus_loss=1\nmute_in_background=1\n[graphics]\nenhanced_textures=1\n"},
+        "route": ["removed_options"],
+        "expect": [
+            r"expect ok .*: PC setting pc_focus_pause absent",
+            r"expect ok .*: PC setting pc_focus_mute absent",
+            r"expect ok .*: PC setting pc_enhanced_textures absent",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+        "forbid": [(r"startup:", r"zzz never", r"enhanced textures|texture preparation|pause menu opened|frozen in the background")],
+    },
     "full": {
         "start_floor": None,
         "frames": 90000,
@@ -1886,27 +1900,17 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
-    # the top banner's queue: the update notice, the enhanced textures lines (a made up generation, PT_TEST_TEXTURE_SCREEN, after the start's
-    # screen is skipped) and the Game+ tier asked for together come one at a time, each for its whole 7.5 s
     "notices": {
         "start_floor": "f010",
         "frames": 16000,
         "args": ["--virtual-pads", "--audio-offline", "--fake-update", "99.0.0"],
-        "env": {"PT_TEST_TEXTURE_SCREEN": "5000"},
         "route": ["notices"],
         "expect": [
-            r"boot: enhanced textures screen shown, 0 of 5000 made",
             r"notice: queued pc_update_available",
-            r"boot: enhanced textures screen over after .* \(skipped\)",
-            r"notice: queued pc_notice_enhanced_working",
             r"notice: shown pc_update_available",
             r"notice: ended pc_update_available.* after 7\.[5-9] s",
-            r"notice: shown pc_notice_enhanced_working",
-            r"notice: ended pc_notice_enhanced_working after 7\.[5-9] s",
             r"notice: shown pc_gameplus_notice.2",
             r"notice: ended pc_gameplus_notice.2 after 7\.[5-9] s",
-            r"notice: shown pc_notice_enhanced_ready",
-            r"notice: ended pc_notice_enhanced_ready after 7\.[5-9] s",
         ],
     },
     # a notice shown once: pushed in the start room, faded out there, then the door into the loop (a stage change) and the hallway; the
@@ -1940,43 +1944,20 @@ SCENARIOS = {
         ],
         "forbid": [(r"notice: cut", r"zzz never", r"notice: (queued|shown|ended)"), (r"notice: shown", r"zzz never", r"notice: ended")],
     },
-    # every source of a line in one run (the update notice, the generation's two lines, a Game+ tier): each is shown once, the start room's
-    # door and the loops after it show none of them again
     "notifyrepeat_all": {
         "start_floor": "f010",
         "frames": 20000,
         "args": ["--virtual-pads", "--audio-offline", "--fake-update", "99.0.0"],
-        "env": {"PT_TEST_TEXTURE_SCREEN": "5000"},
         "route": ["notifyrepeat_all", "f005", "exit"],
         "expect": [
             r"notice: shown pc_update_available",
             r"notice: ended pc_update_available.* after 7\.[5-9] s",
-            r"notice: shown pc_notice_enhanced_working",
-            r"notice: ended pc_notice_enhanced_working after 7\.[5-9] s",
             r"notice: shown pc_gameplus_notice.2",
             r"notice: ended pc_gameplus_notice.2 after 7\.[5-9] s",
-            r"notice: shown pc_notice_enhanced_ready",
-            r"notice: ended pc_notice_enhanced_ready after 7\.[5-9] s",
             r"floor: NextFloor f010 -> f005",
             r"floor: NextFloor f005 -> f020",
         ],
-        "forbid": [(r"notice: ended pc_notice_enhanced_ready", r"zzz never", r"notice: (queued|shown|cut)")],
-    },
-    # the start's enhanced textures screen: Return asks to skip, Esc says no, Return and Return again say yes and the start goes on
-    "texture_screen": {
-        "start_floor": "f010",
-        "frames": 12000,
-        "args": ["--virtual-pads", "--audio-offline"],
-        "env": {"PT_TEST_TEXTURE_SCREEN": "3000"},
-        "route": ["texture_screen"],
-        "expect": [
-            r"boot: enhanced textures screen shown, 0 of 3000 made",
-            r"input script frame \d+: key Escape tapped",
-            r"input script frame \d+: key Return tapped",
-            r"boot: enhanced textures screen over after .* \(skipped\)",
-            r"controller: step \d+ -> 15",
-        ],
-        "forbid": [(r"boot: enhanced textures screen shown", r"key Escape tapped", r"screen over")],
+        "forbid": [(r"notice: ended pc_gameplus_notice.2", r"zzz never", r"notice: (queued|shown|cut)")],
     },
     "prompts": {
         "pad": True,
@@ -2080,6 +2061,20 @@ SCENARIOS = {
             r"demo: gc_p00_010 releases the player",
         ],
         "forbid": [(r"ocho: LogicControl 2", r"demo: gc_p00_010 releases the player", r"sound: id 0xc910062e on Lisa")],
+    },
+    "lisadoor_release": {
+        "start_floor": "f060",
+        "frames": 12000,
+        "args": ["--audio-offline"],
+        "route": ["lisa_door_release"],
+        "expect": [
+            r"floor: NextFloor f050 -> f050 \(loop 2\)",
+            r"sound: id 0x7b136101 on Lisa",
+            r"expect ok frame \d+: event 0x7b136101 alive",
+            r"demo: gc_p00_010 releases the player",
+            r"expect ok frame \d+: event 0x7b136101 not alive",
+            r"input script: \d+ expectations, 0 failed",
+        ],
     },
     "fakecrash": {
         "optional": True,

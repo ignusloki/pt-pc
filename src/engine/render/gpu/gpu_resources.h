@@ -77,6 +77,7 @@ struct BufferDesc {
     bool host_visible = false;
     bool readback = false;
     const char* name = nullptr;
+    bool gpu_read_only = false;
 };
 
 struct BufferResource {

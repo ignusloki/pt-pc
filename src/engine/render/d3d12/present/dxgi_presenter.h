@@ -52,6 +52,9 @@ private:
     uint64_t presents_ = 0;
     uint64_t occluded_ = 0;
     int present_errors_ = 0;
+    HRESULT last_present_status_ = S_OK;
+    bool present_status_seen_ = false;
+    unsigned present_status_logs_ = 0;
 };
 
 }

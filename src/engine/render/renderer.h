@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "engine/render/hdr_output.h"
+#include "engine/render/output_mode.h"
 #include "engine/render/pipeline_warmup.h"
 #include "engine/render/vk/vk_device.h"
 #ifdef _WIN32
@@ -23,7 +24,6 @@ struct SDL_Window;
 namespace pt {
 
 enum class FrameStartAction;
-enum class RendererOutputMode { Sdr, ScRgb, Hdr10 };
 
 struct RendererSettings {
     gpu::Backend backend = gpu::Backend::Vulkan;

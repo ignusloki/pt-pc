@@ -190,6 +190,10 @@ vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& cen
 
 SceneLight ToSceneLight(const vfx::LightOut& v) {
     SceneLight l;
+    if (v.owner == (kGimmickOwner | static_cast<uint64_t>(GimmickType::CeilLamp))) {
+        l.light_fitting = static_cast<uint32_t>(GimmickType::CeilLamp) + 1;
+        l.path_stair_ceiling = true;
+    }
     l.id = v.id;
     l.type = v.spot ? LightType::Spot : LightType::Point;
     l.position = v.position;
@@ -687,6 +691,9 @@ void VfxScene::UpdateSystems(Game& game, float dt) {
     system_.SetWind(wind);
     anim::SetSimWind(wind);
     system_.Update(dt, View(game.ViewCamera(), 16.0f / 9.0f));
+    if (auto* sound = dynamic_cast<GameSound*>(game.Audio())) {
+        sound->UpdateVfxEmissions(system_);
+    }
     if (game.Frame() >= logged_frame_ + 600) {
         logged_frame_ = game.Frame();
         std::string top;

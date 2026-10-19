@@ -6,6 +6,8 @@ set "BUILD_NAME=%~2"
 if "%BUILD_NAME%"=="" set "BUILD_NAME=%PRESET%"
 set "TARGET_ARGS="
 if not "%~3"=="" set "TARGET_ARGS=--target %~3"
+set "BUILD_JOBS=%NUMBER_OF_PROCESSORS%"
+if not "%PT_BUILD_JOBS%"=="" set "BUILD_JOBS=%PT_BUILD_JOBS%"
 set "VSDIR=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
 set "PATH=%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
@@ -24,5 +26,5 @@ rem PT_CMAKE_ARGS (tools/ci/release.py): configure again with these cache values
 if not "%PT_CMAKE_ARGS%"=="" (
   cmake --preset %PRESET% -B "%BUILD_DIR%" %SHARED% %PT_CMAKE_ARGS% || exit /b 2
 ) else if not exist "%BUILD_DIR%\CMakeCache.txt" cmake --preset %PRESET% -B "%BUILD_DIR%" %SHARED% || exit /b 2
-cmake --build "%BUILD_DIR%" --parallel %NUMBER_OF_PROCESSORS% %TARGET_ARGS% || exit /b 3
+cmake --build "%BUILD_DIR%" --parallel %BUILD_JOBS% %TARGET_ARGS% || exit /b 3
 echo BUILD_OK %CD%\%BUILD_DIR%\pt.exe

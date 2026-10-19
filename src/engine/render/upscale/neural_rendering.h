@@ -26,6 +26,8 @@ struct NeuralRuntimeInfo {
 };
 
 std::optional<NeuralRuntimeInfo> FindNeuralRuntime(const std::string& ini_path);
+void ConfigureNativeNeuralRuntime(const std::string& ini_path);
+const std::optional<NeuralRuntimeInfo>& NativeNeuralRuntime();
 
 struct NeuralRenderingSupport {
     bool available = false;
@@ -58,7 +60,7 @@ class NeuralBackend {
 public:
     virtual ~NeuralBackend() = default;
     virtual const NeuralRenderingSupport& Support(const std::string& ini_runtime) = 0;
-    virtual bool Create(void* cmd, uint32_t width, uint32_t height, NeuralStyle style, float intensity, float scaling_ratio) = 0;
+    virtual bool Create(void* cmd, uint32_t width, uint32_t height, NeuralStyle style, float intensity, float scaling_ratio, bool small_model) = 0;
     virtual bool Created() const = 0;
     virtual bool Dispatch(const NeuralDispatch& d) = 0;
     virtual void Release() = 0;

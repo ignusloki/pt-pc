@@ -94,6 +94,7 @@ struct RenderList {
 };
 
 struct LightOut {
+    uint64_t owner = 0;
     bool spot = false;
     glm::vec3 position{0.0f};
     glm::vec3 direction{0.0f, -1.0f, 0.0f};
@@ -207,6 +208,10 @@ public:
         return false;
     }
     size_t ParticleCount() const;
+    bool Emitted(const InstanceKey& key) const {
+        const auto it = instances_.find(key);
+        return it != instances_.end() && it->second.emitted;
+    }
     std::vector<std::pair<std::string, size_t>> Stats() const;
 
 private:
@@ -274,6 +279,7 @@ private:
         float frame = 0.0f;
         uint32_t loop = 0;
         bool started = false;
+        bool emitted = false;
         bool finished = false;
         bool stopped = false;
         std::vector<ShapeState> shapes;

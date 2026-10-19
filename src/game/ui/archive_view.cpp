@@ -331,7 +331,8 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
         DrawFrame(batch, canvas, assets, sheet, {}, L::kTranscript.lo, L::kTranscript.hi, 0.0f, true, false, language);
         batch.Quad(a, b, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), ui::UiDrawParams::Plain(TextureManager::kWhite),
                    ui::UiShade::Solid, ui::UiBlend::Alpha);
-        DrawLines(batch, canvas, assets, panel, L::kTranscript.lo + glm::vec2(22.0f, 18.0f), L::kTranscript.hi - glm::vec2(22.0f, 14.0f), language, true);
+        const bool whole = panel.current_line < 0 && panel.lines.size() <= 8;
+        DrawLines(batch, canvas, assets, panel, L::kTranscript.lo + glm::vec2(22.0f, 18.0f), L::kTranscript.hi - glm::vec2(22.0f, 14.0f), language, whole);
     } else {
         DrawFrame(batch, canvas, assets, panel, current->label, L::kSpotlight.lo, L::kSpotlight.hi, 8.0f, true, locked, language);
     }

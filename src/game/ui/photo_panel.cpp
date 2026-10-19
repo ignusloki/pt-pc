@@ -48,6 +48,7 @@ constexpr RowText kRows[] = {
     {"pc_photo_filter", "pc_note_photo_filter", nullptr},
     {"pc_photo_body", "pc_note_photo_body", nullptr},
     {"pc_photo_flashlight", "pc_note_photo_flashlight", nullptr},
+    {"pc_photo_reset_settings", "pc_note_photo_reset_settings", nullptr},
 };
 
 std::string Number(float value) {
@@ -84,15 +85,23 @@ float PhotoSettings::AspectRatio(float source_aspect) const {
     return PhotoAspectRatio(static_cast<PhotoAspectPreset>(aspect), source_aspect);
 }
 
-void PhotoPanel::Open(const PhotoSettings& settings) {
-    settings_ = settings;
-    settings_.focal_length_mm = PhotoFocalLengthForStep(PhotoFocalLengthStep(settings_.focal_length_mm));
-    settings_.roll = std::clamp(settings_.roll, -kRollMax, kRollMax);
-    settings_.aspect = std::clamp(settings_.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
-    settings_.resolution = static_cast<PhotoResolution>(std::clamp(static_cast<int>(settings_.resolution), 0,
-                                                                    static_cast<int>(PhotoResolution::Count) - 1));
-    settings_.filter = static_cast<PhotoColorFilter>(std::clamp(static_cast<int>(settings_.filter), 0,
-                                                                 static_cast<int>(PhotoColorFilter::Count) - 1));
+void PhotoPanel::Open(const PhotoSettings& defaults) {
+    const auto normalize = [](PhotoSettings& s) {
+        s.focal_length_mm = PhotoFocalLengthForStep(PhotoFocalLengthStep(s.focal_length_mm));
+        s.roll = std::clamp(s.roll, -kRollMax, kRollMax);
+        s.aspect = std::clamp(s.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
+        s.resolution = static_cast<PhotoResolution>(std::clamp(static_cast<int>(s.resolution), 0,
+                                                               static_cast<int>(PhotoResolution::Count) - 1));
+        s.filter = static_cast<PhotoColorFilter>(std::clamp(static_cast<int>(s.filter), 0,
+                                                             static_cast<int>(PhotoColorFilter::Count) - 1));
+    };
+    defaults_ = defaults;
+    normalize(defaults_);
+    if (!initialized_) {
+        settings_ = defaults_;
+        initialized_ = true;
+    }
+    normalize(settings_);
     cursor_ = 0;
     held_dirs_ = 0;
     repeat_time_ = 0.0f;
@@ -111,7 +120,8 @@ int PhotoPanel::Steps(int row) const {
         case kResolution: return static_cast<int>(PhotoResolution::Count);
         case kFilter: return static_cast<int>(PhotoColorFilter::Count);
         case kTakePhoto:
-        case kReset: return 1;
+        case kReset:
+        case kResetSettings: return 1;
         default: return 2;
     }
 }
@@ -145,7 +155,8 @@ std::string PhotoPanel::ValueText(int row, int language) const {
     auto on_off = [&](bool on) { return text(on ? "pc_on" : "pc_off"); };
     switch (row) {
         case kTakePhoto: return text("pc_photo_capture");
-        case kReset: return text("pc_reset_value");
+        case kReset:
+        case kResetSettings: return text("pc_reset_value");
         case kFocalLength: return std::format("{} mm", static_cast<int>(std::lround(s.focal_length_mm)));
         case kRoll: return s.roll > 0 ? std::format("+{}", s.roll) : std::to_string(s.roll);
         case kSpeed: return text(s.speed == 0 ? "pc_photo_speed_slow" : s.speed == 2 ? "pc_photo_speed_fast" : "pc_photo_speed_normal");
@@ -251,10 +262,14 @@ PhotoPanel::Action PhotoPanel::Update(GameAudio* audio, const Input& input, floa
     } else if (act & kRawRight) {
         Change(audio, 1);
     }
-    if (input.accept && (cursor_ == kTakePhoto || cursor_ == kReset)) {
+    if (input.accept && (cursor_ == kTakePhoto || cursor_ == kReset || cursor_ == kResetSettings)) {
         flash_frame_ = 0.0f;
         if (audio) {
             audio->PostEvent(kChangeSound, nullptr);
+        }
+        if (cursor_ == kResetSettings) {
+            settings_ = defaults_;
+            return Action::ResetSettings;
         }
         return cursor_ == kTakePhoto ? Action::TakePhoto : Action::ResetCamera;
     }

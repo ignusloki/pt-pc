@@ -17,6 +17,7 @@
 #include "engine/core/log.h"
 #include "engine/core/resource_path.h"
 #include "engine/render/d3d12/backend/d3d12_native.h"
+#include "engine/render/d3d12/backend/reshade_native.h"
 #include "engine/render/mesh.h"
 #include "engine/render/upscale/upscale_platform.h"
 #include "engine/render/upscale/streamline.h"
@@ -249,7 +250,10 @@ bool DeviceImpl::Init(std::string& error) {
         o.luid = options_.adapter_luid;
     }
     if (streamline::ActiveD3D12()) {
-        o.device_created = [](ID3D12Device* device, const uint8_t (&luid)[8]) { streamline::DeviceCreatedD3D12(device, luid); };
+        o.device_created = [](ID3D12Device* device, const uint8_t (&luid)[8]) {
+            const auto native = ReShadeNative(device);
+            streamline::DeviceCreatedD3D12(native.Get(), luid);
+        };
     }
     if (!bridge_.Create(o, error)) {
         return false;
@@ -308,7 +312,7 @@ bool DeviceImpl::Init(std::string& error) {
     info_.dynamic_depth_bias = has16 && options16.DynamicDepthBiasSupported;
     {
         const char* env = std::getenv("PT_D3D12_GPU_UPLOAD");
-        gpu_upload_ = has16 && options16.GPUUploadHeapSupported && env && env[0] == '1';
+        gpu_upload_ = has16 && options16.GPUUploadHeapSupported && (!env || env[0] != '0');
     }
     UINT64 frequency = 0;
     if (SUCCEEDED(bridge_.Queue()->GetTimestampFrequency(&frequency)) && frequency) {
@@ -359,6 +363,8 @@ bool DeviceImpl::Init(std::string& error) {
     LogInfo("d3d12 backend: {} ({}), shader model 6.6, binding tier {}, ray tracing tier {:#x}, depth bounds {}, dynamic depth bias {}, GPU upload heap {}, {} MB",
             info_.adapter, RuntimeDescription(), static_cast<int>(options.ResourceBindingTier), static_cast<int>(options5.RaytracingTier),
             info_.depth_bounds ? "yes" : "no", info_.dynamic_depth_bias ? "yes" : "no", gpu_upload_ ? "yes" : "no", info_.dedicated_video_memory >> 20);
+    LogInfo("d3d12 backend: CPU-written shader inputs use {}; GPU-written CPU readbacks stay in system memory",
+            gpu_upload_ ? "GPU upload heaps" : "staged video-memory buffers");
     return true;
 }
 
@@ -996,11 +1002,23 @@ bool DeviceImpl::CreateBuffer(const BufferDesc& desc, BufferResource& out) {
     D3D12MA::ALLOCATION_DESC a{};
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
     const bool storage = desc.usage.Has(BufferUsage::StorageBuffer);
+    rec->gpu_read_only = desc.gpu_read_only;
     const bool cpu_reads = desc.host_visible && desc.usage == BufferUsageFlags(BufferUsage::TransferDst);
     if (desc.readback || cpu_reads) {
         rec->heap = HeapKind::Readback;
         a.HeapType = D3D12_HEAP_TYPE_READBACK;
         state = D3D12_RESOURCE_STATE_COPY_DEST;
+    } else if (desc.host_visible && desc.gpu_read_only && storage) {
+        if (gpu_upload_) {
+            rec->heap = HeapKind::Upload;
+            a.HeapType = D3D12_HEAP_TYPE_GPU_UPLOAD;
+            state = D3D12_RESOURCE_STATE_GENERIC_READ;
+        } else {
+            a.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+            rec->host_data.resize(rec->size);
+            rec->mapped = rec->host_data.data();
+            rec->dirty_end = rec->size;
+        }
     } else if (desc.host_visible && storage) {
         rec->heap = HeapKind::HostStorage;
         a.HeapType = D3D12_HEAP_TYPE_CUSTOM;
@@ -1012,20 +1030,16 @@ bool DeviceImpl::CreateBuffer(const BufferDesc& desc, BufferResource& out) {
         state = D3D12_RESOURCE_STATE_GENERIC_READ;
     } else {
         a.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-        if (storage) {
+        if (storage && !desc.gpu_read_only) {
             rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         }
     }
     HRESULT hr;
     if (rec->heap == HeapKind::HostStorage) {
         D3D12_HEAP_PROPERTIES heap{};
-        if (gpu_upload_) {
-            heap.Type = D3D12_HEAP_TYPE_GPU_UPLOAD;
-        } else {
-            heap.Type = D3D12_HEAP_TYPE_CUSTOM;
-            heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
-            heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
-        }
+        heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+        heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+        heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
         hr = bridge_.Get()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr, IID_PPV_ARGS(&rec->resource));
     } else {
         if (test_budget_bytes_ && a.HeapType == D3D12_HEAP_TYPE_DEFAULT && OverTestBudget(rec->size, desc.name)) {
@@ -1061,6 +1075,16 @@ void DeviceImpl::DestroyBuffer(BufferResource& buffer) {
     Release(std::move(rec->resource), rec->allocation);
     delete rec;
     buffer = {};
+}
+
+void DeviceImpl::FlushMapped(const BufferResource& buffer, uint64_t offset, uint64_t size) {
+    BufferRecord* rec = Rec<BufferRecord>(buffer.buffer);
+    if (!rec || rec->host_data.empty() || offset >= rec->size || size == 0) {
+        return;
+    }
+    const uint64_t end = offset + std::min(size, rec->size - offset);
+    rec->dirty_begin = rec->dirty_end ? std::min(rec->dirty_begin, offset) : offset;
+    rec->dirty_end = std::max(rec->dirty_end, end);
 }
 
 SamplerHandle DeviceImpl::CreateSampler(const SamplerDesc& desc) {
@@ -1263,11 +1287,17 @@ void DeviceImpl::WriteBindings(std::span<const BindingWrite> writes) {
         }
         for (size_t i = 0; i < w.buffers.size(); ++i) {
             const BufferBinding& bb = w.buffers[i];
-            const BufferRecord* buf = Rec<BufferRecord>(bb.buffer);
+            BufferRecord* buf = Rec<BufferRecord>(bb.buffer);
             if (!buf) {
                 continue;
             }
             const uint32_t idx = static_cast<uint32_t>(i);
+            const uint64_t key = (uint64_t(w.binding) << 32) | (w.first + idx);
+            if (!buf->host_data.empty()) {
+                set->uploads[key] = buf;
+            } else {
+                set->uploads.erase(key);
+            }
             const uint64_t range = bb.range == ~0ull ? buf->size - bb.offset : bb.range;
             if (w.type == BindingType::UniformBuffer) {
                 D3D12_CONSTANT_BUFFER_VIEW_DESC v{};
@@ -1289,7 +1319,7 @@ void DeviceImpl::WriteBindings(std::span<const BindingWrite> writes) {
             u.Buffer.FirstElement = bb.offset / 4;
             u.Buffer.NumElements = static_cast<UINT>(range / 4);
             u.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
-            const bool uav_capable = buf->heap == HeapKind::Default || buf->heap == HeapKind::HostStorage;
+            const bool uav_capable = !buf->gpu_read_only && (buf->heap == HeapKind::Default || buf->heap == HeapKind::HostStorage);
             if (!array) {
                 device->CreateShaderResourceView(buf->resource.Get(), &s, views_.Cpu(srv_at(idx)));
                 if (uav_capable) {

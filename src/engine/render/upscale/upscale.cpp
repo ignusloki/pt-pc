@@ -1,4 +1,5 @@
 #include "engine/core/ascii.h"
+#include "engine/render/upscale/neural_native.h"
 #include "engine/platform/os.h"
 #include "engine/render/upscale/upscale.h"
 #include "engine/render/upscale/fg_unlock.h"
@@ -18,6 +19,9 @@
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale_platform.h"
+#ifdef _WIN32
+#include "engine/render/d3d12/backend/d3d12_neural.h"
+#endif
 
 #ifdef __APPLE__
 #include <vulkan/vulkan_metal.h>
@@ -754,7 +758,22 @@ FrameGeneration* UpscaleHost::MetalFxFrameGen() {
     return metalfx_frame_gen_.get();
 }
 
+void UpscaleHost::ReleaseD3D12Ngx() {
+    if (!d3d12_device_) return;
+    native_neural_.reset();
+    native_neural_failure_ = {};
+    neural_.reset();
+    neural_created_ = false;
+    const int dlss = static_cast<int>(UpscalerKind::Dlss);
+    backends_[dlss].reset();
+    probed_[dlss] = available_[dlss] = false;
+    reasons_[dlss].clear();
+    LogInfo("upscale: released direct NGX consumers before live Streamline reload");
+}
+
 void UpscaleHost::Shutdown() {
+    native_neural_.reset();
+    native_neural_failure_ = {};
     if (frame_intervals_.size() > 120) {
         std::vector<float> sorted(frame_intervals_.begin() + 60, frame_intervals_.end());
         std::sort(sorted.begin(), sorted.end());
@@ -803,6 +822,37 @@ void UpscaleHost::Shutdown() {
     }
     ctx_ = nullptr;
     d3d12_device_ = nullptr;
+}
+
+const NeuralRenderingSupport* UpscaleHost::NativeNeuralStatus() const {
+    if (native_neural_) return &native_neural_->Status();
+    return native_neural_failure_.reason.empty() ? nullptr : &native_neural_failure_;
+}
+
+bool UpscaleHost::RecordNativeNeural(const UpscaleDispatch& dispatch) {
+#ifdef _WIN32
+    if (!d3d12_device_ || !nr_native::Enabled()) return false;
+    if (!dispatch.neural_enabled && !native_neural_) return true;
+    if (!native_neural_failure_.reason.empty()) return false;
+    if (!native_neural_) {
+        auto& core = backends_[static_cast<int>(UpscalerKind::Dlss)];
+        if (!core && d3d12_factory_) core = d3d12_factory_(UpscalerKind::Dlss, *d3d12_device_);
+        std::string reason;
+        if (!core || !core->InitializeNeuralCore(reason)) {
+            native_neural_failure_.available = false;
+            native_neural_failure_.runtime = NativeNeuralRuntime();
+            native_neural_failure_.reason = "native NR core: " + reason;
+            native_neural_failure_.note = "pc_note_nr_native_failed";
+            LogError("{}", native_neural_failure_.reason);
+            return false;
+        }
+        native_neural_ = gpu::d3d12::CreatePostUpscaleNeural(*d3d12_device_);
+    }
+    return native_neural_ && native_neural_->Record(dispatch);
+#else
+    (void)dispatch;
+    return false;
+#endif
 }
 
 UpscaleBackend* UpscaleHost::Backend(UpscalerKind kind) {

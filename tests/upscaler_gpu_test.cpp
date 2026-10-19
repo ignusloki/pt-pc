@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -10,6 +11,7 @@
 #include "engine/render/upscale/neural_rendering.h"
 #include "engine/render/upscale/neural_unlock.h"
 #include "engine/render/upscale/upscale.h"
+#include "engine/render/upscale/streamline.h"
 
 namespace {
 
@@ -25,6 +27,13 @@ void Expect(bool ok, const char* what) {
 }
 
 int main() {
+    for (unsigned max_generated = 0; max_generated <= 5; ++max_generated) {
+        for (unsigned request = 0; request <= 8; ++request) {
+            const unsigned maximum = std::clamp(max_generated, 1u, 3u) + 1;
+            Expect(pt::streamline::ClampFrameGenMultiplier(request, max_generated) == std::clamp(request, 2u, maximum),
+                   "DLSS multiplier follows runtime capability, capped at 4x");
+        }
+    }
     Expect(pt::AmdGcnGpu(pt::kAmdVendor, 64, 64), "Polaris (64 to 64) is GCN");
     Expect(!pt::AmdGcnGpu(pt::kAmdVendor, 32, 64), "RDNA (32 to 64) is not GCN");
     Expect(!pt::AmdGcnGpu(pt::kAmdVendor, 32, 32), "wave 32 only is not GCN");
@@ -143,9 +152,18 @@ int main() {
         R"({"complete":true,"path":"native","files":["renodx-dlss5.addon64"],"components":{"reshade":"7.1.2","renodx":"9.9.9","dlssnr":"310.9.ZZ"}})");
     Expect(newer && pt::nr_unlock::Usable(*newer) && newer->addon == "9.9.9" && newer->runtime == "310.9.ZZ",
            "an unknown component version is still read and driven");
-    Expect(pt::fg_unlock::Applicable(0x10DE, "pc_note_dlssg_gpu"), "the FG unlock is offered when DLSS-G is greyed for the GPU");
-    Expect(!pt::fg_unlock::Applicable(0x10DE, "pc_note_dlssg_hags"), "a HAGS or driver reason is not the FG unlock's case");
-    Expect(!pt::fg_unlock::Applicable(0x1002, "pc_note_dlssg_gpu"), "a non-NVIDIA GPU is not offered the FG unlock");
+    for (int arch : {75, 86}) {
+        Expect(pt::fg_unlock::Applicable(arch, "pc_note_dlssg_gpu"), "RTX 20/30 offer the missing FG unlock");
+        Expect(!pt::fg_unlock::Applicable(arch, "pc_note_dlssg_hags"), "a HAGS reason does not offer a fresh unlock");
+        Expect(pt::fg_unlock::Applicable(arch, "", true), "installed RTX 20/30 retain route management after support succeeds");
+    }
+    for (int arch : {-1, 0, 89}) {
+        for (bool installed : {false, true}) {
+            Expect(!pt::fg_unlock::Applicable(arch, "pc_note_dlssg_gpu", installed),
+                   "unsupported or native FG GPUs never offer unlock even with a failed check and stale install");
+            Expect(!pt::fg_unlock::Applicable(arch, "", installed), "native FG GPUs never show route management");
+        }
+    }
     const auto fg = pt::fg_unlock::ParseInstall(
         R"({"complete":true,"tool_tag":"v0.4.0","runtime":"310.9.16","proxy":"version.dll",)"
         R"("files":[{"name":"version.dll","size":1,"sha256":"a"},{"name":"dlssg_sm86/runtime/nvngx_dlssg.dll","size":2,"sha256":"b"}]})");

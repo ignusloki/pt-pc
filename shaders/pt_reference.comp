@@ -176,7 +176,7 @@ vec3 CameraPath(vec2 frag, inout uint rng) {
         if (pass.f1.w > 0.5) {
             float a = PtCoatAmount(n, ps.normal, mat3(v.view) * n, pass.f1.xyz, s.roughness, pass.f2.x, pass.f2.y);
             if (a > 0.0 && RtRandom(rng) < a) {
-                vec3 d = PtCoatDirection(n, ps.normal, V, s.roughness, vec2(RtRandom(rng), RtRandom(rng)));
+                vec3 d = PtCoatDirection(n, ps.normal, V);
                 float first_c;
                 return radiance + PtTracePath(next, d, throughput, bounces, reach, 0.0, pass.ids.y, Cutoff(), rng, first_c);
             }

@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <utility>
+#include <vector>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -20,9 +23,22 @@
 #include <pthread.h>
 #else
 #include <dlfcn.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#endif
+#ifndef _WIN32
+#include <spawn.h>
+#include <sys/wait.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+extern char** environ;
+#endif
+#if (defined(__x86_64__) || defined(_M_X64)) && !(defined(__clang__) || defined(__GNUC__))
+#include <immintrin.h>
+#include <intrin.h>
 #endif
 
 #include "engine/core/log.h"
@@ -148,6 +164,97 @@ std::string LoadError() {
 
 std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) + name + kLibraryExtension; }
 
+struct CpuState {
+    std::string brand;
+    uint64_t xcr0 = 0;
+    bool known = false;
+};
+
+CpuState ReadCpuState() {
+    CpuState state;
+#if defined(__x86_64__) || defined(_M_X64)
+    auto cpuid = [](unsigned leaf, unsigned out[4]) {
+#if defined(__clang__) || defined(__GNUC__)
+        __asm__ volatile("cpuid" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3]) : "a"(leaf), "c"(0));
+#else
+        int r[4];
+        __cpuidex(r, static_cast<int>(leaf), 0);
+        for (int i = 0; i < 4; ++i) out[i] = static_cast<unsigned>(r[i]);
+#endif
+    };
+    unsigned r[4] = {};
+    cpuid(0x80000000u, r);
+    if (r[0] >= 0x80000004u) {
+        char text[49] = {};
+        for (unsigned i = 0; i < 3; ++i) {
+            cpuid(0x80000002u + i, r);
+            std::memcpy(text + i * 16, r, 16);
+        }
+        state.brand = text;
+        const auto first = state.brand.find_first_not_of(' ');
+        state.brand = first == std::string::npos ? "" : state.brand.substr(first, state.brand.find_last_not_of(' ') - first + 1);
+    }
+    cpuid(1, r);
+    if (r[2] & (1u << 27)) {
+#if defined(__clang__) || defined(__GNUC__)
+        unsigned lo = 0, hi = 0;
+        __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+        state.xcr0 = (static_cast<uint64_t>(hi) << 32) | lo;
+#else
+        state.xcr0 = _xgetbv(0);
+#endif
+    }
+    state.known = true;
+#endif
+    return state;
+}
+
+uint64_t VariantStateNeeded(std::string_view variant) {
+    constexpr uint64_t kAvx = 0x6, kAvx512 = 0xE6, kAmx = 0x60000;
+    if (variant == "sapphirerapids") return kAvx512 | kAmx;
+    for (const char* name : {"skylakex", "cannonlake", "cascadelake", "icelake", "cooperlake", "zen4"}) {
+        if (variant == name) return kAvx512;
+    }
+    for (const char* name : {"sandybridge", "ivybridge", "piledriver", "haswell", "alderlake"}) {
+        if (variant == name) return kAvx;
+    }
+    return 0;
+}
+
+constexpr const char* kProbeOption = "--voice-cpu-probe";
+
+#ifndef _WIN32
+std::filesystem::path OwnExecutable() {
+#ifdef __APPLE__
+    char path[4096];
+    uint32_t size = sizeof(path);
+    return _NSGetExecutablePath(path, &size) == 0 ? std::filesystem::path(path) : std::filesystem::path();
+#else
+    std::error_code ec;
+    return std::filesystem::read_symlink("/proc/self/exe", ec);
+#endif
+}
+
+std::string ProbeVariant(const std::filesystem::path& dir, const std::string& variant) {
+    const std::filesystem::path exe = OwnExecutable();
+    if (exe.empty()) return {};
+    const std::string exe_text = exe.string(), dir_text = dir.string();
+    char* args[] = {const_cast<char*>(exe_text.c_str()), const_cast<char*>(kProbeOption), const_cast<char*>(dir_text.c_str()),
+                    const_cast<char*>(variant.c_str()), nullptr};
+    pid_t pid = 0;
+    if (posix_spawn(&pid, exe_text.c_str(), nullptr, nullptr, args, environ) != 0) return {};
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return {};
+    if (WIFSIGNALED(status)) {
+        const int sig = WTERMSIG(status);
+        return std::format("signal {}{}", sig, sig == SIGILL ? " (SIGILL, an instruction this CPU does not run)" : "");
+    }
+    return std::format("exit code {}", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+}
+#endif
+
 void TestLoaderStall() {
 #ifdef _WIN32
     const char* text = std::getenv("PT_VOICE_LOAD_STALL_MS");
@@ -196,12 +303,15 @@ bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& fai
     }
     g_api.whisper_log_set(WhisperLog, nullptr);
     const char* forced = std::getenv("PT_VOICE_CPU");
+    const CpuState cpu = ReadCpuState();
+    if (cpu.known) LogInfo("voice: CPU {} (OS vector state XCR0 0x{:x})", cpu.brand.empty() ? "unnamed" : cpu.brand, cpu.xcr0);
     std::filesystem::path best;
     bool registered = false;
     int best_score = 0;
     int candidates = 0;
     int loaded = 0;
     std::string load_error;
+    std::vector<std::pair<int, std::filesystem::path>> ranked;
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
         const std::string name = os::PathToUtf8(entry.path().filename());
@@ -218,14 +328,31 @@ bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& fai
         ++loaded;
         using Score = int (*)();
         const auto score = reinterpret_cast<Score>(Symbol(module, "ggml_backend_score"));
-        const int value = score ? score() : 0;
+        int value = score ? score() : 0;
         Unload(module);
-        if (value > best_score) {
-            best_score = value;
-            best = entry.path();
-            g_api.cpu = variant;
+        if (const uint64_t needed = VariantStateNeeded(variant); value > 0 && cpu.known && (cpu.xcr0 & needed) != needed) {
+            LogInfo("voice: ggml-cpu-{} skipped: the CPU reports its instructions but the OS does not enable their registers (XCR0 0x{:x}, needs 0x{:x})",
+                    variant, cpu.xcr0, needed);
+            value = 0;
         }
+        if (value > 0) ranked.emplace_back(value, entry.path());
     }
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (const auto& [value, path] : ranked) {
+        const std::string name = os::PathToUtf8(path.filename());
+        const std::string variant = name.substr(std::strlen(kLibraryPrefix) + 9, name.size() - std::strlen(kLibraryPrefix) - 9 - std::strlen(kModuleExtension));
+#ifndef _WIN32
+        if (const std::string fault = ProbeVariant(dir, variant); !fault.empty()) {
+            LogWarn("voice: ggml-cpu-{} (score {}) failed in a test process: {}; trying the next variant", variant, value, fault);
+            continue;
+        }
+#endif
+        best_score = value;
+        best = path;
+        g_api.cpu = variant;
+        break;
+    }
+    if (best.empty() && !ranked.empty()) best_score = 0;
     if (!best.empty()) {
         g_api.cpu_backend = LoadNear(best);
         using InitBackend = ggml_backend_reg_t (*)();
@@ -264,6 +391,33 @@ bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& fai
     LogInfo("voice: whisper.cpp CPU code ggml-cpu-{} (score {})", g_api.cpu, best_score);
     return true;
 }
+
+}
+
+int VoiceCpuProbe(int argc, char** argv) {
+    if (argc < 4 || std::strcmp(argv[1], kProbeOption) != 0) return -1;
+#ifdef _WIN32
+    return 2;
+#else
+    rlimit none{0, 0};
+    setrlimit(RLIMIT_CORE, &none);
+#ifdef __linux__
+    prctl(PR_SET_DUMPABLE, 0);
+#endif
+    if (const char* fault = std::getenv("PT_VOICE_PROBE_FAULT"); fault && std::strcmp(fault, argv[3]) == 0) raise(SIGILL);
+    const std::filesystem::path dir = argv[2];
+    if (!LoadNear(dir / LibraryName("ggml-base")) || !LoadNear(dir / LibraryName("ggml"))) return 3;
+    const Library module = LoadNear(dir / (std::string(kLibraryPrefix) + "ggml-cpu-" + argv[3] + kModuleExtension));
+    if (!module) return 4;
+    using InitBackend = ggml_backend_reg_t (*)();
+    const auto init_backend = reinterpret_cast<InitBackend>(Symbol(module, "ggml_backend_init"));
+    if (!init_backend) return 5;
+    const auto registry = init_backend();
+    return registry && registry->api_version == GGML_BACKEND_API_VERSION ? 0 : 6;
+#endif
+}
+
+namespace {
 
 void WriteSegment(const std::filesystem::path& folder, const std::vector<float>& audio) {
     static std::atomic<int> count{0};

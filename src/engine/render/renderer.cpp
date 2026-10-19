@@ -1578,10 +1578,11 @@ gpu::Format Renderer::ChooseOutputD3D12(void* hwnd) {
     float peak = 0.0f;
     const bool display_hdr = d3d12_->DisplayHdr(static_cast<HWND__*>(hwnd), peak);
     d3d12_display_peak_ = peak;
-    if (settings_.hdr && display_hdr) {
-        output_mode_ = RendererOutputMode::ScRgb;
-        LogInfo("d3d12: Windows HDR on for this display, it reports {:.0f} nits at most: scRGB output", peak);
-        return gpu::Format::R16G16B16A16Sfloat;
+    output_mode_ = ChooseD3D12OutputMode(settings_.hdr, display_hdr, fg_wanted_d3d12_ == gpu::d3d12::FrameGenOwner::Dlss);
+    if (output_mode_ != RendererOutputMode::Sdr) {
+        const bool hdr10 = output_mode_ == RendererOutputMode::Hdr10;
+        LogInfo("d3d12: Windows HDR on for this display, it reports {:.0f} nits at most: {} output", peak, hdr10 ? "HDR10" : "scRGB");
+        return hdr10 ? gpu::Format::A2B10G10R10UnormPack32 : gpu::Format::R16G16B16A16Sfloat;
     }
     if (settings_.hdr) {
         LogInfo("d3d12: HDR asked for, but Windows HDR is off for this display: SDR output");
@@ -1767,7 +1768,7 @@ void Renderer::UpdateFrameGenerationD3D12(gpu::d3d12::FrameGenOwner owner, bool 
         return;
     }
     const char* name = FrameGenOwnerName(owner);
-    if (owner != FrameGenOwner::None && output_mode_ != RendererOutputMode::Sdr) {
+    if (owner != FrameGenOwner::None && owner != FrameGenOwner::Dlss && output_mode_ != RendererOutputMode::Sdr) {
         if (!fg_refusal_logged_[static_cast<int>(owner)]) {
             LogWarn("frame generation: {} off while the native HDR output is on", name);
             fg_refusal_logged_[static_cast<int>(owner)] = true;
@@ -1796,7 +1797,8 @@ void Renderer::UpdateFrameGenerationD3D12(gpu::d3d12::FrameGenOwner owner, bool 
 
 bool Renderer::FrameGeneratingD3D12() const {
     return d3d12_ && window_ && !fg_paused_d3d12_ && d3d12_->ActiveFrameGenOwner() != gpu::d3d12::FrameGenOwner::None &&
-           d3d12_->ActiveFrameGenOwner() == fg_wanted_d3d12_ && output_mode_ == RendererOutputMode::Sdr && layer_pipeline_;
+           d3d12_->ActiveFrameGenOwner() == fg_wanted_d3d12_ &&
+           D3D12FrameGenSupportsOutput(output_mode_, fg_wanted_d3d12_ == gpu::d3d12::FrameGenOwner::Dlss) && layer_pipeline_;
 }
 
 bool Renderer::EnsureFrameGenTargetsD3D12(gpu::Extent2D extent) {
@@ -1854,17 +1856,21 @@ bool Renderer::ResizeSwapchainD3D12() {
     if (output_mode_ != previous_mode) {
         LogInfo("display: output {} while running", output_mode_ == RendererOutputMode::Sdr ? "SDR" : output_mode_ == RendererOutputMode::ScRgb ? "HDR (scRGB)" : "HDR (HDR10)");
     }
-    if (!d3d12_->CreateSwapchain(static_cast<HWND__*>(hwnd), static_cast<uint32_t>(w), static_cast<uint32_t>(h), output_format_, settings_.vsync,
-                                 error, HdrPeak())) {
-        LogError("renderer: DirectX 12 swapchain: {}", error);
-        return false;
-    }
+    const bool created = d3d12_->CreateSwapchain(static_cast<HWND__*>(hwnd), static_cast<uint32_t>(w), static_cast<uint32_t>(h), output_format_,
+                                                settings_.vsync, error, HdrPeak());
     if (fg_wanted_d3d12_ != gpu::d3d12::FrameGenOwner::None && d3d12_->ActiveFrameGenOwner() != fg_wanted_d3d12_) {
         LogWarn("frame generation: {} could not start on DirectX 12; off for this session",
                 FrameGenOwnerName(fg_wanted_d3d12_));
         fg_failed_d3d12_[static_cast<int>(fg_wanted_d3d12_)] = true;
         fg_wanted_d3d12_ = gpu::d3d12::FrameGenOwner::None;
         d3d12_->SetFrameGenOwner(fg_wanted_d3d12_);
+        if (D3D12FrameGenFallbackNeedsRecreate(output_mode_)) {
+            return ResizeSwapchainD3D12();
+        }
+    }
+    if (!created) {
+        LogError("renderer: DirectX 12 swapchain: {}", error);
+        return false;
     }
     d3d12_window_w_ = w;
     d3d12_window_h_ = h;

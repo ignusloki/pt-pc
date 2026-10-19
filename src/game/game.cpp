@@ -283,13 +283,16 @@ void Game::Update(float dt, const InputState& pad_input) {
             const glm::vec3 axis = glm::normalize(glm::vec3(hole[2].x, 0.0f, hole[2].z));
             constexpr float pi = 3.14159265f;
             const auto wrap = [](float a) { return std::remainder(a, 2.0f * pi); };
-            float center = wrap(std::atan2(axis.x, axis.z) - pi);
-            if (std::abs(wrap(center - player_.yaw)) > pi / 2) center = wrap(center + pi);
+            const float center = wrap(std::atan2(axis.x, axis.z) - pi);
             context.peephole_center_valid = true;
             context.peephole_center_yaw = center;
         }
         if (demo_control && game_frame_tick_) {
-            player_.DemoHeldFrame(input);
+            const auto& playing = demos_.Playing();
+            const bool exit_door_control = std::any_of(playing.begin(), playing.end(), [](const PlayingDemo& demo) {
+                return demo.demo_id == "gc_p00_010" && demo.player_taken && !demo.finished;
+            });
+            if (!exit_door_control) player_.DemoHeldFrame(input);
         }
         if (!demo_control) {
             player_.Update(dt, input, collision_, context);
@@ -902,22 +905,25 @@ Camera Game::GetCamera() const {
     }
     Camera camera = player_.MakeCamera();
     camera.position += player_.DrawnOffset();
-    glm::vec3 hole(0.0f);
-    if (nazo_.IsPeepholeTheaterActive() && nazo_.PeepholePosition(hole)) {
-        camera.position = hole + camera.Forward();
+    glm::mat4 hole(1.0f);
+    if (nazo_.IsPeepholeTheaterActive() && nazo_.PeepholeTransform(hole)) {
+        camera.position = glm::vec3(hole[3]) + camera.Forward();
     }
     demos_.CameraOverride(camera);
     return camera;
 }
 
 Camera Game::PeepholeTurn(const Camera& turned) const {
-    glm::vec3 hole(0.0f);
-    if (camera_override_ || !nazo_.IsPeepholeTheaterActive() || !nazo_.PeepholePosition(hole)) {
+    glm::mat4 hole(1.0f);
+    if (camera_override_ || !nazo_.IsPeepholeTheaterActive() || !nazo_.PeepholeTransform(hole)) {
         return turned;
     }
     Camera out = turned;
-    player_.ClampPeepholeLook(out.yaw, out.pitch);
-    out.position = hole + out.Forward();
+    const glm::vec2 delta = player_.PeepholeTurnDelta(glm::vec2(
+        std::remainder(out.yaw - player_.yaw, 6.2831853f), out.pitch - player_.pitch));
+    out.yaw = player_.yaw + delta.x;
+    out.pitch = player_.pitch + delta.y;
+    out.position = glm::vec3(hole[3]) + out.Forward();
     return out;
 }
 
@@ -2116,6 +2122,7 @@ void Game::TearDownSession() {
 }
 
 void Game::ResetSessionState() {
+    resumed_threshold_ = false;
     nazo_.ResetSession();
     demos_.ResetPlayerBody();
     floor_.SetPending(0);
@@ -2197,6 +2204,7 @@ std::string Game::DescribeSessionState() const {
 }
 
 void Game::ResetSaveBlocks() {
+    resumed_threshold_ = false;
     floor_.SetSaveFloorName("f000");
     floor_.SetFloorLevel("f000");
     floor_.ResetLoopCount();
@@ -2213,7 +2221,10 @@ void Game::ResetSaveBlocks() {
 bool Game::BrowseLoop(int index) {
     if (index < 0 || index >= static_cast<int>(kBrowseLoops.size())) return false;
     const int step = controller_.Step();
-    if ((step != 13 && step != 15 && step != 28 && step != 31) || controller_.RequestedStep() != step || loop_reload_pending_) {
+    const int requested = controller_.RequestedStep();
+    const bool first_options = (step == 6 || step == 7) && requested == 7 && controller_.OptionMenuOpen();
+    const bool in_play = (step == 13 || step == 15 || step == 28 || step == 31) && requested == step;
+    if ((!first_options && !in_play) || loop_reload_pending_) {
         LogInfo("loop browser: {} refused at controller step {}", kBrowseLoops[index].floor, step);
         return false;
     }
@@ -2451,6 +2462,7 @@ void Game::RequestOptionsSave() {
 }
 
 void Game::RequestLoad() {
+    resumed_threshold_ = false;
     ++save_io_count_;
     save_io_loading_ = true;
     const SaveLoadResult result = save_store_.LoadDetailed();
@@ -2473,7 +2485,8 @@ void Game::RequestLoad() {
         nazo_.CancelPendingClearSound();
         saved_progress_ = file->progress;
         controller_.first_boot = false;
-        LogInfo("save: loaded floor {}", file->progress.floor);
+        resumed_threshold_ = file->progress.floor == "f090" && nazo_.IsCleared(NazoId::Hello);
+        LogInfo("save: loaded floor {}; native threshold overlap {}", file->progress.floor, resumed_threshold_ ? "restored" : "off");
     } else if (result.status == SaveLoadStatus::Broken) {
         controller_.first_boot = false;
         save_dialog_ = SaveDialog{"sys_load_failed_3", SaveDialog::Then::NewSave};
@@ -2491,6 +2504,7 @@ void Game::RequestLoad() {
         RequestSave();
     }
     if (!config_.start_floor.empty()) {
+        resumed_threshold_ = false;
         floor_.SetFloorLevel(config_.start_floor);
         controller_.first_boot = false;
     }

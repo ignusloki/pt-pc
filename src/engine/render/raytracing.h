@@ -13,6 +13,7 @@
 #include "engine/render/mesh.h"
 #include "engine/render/gpu/gpu_device.h"
 #include "engine/render/renderer.h"
+#include "engine/render/rt_caster.h"
 #include "engine/render/vk/vk_device.h"
 #include "engine/render/vk_context.h"
 
@@ -28,20 +29,9 @@ struct RayTracingSettings {
     bool full_shadows = true;
     bool bounce_light = true;
     bool glossy_reflections = true;
+    bool full_unused = false;
     bool path_traced = false;
     bool operator==(const RayTracingSettings&) const = default;
-};
-
-struct RtCaster {
-    const GpuMesh* mesh = nullptr;
-    uint32_t submesh = 0;
-    glm::mat4 transform{1.0f};
-    uint32_t material = 0;
-    uint32_t skin_base = gpu::kInvalid;
-    uint8_t mask = 3;
-    bool alpha_test = false;
-    bool double_sided = false;
-    bool fitting = false;
 };
 
 struct RtStats {

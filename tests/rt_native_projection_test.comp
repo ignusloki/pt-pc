@@ -1,0 +1,30 @@
+#version 460
+#include "pt_native_projection.glsl"
+layout(local_size_x=1) in;
+layout(std430,set=0,binding=0) buffer Results { vec4 values[]; } results;
+bool Pass(uint flags, bool spot, float near_plane, vec3 light, vec3 axis, vec3 a, vec3 b, vec3 c) {
+    return PtProjectionStaticCandidate(flags, spot, near_plane, .3) && PtProjectionClipsTriangle(light, axis, near_plane, a, b, c);
+}
+void main() {
+    vec3 a=vec3(.2,.2,.2),b=vec3(.3,.4,.2),c=vec3(.2,.3,.4),light=vec3(0),axis=vec3(0,1,0);
+    results.values[0] = vec4(Pass(1u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[1] = vec4(Pass(1u,true,.8,vec3(2,0,0),axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[2] = vec4(Pass(1u,true,.8,light,axis,a,b,vec3(0,.9,0)) ? 1.0 : 0.0,0,0,0);
+    results.values[3] = vec4(Pass(1u,true,.8,light,axis,a,b,vec3(.79,.2,0)) ? 1.0 : 0.0,0,0,0);
+    results.values[4] = vec4(Pass(0u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[5] = vec4(Pass(5u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[6] = vec4(Pass(17u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[7] = vec4(Pass(1u,false,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[8] = vec4(Pass(1u,true,.13,light,axis,vec3(.02),vec3(.03),vec3(.04)) ? 1.0 : 0.0,0,0,0);
+    results.values[9] = vec4(Pass(1u,true,.8,light,axis,a,b,vec3(0,.8,0)) ? 1.0 : 0.0,0,0,0);
+    results.values[10] = vec4(Pass(11u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[11] = vec4(Pass(1u,true,.8,vec3(10,20,30),axis,a+vec3(10,20,30),b+vec3(10,20,30),c+vec3(10,20,30)) ? 1.0 : 0.0,0,0,0);
+    results.values[12] = vec4(Pass(1u,true,.3,light,axis,vec3(.02),vec3(.03),vec3(.04)) ? 1.0 : 0.0,0,0,0);
+    results.values[13] = vec4(Pass(1u,true,.8,light,axis,a,b,vec3(.8,0,0)) ? 1.0 : 0.0,0,0,0);
+    results.values[14] = vec4(Pass(1u,true,.8,light,vec3(1,0,0),a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[15] = vec4(Pass(1009u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[16] = vec4(Pass(0u,true,.8,vec3(.7214,1.0844,25.6531),axis,vec3(1.014892,1.226430,25.770569),vec3(1.014892,1.226430,25.580230),vec3(.954391,1.000580,25.580230)) ? 1.0 : 0.0,0,0,0);
+    results.values[17] = vec4(Pass(0u,true,.8,vec3(.7214,1.0844,25.6531),axis,vec3(1.002191,1.206230,25.600692),vec3(1.002191,1.206230,25.750042),vec3(.952191,1.019970,25.750042)) ? 1.0 : 0.0,0,0,0);
+    results.values[18] = vec4(Pass(8u,true,.8,light,axis,a,b,c) ? 1.0 : 0.0,0,0,0);
+    results.values[19] = vec4(Pass(0u,true,.8,light,axis,a,b,vec3(3,0,0)) ? 1.0 : 0.0,0,0,0);
+}

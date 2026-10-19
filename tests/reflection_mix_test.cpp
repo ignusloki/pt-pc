@@ -10,7 +10,7 @@ int main() {
     pt::vk::Context ctx;
     if (!ctx.Init(nullptr, true)) return 2;
     pt::vk::Buffer buffer;
-    constexpr uint32_t bytes = 29 * 4 * sizeof(float);
+    constexpr uint32_t bytes = 34 * 4 * sizeof(float);
     if (!ctx.CreateBuffer(buffer, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) return 2;
     VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -62,17 +62,18 @@ int main() {
         vkCmdPipelineBarrier2(cmd, &dep);
     });
     vmaInvalidateAllocation(ctx.allocator, buffer.allocation, 0, bytes);
-    const std::array<std::array<float, 4>, 29> expected{{
+    const std::array<std::array<float, 4>, 34> expected{{
         {0.7f, 0.4f, 0.0f, 0.0f}, {2.0f / 3.0f, 1.0f / 3.0f, 0.0f, 0.3f},
         {0.2f, 0.4f, 0.6f, 0.8f}, {0.1f, 0.2f, 0.3f, 0.3f}, {0.0f, 0.0f, 0.0f, 0.0f},
         {0.6f, 0.0f, 0.8f, 0.0f}, {0.0f, -0.6f, 0.8f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {2.4f, 1.6f, 5.0f, 1.0f}, {0.44f, -0.38f, 0.0f, 0.0f},
         {.010175f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0},
         {1, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {.29f, .48f, .31f, 0}, {.2f, .2f, .2f, 0},
         { .49f, -.48f, 0, 0 }, { .71875f, 0, 0, 0 }, { .6875f, 0, 0, 0 }, { .6875f, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 },
-        {.01175f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0}
+        {.01175f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0},
+        {2.5f, 1.5f, .5f, 0}, {1, 1, .5f, 0}, {.2f, .5f, .8f, 0}, {.2f, .5f, .8f, 0}, {.25f, .25f, .25f, 0}
 
     }};
-    const char* names[] = {"recover screen coordinate at half coverage", "blend both reflection sources", "screen only", "traced only", "no hit finite", "mapped tangent detail", "mirrored bitangent detail", "flat map preserves geometry", "invalid map does not distort reflection", "reconstruct jittered depth location", "project into jittered scene", "continuous planar reversed depth", "native point depth retained", "depth silhouette not interpolated", "sky boundary not interpolated", "mirror matching depth accepted", "mirror disocclusion rejected", "mirror empty history rejected", "mirror history clipped to current neighborhood", "mirror exposure compensated", "beam sample matches jittered surface", "near wall negative X beam", "positive X beam", "negative Z beam", "outside beam unchanged", "missing light unchanged", "planar footprint interpolates", "crease keeps the texel depth", "far step keeps the texel depth"};
+    const char* names[] = {"recover screen coordinate at half coverage", "blend both reflection sources", "screen only", "traced only", "no hit finite", "mapped tangent detail", "mirrored bitangent detail", "flat map preserves geometry", "invalid map does not distort reflection", "reconstruct jittered depth location", "project into jittered scene", "continuous planar reversed depth", "native point depth retained", "depth silhouette not interpolated", "sky boundary not interpolated", "mirror matching depth accepted", "mirror disocclusion rejected", "mirror empty history rejected", "mirror history clipped to current neighborhood", "mirror exposure compensated", "beam sample matches jittered surface", "near wall negative X beam", "positive X beam", "negative Z beam", "outside beam unchanged", "missing light unchanged", "planar footprint interpolates", "crease keeps the texel depth", "far step keeps the texel depth", "tiny HDR reflection preserves headroom", "SDR retains native base clamp", "HDR below paper white unchanged", "SDR below paper white unchanged", "full reflection replaces HDR base"};
     const auto* actual = static_cast<const float*>(buffer.mapped);
     int failures = 0;
     for (size_t i = 0; i < expected.size(); ++i) {

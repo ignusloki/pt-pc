@@ -62,6 +62,8 @@ public:
     static constexpr float kPitchDown = 0.9599311f;
     static float ClampPitch(float value) { return value < -kPitchDown ? -kPitchDown : value > kPitchUp ? kPitchUp : value; }
     void ClampPeepholeLook(float& yaw_value, float& pitch_value) const;
+    static void ClampPeepholeLook(float& yaw_value, float& pitch_value, float center_yaw);
+    glm::vec2 PeepholeTurnDelta(glm::vec2 delta) const;
 
     Player() {
         if (!OriginalController()) {
@@ -200,6 +202,7 @@ private:
     PlayerBody::FootPlant plant_;
     glm::vec3 eye_{0.0f};
     float roll_ = 0.0f;
+    float look_roll_ = 0.0f;
     glm::vec3 handoff_local_{0.0f};
     float handoff_weight_ = 0.0f;
     float body_yaw_ = 0.0f;

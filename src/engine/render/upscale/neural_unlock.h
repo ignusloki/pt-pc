@@ -42,6 +42,11 @@ inline constexpr float kLocalTone = 0.0f;
 enum class GpuClass { Other, NeedsUnlock, Native };
 GpuClass ClassifyGpu(uint32_t vendor_id, uint32_t device_id, std::string_view adapter);
 
+inline constexpr bool ToggleNeedsRestart(GpuClass gpu, bool usable, bool d3d12, bool hook_failed) {
+    const bool community = gpu == GpuClass::NeedsUnlock || gpu == GpuClass::Native;
+    return community && usable && d3d12 && hook_failed;
+}
+
 struct Install {
     bool complete = false;
     std::string route;
@@ -117,8 +122,12 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
 inline constexpr std::string_view kResultFile = "route-result.txt";
 std::vector<std::string> TopLevelNames(const std::filesystem::path& dir);
 
+std::string DownloadFile(const std::string& url, const std::filesystem::path& dest, uint64_t max_bytes, const std::function<void(int)>& percent,
+                         const std::function<bool()>& cancelled, std::string* error);
 std::string FileSha256(const std::filesystem::path& path);
 
 bool IsOwnReShade(const std::filesystem::path& game_dir);
+
+int RetireRouteFiles(const std::filesystem::path& game_dir, const std::filesystem::path& archive_dir);
 
 }

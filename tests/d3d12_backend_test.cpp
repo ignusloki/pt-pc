@@ -753,8 +753,10 @@ public:
                 bd.usage = gpu::BufferUsage::StorageBuffer;
                 bd.host_visible = true;
                 bd.name = "ui draws";
+                bd.gpu_read_only = true;
                 dev_.CreateBuffer(bd, p.storage);
                 std::memcpy(p.storage.mapped, b.data.data(), b.data.size());
+                dev_.FlushMapped(p.storage, 0, b.data.size());
                 buffers[i] = {p.storage.buffer, 0, ~0ull};
                 w.type = gpu::BindingType::StorageBuffer;
                 w.buffers = std::span(&buffers[i], 1);
@@ -1612,6 +1614,39 @@ bool WindowTest(gpu::d3d12::D3D12Device& device, const fs::path& out_dir, int fr
 
 }
 
+bool MappedInputRun(gpu::Device& dev, bool snapshots) {
+    gpu::BufferResource input;
+    gpu::BufferResource output;
+    constexpr uint32_t initial[4] = {11, 22, 33, 44};
+    bool ok = dev.CreateBuffer({sizeof(initial), gpu::BufferUsage::StorageBuffer, true, false, "mapped input test", true}, input) &&
+              dev.CreateBuffer({2 * sizeof(initial), gpu::BufferUsage::TransferDst, true, true, "mapped input readback"}, output);
+    if (ok) {
+        std::memcpy(input.mapped, initial, sizeof(initial));
+        dev.FlushMapped(input, 0, ~0ull);
+        auto update = [&] {
+            static_cast<uint32_t*>(input.mapped)[1] = 99;
+            dev.FlushMapped(input, sizeof(uint32_t), sizeof(uint32_t));
+        };
+        if (snapshots) {
+            dev.Submit([&](gpu::CommandList& cmd) {
+                cmd.CopyBuffer(input, 0, output, 0, sizeof(initial));
+                update();
+                cmd.CopyBuffer(input, 0, output, sizeof(initial), sizeof(initial));
+            });
+        } else {
+            dev.Submit([&](gpu::CommandList& cmd) { cmd.CopyBuffer(input, 0, output, 0, sizeof(initial)); });
+            update();
+            dev.Submit([&](gpu::CommandList& cmd) { cmd.CopyBuffer(input, 0, output, sizeof(initial), sizeof(initial)); });
+        }
+        const uint32_t expected[8] = {11, 22, 33, 44, 11, 99, 33, 44};
+        dev.InvalidateMapped(output, 0, ~0ull);
+        ok = std::memcmp(output.mapped, expected, sizeof(expected)) == 0;
+    }
+    dev.DestroyBuffer(output);
+    dev.DestroyBuffer(input);
+    return ok;
+}
+
 int main(int argc, char** argv) {
     fs::path out_dir = "d3d12_backend_test";
     bool window = false;
@@ -1645,6 +1680,9 @@ int main(int argc, char** argv) {
     if (!device) {
         return 1;
     }
+    const char* gpu_upload = std::getenv("PT_D3D12_GPU_UPLOAD");
+    Check(MappedInputRun(*device, gpu_upload && gpu_upload[0] == '0'),
+          "mapped read-only inputs preserve partial updates and recorded upload snapshots");
     const std::string shader_dir = pt::ResourceDir("shaders", PT_SHADER_DIR).string();
     std::string report;
     const bool covered = device->CheckRootSignature(shader_dir, report);

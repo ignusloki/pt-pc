@@ -63,11 +63,30 @@ std::string HashPart(const fs::path& file,uint64_t limit){
     if(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0)throw std::runtime_error("SHA256 provider unavailable.");
     DWORD size=0,used=0;BCryptGetProperty(algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&size),sizeof(size),&used,0);
     std::vector<UCHAR> object(size);if(BCryptCreateHash(algorithm,&hash,object.data(),size,nullptr,0,0)<0){BCryptCloseAlgorithmProvider(algorithm,0);throw std::runtime_error("SHA256 initialization failed.");}
-    std::ifstream input(file,std::ios::binary);std::vector<char> buffer(1024*1024);bool ok=bool(input);
+    HANDLE input=INVALID_HANDLE_VALUE;DWORD open_error=0;
+    for(int attempt=0;attempt<100;++attempt){
+        CheckCancel();
+        input=CreateFileW(file.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
+        if(input!=INVALID_HANDLE_VALUE)break;
+        open_error=GetLastError();
+        if(open_error!=ERROR_SHARING_VIOLATION && open_error!=ERROR_LOCK_VIOLATION && open_error!=ERROR_ACCESS_DENIED)break;
+        Sleep(100);
+    }
+    std::vector<char> buffer(1024*1024);bool ok=input!=INVALID_HANDLE_VALUE;DWORD read_error=0;
     uint64_t left=limit;
-    while(input && left){CheckCancel();input.read(buffer.data(),std::streamsize(std::min<uint64_t>(buffer.size(),left)));left-=uint64_t(input.gcount());if(input.gcount() && BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),ULONG(input.gcount()),0)<0)ok=false;}
-    std::array<UCHAR,32> bytes{};ok=ok && (input.eof() || left==0) && BCryptFinishHash(hash,bytes.data(),bytes.size(),0)>=0;BCryptDestroyHash(hash);BCryptCloseAlgorithmProvider(algorithm,0);
-    if(!ok)throw std::runtime_error("Could not verify file integrity.");
+    while(ok && left){
+        CheckCancel();DWORD got=0;
+        if(!ReadFile(input,buffer.data(),DWORD(std::min<uint64_t>(buffer.size(),left)),&got,nullptr)){read_error=GetLastError();ok=false;break;}
+        if(got==0)break;
+        left-=got;if(BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),got,0)<0)ok=false;
+    }
+    if(input!=INVALID_HANDLE_VALUE)CloseHandle(input);
+    std::array<UCHAR,32> bytes{};ok=ok && BCryptFinishHash(hash,bytes.data(),bytes.size(),0)>=0;BCryptDestroyHash(hash);BCryptCloseAlgorithmProvider(algorithm,0);
+    if(!ok){
+        const DWORD code=open_error && input==INVALID_HANDLE_VALUE?open_error:read_error;
+        const std::string why=code==ERROR_SHARING_VIOLATION||code==ERROR_LOCK_VIOLATION?" (another program, often an antivirus, kept it open)":code==ERROR_ACCESS_DENIED?" (access denied: an antivirus or the folder's permissions)":"";
+        throw std::runtime_error("Could not read or hash this file to verify its integrity: " + PathUtf8(file) + " (Windows error " + std::to_string(code) + ")" + why);
+    }
     const char* hex="0123456789abcdef";std::string result;for(auto b:bytes){result+=hex[b>>4];result+=hex[b&15];}return result;
 }
 std::string Hash(const fs::path& file){return HashPart(file,UINT64_MAX);}

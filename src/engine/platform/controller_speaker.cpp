@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -123,7 +124,7 @@ bool HidContainerId(std::string_view path, GUID* out) {
         GUID container{};
         if (SetupDiGetDevicePropertyW(devices, &device_info, &kDeviceContainerId, &type,
                                       reinterpret_cast<PBYTE>(&container), sizeof(container), nullptr, 0) &&
-            type == DEVPROP_TYPE_GUID) {
+            type == DEVPROP_TYPE_GUID && !IsEqualGUID(container, GUID_NULL)) {
             *out = container;
             found = true;
         }
@@ -169,7 +170,7 @@ bool ReadEndpointContainer(IMMDevice* endpoint, GUID* out) {
     PROPVARIANT value;
     PropVariantInit(&value);
     const HRESULT result = properties->GetValue(PKEY_Device_ContainerId, &value);
-    const bool ok = SUCCEEDED(result) && value.vt == VT_CLSID && value.puuid;
+    const bool ok = SUCCEEDED(result) && value.vt == VT_CLSID && value.puuid && !IsEqualGUID(*value.puuid, GUID_NULL);
     if (ok) {
         *out = *value.puuid;
     }
@@ -268,6 +269,37 @@ std::string DeviceList(std::span<const ControllerAudioEndpointName> devices) {
     return out.empty() ? std::string("none") : out;
 }
 
+std::string Ds4BluetoothPath(SDL_Gamepad* gamepad, std::string* reason) {
+    const char* selected_path = SDL_GetGamepadPath(gamepad);
+    SDL_hid_device_info* devices = SDL_hid_enumerate(kSonyVendor, 0);
+    std::vector<std::string> paths;
+    std::vector<ControllerSpeakerHidPath> inventory;
+    for (auto* d = devices; d; d = d->next) if (d->path) paths.emplace_back(d->path);
+    size_t path_index = 0;
+    unsigned candidates = 0;
+    bool selected_usb = false;
+    for (auto* d = devices; d; d = d->next) {
+        if (!d->path) continue;
+        const auto& path = paths[path_index++];
+        if (SonyPadAudioModel(d->vendor_id, d->product_id) != SonyPadAudio::DualShock4 ||
+            (d->usage_page && d->usage_page != 1) || (d->usage && d->usage != 5)) continue;
+        const bool selected = selected_path && std::string_view(selected_path) == d->path;
+        if (selected && d->bus_type == SDL_HID_API_BUS_USB) selected_usb = true;
+        const bool bluetooth = d->bus_type == SDL_HID_API_BUS_BLUETOOTH;
+        inventory.push_back({path, bluetooth, d->bus_type == SDL_HID_API_BUS_USB});
+        if (bluetooth) ++candidates;
+    }
+    SDL_hid_free_enumeration(devices);
+    if (const auto index = MatchDs4SpeakerHidPath(selected_path ? selected_path : "", inventory)) return std::string(inventory[*index].path);
+    if (selected_usb) {
+        SetReason(reason, "DualShock 4 USB audio feeds its headset jack; its built-in speaker requires a Bluetooth connection");
+        return {};
+    }
+    SetReason(reason, candidates ? "multiple Bluetooth DualShock 4 devices; cannot associate the selected pad's speaker safely" :
+                                  "no accessible Bluetooth DualShock 4 HID device; connect the pad over Bluetooth (DS4Windows/HidHide may hide it)");
+    return {};
+}
+
 }
 
 ControllerSpeakerOutput::ControllerSpeakerOutput() = default;
@@ -277,7 +309,7 @@ ControllerSpeakerOutput::~ControllerSpeakerOutput() {
 }
 
 struct ControllerSpeakerOutput::HidWriter {
-    explicit HidWriter(SDL_hid_device* device) : device(device), thread([this] { Run(); }) {}
+    explicit HidWriter(SDL_hid_device* device, bool ds4 = false) : device(device), ds4(ds4), thread([this] { Run(); }) {}
     ~HidWriter() {
         {
             std::lock_guard lock(mutex);
@@ -286,37 +318,65 @@ struct ControllerSpeakerOutput::HidWriter {
         wake.notify_one();
         thread.join();
     }
-    bool Push(const std::array<uint8_t, kDualSenseBtHapticsReportSize>& report) {
+    bool Push(std::span<const uint8_t> report) {
+        if (report.size() > kDs4AudioReportSize) return false;
         if (failed.load()) return false;
         {
             std::lock_guard lock(mutex);
-            if (queue.size() >= 8) queue.pop_front();
-            queue.push_back(report);
+            if (queue.size() >= 8) {
+                queue.pop_front();
+                if (ds4 && !dropped++) LogWarn("input: DualShock 4 speaker link backlog; dropping old audio packets");
+            }
+            Packet packet;
+            packet.size = report.size();
+            std::copy(report.begin(), report.end(), packet.data.begin());
+            queue.push_back(packet);
         }
         wake.notify_one();
         return true;
     }
+    void Clear() {
+        std::lock_guard lock(mutex);
+        queue.clear();
+        wake.notify_one();
+    }
     void Run() {
         std::unique_lock lock(mutex);
+        auto next = std::chrono::steady_clock::now();
+        bool first = true;
         while (true) {
             wake.wait(lock, [this] { return stop || !queue.empty(); });
             if (stop) return;
+            if (ds4) {
+                wake.wait_until(lock, next, [this] { return stop || queue.empty(); });
+                if (stop) return;
+                if (queue.empty()) continue;
+            }
             const auto report = queue.front();
             queue.pop_front();
             lock.unlock();
-            if (SDL_hid_write(device, report.data(), report.size()) < 0) {
-                LogInfo("input: DualSense Bluetooth haptics report failed: {}", SDL_GetError());
+            const int written = SDL_hid_write(device, report.data.data(), report.size);
+            if (written != static_cast<int>(report.size)) {
+                LogInfo("input: {} Bluetooth report failed ({}/{} bytes): {}", ds4 ? "DualShock 4 speaker" : "DualSense haptics",
+                        written, report.size, SDL_GetError());
                 failed.store(true);
+            } else if (ds4 && first) {
+                LogInfo("input: DualShock 4 first speaker SBC report written (0x17, {} bytes, 32 kHz, target 0x02)", written);
+                first = false;
             }
+            if (ds4) next = std::max(next + std::chrono::milliseconds(16), std::chrono::steady_clock::now());
             lock.lock();
         }
     }
     SDL_hid_device* device;
+    const bool ds4;
     std::mutex mutex;
     std::condition_variable wake;
-    std::deque<std::array<uint8_t, kDualSenseBtHapticsReportSize>> queue;
+    struct Packet { std::array<uint8_t, kDs4AudioReportSize> data{}; size_t size = 0; };
+    std::deque<Packet> queue;
     std::atomic<bool> failed{false};
     bool stop = false;
+    unsigned dropped = 0;
     std::thread thread;
 };
 
@@ -369,10 +429,18 @@ bool ControllerSpeakerOutput::WriteBluetoothHaptics(const float* actuator_stereo
 }
 
 bool ControllerSpeakerOutput::IsOpen() const {
-    if (hid_) return true;
+    if (hid_) return !hid_writer_ || !hid_writer_->failed.load();
     if (!stream_) return false;
     const SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(stream_);
     return device != 0 && SDL_GetAudioDeviceName(device) != nullptr;
+}
+
+bool ControllerSpeakerOutput::MatchesGamepad(SDL_Gamepad* gamepad) const {
+    if (!gamepad || route_ != ControllerPcmRoute::DualShock4BluetoothSpeaker ||
+        SonyPadAudioModel(SDL_GetGamepadVendor(gamepad), SDL_GetGamepadProduct(gamepad)) != SonyPadAudio::DualShock4) return false;
+    const char* path = SDL_GetGamepadPath(gamepad);
+    if (path && (path == hid_path_ || path == source_path_)) return true;
+    return Ds4BluetoothPath(gamepad, nullptr) == hid_path_;
 }
 
 bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* reason) {
@@ -383,6 +451,37 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     }
     const uint16_t vendor = SDL_GetGamepadVendor(gamepad);
     const uint16_t product = SDL_GetGamepadProduct(gamepad);
+    const SonyPadAudio model = SonyPadAudioModel(vendor, product);
+    const char* override_env = SDL_getenv("PT_CONTROLLER_SPEAKER_DEVICE");
+    const std::string override_name = override_env ? override_env : "";
+    if (model == SonyPadAudio::DualShock4 && override_name.empty()) {
+        if (SDL_hid_init() != 0) {
+            SetReason(reason, std::format("DualShock 4 HID initialization failed: {}", SDL_GetError()));
+            return false;
+        }
+        hid_path_ = Ds4BluetoothPath(gamepad, reason);
+        if (hid_path_.empty()) { SDL_hid_exit(); return false; }
+        hid_ = SDL_hid_open_path(hid_path_.c_str());
+        if (!hid_) {
+            SDL_hid_exit();
+            SetReason(reason, std::format("could not open the physical DualShock 4 speaker HID path (DS4Windows/HidHide may own it): {}", SDL_GetError()));
+            return false;
+        }
+        route_ = ControllerPcmRoute::DualShock4BluetoothSpeaker;
+        ds4_encoder_ = std::make_unique<DualShockAudioEncoder>();
+        const auto control = BuildDs4SpeakerControl(true);
+        if (!ds4_encoder_->Ready() || SDL_hid_write(hid_, control.data(), control.size()) != control.size()) {
+            SetReason(reason, std::format("DualShock 4 speaker SBC setup or volume command failed: {}", SDL_GetError()));
+            Close();
+            return false;
+        }
+        if (const char* path = SDL_GetGamepadPath(gamepad)) source_path_ = path;
+        hid_writer_ = std::make_unique<HidWriter>(hid_, true);
+        device_name_ = "DualShock 4 Bluetooth speaker";
+        SetReason(reason, {});
+        LogInfo("input: DualShock 4 Bluetooth speaker opened for '{}' (SBC 32 kHz, report 0x17, target 0x02; speaker volume command sent)", SDL_GetGamepadName(gamepad));
+        return true;
+    }
     if (SDL_GetGamepadConnectionState(gamepad) == SDL_JOYSTICK_CONNECTION_WIRELESS && vendor == kSonyVendor &&
         (product == kDualSense || product == kDualSenseEdge)) {
         const char* hid_path = SDL_GetGamepadPath(gamepad);
@@ -398,13 +497,10 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
         LogInfo("input: DualSense Bluetooth haptics opened (HID output report 0x32; the speaker needs a wired connection)");
         return true;
     }
-    const SonyPadAudio model = SonyPadAudioModel(vendor, product);
     if (model == SonyPadAudio::None) {
         SetReason(reason, "controller model has no verified speaker audio layout");
         return false;
     }
-    const char* override_env = SDL_getenv("PT_CONTROLLER_SPEAKER_DEVICE");
-    const std::string override_name = override_env ? override_env : "";
     const SDL_JoystickConnectionState connection = SDL_GetGamepadConnectionState(gamepad);
     if (connection == SDL_JOYSTICK_CONNECTION_WIRELESS || connection == SDL_JOYSTICK_CONNECTION_INVALID) {
         SetReason(reason, "controller speaker routing requires a wired gamepad (a DualSense over Bluetooth gets haptics only)");
@@ -525,10 +621,18 @@ void ControllerSpeakerOutput::Close() {
     }
     hid_writer_.reset();
     if (hid_) {
+        if (route_ == ControllerPcmRoute::DualShock4BluetoothSpeaker) {
+            const auto control = BuildDs4SpeakerControl(false);
+            const int written = SDL_hid_write(hid_, control.data(), control.size());
+            LogInfo("input: DualShock 4 speaker closed; mute command {}", written == control.size() ? "sent" : SDL_GetError());
+        }
         SDL_hid_close(hid_);
         SDL_hid_exit();
         hid_ = nullptr;
     }
+    ds4_encoder_.reset();
+    hid_path_.clear();
+    source_path_.clear();
     bt_sum_ = {};
     bt_summed_ = 0;
     bt_frame_count_ = 0;
@@ -544,6 +648,8 @@ void ControllerSpeakerOutput::Close() {
 
 void ControllerSpeakerOutput::ClearPending() {
     if (stream_) SDL_ClearAudioStream(stream_);
+    if (hid_writer_) hid_writer_->Clear();
+    if (ds4_encoder_) ds4_encoder_->Clear();
     haptic_filter_.Reset();
 }
 
@@ -607,6 +713,12 @@ bool ControllerSpeakerOutput::WriteCapturedBlock(const audio::ControllerPcmBlock
         haptics_source[i] = block.haptic[i] * haptics_level;
     }
     const std::span<const float> speaker(speaker_scratch_.data(), stereo_samples);
+    if (route_ == ControllerPcmRoute::DualShock4BluetoothSpeaker) {
+        if (!speaker_enabled) { ClearPending(); return true; }
+        return ds4_encoder_ && hid_writer_ && ds4_encoder_->Push(speaker, [this](std::span<const uint8_t> report) {
+            return hid_writer_->Push(report);
+        });
+    }
     if (route_ == ControllerPcmRoute::DualShock4Mono) {
         const std::span<float> mono(mono_scratch_.data(), block.frames);
         return DownmixControllerSpeakerMono(speaker, mono, block.frames) && WriteMono(mono.data(), block.frames);

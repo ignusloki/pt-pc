@@ -5,9 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
-#include <atomic>
 #include <future>
-#include <mutex>
 #include <memory>
 #include <span>
 #include <string>
@@ -96,16 +94,6 @@ public:
     uint32_t MaterialFlags(uint32_t index) const { return index < materials_.size() ? materials_[index].flags : 0u; }
     int SetAnisotropy(int level);
     int Anisotropy() const { return anisotropy_; }
-    void ConfigureEnhancedTextures(const QarArchive& qar, const std::filesystem::path& cache, uint64_t model, uint32_t kinds);
-    void SetEnhancedTextures(bool enabled);
-    bool EnhancedTextures() const { return enhanced_enabled_; }
-    void PumpEnhancedTextures(double budget_ms);
-    bool EnhancedPending() const { return enhanced_queue_ != nullptr; }
-    void RefreshEnhancedTextures();
-    std::vector<std::string> LoadedTextureStems() const;
-    bool ReleaseEnhancedTextures(const char* why);
-    bool EnhancedSuspended() const { return enhanced_suspended_; }
-
     gpu::BindingLayoutHandle BindingLayout() const { return set_layout_; }
     gpu::BindingSetHandle BindingSet() const { return set_; }
     uint32_t TextureCount() const { return static_cast<uint32_t>(images_.size()); }
@@ -117,7 +105,6 @@ private:
     void UpdateTextureDescriptor(uint32_t index);
     void Pin(uint32_t index) const;
     uint64_t FreeTexture(uint32_t index);
-    void LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source = nullptr);
     uint32_t LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png, bool raw);
 
     gpu::Device* device_ = nullptr;
@@ -140,36 +127,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> redirects_;
     gpu::BufferResource material_buffer_;
     bool materials_dirty_ = false;
-    const QarArchive* enhanced_qar_ = nullptr;
-    std::filesystem::path enhanced_cache_;
-    uint64_t enhanced_model_ = 0;
-    uint32_t enhanced_kinds_ = 0;
-    bool enhanced_enabled_ = false;
-    bool enhanced_suspended_ = false;
     bool memory_short_ = false;
-    std::unordered_map<uint32_t, std::string> fox_sources_;
-    std::unordered_map<uint32_t, uint32_t> enhanced_images_;
-    uint64_t enhanced_bytes_ = 0;
-    struct EnhancedPrepared {
-        uint32_t index = 0;
-        std::string path;
-        uint64_t key = 0;
-        FtexTexture cached;
-    };
-    struct EnhancedQueue {
-        std::mutex mutex;
-        std::deque<EnhancedPrepared> ready;
-        std::atomic<bool> stop{false};
-        std::atomic<size_t> done{0};
-        size_t total = 0;
-        size_t applied = 0;
-        bool refresh = false;
-    };
-    std::shared_ptr<EnhancedQueue> enhanced_queue_;
-    std::future<void> enhanced_worker_;
-    void StopEnhancedWorker();
-    void StartEnhancedWorker(bool only_cached);
-    void SetEnhancedTexturesFrom(bool enabled, bool only_cached);
     std::unordered_map<std::string, std::shared_future<std::shared_ptr<FtexTexture>>> decoding_;
     std::deque<std::string> decode_order_;
     std::vector<std::shared_ptr<ParallelTask>> decode_workers_;

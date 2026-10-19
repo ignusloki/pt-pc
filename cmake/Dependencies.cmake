@@ -28,6 +28,24 @@ FetchContent_Declare(lua51 URL https://www.lua.org/ftp/lua-5.1.5.tar.gz
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sdl3 zlib)
 
+# The DS4's Bluetooth speaker consumes SBC frames, not its USB headset PCM endpoint.
+FetchContent_Declare(google_sbc URL https://github.com/google/libsbc/archive/6e505650145c9973d08a0bdd5e5f5e1914305e40.tar.gz
+  URL_HASH SHA256=fbb2e0b15d3f6717016bd61db26c134fe9c7231cc748d525714f0a2bca02177d)
+FetchContent_Populate(google_sbc)
+# Upstream places C11 alignas after int16_t, which is not valid in C++. Keep the same ABI with standard placement.
+file(READ ${google_sbc_SOURCE_DIR}/include/sbc.h PT_SBC_HEADER)
+string(REPLACE "int16_t alignas(sizeof(int))" "alignas(sizeof(int)) int16_t" PT_SBC_HEADER "${PT_SBC_HEADER}")
+file(WRITE ${CMAKE_BINARY_DIR}/generated/pt-sbc/sbc.h "${PT_SBC_HEADER}")
+# compute_scale_factors already visits both dual channels. The extra call visits a nonexistent third channel and
+# overwrites the stack. Keep the pinned upstream sources intact; compile this narrow correction in a generated copy.
+file(READ ${google_sbc_SOURCE_DIR}/src/sbc.c PT_SBC_SOURCE)
+string(REPLACE "    if (frame->mode == SBC_MODE_DUAL_CHANNEL)\n        compute_scale_factors(frame, sb_samples + 1, scale_factors + 1);"
+  "    /* P.T. fix: compute_scale_factors above already processed both dual channels. */" PT_SBC_SOURCE "${PT_SBC_SOURCE}")
+file(WRITE ${CMAKE_BINARY_DIR}/generated/pt-sbc/sbc.c "${PT_SBC_SOURCE}")
+add_library(pt_sbc STATIC ${CMAKE_BINARY_DIR}/generated/pt-sbc/sbc.c ${google_sbc_SOURCE_DIR}/src/bits.c)
+target_include_directories(pt_sbc PUBLIC ${CMAKE_BINARY_DIR}/generated/pt-sbc)
+target_include_directories(pt_sbc PRIVATE ${google_sbc_SOURCE_DIR}/src)
+
 # whisper.cpp (MIT) for the true end's word (formats/voice.md), CPU only. pt.exe stays x86-64 SSE2: whisper and ggml
 # are DLLs in voice/ that VoiceRecognizer loads at run time, and the CPU code is ggml's per-CPU variants
 # (ggml-cpu-x64, -sse42, -sandybridge, -haswell, -skylakex, ... DLLs), of which ggml loads the best the CPU runs.
@@ -149,14 +167,12 @@ FetchContent_Populate(glm)
 FetchContent_Populate(imgui)
 FetchContent_Populate(lua51)
 FetchContent_Populate(stb)
-
-FetchContent_Declare(bc7enc URL https://codeload.github.com/richgel999/bc7enc_rdo/zip/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0)
-FetchContent_Populate(bc7enc)
-add_library(pt_bc7enc STATIC ${bc7enc_SOURCE_DIR}/bc7enc.cpp ${bc7enc_SOURCE_DIR}/rgbcx.cpp)
-target_include_directories(pt_bc7enc PUBLIC ${bc7enc_SOURCE_DIR})
-if(MSVC)
-  target_compile_options(pt_bc7enc PRIVATE /w)
-endif()
+# zstd (BSD, docs/licenses/zstd-BSD.txt), its decompressor only: the DLSS 5 install unpacks the RTX 20, 30 and 40 GPU code of the
+# community runtime with it (src/engine/render/upscale/neural_native.cpp)
+FetchContent_Declare(zstd URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+  URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3)
+FetchContent_Populate(zstd)
+file(GLOB ZSTD_SOURCES ${zstd_SOURCE_DIR}/lib/common/*.c ${zstd_SOURCE_DIR}/lib/decompress/*.c)
 
 file(GLOB LUA51_SOURCES ${lua51_SOURCE_DIR}/src/*.c)
 list(FILTER LUA51_SOURCES EXCLUDE REGEX ".*/(lua|luac|print)\\.c$")
@@ -170,8 +186,10 @@ add_library(pt_thirdparty STATIC
   ${imgui_SOURCE_DIR}/imgui_demo.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
-  ${LUA51_SOURCES})
+  ${LUA51_SOURCES}
+  ${ZSTD_SOURCES})
 target_include_directories(pt_thirdparty PUBLIC
+  ${zstd_SOURCE_DIR}/lib
   ${volk_SOURCE_DIR}
   ${vma_SOURCE_DIR}/include
   ${glm_SOURCE_DIR}
@@ -180,13 +198,15 @@ target_include_directories(pt_thirdparty PUBLIC
   ${lua51_SOURCE_DIR}/src
   ${stb_SOURCE_DIR})
 target_compile_definitions(pt_thirdparty PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
+# the decompressor's C build alone (its x86-64 assembly is for GCC and Clang)
+target_compile_definitions(pt_thirdparty PRIVATE ZSTD_DISABLE_ASM)
 if(WIN32)
   target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_WIN32_KHR)
 elseif(APPLE)
   # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
   target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS VK_USE_PLATFORM_METAL_EXT)
 endif()
-target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3-static zlibstatic pt_bc7enc)
+target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3-static zlibstatic)
 if(NOT WIN32)
   # Unicode text shaping for the added languages (src/engine/ui/unicode_font_harfbuzz.cpp); Windows uses Uniscribe instead
   FetchContent_Declare(harfbuzz GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git GIT_TAG 14.6.0 GIT_SHALLOW TRUE)

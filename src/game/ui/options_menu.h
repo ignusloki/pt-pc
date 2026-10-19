@@ -39,6 +39,7 @@ struct MenuInput {
     bool tab_next = false;
     bool tab_from_e = false;
     bool donate = false;
+    bool update = false;
     bool street_return = false;
     uint32_t held_dirs = 0;
     uint32_t music = 0;

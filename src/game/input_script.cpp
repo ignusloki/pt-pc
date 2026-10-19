@@ -1,3 +1,4 @@
+#include <chrono>
 #include "engine/platform/os.h"
 #include "engine/core/ascii.h"
 #include "game/input_script.h"
@@ -349,8 +350,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "freeze", static_cast<int>(arg(0))});
         } else if (c.op == "sfreecam") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "freecam", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
-        } else if (c.op == "senhanced") {
-            waypoints_.push_back({glm::vec3(0.0f), false, false, "enhanced", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sneural") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "neural", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sthird") {
@@ -589,8 +588,6 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             LogInfo("input script: game clock {}", item.frames != 0 ? "frozen" : "running");
         } else if (item.op == "freecam") {
             game.RequestFreeCamera(item.frames != 0);
-        } else if (item.op == "enhanced") {
-            game.RequestEnhancedTextures(item.frames != 0);
         } else if (item.op == "neural") {
             game.RequestNeuralRendering(std::clamp(item.frames, 0, 3));
         } else if (item.op == "third") {
@@ -1506,11 +1503,18 @@ bool InputScript::ArchiveWait(Game& game, Waypoint& item) {
     return false;
 }
 
+static float WaitClock() {
+    static const auto start = std::chrono::steady_clock::now();
+    return std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count();
+}
+
 bool InputScript::BrowseWait(Game& game, Waypoint& item) {
+    if (item.extra.y == 0.0f) item.extra.y = WaitClock() + 1.0e-3f;
+    const float waited = WaitClock() - item.extra.y;
     if (item.op == "browse_loop") {
         if (item.text.empty() || item.text == "refused") {
             const bool picked = game.BrowseLoop(item.frames);
-            if (!picked && ++item.extra.x < 1200.0f) {
+            if (!picked && (++item.extra.x < 1200.0f || waited < 60.0f)) {
                 item.text = "refused";
                 return true;
             }
@@ -1538,7 +1542,7 @@ bool InputScript::BrowseWait(Game& game, Waypoint& item) {
     if (done) {
         return false;
     }
-    if (--item.frames > 0) {
+    if (--item.frames > 0 || waited < 60.0f) {
         return true;
     }
     LogWarn("input script: s{} gave up at controller step {} floor {}", item.op, game.Controller().Step(), game.Floor().CurrentFloorName());

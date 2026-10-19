@@ -67,6 +67,34 @@ std::vector<QuadSignature> RenderSmokeSeeds(const std::vector<uint8_t>& bytes,
 }
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--emission-sound") {
+        std::ifstream input(argv[2], std::ios::binary);
+        if (!input) return 2;
+        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+        pt::vfx::SoundNode sound;
+        if (!pt::vfx::ReadSoundNode(bytes, sound) || !sound.on_emit || sound.play != "Play_sfx_water_drop_b") return 1;
+        pt::vfx::System system;
+        system.SetReader([&](const std::string&) -> std::optional<std::vector<uint8_t>> { return bytes; });
+        if (!system.Spawn({1, 1}, "bathtub.vfx", glm::mat4(1.0f), 1)) return 2;
+        pt::vfx::ViewInfo view;
+        size_t bursts = 0, quiet = 0;
+        for (int tick = 0; tick < 600; ++tick) {
+            const size_t before = system.ParticleCount();
+            system.Update(1.0f / 60.0f, view);
+            const bool emitted = system.Emitted({1, 1});
+            if (system.ParticleCount() > before && !emitted) return 1;
+            emitted ? ++bursts : ++quiet;
+        }
+        system.Stop({1, 1});
+        for (int tick = 0; tick < 150; ++tick) {
+            system.Update(1.0f / 60.0f, view);
+            if (system.Emitted({1, 1})) return 1;
+        }
+        system.Remove({1, 1});
+        if (system.Emitted({1, 1}) || bursts < 2 || quiet < 300) return 1;
+        std::printf("bathtub emission sound: %zu burst ticks, %zu quiet ticks, stopped and removed instances silent\n", bursts, quiet);
+        return 0;
+    }
     if (argc == 3 && (std::string(argv[1]) == "--dust" || std::string(argv[1]) == "--world-dust" ||
                       std::string(argv[1]) == "--camera-layer")) {
         const bool wrapped = std::string(argv[1]) == "--dust";

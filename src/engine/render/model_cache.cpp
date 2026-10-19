@@ -253,6 +253,9 @@ MaterialGpu ModelCache::BuildMaterial(const FmdlMaterial& m, uint32_t alpha_flag
         gpu.params.z = scalar("Incidence_Roughness", 1.0f);
         gpu.albedo_factor = m.Vector("Incidence_Color");
     }
+    if (m.name == "fabric_no_glossy_hood_new") {
+        gpu.flags |= gpu::kMatMirrorLining;
+    }
     if (HasVector(m, "MinRoughness")) {
         gpu.flags |= gpu::kMatMicroRoughness;
         gpu.params.z = scalar("MinRoughness", 1.0f);

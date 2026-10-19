@@ -85,6 +85,10 @@ struct BufferRecord {
     HeapKind heap = HeapKind::Default;
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
     void* mapped = nullptr;
+    bool gpu_read_only = false;
+    std::vector<uint8_t> host_data;
+    uint64_t dirty_begin = 0;
+    uint64_t dirty_end = 0;
 };
 
 struct SamplerRecord {
@@ -109,6 +113,7 @@ struct SetRecord {
         uint32_t count = 0;
     };
     std::vector<Array> arrays;
+    std::map<uint64_t, BufferRecord*> uploads;
 };
 
 struct PoolRecord {
@@ -274,6 +279,7 @@ public:
     void DestroyImage(ImageResource& image) override;
     bool CreateBuffer(const BufferDesc& desc, BufferResource& out) override;
     void DestroyBuffer(BufferResource& buffer) override;
+    void FlushMapped(const BufferResource& buffer, uint64_t offset, uint64_t size) override;
     uint64_t ImageBytes(const ImageResource& image) const override;
     SamplerHandle CreateSampler(const SamplerDesc& desc) override;
     void DestroySampler(SamplerHandle sampler) override;

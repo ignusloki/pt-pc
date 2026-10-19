@@ -17,6 +17,8 @@ struct whisper_vad_context;
 
 namespace pt {
 
+int VoiceCpuProbe(int argc, char** argv);
+
 class VoiceRecognizer {
 public:
     static constexpr int kSampleRate = 16000;

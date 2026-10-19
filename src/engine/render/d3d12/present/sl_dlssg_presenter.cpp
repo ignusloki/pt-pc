@@ -56,13 +56,49 @@ bool SlDlssgPresenter::ModeOff() {
     return SetMode(off);
 }
 
+bool SlDlssgPresenter::SetColorSpace(std::string& error) {
+    ComPtr<IDXGISwapChain4> sc4;
+    if (FAILED(swapchain_.As(&sc4))) {
+        error = "the DLSS Frame Generation swapchain has no colour space interface";
+        return false;
+    }
+    UINT support = 0;
+    if (FAILED(sc4->CheckColorSpaceSupport(desc_.color_space, &support)) || !(support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) ||
+        FAILED(sc4->SetColorSpace1(desc_.color_space))) {
+        error = std::format("the DLSS Frame Generation swapchain could not present colour space {}", static_cast<int>(desc_.color_space));
+        return false;
+    }
+    if (desc_.color_space == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+        DXGI_HDR_METADATA_HDR10 meta{};
+        const auto chroma = [](float v) { return static_cast<UINT16>(v * 50000.0f + 0.5f); };
+        meta.RedPrimary[0] = chroma(0.708f);
+        meta.RedPrimary[1] = chroma(0.292f);
+        meta.GreenPrimary[0] = chroma(0.170f);
+        meta.GreenPrimary[1] = chroma(0.797f);
+        meta.BluePrimary[0] = chroma(0.131f);
+        meta.BluePrimary[1] = chroma(0.046f);
+        meta.WhitePoint[0] = chroma(0.3127f);
+        meta.WhitePoint[1] = chroma(0.3290f);
+        meta.MaxMasteringLuminance = static_cast<UINT>(desc_.max_nits);
+        meta.MinMasteringLuminance = 1;
+        meta.MaxContentLightLevel = static_cast<UINT16>(desc_.max_nits);
+        meta.MaxFrameAverageLightLevel = static_cast<UINT16>(desc_.max_frame_average_nits);
+        if (desc_.max_nits > 0.0f && FAILED(sc4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(meta), &meta))) {
+            error = "the DLSS Frame Generation swapchain could not set its HDR10 metadata";
+            return false;
+        }
+        LogInfo("frame generation: DLSS Frame Generation (DirectX 12) HDR10 colour space, metadata peak {:.0f} nits", desc_.max_nits);
+    }
+    return true;
+}
+
 bool SlDlssgPresenter::SetMode(const Options& wanted) {
     if (wanted == mode_) {
         return true;
     }
     streamline::D3D12FrameGenOptions o;
     o.on = wanted.on;
-    o.frames_to_generate = 1;
+    o.frames_to_generate = wanted.multiplier - 1;
     o.back_buffers = desc_.buffer_count;
     o.color_width = wanted.color_w;
     o.color_height = wanted.color_h;
@@ -83,6 +119,11 @@ bool SlDlssgPresenter::SetMode(const Options& wanted) {
         }
         return false;
     }
+    if (wanted.multiplier != mode_.multiplier || (wanted.on && !mode_.on)) {
+        LogInfo("frame generation: DLSS Frame Generation (DirectX 12) multiplier {}x ({} generated per rendered frame)",
+                wanted.multiplier, wanted.multiplier - 1);
+        window_presents_ = window_shown_ = 0;
+    }
     if (wanted.on != mode_.on) {
         LogInfo("frame generation: DLSS Frame Generation (DirectX 12) mode {}", wanted.on ? "on" : "off");
     }
@@ -94,6 +135,11 @@ bool SlDlssgPresenter::Create(const SwapchainDesc& desc, std::string& error) {
     std::string reason;
     if (!Available(reason)) {
         error = reason;
+        return false;
+    }
+    if (desc.color_space != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 &&
+        (desc.color_space != DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || desc.format != DXGI_FORMAT_R10G10B10A2_UNORM)) {
+        error = "DLSS Frame Generation HDR needs an HDR10/PQ swapchain; scRGB is unsupported";
         return false;
     }
     const UINT flags = device_.TearingSupported() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
@@ -108,7 +154,7 @@ bool SlDlssgPresenter::Create(const SwapchainDesc& desc, std::string& error) {
             return false;
         }
         desc_ = desc;
-        if (!GetBuffers(error)) {
+        if (!GetBuffers(error) || !SetColorSpace(error)) {
             Destroy();
             return false;
         }
@@ -149,7 +195,7 @@ bool SlDlssgPresenter::Create(const SwapchainDesc& desc, std::string& error) {
     factory_->MakeWindowAssociation(desc.window, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
     desc_ = desc;
     flags_ = flags;
-    if (!GetBuffers(error)) {
+    if (!GetBuffers(error) || !SetColorSpace(error)) {
         Destroy();
         return false;
     }
@@ -237,6 +283,7 @@ PresentResult SlDlssgPresenter::Present(const FrameInputs& in, uint64_t& consume
     bool generate = generating_ && inputs && !failed_;
     Options wanted = mode_;
     wanted.on = generate;
+    wanted.multiplier = streamline::FrameGenMultiplier();
     if (generate) {
         streamline::D3D12FrameGenTags t;
         t.depth = in.depth;

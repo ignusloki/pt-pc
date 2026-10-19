@@ -65,6 +65,13 @@ set(PT_FFX_FILES
 # v1.1.4's amd_fidelityfx_dx12.dll. The FSR 4 network itself runs in AMD's driver (amdxcffx64.dll), which the port does not ship.
 set(PT_FFX2_DIR "${PT_UPSCALER_SDK_DIR}/fsr-sdk-v2.3.0")
 set(PT_FFX2_FILES
+  "Kits/FidelityFX/api/include/ffx_api.h|e1a9d1b559eaf75f4cb401f1c43a66e2f3dc9621abfeb58b9c6fac56443177fd"
+  "Kits/FidelityFX/api/include/ffx_api_loader.h|18d1901dbbc881e8131b91c65ad44bb3b4a1de6c31435d5b75236f16727ba80e"
+  "Kits/FidelityFX/api/include/ffx_api_types.h|cc0adc0ffc804dd7cd03c39c15581b575e416383177ffe95060201d52cc0fc49"
+  "Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h|c9afbc3c4c673723e9e5369a666f0ff54560543b5a93537f8ff453bf1c3bf530"
+  "Kits/FidelityFX/upscalers/include/ffx_upscale.h|65be36d5653eb71c10379e0204f7bb7cd6a8aeec96e6f8cffc5f59ffeb1f89bf"
+  "Kits/FidelityFX/denoisers/include/ffx_denoiser.h|bdfde56568543abe5fef75debc141f0199bc84e8733a8e151b40b4b5cda3008c"
+  "Kits/FidelityFX/signedbin/amd_fidelityfx_denoiser_dx12.dll|48f1e5888ba6a0a3d59a98b9751e37c392b0f7b8c223d0082d5c1f40642879d3"
   "docs/license.md|6757f2fec461238da6f84f83536ec195e8c036b1773a06f6f34301b9ed8c0963"
   "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll|e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa"
   "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll|d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46")
@@ -231,7 +238,8 @@ elseif(PT_UPSCALERS)
     pt_sdk_files(pt_ffx2_ok "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.3.0" "${PT_FFX2_DIR}" ${PT_FFX2_FILES})
     if(pt_ffx2_ok)
       list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll"
-        "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll")
+        "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
+        "${PT_FFX2_DIR}/Kits/FidelityFX/signedbin/amd_fidelityfx_denoiser_dx12.dll")
       list(APPEND PT_UPSCALER_NOTICES "${PT_FFX2_DIR}/docs/license.md|AMD_FSR_SDK_2_LICENSE.txt")
     elseif(PT_REQUIRE_UPSCALERS)
       message(FATAL_ERROR "Strict Windows release requires the AMD FSR SDK 2.3.0 DirectX 12 DLLs (FSR 4); see download/hash errors above")
@@ -245,6 +253,15 @@ elseif(PT_UPSCALERS)
     list(APPEND PT_UPSCALER_RUNTIME_FILES "${PT_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll"
       "${PT_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlssd.dll")
     list(APPEND PT_UPSCALER_NOTICES "${PT_DLSS_DIR}/LICENSE.txt|NVIDIA_RTX_SDKs_LICENSE.txt")
+    # DLSS 5's companion (src/engine/render/upscale/neural_native.h): the module NVIDIA's neural rendering runtime is called from,
+    # next to pt.exe; on RTX 20, 30 and 40 it also hands the driver that card's GPU code. NGX's headers only, no NVIDIA code.
+    if(WIN32)
+      add_library(pt_native_nvngx SHARED "${CMAKE_SOURCE_DIR}/tools/nr_native_companion_probe.cpp")
+      target_include_directories(pt_native_nvngx PRIVATE "${PT_DLSS_DIR}/include")
+      target_compile_features(pt_native_nvngx PRIVATE cxx_std_20)
+      set_target_properties(pt_native_nvngx PROPERTIES OUTPUT_NAME "pt-native-nvngx" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+      add_dependencies(pt_engine pt_native_nvngx)
+    endif()
   endif()
   pt_sdk_files(pt_xess_ok "https://raw.githubusercontent.com/intel/xess/v3.0.2" "${PT_XESS_DIR}" ${PT_XESS_FILES})
   if(PT_REQUIRE_UPSCALERS AND (NOT pt_ffx_ok OR NOT pt_dlss_ok OR NOT pt_xess_ok))

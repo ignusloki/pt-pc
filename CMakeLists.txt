@@ -44,7 +44,7 @@ list(FILTER PT_ENGINE_SOURCES EXCLUDE REGEX "src/engine/render/d3d12/backend/")
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.8")
+set(PT_VERSION "1.0.9")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()
@@ -80,7 +80,7 @@ target_include_directories(pt_engine PRIVATE installer/Native)
 add_dependencies(pt_engine pt_version)
 target_include_directories(pt_engine PUBLIC src)
 target_compile_definitions(pt_engine PUBLIC VK_NO_PROTOTYPES NOMINMAX WIN32_LEAN_AND_MEAN GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
-target_link_libraries(pt_engine PUBLIC pt_thirdparty SDL3::SDL3-static)
+target_link_libraries(pt_engine PUBLIC pt_thirdparty SDL3::SDL3-static pt_sbc)
 if(WIN32)
   # dbghelp: the crash report (src/engine/core/crash_report.cpp) writes minidumps from pt_engine, so every test links it
   target_link_libraries(pt_engine PUBLIC gdi32 usp10 winhttp dbghelp ws2_32 bcrypt)
@@ -209,13 +209,13 @@ endif()
 
 include(cmake/D3D12.cmake)
 include(cmake/Upscalers.cmake)
-include(cmake/EnhancedTextures.cmake)
 include(cmake/OpenXR.cmake)
 if(APPLE)
   include(cmake/MacOS.cmake)
 endif()
 list(APPEND PT_UPSCALER_RUNTIME_FILES ${PT_OPENXR_RUNTIME_FILES})
 list(APPEND PT_UPSCALER_NOTICES ${PT_OPENXR_NOTICES})
+list(APPEND PT_UPSCALER_NOTICES "${google_sbc_SOURCE_DIR}/LICENSE|google-libsbc-Apache-2.0.txt")
 foreach(file ${PT_UPSCALER_RUNTIME_FILES})
   add_custom_command(TARGET pt POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different "${file}" "$<TARGET_FILE_DIR:pt>" VERBATIM)
 endforeach()
@@ -285,16 +285,6 @@ if(MSVC)
 endif()
 target_link_libraries(pt_collision_test PRIVATE pt_engine)
 
-add_executable(pt_texture_cache_test tests/texture_cache_test.cpp)
-target_link_libraries(pt_texture_cache_test PRIVATE pt_engine)
-
-add_executable(pt_texture_job_test tests/texture_job_test.cpp)
-target_link_libraries(pt_texture_job_test PRIVATE pt_engine)
-
-# the enhanced texture generation timed on its own: pt_texture_bench <game> <runtime> <new-cache-dir> [limit] [kinds] [max-output]
-add_executable(pt_texture_bench tests/texture_bench.cpp)
-target_link_libraries(pt_texture_bench PRIVATE pt_engine)
-
 set(PT_TEXTURE_DESCRIPTOR_SHADER "${CMAKE_BINARY_DIR}/tests/texture_descriptor.comp.spv")
 add_custom_command(OUTPUT "${PT_TEXTURE_DESCRIPTOR_SHADER}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/tests"
@@ -303,6 +293,9 @@ add_custom_command(OUTPUT "${PT_TEXTURE_DESCRIPTOR_SHADER}"
 add_custom_target(pt_texture_descriptor_shader DEPENDS "${PT_TEXTURE_DESCRIPTOR_SHADER}")
 add_executable(pt_texture_descriptor_test tests/texture_descriptor_test.cpp)
 target_link_libraries(pt_texture_descriptor_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_texture_descriptor_test PRIVATE pt_gpu_d3d12)
+endif()
 target_compile_definitions(pt_texture_descriptor_test PRIVATE PT_TEXTURE_DESCRIPTOR_SHADER="${PT_TEXTURE_DESCRIPTOR_SHADER}")
 add_dependencies(pt_texture_descriptor_test pt_texture_descriptor_shader)
 
@@ -310,13 +303,43 @@ set(PT_REFLECTION_MIX_SHADER "${CMAKE_BINARY_DIR}/tests/reflection_mix_test.comp
 add_custom_command(OUTPUT "${PT_REFLECTION_MIX_SHADER}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/tests"
   COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -I "${CMAKE_SOURCE_DIR}/shaders" "${CMAKE_SOURCE_DIR}/tests/reflection_mix_test.comp" -o "${PT_REFLECTION_MIX_SHADER}"
-  DEPENDS tests/reflection_mix_test.comp shaders/reflection_mix.glsl shaders/mirror_temporal.glsl shaders/flashlight_reactivity.glsl VERBATIM)
+  DEPENDS tests/reflection_mix_test.comp shaders/common.glsl shaders/reflection_blend.glsl shaders/reflection_mix.glsl shaders/mirror_temporal.glsl shaders/flashlight_reactivity.glsl VERBATIM)
 add_custom_target(pt_reflection_mix_shader DEPENDS "${PT_REFLECTION_MIX_SHADER}")
 add_executable(pt_reflection_mix_test tests/reflection_mix_test.cpp)
 target_link_libraries(pt_reflection_mix_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_reflection_mix_test PRIVATE pt_gpu_d3d12)
+endif()
 target_compile_definitions(pt_reflection_mix_test PRIVATE PT_REFLECTION_MIX_SHADER="${PT_REFLECTION_MIX_SHADER}")
 add_dependencies(pt_reflection_mix_test pt_reflection_mix_shader)
 
+set(PT_NATIVE_PROJECTION_SHADER "${CMAKE_BINARY_DIR}/tests/rt_native_projection_test.comp.spv")
+add_custom_command(OUTPUT "${PT_NATIVE_PROJECTION_SHADER}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/tests"
+  COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -I "${CMAKE_SOURCE_DIR}/shaders" "${CMAKE_SOURCE_DIR}/tests/rt_native_projection_test.comp" -o "${PT_NATIVE_PROJECTION_SHADER}"
+  DEPENDS tests/rt_native_projection_test.comp shaders/pt_native_projection.glsl VERBATIM)
+add_custom_target(pt_native_projection_shader DEPENDS "${PT_NATIVE_PROJECTION_SHADER}")
+add_executable(pt_native_projection_test tests/rt_native_projection_test.cpp)
+target_link_libraries(pt_native_projection_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_native_projection_test PRIVATE pt_gpu_d3d12)
+endif()
+target_compile_definitions(pt_native_projection_test PRIVATE PT_NATIVE_PROJECTION_SHADER="${PT_NATIVE_PROJECTION_SHADER}")
+add_dependencies(pt_native_projection_test pt_native_projection_shader)
+
+set(PT_RT_FITTING_POLICY_SHADER "${CMAKE_BINARY_DIR}/tests/rt_fitting_policy_test.comp.spv")
+add_custom_command(OUTPUT "${PT_RT_FITTING_POLICY_SHADER}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/tests"
+  COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -I "${CMAKE_SOURCE_DIR}/shaders" "${CMAKE_SOURCE_DIR}/tests/rt_fitting_policy_test.comp" -o "${PT_RT_FITTING_POLICY_SHADER}"
+  DEPENDS tests/rt_fitting_policy_test.comp shaders/rt_fitting_policy.glsl VERBATIM)
+add_custom_target(pt_rt_fitting_policy_shader DEPENDS "${PT_RT_FITTING_POLICY_SHADER}")
+add_executable(pt_rt_fitting_policy_test tests/rt_fitting_policy_test.cpp)
+target_link_libraries(pt_rt_fitting_policy_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_rt_fitting_policy_test PRIVATE pt_gpu_d3d12)
+endif()
+target_compile_definitions(pt_rt_fitting_policy_test PRIVATE PT_RT_FITTING_POLICY_SHADER="${PT_RT_FITTING_POLICY_SHADER}")
+add_dependencies(pt_rt_fitting_policy_test pt_rt_fitting_policy_shader)
 
 add_executable(pt_dualsense_probe EXCLUDE_FROM_ALL tests/dualsense_hid_probe.cpp)
 target_link_libraries(pt_dualsense_probe PRIVATE pt_engine)
@@ -335,9 +358,15 @@ target_link_libraries(pt_photo_panel_test PRIVATE pt_engine)
 
 add_executable(pt_controller_speaker_route_test tests/controller_speaker_route_test.cpp)
 target_link_libraries(pt_controller_speaker_route_test PRIVATE pt_engine)
+add_executable(pt_dualshock_audio_test tests/dualshock_audio_test.cpp)
+target_link_libraries(pt_dualshock_audio_test PRIVATE pt_engine)
 
 add_executable(pt_hdr_output_test tests/hdr_output_test.cpp)
 target_link_libraries(pt_hdr_output_test PRIVATE pt_engine)
+add_executable(pt_d3d12_hdr_framegen_test tests/d3d12_hdr_framegen_test.cpp)
+target_include_directories(pt_d3d12_hdr_framegen_test PRIVATE src)
+add_executable(pt_composite_output_test tests/composite_output_test.cpp)
+target_include_directories(pt_composite_output_test PRIVATE ${glm_SOURCE_DIR})
 
 add_executable(pt_audio_test tests/audio_test.cpp)
 target_link_libraries(pt_audio_test PRIVATE pt_engine)
@@ -368,6 +397,12 @@ endif()
 
 add_executable(pt_user_data_test tests/user_data_test.cpp)
 target_link_libraries(pt_user_data_test PRIVATE pt_engine)
+if(APPLE)
+  add_executable(pt_macos_data_path_test tests/macos_data_path_test.cpp
+    src/engine/platform/macos_data_path.cpp src/engine/platform/user_data.cpp src/engine/platform/os.cpp)
+  target_include_directories(pt_macos_data_path_test PRIVATE src)
+  target_link_libraries(pt_macos_data_path_test PRIVATE "-framework CoreFoundation")
+endif()
 add_executable(pt_crash_upload_test tests/crash_upload_test.cpp)
 target_link_libraries(pt_crash_upload_test PRIVATE pt_engine)
 
@@ -396,6 +431,17 @@ target_link_libraries(pt_vr_view_test PRIVATE pt_engine)
 # the hardware check of FSR 3 frame generation (src/engine/render/upscale/upscale.h, docs/upscaling.md)
 add_executable(pt_upscaler_gpu_test tests/upscaler_gpu_test.cpp)
 target_link_libraries(pt_upscaler_gpu_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_upscaler_gpu_test PRIVATE pt_gpu_d3d12)
+endif()
+
+if(WIN32)
+  add_executable(pt_d3d12_ngx_identity_test tests/d3d12_ngx_identity_test.cpp)
+  target_include_directories(pt_d3d12_ngx_identity_test PRIVATE src)
+endif()
+
+add_executable(pt_nr_toggle_policy_test tests/nr_toggle_policy_test.cpp)
+target_include_directories(pt_nr_toggle_policy_test PRIVATE src)
 
 add_executable(pt_nr_unlock_test tests/nr_unlock_test.cpp)
 target_link_libraries(pt_nr_unlock_test PRIVATE pt_engine)
@@ -445,6 +491,9 @@ target_link_libraries(pt_device_start_test PRIVATE pt_engine)
 # the occluder stage of the original's light culling (0xD2A100, 0xD2AC10), src/engine/render/light_cull.cpp
 add_executable(pt_light_cull_test tests/light_cull_test.cpp)
 target_link_libraries(pt_light_cull_test PRIVATE pt_engine)
+
+add_executable(pt_point_shadow_projection_test tests/point_shadow_projection_test.cpp)
+target_include_directories(pt_point_shadow_projection_test PRIVATE src "${glm_SOURCE_DIR}")
 
 # the option defaults from the system language (0x91D7B0)
 add_executable(pt_language_default_test tests/language_default_test.cpp)
@@ -500,6 +549,14 @@ target_link_libraries(pt_camera_blend_test PRIVATE pt_engine)
 add_executable(pt_skin_render_test tests/skin_render_test.cpp)
 target_link_libraries(pt_skin_render_test PRIVATE pt_engine)
 
+add_executable(pt_rt_record_flags_test tests/rt_record_flags_test.cpp)
+target_include_directories(pt_rt_record_flags_test PRIVATE src "${glm_SOURCE_DIR}")
+
+add_executable(pt_foliage_shadow_test tests/pt_foliage_shadow_test.cpp)
+target_include_directories(pt_foliage_shadow_test PRIVATE src "${glm_SOURCE_DIR}")
+add_executable(pt_skin_shadow_receiver_test tests/rt_skin_shadow_receiver_test.cpp)
+target_include_directories(pt_skin_shadow_receiver_test PRIVATE "${glm_SOURCE_DIR}")
+
 # the mod override index, mod.json and the mod script sandbox (docs/modding.md); no game files needed
 # the platform layer (src/engine/platform: os, http, update check) on Windows and Linux, docs/linux.md
 add_executable(pt_platform_test tests/platform_test.cpp)
@@ -526,11 +583,17 @@ target_link_libraries(pt_archive_model_camera_test PRIVATE pt_engine)
 add_executable(pt_pc_prompt_note_test tests/pc_prompt_note_test.cpp)
 target_link_libraries(pt_pc_prompt_note_test PRIVATE pt_engine)
 
+add_executable(pt_pc_settings_refresh_test tests/pc_settings_refresh_test.cpp)
+target_link_libraries(pt_pc_settings_refresh_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_pc_settings_refresh_test PRIVATE pt_gpu_d3d12)
+endif()
+
 # the hint lines' controls: tokens become the device in use's pictures, a hint names no list of devices in any language
 add_executable(pt_prompt_hint_test tests/prompt_hint_test.cpp)
 target_link_libraries(pt_prompt_hint_test PRIVATE pt_engine)
 
-# the top banner's lines (update, Game+ tier, enhanced textures): one at a time, each for its whole time, never two at once
+# the top banner's lines (update, Game+ tier): one at a time, each for its whole time, never two at once
 add_executable(pt_notice_queue_test tests/notice_queue_test.cpp)
 target_link_libraries(pt_notice_queue_test PRIVATE pt_engine)
 
@@ -538,10 +601,6 @@ target_link_libraries(pt_notice_queue_test PRIVATE pt_engine)
 # back cancels, Arabic lays the plates out from the right
 add_executable(pt_dialog_nav_test tests/dialog_nav_test.cpp)
 target_link_libraries(pt_dialog_nav_test PRIVATE pt_engine)
-
-# the enhanced textures' manifest names the archive, kinds, size cap and model it was made for: the start skips its preparation screen while it does
-add_executable(pt_enhanced_manifest_test tests/enhanced_manifest_test.cpp)
-target_link_libraries(pt_enhanced_manifest_test PRIVATE pt_engine)
 
 # the Museum's unlock keys: what each exhibit waits for and what a sound, a picture or a demo shown in play opens
 add_executable(pt_archive_unlock_test tests/archive_unlock_test.cpp)

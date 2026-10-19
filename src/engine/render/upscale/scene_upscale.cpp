@@ -1,4 +1,5 @@
 #include <chrono>
+#include "engine/render/upscale/neural_native.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -11,6 +12,9 @@
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/d3d12/vk_d3d12_share.h"
 #include "engine/render/upscale/streamline.h"
+#ifdef _WIN32
+#include "engine/render/d3d12/backend/d3d12_native.h"
+#endif
 
 namespace pt {
 namespace {
@@ -262,7 +266,7 @@ bool SceneRenderer::CreateUpscaleTargets(gpu::Extent2D render, gpu::Extent2D out
                                                 (gpu_->Info().backend == gpu::Backend::D3D12 ? gpu::ImageUsageFlags(gpu::ImageUsage::ColorAttachment)
                                                                                              : gpu::ImageUsageFlags{});
     const bool ok = CreateTarget(motion_, kMotionFormat, render, color | gpu::ImageUsage::TransferSrc, c) && CreateTarget(reactive_, kReactiveFormat, render, color | gpu::ImageUsage::TransferSrc, c) &&
-                    CreateTarget(opaque_, kHdrTargetFormat, render, color | gpu::ImageUsage::TransferDst, c) &&
+                    CreateTarget(opaque_, kHdrTargetFormat, render, color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::Storage, c) &&
                     CreateTarget(handy_factor_, kHandyFactorFormat, render, color, c) &&
                     CreateTarget(exposure_image_, kExposureFormat, {1, 1}, exposure_usage, c) &&
                     CreateTarget(upscaled_, kUpscaleColorFormat, output,
@@ -276,7 +280,20 @@ bool SceneRenderer::CreateUpscaleTargets(gpu::Extent2D render, gpu::Extent2D out
     return ok;
 }
 
+void SceneRenderer::PrepareNgxReload() {
+    if (gpu_->Info().backend != gpu::Backend::D3D12) return;
+    gpu_->WaitIdle();
+    if (up_.kind == UpscalerKind::Dlss) {
+        up_.backend = nullptr;
+        up_.created = false;
+        up_.reset = true;
+        up_.failed_key.clear();
+    }
+    UpscaleHost::Get().ReleaseD3D12Ngx();
+}
+
 void SceneRenderer::DestroyUpscaleTargets() {
+    ++neural_output_epoch_;
     RenderTarget* targets[] = {&motion_,    &reactive_,  &opaque_,     &handy_factor_,         &exposure_image_, &upscaled_,
                                &post_hdr_,  &post_depth_, &post_object_velocity_, &fg_motion_, &fg_depth_};
     for (RenderTarget* t : targets) {
@@ -306,6 +323,7 @@ void SceneRenderer::WriteUpscaleDescriptors(gpu::ImageBinding* images, bool post
 }
 
 bool SceneRenderer::BeginUpscaleFrame(gpu::Extent2D output) {
+    streamline::SetFrameGenMultiplier(static_cast<unsigned>(std::clamp(upscale.dlssg_multiplier, 2, 4)));
     if (gpu_->Info().backend == gpu::Backend::D3D12) {
         const bool active = SetupUpscaler(output);
 #ifdef _WIN32
@@ -369,6 +387,8 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
             }
         }
     }
+    const bool was_native_neural_only = up_.native_neural_only;
+    up_.native_neural_only = false;
     up_.enabled = false;
     upscale_stats_.active = false;
     upscale_stats_.kind = upscale.kind;
@@ -385,6 +405,17 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
         up_.kind = UpscalerKind::Off;
         up_.failed_key.clear();
         upscale_stats_.error.clear();
+        if (kind == UpscalerKind::Off && neural.enabled && nr_native::Enabled() &&
+            gpu_->Info().backend == gpu::Backend::D3D12 && lit && output.width && output.height && vr_eye_ < 0) {
+            up_.native_neural_only = true;
+            up_.enabled = true;
+            up_.render = output;
+            up_.jitter_pixels = up_.jitter_ndc = glm::vec2(0.0f);
+            up_.mip_bias = 0.0f;
+            up_.warp_test = false;
+            if (!was_native_neural_only) up_.reset = true;
+            return true;
+        }
         return false;
     }
     std::string reason;
@@ -396,13 +427,14 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
     UpscaleSettings key_settings = upscale;
     key_settings.sharpness = 0.0f;
     key_settings.frame_generation = FrameGenKind::Off;
+    key_settings.dlssg_multiplier = 2;
     if (kind != UpscalerKind::Dlss) {
         key_settings.dlss_model = DlssModel::Auto;
     }
     std::string rr_reason;
     const bool traced = raytracing.path_traced || raytracing.full || raytracing.shadows || raytracing.contact_shadows ||
                         raytracing.ambient_occlusion || raytracing.reflections;
-    const bool ray_reconstruction = kind == UpscalerKind::Dlss && upscale.ray_reconstruction && traced && rt_ != nullptr &&
+    const bool ray_reconstruction = (kind == UpscalerKind::Dlss || kind == UpscalerKind::Fsr4) && upscale.ray_reconstruction && traced && rt_ != nullptr &&
                                     toggles.lights && vr_eye_ < 0 && RayReconstructionAvailable(rr_reason);
     key_settings.ray_reconstruction = ray_reconstruction;
     const bool changed = !up_.created || up_.kind != kind || !(up_.created_settings == key_settings) || up_.created_render.width != render.width ||
@@ -502,16 +534,15 @@ void SceneRenderer::RecordOpaqueSnapshot(gpu::CommandList& cmd, RenderTarget& ou
     cmd.BeginPass(extent_, {{&output, false, {}}}, &depth_, true, false);
 }
 
-void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& view) {
-    FrameSlot& slot = slots_[renderer_->FrameIndex()];
-    if (queries_) cmd.WriteTimestamp(slot.upscale_queries, 0);
-    cmd.UseTargets({{&depth_, gpu::Layout::DepthReadOnly}, {&motion_, gpu::Layout::ColorAttachment}});
-    cmd.BeginPass(extent_, {{&motion_, false, {}}}, &depth_, true, false);
+void SceneRenderer::RecordUpscaleMotion(gpu::CommandList& cmd, const ViewSetup& view, bool fsr_rr) {
+    RenderTarget& target = fsr_rr ? fsr_rr_motion_ : motion_;
+    cmd.UseTargets({{&depth_, gpu::Layout::DepthReadOnly}, {&target, gpu::Layout::ColorAttachment}});
+    cmd.BeginPass(extent_, {{&target, false, {}}}, &depth_, true, false);
     gpu::PassPush push;
     push.ids = glm::uvec4(0, 0, 0, view.index);
     push.m = previous_view_projection_;
-    Fullscreen(cmd, up_motion_, push);
-    cmd.BindPipeline(gpu::BindPoint::Graphics, up_object_motion_);
+    Fullscreen(cmd, fsr_rr ? fsr_rr_motion_trace_ : up_motion_, push);
+    cmd.BindPipeline(gpu::BindPoint::Graphics, fsr_rr ? fsr_rr_velocity_ : up_object_motion_);
     for (const Draw& d : draws_) {
         const SubMesh& sub = *d.sub;
         if (d.previous_model == gpu::kInvalid || sub.pass != RenderPass::Opaque || sub.kind != gpu::kKindDeferred || !Visible(d, view)) {
@@ -531,6 +562,14 @@ void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& 
         cmd.DrawIndexed(sub.index_count, 1, sub.first_index, sub.vertex_offset, 0);
     }
     cmd.EndPass();
+    cmd.UseTargets({{&target, gpu::Layout::ShaderReadOnly}});
+}
+
+void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& view) {
+    FrameSlot& slot = slots_[renderer_->FrameIndex()];
+    if (queries_) cmd.WriteTimestamp(slot.upscale_queries, 0);
+    RecordUpscaleMotion(cmd, view);
+    gpu::PassPush push;
     cmd.UseTargets({{&motion_, gpu::Layout::ShaderReadOnly},
                      {&hdr_, gpu::Layout::ShaderReadOnly},
                      {&opaque_, gpu::Layout::ShaderReadOnly},
@@ -586,7 +625,7 @@ void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& 
             break;
         }
     }
-    handy_demod_ = demod_on && handy != gpu::kInvalid && handy_factor_.Valid() && !up_.ray_reconstruction;
+    handy_demod_ = demod_on && handy != gpu::kInvalid && handy_factor_.Valid() && !up_.ray_reconstruction && !up_.native_neural_only;
     if (handy_demod_) {
         cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly},
                          {&diffuse_, gpu::Layout::ShaderReadOnly},
@@ -617,9 +656,10 @@ void SceneRenderer::RecordNeuralRendering(gpu::CommandList& cmd) {
         if (!nr) {
             return;
         }
-        if (!nr_feature_ready_ || nr_extent_.width != extent.width || nr_extent_.height != extent.height) {
-            nr_feature_ready_ = nr->Create(gpu::vk::Native(cmd), extent.width, extent.height, neural.style, neural.intensity, 1.0f);
+        if (!nr_feature_ready_ || nr_extent_.width != extent.width || nr_extent_.height != extent.height || nr_small_model_ != neural.small_model) {
+            nr_feature_ready_ = nr->Create(gpu::vk::Native(cmd), extent.width, extent.height, neural.style, neural.intensity, 1.0f, neural.small_model);
             nr_extent_ = extent;
+            nr_small_model_ = neural.small_model;
         }
         if (!nr_feature_ready_ || !nr->Created()) {
             return;
@@ -627,7 +667,7 @@ void SceneRenderer::RecordNeuralRendering(gpu::CommandList& cmd) {
     }
     cmd.BeginLabel("neural rendering");
     gpu::PassPush push{};
-    push.f0 = glm::vec4(std::max(neural.paper_white, 1.0e-4f), 0.0f, 0.0f, 0.0f);
+    push.f0 = glm::vec4(std::max(neural.paper_white, 1.0e-4f), std::clamp(neural.intensity, 1.0f, 3.0f), 0.0f, 0.0f);
     cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly}, {&nr_in_, gpu::Layout::ColorAttachment}});
     cmd.BeginPass(extent, {{&nr_in_, false, {}}});
     Fullscreen(cmd, up_nr_encode_, push);
@@ -684,7 +724,7 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
     value.float32[0] = exposure_;
     cmd.ClearColorImage(exposure_image_.image, gpu::Layout::TransferDst, value, 1, 1);
     cmd.UseTargets({{&exposure_image_, gpu::Layout::ShaderReadOnly}});
-    if (!up_.backend) {
+    if (!up_.backend && !up_.native_neural_only) {
         return;
     }
     if (rr_raster_) {
@@ -697,6 +737,14 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
                      {&upscaled_, gpu::Layout::General}});
     const bool on_vulkan = gpu_->Info().backend == gpu::Backend::Vulkan;
     UpscaleDispatch d;
+    d.neural_enabled = neural.enabled;
+    d.neural_style = neural.style;
+    d.neural_intensity = neural.intensity;
+    d.neural_small_model = neural.small_model;
+    d.neural_scale = neural.scale;
+    d.neural_every = neural.every;
+    d.neural_pre = neural.pre;
+    d.neural_output_epoch = neural_output_epoch_;
     d.cmd = on_vulkan ? gpu::vk::Native(cmd) : VK_NULL_HANDLE;
     d.list = &cmd;
     d.color = Wrap(on_vulkan, handy_demod_ ? opaque_ : hdr_);
@@ -759,11 +807,55 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
 }
 
 bool SceneRenderer::RecordUpscaleDispatch() {
-    if (!up_.backend || (!up_dispatch_.cmd && !up_dispatch_.list)) {
+    if ((!up_.backend && !up_.native_neural_only) || (!up_dispatch_.cmd && !up_dispatch_.list)) {
         return false;
     }
-    const bool upscaled = up_.backend->Dispatch(up_dispatch_);
+    bool upscaled = false;
+    if (up_.native_neural_only) {
+        auto& cmd = *up_dispatch_.list;
+        cmd.UseTargets({{&hdr_, gpu::Layout::TransferSrc}, {&upscaled_, gpu::Layout::TransferDst}});
+        gpu::ImageCopy copy;
+        copy.src = {gpu::Aspect::Color, 0, 0, 1}; copy.dst = copy.src;
+        copy.extent = {extent_.width, extent_.height, 1};
+        cmd.CopyImage(hdr_.image, gpu::Layout::TransferSrc, upscaled_.image, gpu::Layout::TransferDst, {&copy, 1});
+        cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly}, {&upscaled_, gpu::Layout::General}});
+        upscaled = true;
+    } else {
+#ifdef _WIN32
+        static const bool force_pre = std::getenv("PT_NR_PRE") != nullptr;
+        if ((up_dispatch_.neural_pre || force_pre) && gpu_->Info().backend == gpu::Backend::D3D12 && nr_native::Enabled() && up_dispatch_.neural_enabled) {
+            RenderTarget& input = handy_demod_ ? opaque_ : hdr_;
+            auto& cmd = *up_dispatch_.list;
+            cmd.UseTargets({{&input, gpu::Layout::General}});
+            UpscaleDispatch before = up_dispatch_;
+            before.output = before.color;
+            FrameSlot& slot = slots_[renderer_->FrameIndex()];
+            const bool timed = std::getenv("PT_NR_TIMING") != nullptr;
+            if (timed && !slot.neural_queries) slot.neural_queries = gpu_->CreateTimestampPool(4);
+            before.neural_queries = timed ? slot.neural_queries : gpu::QueryPoolHandle{};
+            slot.neural_timed = UpscaleHost::Get().RecordNativeNeural(before) && timed && slot.neural_queries;
+            slot.neural_frame = frame_counter_;
+            gpu::d3d12::ResumeAfterNative(cmd);
+            BindSets(cmd, gpu::BindPoint::Graphics);
+            BindSets(cmd, gpu::BindPoint::Compute);
+            cmd.UseTargets({{&input, gpu::Layout::ShaderReadOnly}});
+        }
+#endif
+        upscaled = up_.backend->Dispatch(up_dispatch_);
+    }
     if (gpu_->Info().backend == gpu::Backend::D3D12) {
+#ifdef _WIN32
+        const bool pre_neural = (up_dispatch_.neural_pre || std::getenv("PT_NR_PRE") != nullptr) && !up_.native_neural_only;
+        if (upscaled && nr_native::Enabled() && !pre_neural) {
+            FrameSlot& slot = slots_[renderer_->FrameIndex()];
+            const bool timed = up_dispatch_.neural_enabled && std::getenv("PT_NR_TIMING");
+            if (timed && !slot.neural_queries) slot.neural_queries = gpu_->CreateTimestampPool(4);
+            up_dispatch_.neural_queries = timed ? slot.neural_queries : gpu::QueryPoolHandle{};
+            slot.neural_timed = UpscaleHost::Get().RecordNativeNeural(up_dispatch_) && timed && slot.neural_queries;
+            slot.neural_frame = frame_counter_;
+            gpu::d3d12::ResumeAfterNative(*up_dispatch_.list);
+        }
+#endif
         BindSets(*up_dispatch_.list, gpu::BindPoint::Graphics);
         BindSets(*up_dispatch_.list, gpu::BindPoint::Compute);
 #ifdef _WIN32
@@ -930,7 +1022,8 @@ void SceneRenderer::RecordUpscaleResolve(gpu::CommandList& cmd, bool upscaled) {
                           reflect_post_upscale_ ? gpu::kImgReflectHistoryA + reflect_history_index_ : 0u, main_view_.index);
     push.f0 = glm::vec4(up_.jitter_pixels.x / static_cast<float>(extent_.width), up_.jitter_pixels.y / static_cast<float>(extent_.height),
                         1.0f / static_cast<float>(output_extent_.width), 1.0f / static_cast<float>(output_extent_.height));
-    push.f1 = glm::vec4(static_cast<float>(extent_.width), static_cast<float>(extent_.height), upscaled && handy_demod_ ? 1.0f : 0.0f, 0.0f);
+    push.f1 = glm::vec4(static_cast<float>(extent_.width), static_cast<float>(extent_.height), upscaled && handy_demod_ ? 1.0f : 0.0f,
+                        rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1.0f : 0.0f);
     Fullscreen(cmd, up_resolve_, push);
     cmd.EndPass();
     cmd.UseTargets({{&post_hdr_, gpu::Layout::ShaderReadOnly},
@@ -957,6 +1050,17 @@ void SceneRenderer::RecordUpscale(gpu::CommandList& cmd, float dt) {
 }
 
 void SceneRenderer::ReadUpscaleTimestamps(FrameSlot& slot) {
+    if (slot.neural_timed) {
+        slot.neural_timed = false;
+        uint64_t stamps[4] = {};
+        if (gpu_->ReadTimestamps(slot.neural_queries, 0, 4, stamps)) {
+            const double ms = gpu_->Info().timestamp_period_ns * 1.0e-6;
+            LogInfo("native nr gpu: frame {} encode {:.4f} ms, inference {:.4f} ms, resolve {:.4f} ms, total {:.4f} ms",
+                    slot.neural_frame, static_cast<double>(stamps[1] - stamps[0]) * ms,
+                    static_cast<double>(stamps[2] - stamps[1]) * ms, static_cast<double>(stamps[3] - stamps[2]) * ms,
+                    static_cast<double>(stamps[3] - stamps[0]) * ms);
+        }
+    }
     if (!slot.upscale_timed) {
         return;
     }

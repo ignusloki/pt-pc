@@ -24,8 +24,8 @@ constexpr Prompt Key(KeyAction action) { return {PromptButton::Cross, action, ac
 constexpr Prompt Both(PromptButton button, KeyAction action) { return {button, action, action}; }
 constexpr Prompt Pair(PromptButton button, KeyAction a, KeyAction b) { return {button, a, b}; }
 
-const std::array<Token, 20>& Tokens() {
-    static const std::array<Token, 20> tokens = {{
+const std::array<Token, 21>& Tokens() {
+    static const std::array<Token, 21> tokens = {{
         {"accept", {Both(PromptButton::Cross, KeyAction::Confirm)}, 1, {Both(PromptButton::Cross, KeyAction::Confirm)}, 1},
         {"back", {Both(PromptButton::Circle, KeyAction::Menu)}, 1, {Both(PromptButton::Circle, KeyAction::Menu)}, 1},
         {"pause", {Both(PromptButton::Options, KeyAction::Menu)}, 1, {Both(PromptButton::Options, KeyAction::Menu)}, 1},
@@ -49,6 +49,7 @@ const std::array<Token, 20>& Tokens() {
         {"tabprev", {Key(KeyAction::MenuTabPrev)}, 1, {Both(PromptButton::L1, KeyAction::MenuTabPrev)}, 1},
         {"tabnext", {Key(KeyAction::MenuTabNext)}, 1, {Both(PromptButton::R1, KeyAction::MenuTabNext)}, 1},
         {"donate", {Key(KeyAction::MenuDonate)}, 1, {Both(PromptButton::Select, KeyAction::MenuDonate)}, 1},
+        {"update", {Key(KeyAction::MenuUpdate)}, 1, {Both(PromptButton::Triangle, KeyAction::MenuUpdate)}, 1},
     }};
     return tokens;
 }

@@ -16,8 +16,6 @@ struct AppSettings {
         int height = 900;
         int fullscreen = 0;
         bool vsync = true;
-        bool pause_on_focus_loss = true;
-        bool mute_in_background = false;
         int fps_limit = 0;
         bool hdr = false;
         int hdr_paper_white = 200;
@@ -64,11 +62,13 @@ struct AppSettings {
         float sharpness = 0.0f;
         std::string dlss_model = "auto";
         std::string frame_generation = "off";
+        int dlssg_multiplier = 2;
         bool ray_reconstruction = true;
         std::string neural_rendering = "off";
         std::string neural_style = "default";
+        std::string neural_quality = "quality";
+        std::string neural_model = "small";
         float neural_intensity = 1.0f;
-        float neural_scale = 1.0f;
         std::string neural_runtime;
         bool neural_route_armed = false;
         bool dlssg_route_armed = false;
@@ -85,7 +85,6 @@ struct AppSettings {
     } ray_tracing;
     struct Graphics {
         int anisotropy = 0;
-        bool enhanced_textures = false;
         int shadow_quality = 3;
         bool ambient_occlusion = true;
         bool reflections = true;
@@ -121,6 +120,7 @@ struct AppSettings {
         float gyro_tightening = 4.0f;
         std::map<std::string, std::array<float, 3>> gyro_bias;
         int fov_offset = 0;
+        bool fps_counter = false;
         bool operator==(const Accessibility&) const = default;
     } accessibility;
     struct Vr {

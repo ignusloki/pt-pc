@@ -34,7 +34,7 @@ D3D12_EXPORT_MARK = b"D3D12SDKVersion"
 # and AMD's DX12 DLLs (cmake/Upscalers.cmake): the FSR SDK 2.3.0 loader and upscaler (FSR 3.1 and FSR 4 on DirectX 12) and v1.1.4's
 # amd_fidelityfx_dx12.dll (FSR frame generation on DirectX 12)
 D3D12_RUNTIME_FILES = ("D3D12/D3D12Core.dll", "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll",
-                       "amd_fidelityfx_dx12.dll")
+                       "amd_fidelityfx_dx12.dll", "amd_fidelityfx_denoiser_dx12.dll")
 
 
 def d3d12_capable(executable_bytes):
@@ -296,8 +296,6 @@ def main():
         shutil.rmtree(previews / "pipeline-cache", ignore_errors=True)
     else:
         print(f"loop browser previews skipped: no game files at {args.game}")
-    if (build / "texture-tools").is_dir():
-        shutil.copytree(build / "texture-tools", root / "texture-tools")
     # the port's own ReShade for the DLSS 5 community route (tools/build_reshade.py), which pt-updater installs over Autopilot's
     if (build / "reshade" / "dxgi.dll").is_file():
         (root / "reshade").mkdir()
@@ -319,7 +317,8 @@ def main():
     else:
         print(f"warning: no updater at {updater}; this package cannot update itself in game")
     if (build / "licenses").is_dir():
-        shutil.copytree(build / "licenses", root / "licenses")
+        shutil.copytree(build / "licenses", root / "licenses",
+                        ignore=shutil.ignore_patterns("enhanced-textures", "Real-ESRGAN-*.txt", "bc7enc.txt"))
     shutil.copy2(REPO / "README.md", root / "README.md")
     (root / FILE_LIST).write_bytes(file_list({p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}))
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:

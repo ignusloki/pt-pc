@@ -1,5 +1,6 @@
 #version 460
 #include "common.glsl"
+#include "reflection_blend.glsl"
 
 #define IMG_REFLECT_LAYER 50
 #define IMG_REFLECT_OFFSET 51
@@ -89,5 +90,5 @@ void main() {
     }
     result = max(result, vec4(0.0));
     out_history = result;
-    out_color = result.a > 0.0 && pass.f1.w < 0.5 ? vec4(SrgbDecode(SrgbEncode(min(base.rgb, vec3(1.0))) * (1.0 - result.a) + result.rgb), base.a) : base;
+    out_color = result.a > 0.0 && pass.f1.w < 0.5 ? vec4(SrgbDecode(ReflectionBlendBase(base.rgb, pass.ids.w != 0u) * (1.0 - result.a) + result.rgb), base.a) : base;
 }

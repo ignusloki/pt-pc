@@ -62,18 +62,6 @@ public:
     bool BootSplashShown() const { return boot_splash_ != 0 && boot_splash_time_ > 0.0f; }
     void SetShaderScreen(std::string note) { shader_screen_ = std::move(note); }
     bool ShaderScreenShown() const { return !shader_screen_.empty(); }
-    void SetTexturesScreen(std::string note, float progress, bool asking) {
-        textures_screen_ = std::move(note);
-        textures_progress_ = progress;
-        if (asking && !textures_asking_) textures_nav_fresh_ = true;
-        textures_asking_ = asking;
-    }
-    bool TexturesScreenShown() const { return !textures_screen_.empty(); }
-    struct TexturesAnswer {
-        dialog::Result result = dialog::Result::None;
-        bool yes = false;
-    };
-    TexturesAnswer AnswerTexturesQuestion(const InputState& input);
     std::string DialogKind(int* focus) const;
     void ShowSubtitle(std::string_view subtitle_id, float start_offset_seconds);
     void ClearSubtitles();
@@ -112,6 +100,12 @@ public:
     void EnterTheater(Game& theater);
     void LeaveTheater(Game& game);
     void ShowUpdateNotice(std::string note);
+    void AskUpdate() { update_question_ = true; }
+    void SetFpsCounter(bool shown, int rendered, int presented) {
+        fps_shown_ = shown;
+        fps_rendered_ = rendered;
+        fps_presented_ = presented;
+    }
     void ShowNotice(std::string note);
     void HoldUpdateNotice(bool held) { update_notice_held_ = held; }
     bool UpdateNoticeShown() const { return notices_.Visible(); }
@@ -135,9 +129,9 @@ private:
     void DrawEndingSkip(ui::UiBatch& batch, const UiCanvas& canvas);
     void UpdateSpeedrun(const Game& game);
     void DrawSpeedrun(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
+    void DrawFpsCounter(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
     void UpdateUpdateNotice(Game& game, float dt);
     void DrawUpdateNotice(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
-    void DrawTexturesScreen(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
 
     Renderer* renderer_ = nullptr;
     std::unique_ptr<ui::UiBatch> batch_;
@@ -150,11 +144,6 @@ private:
     uint32_t boot_splash_ = 0;
     float boot_splash_time_ = 0.0f;
     std::string shader_screen_;
-    std::string textures_screen_;
-    float textures_progress_ = 0.0f;
-    bool textures_asking_ = false;
-    dialog::Nav textures_nav_;
-    bool textures_nav_fresh_ = false;
     dialog::Nav save_nav_;
     bool save_nav_open_ = false;
     float dialog_flash_ = 0.0f;
@@ -209,6 +198,10 @@ private:
     UiCanvas canvas_;
     bool canvas_ready_ = false;
     bool pc_request_ = false;
+    bool fps_shown_ = false;
+    int fps_rendered_ = 0;
+    int fps_presented_ = 0;
+    bool update_question_ = false;
     float letterbox_ = 0.0f;
     bool vr_hud_ = false;
     bool top_pending_ = false;

@@ -6,24 +6,30 @@ on Windows, adds vibration derived from Lisa's filtered crying audio. Enhanced e
 driver; unsupported effects stay unavailable. Turning the main Vibration setting off disables both original and enhanced
 vibration.
 
-Controller-speaker playback is a separate optional setting. On supported wired Sony controllers on Windows, it can play
-Lisa's authored crying audio through the controller speaker. Its volume has its own control. The normal game mix,
+Controller-speaker playback plays Lisa's authored crying audio through supported Sony controllers. DualShock 4 speaker
+playback starts automatically over Bluetooth and is experimental. DualSense keeps its separate optional setting, off by
+default. Speaker volume has its own control for both controllers. The normal game mix,
 including headphone output, continues unchanged, and speaker volume does not change vibration strength. The speaker
 setting and its volume are independent of the vibration mode. The original game plays nothing through the controller speaker
-(`gameplay.md` 14.5), so this stays a PC addition and off by default.
+(`gameplay.md` 14.5), so this stays a PC addition. Setting the speaker volume to zero mutes either controller.
 
-Finding the speaker: on Windows the pad's own playback endpoint is looked up through the pad's PnP container; when that finds
-none (DS4Windows puts a virtual DualShock 4 in front of the real pad) or on Linux and macOS, the one playback device named as the
-pad's USB audio is taken: a DualShock 4's is "Wireless Controller" (Windows: "Headset Earphone (Wireless Controller)", a stereo
-pair at 32 kHz), a DualSense's "DualSense Wireless Controller" (4 channels). Two of the same kind by name, or none, leave the
-speaker off; the main mix is the same either way. The route is tried again every 2 s and follows the pad last used, so plugging
-the pad in or out while playing works. `PT_CONTROLLER_SPEAKER_DEVICE=<part of a playback device name>` makes another device stand
-in for the speaker (tests).
+DualSense uses its four-channel USB audio endpoint. DualShock 4 uses its physical Bluetooth HID interface: the game's PCM is
+resampled to 32 kHz, encoded as SBC and sent to the internal speaker using report 0x17, target 0x02. A speaker-only volume
+command arms the route; closing it mutes the speaker. Rumble, lightbar, headset and microphone controls are not overwritten.
+USB audio on a DS4 feeds its headset jack; it is not an internal-speaker route. A USB-only DS4 therefore logs a Bluetooth
+requirement instead of opening that jack or an unrelated PC sound device. See [DS4-BT](https://www.psdevwiki.com/ps4/DS4-BT) for the Bluetooth protocol.
+
+Finding the DualSense speaker: on Windows the pad's playback endpoint is looked up through its PnP container. If that finds
+none, or on Linux and macOS, the one four-channel playback device named "DualSense" is used. Missing or ambiguous devices
+leave the speaker off; the main mix stays unchanged. DS4 Bluetooth matching uses its physical HID path or a single physical
+BT DS4 behind a virtual pad. Unsupported or failed routes retry at most every 2 s. The route follows the last-used controller,
+so unplugging and reconnecting works. `PT_CONTROLLER_SPEAKER_DEVICE=<part of a playback device name>` names a stand-in endpoint
+for software tests; DS4 USB headset endpoints are accepted only through that explicit override.
 
 These controller features have passed software tests for supported-capability handling, event selection and audio
-routing. DualShock 4 speaker playback on hardware has not been verified (whether a DS4 on PC plays its USB audio on the built-in
-speaker at a usable volume without a PS4 setting its speaker volume is unknown); trigger vibration and DualSense actuator output
-have not been verified on hardware either. Bluetooth and unsupported devices are not claimed to work.
+routing. The DS4 Bluetooth encoder, packet layout, CRC and physical-device matching have software coverage, but audible playback
+on a physical DS4 has not been verified. DualSense speaker audio still requires USB. Trigger vibration and DualSense actuator
+output have not been verified on hardware either.
 
 PC settings > Accessibility has two more controller features, both off by default. **Sound captions** give the controller a short
 rumble pulse (the small motor, a quarter of a second) with a caption for sounds that have no vibration of their own, when

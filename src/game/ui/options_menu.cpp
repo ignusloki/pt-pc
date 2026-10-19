@@ -97,6 +97,7 @@ MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t
     out.tab_next = (input.menu_keys_pressed & kMenuKeyTabNext) != 0;
     out.tab_from_e = (input.menu_keys_pressed & kMenuKeyFromE) != 0;
     out.donate = (input.menu_keys_pressed & kMenuKeyDonate) != 0;
+    out.update = (input.menu_keys_pressed & kMenuKeyUpdate) != 0;
     out.street_return = (input.raw_pressed & kRawL1) != 0 || input.house_pressed;
     out.held_dirs = input.raw_held & (kRawUp | kRawDown | kRawLeft | kRawRight);
     const auto stick = [&](float v, uint32_t positive, uint32_t negative) {
@@ -354,7 +355,7 @@ void OptionsMenu::ApplyPrompts() {
             state.positions = std::move(positions);
         }
     }
-    for (const uint16_t id : {pc_.Help(), pc_.NavigationText(), pc_.TabPrevText(), pc_.TabNextText(), pc_.DonateText()}) {
+    for (const uint16_t id : {pc_.Help(), pc_.NavigationText(), pc_.TabPrevText(), pc_.TabNextText(), pc_.DonateText(), pc_.UpdateText()}) {
         UifNodeState& help = view_.State(id);
         help.inline_pictures.clear();
         if (help.text && HasPromptTokens(*help.text)) {
@@ -684,18 +685,13 @@ void OptionsMenu::OpenAsk(Game& game, bool quit, uint32_t held) {
 void OptionsMenu::UpdateAsk(Game& game, const MenuInput& input, float dt) {
     ask_flash_ += dt * 60.0f;
     const bool quit = quit_confirming_;
-    bool yes = quit ? input.switch_column : input.street_return;
-    bool answered = yes;
-    if (!yes) {
-        const dialog::Result result = ask_nav_.Update(input, 2, text_language_, true);
-        if (ask_nav_.Moved()) {
-            ask_flash_ = 0.0f;
-            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
-        }
-        yes = result == dialog::Result::Chosen && ask_nav_.Chosen() == 0;
-        answered = result != dialog::Result::None;
+    const dialog::Result result = ask_nav_.Update(input, 2, text_language_, true);
+    if (ask_nav_.Moved()) {
+        ask_flash_ = 0.0f;
+        if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
     }
-    if (!answered) return;
+    const bool yes = result == dialog::Result::Chosen && ask_nav_.Chosen() == 0;
+    if (result == dialog::Result::None) return;
     if (!yes) {
         quit_confirming_ = street_confirming_ = quit_focused_ = false;
         if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
@@ -956,7 +952,6 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
             view.choices = {std::string(PcText("pc_save_move_yes", text_language_)), std::string(PcText("pc_save_move_no", text_language_))};
             view.focus = ask_nav_.Focus();
             view.language = text_language_;
-            view.back_label = std::string(PcText("pc_back", text_language_));
             view.flash = SelectionFlash(ask_flash_);
             shown = true;
         }

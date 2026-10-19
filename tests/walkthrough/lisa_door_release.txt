@@ -1,0 +1,30 @@
+# f050 pass 1 to pass 2 at the basement door. Release the stick while gc_p00_010 holds the player,
+# before the chase event's delayed voice begins. The original keeps WALK until the release functor.
+sstep 15
+sloop 7
+# The browser respawns in the preceding start room; walk out to reach the selected hallway.
+sstep 20
+sstep 15
+swait 5
+sfree
+goto 0 0 12.5 900
+swait 10
+sfree
+sbrowsed 1200
+sstep 15
+srate 1
+sfree
+sanchor
+gfile 0 -1.4 7.5
+gfile -12.8 -1.4 7.5
+gfile -15.1 -2.65 7.5
+ffile -18 -2.8 7.5
+sstick 0 1 65
+sstick 0 0 15
+sdframe gc_p00_010 96 200
+sexpect ocho 3
+sexpect eventid 7b136101 1
+sfree
+swait 12
+sexpect eventid 7b136101 0
+sexpect ocho 3

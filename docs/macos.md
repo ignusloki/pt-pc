@@ -27,8 +27,12 @@ the settings page greys them out. Validation results and hardware limits are rec
    (`P.T. PC Port.app/Contents/MacOS/pt`) still works.
 4. On a normal game launch with microphone input enabled, macOS requests microphone permission at startup if it has no decision recorded for this app. Granting permission does not start recording. Recording still begins when the game needs voice input or the microphone test. PC Settings → Sound → Microphone input turns capture on/off and saves the choice; Off also disables its test. Turning it back On requests access if no decision exists. If access is denied, gameplay continues; enable the app in System Settings > Privacy & Security > Microphone for the voice puzzle. Already granted/denied decisions are respected. `[voice] key = J` in `pt.ini` works here too. Headless runs, previews, WAV voice tests and installer verification do not request startup microphone access.
 
-Settings, the save, `pt.log` and the enhanced texture cache are in `~/Library/Application Support/pt-port/pt/`. Mods go
+Settings, the save and `pt.log` are in `~/Library/Application Support/pt-port/pt/`. Mods go
 in `mods/` in that folder (docs/modding.md), since the app bundle is no place for user files.
+
+The `pt-port` or `pt` directory may be a symbolic link or a Finder alias to a writable folder on an already mounted drive.
+The app resolves the target before preparing its data folder; the link/alias, settings and saves stay in place. Missing
+targets and read-only folders still fail their checks. The app does not mount a missing volume automatically.
 
 ## Optional features
 
@@ -69,7 +73,6 @@ macOS takes the POSIX side of `src/engine/platform` (docs/linux.md), with these 
 | `LiveSplitClient` | no `MSG_NOSIGNAL` on macOS: `SO_NOSIGPIPE` is set on the socket |
 | window opened in the background | no pause menu before the controller's first tick (an app started from Finder or the Dock can lose the focus while it starts) |
 | shadow maps | compared in the shader from a `textureGather` (`PT_SHADOW_GATHER`, shaders/lighting.glsl) instead of a comparison sampler: with one on the bindless `images[]` array SPIRV-Cross declares the whole array `depth2d`, and Metal reads the G-buffer's normal and material through it as one channel, which lit the hallway ceiling in blotches |
-| enhanced textures | the `realesrgan-ncnn-vulkan` macOS release (a universal binary, x86_64 and arm64, MoltenVK linked in; checked here by its Mach-O header), by SHA-256 |
 | missing GPU features | the device is checked for the features the renderer needs (`vk_context.cpp`) and the log names the one that is missing |
 | first-run screen when no game is found | `NSAlert` and `NSOpenPanel` through SDL; the app is brought to the front first (`SDL_HINT_MAC_BACKGROUND_APP` 0), since SDL 3.4 leaves an app with no window in the background on macOS 14 and later; the PKG helper is a single-file .NET executable for the Mac's CPU, signed with the app |
 | crash dump | none |
@@ -107,8 +110,7 @@ is refused: ggml's CPU variants for the voice recognizer are chosen per architec
 workflow does; `make_app.py` reads the architecture from the executable and names the zip `...-macos-arm64.zip` or
 `...-macos-x64.zip`.
 
-CMake downloads MoltenVK and the macOS Real-ESRGAN build next to the other dependencies (cmake/MacOS.cmake,
-cmake/EnhancedTextures.cmake). `build/macos/pt` runs from the build folder. The unit tests build with the default
+CMake downloads MoltenVK next to the other dependencies (cmake/MacOS.cmake). `build/macos/pt` runs from the build folder. The unit tests build with the default
 target, as elsewhere.
 
     python3 tools/macos/make_app.py --build build/macos
@@ -132,7 +134,7 @@ The helper builds `pt_release`, its resources, the in-app PKG helper and the nat
 
 `--liborbis <checkout>` uses an existing source checkout; otherwise the pinned revision is downloaded. `--build <folder>` changes the build/output cache. `--identity <Developer ID Application identity>` signs using that identity; the default is ad hoc. Signing with an identity does not perform notarization.
 
-Cross-compilation is available with `--arch x64 --skip-tests` on Apple silicon, or the reverse target. It verifies and signs the target binaries but skips target-runtime tests. Native hardware testing remains required, especially for GPU support and voice CPU feature selection. Release-only Mac builds stage the same shaders, fonts, voice runtime, MoltenVK and texture helper as developer builds.
+Cross-compilation is available with `--arch x64 --skip-tests` on Apple silicon, or the reverse target. It verifies and signs the target binaries but skips target-runtime tests. Native hardware testing remains required, especially for GPU support and voice CPU feature selection. Release-only Mac builds stage the same shaders, fonts, voice runtime and MoltenVK as developer builds. Upstream 1.0.7 removes Enhanced Textures; its retired tools and licenses are excluded even when reusing an older build cache.
 
 ## Releases
 

@@ -1,6 +1,6 @@
 # Windowed first boot with a virtual DualSense only: the option screen, its PC settings page navigated with the pad
-# (View opens it, the D-pad moves, circle returns), a 1200 frame focus loss during the preface (the game and the audio clock freeze),
-# the opening, 3600 ticks in the pause menu, a focus loss in play (the pause menu opens and stays), then out of the
+# (View opens it, the D-pad moves, circle returns), a 1200 frame focus loss during the preface (the game and audio keep running),
+# the opening, 3600 ticks in the pause menu, a focus loss in play (the game keeps playing), then out of the
 # start room and through the hallway to the next floor (door save). Screenshots w1 to w6 go to the working folder.
 # Needs an empty save folder; keep the window from taking the focus and the audio silent:
 # SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_AUDIO_DRIVER=dummy pt.exe --virtual-pads --settings <pt.ini> --save-dir <empty>
@@ -48,11 +48,9 @@
 700 sexpect paused 0
 700 sfocus 0 300
 700 swait 10
-700 sexpect menu 1
+700 sexpect menu 0
 700 swait 400
-700 sexpect menu 1
-700 stap 0 options
-700 smenu 0
+700 sexpect menu 0
 700 sexpect paused 0
 700 goto 0 0 12.5
 700 swait 10

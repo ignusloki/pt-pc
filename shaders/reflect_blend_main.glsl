@@ -1,4 +1,5 @@
 #include "common.glsl"
+#include "reflection_blend.glsl"
 #ifdef PT_RT_REFLECTIONS
 layout(set = 2, binding = 2) uniform sampler2D rt_reflection_color;
 #include "reflection_mix.glsl"
@@ -160,6 +161,6 @@ void main() {
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * refl.xy - 1.0), true);
 #endif
 #else
-    out_color = vec4(SrgbDecode(mix(SrgbEncode(min(base.rgb, vec3(1.0))), SrgbEncode(min(hit, vec3(1.0))), amount)), base.a);
+    out_color = vec4(SrgbDecode(mix(ReflectionBlendBase(base.rgb, pass.ids.y != 0u), SrgbEncode(min(hit, vec3(1.0))), amount)), base.a);
 #endif
 }

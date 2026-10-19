@@ -1,4 +1,5 @@
 #include "engine/render/upscale/neural_rendering.h"
+#include "engine/render/upscale/neural_native.h"
 
 #include <array>
 #include <cstdlib>
@@ -19,6 +20,7 @@ namespace {
 constexpr const char* kKinds[] = {"off", "dlss5"};
 constexpr const char* kStyles[] = {"default", "natural", "cinematic"};
 constexpr const char* kRuntimeName = "nvngx_dlssnr.dll";
+std::optional<NeuralRuntimeInfo> native_runtime;
 
 std::string Lower(const std::string& text) { return AsciiLowerCopy(text); }
 
@@ -128,6 +130,13 @@ bool NeuralRenderingVendorSupported(uint32_t vendor_id) {
     return vendor_id == 0x10DE;
 }
 
+void ConfigureNativeNeuralRuntime(const std::string& ini_path) {
+    native_runtime = FindNeuralRuntime(ini_path);
+    if (native_runtime) LogInfo("native nr: selected {} ({} bytes, sha256 {}, from {})", native_runtime->path.string(), native_runtime->size,
+                                native_runtime->sha256, native_runtime->source);
+}
+const std::optional<NeuralRuntimeInfo>& NativeNeuralRuntime() { return native_runtime; }
+
 std::optional<NeuralRuntimeInfo> FindNeuralRuntime(const std::string& ini_path) {
     struct Candidate {
         std::filesystem::path where;
@@ -157,6 +166,14 @@ std::optional<NeuralRuntimeInfo> FindNeuralRuntime(const std::string& ini_path) 
     }
     if (const std::filesystem::path env = EnvPath("PT_NEURAL_RUNTIME"); !env.empty()) {
         candidates.insert(candidates.begin(), {env, 2, "PT_NEURAL_RUNTIME"});
+    }
+    if (const auto& install = nr_native::Active(); install && EnvPath("PT_NEURAL_RUNTIME").empty()) {
+        NeuralRuntimeInfo info;
+        info.path = install->runtime;
+        info.size = nr_native::kRuntimeSize;
+        info.sha256 = std::string(nr_native::kRuntimeSha256);
+        info.source = "the port's DLSS 5 install";
+        return info;
     }
     for (const Candidate& c : candidates) {
         const std::filesystem::path found = RuntimeIn(c.where, c.depth);

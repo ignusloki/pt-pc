@@ -1,0 +1,19 @@
+#version 460
+#include "rt_fitting_policy.glsl"
+layout(local_size_x=1) in;
+layout(std430,set=0,binding=0) buffer Results { vec4 values[]; } results;
+void main() {
+    uint rays = 4u << 16u;
+    results.values[0] = vec4(RtFittingAllows(1u,rays,3u,.2918136) ? 1.0 : 0.0,0,0,0);
+    results.values[1] = vec4(RtFittingAllows(1u,rays,1u,.2918136) ? 1.0 : 0.0,0,0,0);
+    results.values[2] = vec4(RtFittingAllows(3u,rays,3u,.01) ? 1.0 : 0.0,0,0,0);
+    results.values[3] = vec4(RtFittingAllows(1u,rays,1u,.3) ? 1.0 : 0.0,0,0,0);
+    results.values[4] = vec4(RtFittingAllows(1u,rays,1u,.3003861) ? 1.0 : 0.0,0,0,0);
+    results.values[5] = vec4(RtFittingAllows(49u,rays|(3u<<25u),1u,8.0) ? 1.0 : 0.0,0,0,0);
+    results.values[6] = vec4(RtFittingAllows(49u,rays|(2u<<25u),1u,.01) ? 1.0 : 0.0,0,0,0);
+    results.values[7] = vec4(RtFittingAllows(1009u,rays|(63u<<25u),1u,8.0) ? 1.0 : 0.0,0,0,0);
+    results.values[8] = vec4(RtFittingAllows(1009u,rays|(63u<<25u),3u,.01) ? 1.0 : 0.0,0,0,0);
+    results.values[9] = vec4(RtFittingAllows(0u,rays,1u,.01) ? 1.0 : 0.0,0,0,0);
+    results.values[10] = vec4(RtFittingAllows(5u,rays,3u,.01) ? 1.0 : 0.0,0,0,0);
+    results.values[11] = vec4(float(0u & 1u),float(1u & 1u),float(2u & 1u),float(3u & 1u));
+}

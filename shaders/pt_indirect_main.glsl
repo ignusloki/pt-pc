@@ -73,7 +73,50 @@ void main() {
     vec3 origin = world + ng * max(0.003, 0.0015 * c.z);
     uint bounces = uint(pass.f0.y + 0.5);
     uint rng = RtHash(uint(half_pixel.x) * 1973u + uint(half_pixel.y) * 9277u) ^ RtHash(pass.ids.z * 26699u + 3u);
-#ifdef PT_INDIRECT_RENDER_SIZE
+#if defined(PT_D3D12) && defined(PT_INDIRECT_RENDER_SIZE)
+    if (pass.f1.y > 0.5) {
+        vec4 mat0_one = Img(RES_MATERIAL, SMP_POINT_CLAMP, vec2(s.material_u, 0.25));
+        vec3 level_one = s.specular * mat0_one.rgb;
+        float ls = Luma709(PtSpecularAlbedo(n, V, s));
+        bool specular_worth = !(ls < 0.002 || Luma709(level_one) < 1.0e-4);
+        float ld = Luma709(s.albedo);
+        float p_spec = specular_worth && ls + ld > 1.0e-5 ? clamp(ls / (ls + ld), 0.05, 0.95) : 0.0;
+        float travel_one = pass.f0.x;
+        bool diffuse_one = RtRandom(rng) >= p_spec;
+        vec3 d_one;
+        vec3 path_weight_one = vec3(1.0);
+        bool valid_one = true;
+        if (diffuse_one) {
+            uint seed_one = RtHash(uint(half_pixel.x) * 7919u + uint(half_pixel.y) * 104729u);
+            vec2 e_one = fract(vec2(float(seed_one & 0xFFFFu), float(seed_one >> 16u)) / 65536.0 + float(pass.ids.z) * vec2(0.7548776662, 0.5698402910));
+            d_one = PtCosineDirection(n, e_one);
+            if (dot(d_one, ng) < 0.0) {
+                d_one = normalize(d_one - 2.0 * dot(d_one, ng) * ng);
+            }
+        } else {
+            vec3 w_one;
+            valid_one = PtSampleSpecular(n, V, s, vec2(RtRandom(rng), RtRandom(rng)), d_one, w_one);
+            if (valid_one) {
+                if (dot(d_one, ng) <= 0.0) {
+                    d_one = normalize(d_one - 2.0 * dot(d_one, ng) * ng);
+                }
+                path_weight_one = w_one / max(level_one, vec3(1.0e-4));
+            }
+        }
+        vec3 light = vec3(0.0);
+        if (valid_one) {
+            light = Clamp(PtTracePath(origin, d_one, path_weight_one, bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel_one));
+        }
+        if (diffuse_one) {
+            imageStore(rt_gi_raw, half_pixel, vec4(min(light / (1.0 - p_spec), vec3(64.0)), travel_one));
+            imageStore(rt_glossy_raw, half_pixel, vec4(0.0, 0.0, 0.0, specular_worth ? 0.0 : -1.0));
+        } else {
+            imageStore(rt_gi_raw, half_pixel, vec4(0.0, 0.0, 0.0, travel_one));
+            imageStore(rt_glossy_raw, half_pixel, vec4(min(light / p_spec, vec3(64.0)), travel_one));
+        }
+        return;
+    }
+#elif defined(PT_INDIRECT_RENDER_SIZE)
     if (pass.f1.y > 0.5) {
         vec4 mat0_one = Img(RES_MATERIAL, SMP_POINT_CLAMP, vec2(s.material_u, 0.25));
         vec3 level_one = s.specular * mat0_one.rgb;

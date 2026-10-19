@@ -254,6 +254,7 @@ bool ReadSoundNode(std::span<const uint8_t> data, SoundNode& out) {
         out.play = node.String("soundEvent");
         out.stop = node.String("soundStop");
         out.stop_playing = node.Bool(0x37CD447Cu);
+        out.on_emit = node.Bool(0x6F15D5A0u);
         out.fade = node.Float(0xD2ECAC68u);
         out.curve = node.UInt(0xE3A9CADAu, 4u);
         if (!out.play.empty()) {

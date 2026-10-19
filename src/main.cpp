@@ -3,6 +3,7 @@
 #include "engine/core/ascii.h"
 #include "engine/platform/update_check.h"
 #include "engine/platform/update_journal.h"
+#include "engine/platform/macos_data_path.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -41,7 +42,6 @@
 
 #include "engine/anim/anim_test.h"
 #include "engine/assets/fmdl.h"
-#include "engine/assets/enhanced_textures.h"
 #include "engine/assets/geom.h"
 #include "engine/core/log.h"
 #include "engine/core/crash_upload.h"
@@ -69,6 +69,7 @@
 #include "engine/render/d3d12/vk_d3d12_share.h"
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/neural_rendering.h"
+#include "engine/render/upscale/neural_native.h"
 #include "engine/render/upscale/neural_unlock.h"
 #include "engine/render/upscale/fg_unlock.h"
 #include "engine/render/upscale/route_queue.h"
@@ -144,6 +145,7 @@ bool ProbeD3D12(std::string& reason) {
 #endif
 #include "engine/voice/voice_recognizer.h"
 #include "game/archive.h"
+#include "game/museum_transcripts.h"
 #include "game/archive_theater.h"
 #include "engine/audio/wem.h"
 #include "game/museum_music.h"
@@ -236,6 +238,8 @@ struct Options {
     bool release_locks = kReleaseLocks;
     bool third_person = false;
     std::filesystem::path make_loop_previews;
+    std::filesystem::path dlss5_install;
+    int dlss5_arch = 0;
     std::filesystem::path make_museum_previews;
     std::filesystem::path museum_previews;
     bool vr = false;
@@ -284,6 +288,8 @@ constexpr OptionSpec kOptionSpecs[] = {
     {"--third-person", 0, "the experimental third person view on (Extras; pt.ini is not changed)"},
     {"--no-release-locks", 0, "no loop browser locks"},
     {"--make-loop-previews", 1, "<folder> shoot the loop browser previews and exit (headless)"},
+    {"--dlss5-install", 1, "<folder> install DLSS 5 into that data folder and exit (tests)"},
+    {"--dlss5-arch", 1, "<0|75|86|89> the GPU code --dlss5-install takes (0: RTX 50, none)"},
     {"--make-museum-previews", 1, "<folder> shoot the Museum's thumbnails and exit (headless)"},
     {"--museum-previews", 1, "<folder> the Museum's thumbnails to show (tests)"},
     {"--seed", 1, "<n> random seed"},
@@ -408,6 +414,10 @@ Options ParseOptions(int argc, char** argv) {
             options.release_locks = false;
         } else if (arg == "--third-person") {
             options.third_person = true;
+        } else if (arg == "--dlss5-install" && has_value) {
+            options.dlss5_install = pt::os::PathFromUtf8(argv[++i]);
+        } else if (arg == "--dlss5-arch" && has_value) {
+            options.dlss5_arch = std::atoi(argv[++i]);
         } else if (arg == "--make-loop-previews" && has_value) {
             options.make_loop_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--make-museum-previews" && has_value) {
@@ -670,12 +680,18 @@ struct App {
     pt::update::Checker updates;
     bool update_polled = false;
     bool update_requested = false;
+    bool update_question = false;
     int update_language = 0;
     pt::nr_unlock::GpuClass nr_gpu = pt::nr_unlock::GpuClass::Other;
     std::optional<pt::nr_unlock::Install> nr_install;
     bool nr_install_usable = false;
     pt::nr_unlock::Job nr_job;
     uint32_t nr_job_serial = 0;
+    pt::nr_native::Job nr_native_job;
+    uint32_t nr_native_serial = 0;
+    int nr_arch = -1;
+    bool nr_native_remove_pending = false;
+    bool nr_crash_hold = false;
     int nr_job_request = 0;
     bool nr_reshade_loaded = false;
     bool nr_marker_read = false;
@@ -686,6 +702,7 @@ struct App {
     int nr_hook_tries = 0;
     double nr_hook_try_time = -10.0;
     bool nr_hook_failed = false;
+    bool nr_restart_pending = false;
     uint32_t nr_toggles_logged = 0;
     pt::route_queue::Queue routes;
     int NrPending() const { return routes.Pending(pt::route_queue::Route::Nr); }
@@ -731,17 +748,7 @@ struct App {
     pt::TextureManager textures;
     pt::SceneRenderer scene;
     std::unique_ptr<pt::ModelCache> models;
-    pt::EnhancedTextureJob texture_job;
-    std::filesystem::path texture_cache;
-    uint32_t texture_max_output = 0;
-    uint32_t texture_kinds = pt::kEnhancedAllKinds;
-    std::filesystem::path texture_runtime;
     pt::Vfs* vfs = nullptr;
-    bool texture_requested = false;
-    uint64_t texture_poll_ms = 0;
-    uint32_t texture_refreshed_done = 0;
-    size_t texture_stems_count = 0;
-    bool texture_final_pass = false;
     std::unique_ptr<pt::mods::ModSet> mods;
     std::unique_ptr<pt::xr::Host> xr;
     pt::LiveSplitClient livesplit;
@@ -807,69 +814,6 @@ void MountMods(App& app) {
     pt::LogInfo("mods: {} found in {}, {} files replaced", app.mods->mods.size(), pt::os::PathToUtf8(dir), app.mods->index.Size());
 }
 
-void RequestEnhancedTextures(App& app, bool enabled) {
-    app.texture_requested = enabled;
-    if (!enabled) {
-        app.texture_job.Cancel();
-        app.textures.SetEnhancedTextures(false);
-        app.settings.graphics.enhanced_textures = false;
-        return;
-    }
-    app.settings.graphics.enhanced_textures = true;
-    app.texture_poll_ms = 0;
-    app.texture_refreshed_done = 0;
-    app.texture_stems_count = 0;
-    app.texture_final_pass = false;
-    app.texture_job.SetPaused(app.window != nullptr);
-    const uint64_t model = pt::EnhancedModelKey(app.texture_runtime);
-    app.textures.ConfigureEnhancedTextures(app.vfs->Textures(), app.texture_cache, model, app.texture_kinds);
-    app.texture_job.Start(app.vfs->GameDir(), app.texture_cache, app.texture_runtime, 0, app.texture_max_output, app.texture_kinds);
-}
-
-void PollEnhancedTextures(App& app) {
-    if (!app.texture_requested) return;
-    const auto status = app.texture_job.GetStatus();
-    if (status.state == pt::EnhancedTextureJob::State::Running) {
-        const uint64_t now = SDL_GetTicks();
-        if (now - app.texture_poll_ms >= 2000) {
-            app.texture_poll_ms = now;
-            auto stems = app.textures.LoadedTextureStems();
-            if (stems.size() != app.texture_stems_count) {
-                app.texture_stems_count = stems.size();
-                pt::LogInfo("enhanced textures: {} loaded textures go first", stems.size());
-                if (const char* dump = std::getenv("PT_TEXTURE_STEMS_DUMP"); dump && *dump) {
-                    std::sort(stems.begin(), stems.end());
-                    if (std::ofstream out(pt::os::PathFromUtf8(dump), std::ios::trunc); out) for (const auto& stem : stems) out << stem << '\n';
-                }
-                app.texture_job.Prioritise(std::move(stems));
-            }
-            if (status.done > app.texture_refreshed_done) {
-                app.texture_refreshed_done = status.done;
-                app.textures.RefreshEnhancedTextures();
-            }
-        }
-        return;
-    }
-    if(status.state == pt::EnhancedTextureJob::State::Cancelled) {
-        app.texture_job.Start(app.vfs->GameDir(),app.texture_cache,app.texture_runtime,0,app.texture_max_output,app.texture_kinds);
-        return;
-    }
-    const bool ready = status.state == pt::EnhancedTextureJob::State::Ready;
-    if (ready) {
-        if (!app.texture_final_pass) {
-            app.texture_final_pass = true;
-            app.textures.RefreshEnhancedTextures();
-            return;
-        }
-        if (app.textures.EnhancedPending()) return;
-    } else {
-        app.textures.SetEnhancedTextures(false);
-    }
-    app.texture_final_pass = false;
-    app.texture_requested = false;
-    if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
-}
-
 void ApplyFullscreen(App& app) {
     if (!app.window) {
         return;
@@ -932,14 +876,24 @@ std::filesystem::path UserDataDir() {
 #ifdef __APPLE__
     /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
        /Applications; the data folder is then the user's (docs/macos.md). A build folder keeps it next to pt. */
-    const std::filesystem::path base = pt::ExecutableDir();
-    const bool bundled = std::any_of(base.begin(), base.end(), [](const std::filesystem::path& part) { return part.extension() == ".app"; });
-    if (bundled) {
-        const auto home = pt::os::GetEnv("HOME");
-        if (!home.empty()) return pt::os::PathFromUtf8(home) / "Library" / "Application Support" / "pt-port" / "pt";
-    }
-#endif
+    static const std::filesystem::path directory = [] {
+        const std::filesystem::path base = pt::ExecutableDir();
+        const bool bundled = std::any_of(base.begin(), base.end(), [](const std::filesystem::path& part) { return part.extension() == ".app"; });
+        std::filesystem::path requested = base / "data";
+        if (bundled) {
+            const auto home = pt::os::GetEnv("HOME");
+            if (!home.empty()) requested = pt::os::PathFromUtf8(home) / "Library" / "Application Support" / "pt-port" / "pt";
+        }
+        std::error_code error;
+        const auto resolved = pt::platform::ResolveMacDataPath(requested, error);
+        if (!error) return resolved;
+        pt::LogWarn("Cannot resolve macOS data folder '{}': {}", pt::os::PathToUtf8(requested), error.message());
+        return requested;
+    }();
+    return directory;
+#else
     return pt::ExecutableDir() / "data";
+#endif
 }
 
 bool SaveMoveTest() { return !pt::os::GetEnv("PT_TEST_SAVE_MOVE").empty(); }
@@ -1025,7 +979,12 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
         std::ifstream in(remembered_file, std::ios::binary);
         std::string line;
         if (std::getline(in, line)) {
-            const std::filesystem::path remembered = std::filesystem::path(reinterpret_cast<const char8_t*>(line.c_str()));
+            std::filesystem::path remembered = std::filesystem::path(reinterpret_cast<const char8_t*>(line.c_str()));
+#ifdef __APPLE__
+            std::error_code path_error;
+            const auto resolved = pt::platform::ResolveMacDataPath(remembered, path_error);
+            if (!path_error) remembered = resolved;
+#endif
             if (LooksLikeGameDir(remembered)) {
                 source = "game_dir.txt, the folder picked at an earlier start";
                 return remembered;
@@ -1418,6 +1377,7 @@ pt::UpscaleSettings UpscaleFromApp(const pt::AppSettings& s) {
     if (!pt::ParseFrameGen(s.upscaling.frame_generation, u.frame_generation)) {
         u.frame_generation = pt::FrameGenKind::Off;
     }
+    u.dlssg_multiplier = std::clamp(s.upscaling.dlssg_multiplier, 2, 4);
     u.ray_reconstruction = s.upscaling.ray_reconstruction;
     if (const char* env = std::getenv("PT_RR")) {
         u.ray_reconstruction = std::atoi(env) != 0;
@@ -1446,8 +1406,11 @@ pt::RayTracingSettings RayTracingFromApp(const pt::AppSettings& s) {
         r.contact_shadows = std::atoi(env) != 0;
     }
     r.full = s.graphics.ray_quality >= 3;
+    r.full_unused = r.full && !r.shadows && !r.reflections && !r.ambient_occlusion;
+    if (r.full_unused) r.full = false;
     if (const char* env = std::getenv("PT_RT_FULL")) {
         r.full = std::atoi(env) != 0;
+        r.full_unused = false;
     }
     r.path_traced = s.graphics.ray_quality >= 4;
     if (const char* env = std::getenv("PT_RT_PATH")) {
@@ -1455,6 +1418,7 @@ pt::RayTracingSettings RayTracingFromApp(const pt::AppSettings& s) {
     }
     if (r.path_traced) {
         r.full = true;
+        r.full_unused = false;
     }
     r.full_shadows = s.ray_tracing.full_shadows;
     if (const char* env = std::getenv("PT_RT_FULL_SHADOWS")) {
@@ -1471,12 +1435,40 @@ pt::RayTracingSettings RayTracingFromApp(const pt::AppSettings& s) {
     return r;
 }
 
+constexpr bool kCommunityRouteRetired = true;
+
+std::filesystem::path NrDataDir(const std::filesystem::path& settings_path) {
+    return settings_path.empty() ? UserDataDir() : settings_path.parent_path();
+}
+
 bool UsesNrRoute(pt::nr_unlock::GpuClass gpu) {
     return gpu == pt::nr_unlock::GpuClass::NeedsUnlock || gpu == pt::nr_unlock::GpuClass::Native;
 }
 
+struct NeuralQualityPlan { float scale; bool pre; };
+NeuralQualityPlan PlanForNeuralQuality(const std::string& quality) {
+    if (quality == "performance") return {0.75f, true};
+    if (quality == "ultra") return {1.0f, false};
+    return {1.0f, true};
+}
+int NeuralQualityIndex(const std::string& quality) {
+    return quality == "performance" ? 0 : quality == "ultra" ? 2 : 1;
+}
+
+bool NrUpscalerReady(const App& app) {
+    return app.settings.upscaling.upscaler == pt::UpscalerKey(pt::UpscalerKind::Dlss);
+}
+
 pt::NeuralRenderingSupport NeuralSupport(App& app) {
     pt::NeuralRenderingSupport s;
+    if (pt::nr_native::Enabled() && app.renderer.Backend() == pt::gpu::Backend::D3D12) {
+        if (const auto* actual = app.scene.NativeNeuralStatus()) return *actual;
+        s.runtime = pt::NativeNeuralRuntime();
+        s.available = app.nr_gpu != pt::nr_unlock::GpuClass::Other && s.runtime.has_value();
+        s.reason = s.available ? "private native D3D12 preflight; actual feature create is logged by the renderer" : "native NR needs an NVIDIA RTX GPU and a supplied runtime";
+        if (!s.available) s.note = s.runtime ? "pc_note_nr_gpu" : "pc_note_nr_runtime";
+        return s;
+    }
     if (UsesNrRoute(app.nr_gpu)) {
         if (!app.nr_install_usable) {
             s.reason = "DLSS 5 needs the community route installed first (the Graphics page's Download or Unlock action)";
@@ -1510,7 +1502,14 @@ pt::NeuralRenderingSupport NeuralSupport(App& app) {
 }
 
 bool NeuralRouteActive(const App& app) {
+    if (kCommunityRouteRetired || pt::nr_native::Enabled()) return false;
     return UsesNrRoute(app.nr_gpu) && app.nr_install_usable && app.renderer.Backend() == pt::gpu::Backend::D3D12;
+}
+
+bool NeuralRouteNeedsRestart(const App& app) {
+    if (kCommunityRouteRetired || pt::nr_native::Enabled()) return false;
+    return pt::nr_unlock::ToggleNeedsRestart(app.nr_gpu, app.nr_install_usable,
+                                           app.renderer.Backend() == pt::gpu::Backend::D3D12, app.nr_hook_failed);
 }
 
 bool NrTestInstall() {
@@ -1525,7 +1524,7 @@ void WriteNeuralRoute(App& app) {
     pt::NeuralStyle style = pt::NeuralStyle::Default;
     pt::ParseNeuralStyle(app.settings.upscaling.neural_style, style);
     pt::nr_unlock::AddonSettings addon;
-    addon.on = kind == pt::NeuralRenderingKind::Dlss5;
+    addon.on = kind == pt::NeuralRenderingKind::Dlss5 && NrUpscalerReady(app);
     addon.parked = app.nr_addon_parked;
     addon.style = static_cast<int>(style);
     addon.intensity = std::clamp(app.settings.upscaling.neural_intensity, 0.0f, 1.0f);
@@ -1555,7 +1554,7 @@ void ArmNeuralRoute(App& app, bool armed) {
 }
 
 void DisableNeuralRoute(App& app, const char* note, const std::string& detail) {
-    pt::LogWarn("neural rendering: the community route is off for this session: {}", detail);
+    pt::LogWarn("neural rendering: DLSS 5 is off for this session: {}", detail);
     app.nr_route_failed = true;
     app.nr_row_note = note;
     app.settings.upscaling.neural_rendering = "off";
@@ -1599,22 +1598,42 @@ void ApplyNeuralToScene(App& app) {
     if (const char* env = std::getenv("PT_NEURAL_RENDERING")) wanted = env;
     pt::NeuralRenderingKind kind = pt::NeuralRenderingKind::Off;
     pt::ParseNeuralRendering(wanted, kind);
+    if (!NrUpscalerReady(app) || app.nr_crash_hold) kind = pt::NeuralRenderingKind::Off;
     const bool passthrough = std::getenv("PT_NEURAL_PASSTHROUGH") != nullptr;
-    const bool native_pass = app.renderer.Backend() == pt::gpu::Backend::Vulkan && pt::UpscaleHost::Get().Neural() != nullptr && NeuralSupport(app).available;
+    const bool native_pass = ((app.renderer.Backend() == pt::gpu::Backend::D3D12 && pt::nr_native::Enabled()) ||
+                             (app.renderer.Backend() == pt::gpu::Backend::Vulkan && pt::UpscaleHost::Get().Neural() != nullptr)) && NeuralSupport(app).available;
     app.scene.neural.enabled = passthrough || (kind == pt::NeuralRenderingKind::Dlss5 && native_pass);
     pt::NeuralStyle style = pt::NeuralStyle::Default;
     pt::ParseNeuralStyle(u.neural_style, style);
     app.scene.neural.style = style;
-    app.scene.neural.intensity = std::clamp(u.neural_intensity, 0.0f, 1.0f);
-    app.scene.neural.scale = std::clamp(u.neural_scale, 0.5f, 1.0f);
+    app.scene.neural.intensity = std::clamp(u.neural_intensity, 0.25f, 3.0f);
+    const NeuralQualityPlan plan = PlanForNeuralQuality(u.neural_quality);
+    app.scene.neural.small_model = u.neural_model == "small";
+    app.scene.neural.scale = plan.scale;
+    app.scene.neural.every = 1;
+    app.scene.neural.pre = plan.pre;
     app.scene.neural.paper_white = 1.0f;
     WriteNeuralRoute(app);
-    if (NeuralRouteActive(app) && app.nr_reshade_loaded && !app.nr_route_failed) {
-        ArmNeuralRoute(app, kind == pt::NeuralRenderingKind::Dlss5);
+    const bool wanted_on = kind == pt::NeuralRenderingKind::Dlss5;
+    const bool deferred = NeuralRouteNeedsRestart(app);
+    const bool pending = deferred && wanted_on != app.nr_addon_boot_on;
+    if (pending && !app.nr_restart_pending) {
+        app.pending_notices.push_back("pc_note_nr_next_start");
+        pt::LogInfo("neural rendering: DLSS 5 {} saved for the next start; the add-on stays {} this session",
+                    wanted_on ? "on" : "off", app.nr_addon_boot_on ? "on" : "off");
     }
+    app.nr_restart_pending = pending;
+    if (NeuralRouteActive(app) && app.nr_reshade_loaded && !app.nr_route_failed) {
+        ArmNeuralRoute(app, deferred ? app.nr_addon_boot_on : wanted_on);
+    }
+    if (pt::nr_native::Active() && app.renderer.Backend() == pt::gpu::Backend::D3D12 && !app.nr_route_failed) {
+        ArmNeuralRoute(app, app.scene.neural.enabled);
+    }
+    if (pending) Save(app);
 }
 
 void SyncNeuralToggle(App& app) {
+    if (NeuralRouteNeedsRestart(app)) return;
     if (!NeuralRouteActive(app) || !app.nr_reshade_loaded || NrTestInstall() || app.nr_hook_failed) return;
     if (!pt::nr_unlock::NrToggleHookReady()) {
         const double now = SDL_GetTicks() / 1000.0;
@@ -1623,6 +1642,7 @@ void SyncNeuralToggle(App& app) {
         if (!pt::nr_unlock::InstallNrToggleHook() && ++app.nr_hook_tries >= 10) {
             app.nr_hook_failed = true;
             pt::LogWarn("neural rendering: the route's add-on could not be reached; DLSS 5 on and off apply at the next start");
+            ApplyNeuralToScene(app);
         }
         return;
     }
@@ -1653,7 +1673,8 @@ void ApplyGraphicsSettings(App& app) {
             rt.ambient_occlusion?"on":"off",rt.reflections?"on":"off",g.ray_quality,
             rt.path_traced?std::string(" (path traced lighting)"):
             rt.full?std::format(" (full: every light's shadow {}, bounce light {}, glossy reflections {})",rt.full_shadows?"on":"off",
-                                rt.bounce_light?"on":"off",rt.glossy_reflections?"on":"off"):std::string());
+                                rt.bounce_light?"on":"off",rt.glossy_reflections?"on":"off"):
+            rt.full_unused?std::string(" (Ultra's bounce light and glossy reflections off: no traced shadows, reflections or ambient occlusion)"):std::string());
         static std::string last;
         if(modes!=last){last=modes;pt::LogInfo("ray tracing: {}",modes);}
     }
@@ -1663,9 +1684,9 @@ void ApplyGraphicsSettings(App& app) {
         if(detected==pt::GraphicsPreset::Custom) detected=pt::DetectGraphicsPreset(app.settings,false);
         const int preset=std::clamp(static_cast<int>(detected),0,4);
         const std::string text=std::format("preset {}, shadow maps {}, ambient occlusion {}, reflections {}, bloom {}, depth of field {}, motion blur {}, "
-            "lens distortion {}, film grain {:.2f}, anisotropy {}, enhanced textures {}, texture detail {}",kPresetNames[preset],g.shadow_quality,
+            "lens distortion {}, film grain {:.2f}, anisotropy {}, texture detail {}",kPresetNames[preset],g.shadow_quality,
             g.ambient_occlusion?"on":"off",g.reflections?"on":"off",g.bloom?"on":"off",g.depth_of_field?"on":"off",g.motion_blur?"on":"off",
-            g.lens_distortion?"on":"off",g.film_grain,g.anisotropy,g.enhanced_textures?"on":"off",g.texture_detail);
+            g.lens_distortion?"on":"off",g.film_grain,g.anisotropy,g.texture_detail);
         static std::string last;
         if(text!=last){last=text;pt::LogInfo("graphics: {}",text);}
     }
@@ -1693,6 +1714,7 @@ void UpscaleToApp(const pt::UpscaleSettings& u, pt::AppSettings& s) {
     s.upscaling.sharpness = u.sharpness;
     s.upscaling.dlss_model = pt::DlssModelKey(u.dlss_model);
     s.upscaling.frame_generation = pt::FrameGenKey(u.frame_generation);
+    s.upscaling.dlssg_multiplier = std::clamp(u.dlssg_multiplier, 2, 4);
     s.upscaling.ray_reconstruction = u.ray_reconstruction;
 }
 
@@ -1810,6 +1832,20 @@ bool DrawUpscaleSettings(App& app) {
         ImGui::SameLine();
         ImGui::TextDisabled("(%s)", off && dlss_fg.hardware && dlss_fg.built ? "needs an upscaler" : dlss_fg.reason.c_str());
     }
+    if (dlss_fg_on) {
+        const char* multipliers[] = {"2x", "3x", "4x"};
+        int multiplier = std::clamp(u.dlssg_multiplier, 2, 4) - 2;
+        ImGui::BeginDisabled(!dlss_fg_available);
+        if (ImGui::BeginCombo("DLSS frame multiplier", multipliers[multiplier])) {
+            for (int i = 0; i < 3; ++i) {
+                ImGui::BeginDisabled(static_cast<unsigned>(i + 2) > pt::streamline::FrameGenMaxMultiplier());
+                if (ImGui::Selectable(multipliers[i], i == multiplier)) { u.dlssg_multiplier = i + 2; changed = true; }
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+    }
     pt::FrameGeneration* xefg = pt::UpscaleHost::Get().XefgFrameGen();
     std::string xefg_reason = "Windows only";
     bool xefg_available = xefg && xefg->Available(xefg_reason);
@@ -1854,8 +1890,6 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
         changed = true;
     }
     changed |= ImGui::Checkbox("Vsync (next start)", &s.display.vsync);
-    changed |= ImGui::Checkbox("Pause when the window loses focus", &s.display.pause_on_focus_loss);
-    changed |= ImGui::Checkbox("Mute when in background", &s.display.mute_in_background);
     if (ImGui::SliderFloat("Mouse sensitivity", &s.input.mouse_sensitivity, 0.1f, 5.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) {
         input.settings.mouse_sensitivity = pt::InputSettings{}.mouse_sensitivity * s.input.mouse_sensitivity;
         changed = true;
@@ -2394,6 +2428,19 @@ public:
             }
             return {std::move(loops), pt::game::PcSettingSection{"pc_loop_preview", 1, {}}};
         }
+        if (page_ == kUpdatePage) {
+            pt::game::PcSettingSection question{"pc_update_title", 0, {}};
+            const auto newer = app_.updates.Newer();
+            auto yes = Row(kUpdateYes, "pc_update_yes", {""}, 0,
+                           newer ? std::format("pc_note_update_now{}{}", pt::game::kPcNoteArgument, newer->version) : std::string("pc_note_update_later"));
+            yes.link = true;
+            yes.enabled = !app_.update_requested;
+            question.rows.push_back(std::move(yes));
+            auto later = Row(kUpdateLater, "pc_update_no", {""}, 0, "pc_note_update_later");
+            later.link = true;
+            question.rows.push_back(std::move(later));
+            return {std::move(question)};
+        }
         if (page_ == kStreetPage && game_.SpeedrunResultsPending()) return SpeedrunResults();
         if (page_ == kStreetPage) {
             pt::game::PcSettingSection street{"pc_street_question", 0, {}};
@@ -2470,6 +2517,7 @@ public:
             const pt::AppSettings::Accessibility& a = app_.settings.accessibility;
             pt::game::PcSettingSection access{"pc_accessibility", 0, {}};
             access.rows.push_back(Row(kSoundCaptions, "pc_sound_captions", OffOn(), a.sound_captions ? 1 : 0, "pc_note_sound_captions"));
+            access.rows.push_back(Row(kFpsCounter, "pc_fps_counter", OffOn(), a.fps_counter ? 1 : 0, "pc_note_fps_counter"));
             access.rows.push_back(Row(kGyro, "pc_gyro", {"pc_off", "pc_gyro_camera", "pc_gyro_flashlight"}, std::clamp(a.gyro, 0, 2),
                                       a.gyro == 1 ? "pc_note_gyro_camera" : a.gyro == 2 ? "pc_note_gyro_flashlight" : "pc_note_gyro"));
             pt::game::PcSettingRow sensitivity = Row(kGyroSensitivity, "pc_gyro_sensitivity", {}, Nearest(kGyroSensitivitySteps, a.gyro_sensitivity),
@@ -2568,8 +2616,6 @@ public:
             peak.wrap = false;
             display.rows.push_back(std::move(peak));
         }
-        display.rows.push_back(Row(kFocusPause, "pc_focus_pause", OffOn(), s.display.pause_on_focus_loss ? 1 : 0, "pc_note_focus_pause"));
-        display.rows.push_back(Row(kFocusMute, "pc_focus_mute", OffOn(), s.display.mute_in_background ? 1 : 0, "pc_note_focus_mute"));
         if (pt::RenderingApiSelectable()) {
             pt::RenderingApi api = pt::RenderingApi::Vulkan;
             pt::ParseRenderingApi(s.display.rendering_api, api);
@@ -2690,7 +2736,19 @@ public:
         }
         pt::game::PcSettingSection generation{"pc_frame_generation", 0, {}};
         generation.rows.push_back(std::move(frame_generation));
-        if (app_.fg_applicable || app_.fg_install_usable) {
+        if (u.frame_generation == pt::FrameGenKind::Dlss) {
+            const unsigned max_multiplier = pt::streamline::FrameGenMaxMultiplier();
+            auto multiplier = Row(kDlssgMultiplier, "pc_dlssg_multiplier", {"2x", "3x", "4x"},
+                static_cast<int>(pt::streamline::ClampFrameGenMultiplier(u.dlssg_multiplier, max_multiplier - 1)) - 2,
+                "pc_note_dlssg_multiplier");
+            multiplier.enabled = !off && dlss_fg.hardware && dlss_fg.built && pt::streamline::Active() && app_.FgPending() == 0;
+            multiplier.value_notes = {std::string(), max_multiplier < 3 ? "pc_note_dlssg_multiplier_limit" : "",
+                max_multiplier < 4 ? "pc_note_dlssg_multiplier_limit" : ""};
+            if (!multiplier.enabled) multiplier.note = off ? "pc_note_needs_upscaler" :
+                !dlss_fg.note.empty() ? dlss_fg.note : "pc_note_dlssg_restart";
+            generation.rows.push_back(std::move(multiplier));
+        }
+        if (app_.fg_applicable) {
             UnlockRowState st;
             st.installed = app_.fg_install_usable;
             st.busy = app_.fg_job.Busy() || app_.fg_test_percent >= 0;
@@ -2699,7 +2757,12 @@ public:
             st.row_note = app_.fg_row_note;
             st.failed_at_run_time = app_.fg_route_failed;
             st.choice = app_.fg_unlock_choice;
-            generation.rows.push_back(UnlockRow(kFgUnlock, kFgUnlockTexts, st));
+            auto row = UnlockRow(kFgUnlock, kFgUnlockTexts, st);
+            if (app_.renderer.Backend() != pt::gpu::Backend::D3D12 && !st.busy && st.requested == 0) {
+                row.note = "pc_note_fg_unlock_d3d12";
+                if (!st.installed) row.enabled = false;
+            }
+            generation.rows.push_back(std::move(row));
         }
         pt::game::PcSettingSection neural_section{"pc_section_dlss5", 0, {}};
         {
@@ -2711,15 +2774,17 @@ public:
             pt::ParseNeuralStyle(nu.neural_style, style);
             const bool is_rtx50 = app_.nr_gpu == pt::nr_unlock::GpuClass::Native;
             const bool route = UsesNrRoute(app_.nr_gpu);
-            const bool nr_on = nr.available && nr_kind == pt::NeuralRenderingKind::Dlss5 && !app_.nr_route_failed;
+            const bool dlss = NrUpscalerReady(app_);
+            const bool nr_on = nr.available && dlss && nr_kind == pt::NeuralRenderingKind::Dlss5 && !app_.nr_route_failed && !app_.nr_crash_hold;
             auto neural = Row(kNeuralRendering, "pc_neural_rendering", OffOn(), nr_on ? 1 : 0, "pc_note_neural_rendering");
             std::string reason;
             if (app_.nr_route_failed && !app_.nr_row_note.empty()) reason = app_.nr_row_note;
             else if (!nr.available) reason = route && !app_.nr_install_usable ? (is_rtx50 ? "pc_note_nr_download_first" : "pc_note_nr_unlock_first") : nr.note;
+            else if (!dlss) reason = "pc_note_nr_needs_dlss";
             if (!reason.empty()) {
                 neural.enabled = false;
                 neural.note = reason;
-            } else if (app_.nr_hook_failed) neural.note = "pc_note_nr_next_start";
+            } else if (app_.nr_hook_failed || NeuralRouteNeedsRestart(app_)) neural.note = "pc_note_nr_next_start";
             if (app_.NrPending() != 0) {
                 neural.enabled = false;
                 neural.note = app_.NrPending() == 2 ? "pc_note_nr_remove_restart"
@@ -2729,17 +2794,24 @@ public:
             if (nr_on && app_.NrPending() == 0) {
                 neural_section.rows.push_back(Row(kNeuralStyle, "pc_neural_style", {"pc_nr_style_default", "pc_nr_style_natural", "pc_nr_style_cinematic"},
                                                   static_cast<int>(style), "pc_note_neural_style"));
-                auto strength = Row(kNeuralIntensity, "pc_neural_intensity", {"25%", "50%", "75%", "100%"},
-                                    std::clamp(static_cast<int>(std::lround(nu.neural_intensity * 4.0f)) - 1, 0, 3), "pc_note_neural_intensity");
+                neural_section.rows.push_back(Row(kNeuralModel, "pc_neural_model", {"pc_nr_model_small", "pc_nr_model_large"},
+                                                  nu.neural_model == "small" ? 0 : 1, "pc_note_neural_model"));
+                auto quality = Row(kNeuralQuality, "pc_neural_quality", {"pc_quality_performance", "pc_quality_quality", "pc_preset_ultra"},
+                                   NeuralQualityIndex(nu.neural_quality), "pc_note_neural_quality");
+                quality.wrap = false;
+                neural_section.rows.push_back(std::move(quality));
+                auto strength = Row(kNeuralIntensity, "pc_neural_intensity", {"25%", "50%", "75%", "100%", "125%", "150%", "175%", "200%", "225%", "250%", "275%", "300%"},
+                                    std::clamp(static_cast<int>(std::lround(nu.neural_intensity * 4.0f)) - 1, 0, 11), "pc_note_neural_intensity");
                 strength.wrap = false;
                 neural_section.rows.push_back(std::move(strength));
             }
             if (route) {
                 UnlockRowState st;
                 st.installed = app_.nr_install_usable;
-                st.busy = app_.nr_job.Busy() || app_.nr_test_percent >= 0;
-                st.percent = app_.nr_test_percent >= 0 ? app_.nr_test_percent : app_.nr_job.Get().percent;
-                st.requested = app_.NrPending();
+                st.busy = app_.nr_job.Busy() || app_.nr_native_job.Busy() || app_.nr_test_percent >= 0;
+                st.percent = app_.nr_test_percent >= 0 ? app_.nr_test_percent
+                             : app_.nr_native_job.Busy() ? app_.nr_native_job.Get().percent : app_.nr_job.Get().percent;
+                st.requested = app_.nr_native_remove_pending ? 2 : app_.NrPending();
                 st.row_note = app_.nr_row_note;
                 st.failed_at_run_time = app_.nr_route_failed;
                 st.choice = app_.nr_unlock_choice;
@@ -2872,18 +2944,9 @@ public:
             pt::game::PcSettingRow send = Row(kSendLog, "pc_send_log", {value}, 0, "pc_note_send_log");
             send.action = true;
             send.confirm_note = "pc_dlg_send_log";
-            send.confirm_default_yes = true;
-            send.enabled = state != pt::LogReportState::Sending;
+            send.confirm_default_yes = false;
+            send.enabled = state != pt::LogReportState::Sending && state != pt::LogReportState::Sent;
             support.rows.push_back(std::move(send));
-        }
-        if (const auto newer = app_.updates.Newer(); newer && InGameUpdate(*newer)) {
-            pt::game::PcSettingRow update = Row(kUpdateNow, "pc_update_now", {UpdateVersionLabel(*newer)}, 0,
-                                                std::format("pc_note_update_now{}{}", pt::game::kPcNoteArgument, newer->version));
-            update.action = true;
-            update.confirm_note = "pc_dlg_update";
-            update.confirm_default_yes = true;
-            update.enabled = !app_.update_requested;
-            support.rows.push_back(std::move(update));
         }
         out.push_back(std::move(progress));
         out.push_back(std::move(support));
@@ -2893,6 +2956,19 @@ public:
         std::vector<int> tabs = {kDisplayPage, kUpscalingPage, kGraphicsPage, kSoundPage, kControlsPage, kAccessibilityPage, kExtrasPage};
         if (app_.mods && !app_.mods->mods.empty()) tabs.push_back(kModsPage);
         return tabs;
+    }
+    std::optional<pt::game::PcSettingRow> FooterAction() override {
+        if (TabCount() == 0) return std::nullopt;
+        if (const auto newer = app_.updates.Newer(); newer && InGameUpdate(*newer)) {
+            pt::game::PcSettingRow update = Row(kUpdateNow, "pc_update_now", {UpdateVersionLabel(*newer)}, 0,
+                                                std::format("pc_note_update_now{}{}", pt::game::kPcNoteArgument, newer->version));
+            update.action = true;
+            update.confirm_note = "pc_dlg_update";
+            update.confirm_default_yes = true;
+            update.enabled = !app_.update_requested;
+            return update;
+        }
+        return std::nullopt;
     }
     int TabCount() const override {
         const std::vector<int> tabs = Tabs();
@@ -2988,6 +3064,7 @@ public:
                 for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
             }
         }
+        if (const auto footer = FooterAction(); footer && !footer->note.empty()) notes.push_back(footer->note);
         page_ = previous;
         archive_section_ = previous_section;
         for (const char* note : {"pc_mic_disabled", "pc_mic_permission_pending", "pc_mic_permission_denied"}) notes.push_back(note);
@@ -2995,21 +3072,22 @@ public:
                                  "pc_note_archive_gate", "pc_note_archive_lock"}) {
             notes.push_back(note);
         }
-        for (const char* note : {"pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_ray_reconstruction", "pc_note_rr_unavailable", "pc_note_in_path_tracing",
+        for (const char* note : {"pc_note_fsr_rr", "pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_ray_reconstruction", "pc_note_rr_unavailable", "pc_note_in_path_tracing",
                                  "pc_note_frame_generation_dlss", "pc_note_dlssg_gpu",
+                                 "pc_note_dlssg_multiplier", "pc_note_dlssg_multiplier_limit",
                                  "pc_note_dlssg_driver", "pc_note_dlssg_hags", "pc_note_dlssg_missing", "pc_note_dlssg_failed",
                                  "pc_note_dlssg_restart", "pc_note_vsync_dlssg", "pc_note_fsr_fg_restart", "pc_note_vsync_off", "pc_note_vsync_metalfx_fg",
                                  "pc_note_frame_generation_xess", "pc_note_xefg_gpu", "pc_note_xefg_windows", "pc_note_xefg_interop",
                                  "pc_note_xefg_failed", "pc_note_xefg_restart", "pc_note_nr_gpu", "pc_note_nr_sdk",
                                  "pc_note_nr_runtime", "pc_note_nr_create", "pc_note_nr_driver", "pc_note_nr_d3d12",
-                                 "pc_note_nr_build", "pc_note_neural_style", "pc_note_neural_intensity", "pc_note_nr_route_d3d12",
+                                 "pc_note_nr_build", "pc_note_nr_needs_dlss", "pc_note_neural_style", "pc_note_neural_model", "pc_note_neural_quality", "pc_note_neural_intensity", "pc_note_nr_route_d3d12",
                                  "pc_note_nr_unlock", "pc_note_nr_unlock_working", "pc_note_nr_unlock_restart",
                                  "pc_note_nr_unlock_failed", "pc_note_nr_unlock_hash", "pc_note_nr_unlock_download",
                                  "pc_note_nr_uninstall", "pc_notice_nr_unlock_ready",
                                  "pc_note_nr_crash", "pc_note_nr_addon", "pc_nr_reinstall", "pc_nr_reinstall_action", "pc_note_nr_reinstall",
                                  "pc_notice_nr_failed",
                                  "pc_nr_download_action", "pc_note_nr_download", "pc_note_nr_unlock_offline",
-                                 "pc_fg_unlock", "pc_fg_unlock_action", "pc_fg_retry_action", "pc_fg_failed_value", "pc_note_fg_unlock",
+                                 "pc_fg_unlock", "pc_fg_unlock_action", "pc_fg_retry_action", "pc_fg_failed_value", "pc_note_fg_unlock", "pc_note_fg_unlock_d3d12",
                                  "pc_note_fg_unlock_working", "pc_note_fg_unlock_failed", "pc_note_fg_unlock_hash",
                                  "pc_note_fg_unlock_download", "pc_fg_reinstall", "pc_fg_reinstall_action", "pc_note_fg_reinstall",
                                  "pc_fg_uninstall", "pc_fg_uninstall_action", "pc_note_fg_uninstall",
@@ -3140,12 +3218,6 @@ public:
             s.display.vsync = value == 1;
             app_.renderer.SetVsync(s.display.vsync);
             break;
-        case kFocusPause:
-            s.display.pause_on_focus_loss = value == 1;
-            break;
-        case kFocusMute:
-            s.display.mute_in_background = value == 1;
-            break;
         case kRenderingApi: {
             const pt::RenderingApi api = value == 0 ? pt::RenderingApi::D3D12 : pt::RenderingApi::Vulkan;
             const std::string key(pt::RenderingApiKey(api));
@@ -3164,6 +3236,11 @@ public:
             }
             u.kind = kinds[value];
             UpscaleToApp(u, s);
+            if (u.kind != pt::UpscalerKind::Dlss && s.upscaling.neural_rendering != "off") {
+                s.upscaling.neural_rendering = "off";
+                pt::LogInfo("neural rendering: off, the upscaler is no longer DLSS");
+                ApplyNeuralToScene(app_);
+            }
             break;
         }
         case kQuality:
@@ -3181,6 +3258,12 @@ public:
         case kRayReconstruction:
             u.ray_reconstruction = value == 1;
             UpscaleToApp(u, s);
+            break;
+        case kDlssgMultiplier:
+            u.dlssg_multiplier = static_cast<int>(pt::streamline::ClampFrameGenMultiplier(
+                static_cast<unsigned>(std::clamp(value, 0, 2) + 2), pt::streamline::FrameGenMaxMultiplier() - 1));
+            UpscaleToApp(u, s);
+            pt::LogInfo("frame generation: DLSS multiplier selected {}x", u.dlssg_multiplier);
             break;
         case kFrameGeneration:
             u.frame_generation = static_cast<pt::FrameGenKind>(std::clamp(value, 0, static_cast<int>(pt::FrameGenKind::Count) - 1));
@@ -3205,6 +3288,9 @@ public:
         case kMouse:
             s.input.mouse_sensitivity = kMouseSteps[std::clamp(value, 0, static_cast<int>(std::size(kMouseSteps)) - 1)];
             input_.settings.mouse_sensitivity = pt::InputSettings{}.mouse_sensitivity * s.input.mouse_sensitivity;
+            break;
+        case kFpsCounter:
+            s.accessibility.fps_counter = value == 1;
             break;
         case kSoundCaptions:
             s.accessibility.sound_captions = value == 1;
@@ -3255,7 +3341,6 @@ public:
             std::string reason;
             pt::ApplyGraphicsPreset(s,static_cast<pt::GraphicsPreset>(std::clamp(value,0,4)),app_.scene.RayTracingSupported(reason));
             app_.textures.SetAnisotropy(s.graphics.anisotropy);
-            RequestEnhancedTextures(app_,s.graphics.enhanced_textures);
             break;
         }
         case kShadowQuality:
@@ -3285,7 +3370,10 @@ public:
         case kLetterbox: s.display.letterbox=std::clamp(value,0,2);break;
         case kNeuralRendering: {
             const bool available=NeuralSupport(app_).available&&!app_.nr_route_failed;
-            const bool on=value>=1&&available;
+            const bool on=value>=1&&available&&NrUpscalerReady(app_);
+            if(app_.nr_crash_hold){app_.nr_crash_hold=false;pt::LogInfo("neural rendering: the player chose DLSS 5 {} after the hold",on?"on":"off");}
+            if(on&&app_.nr_row_note=="pc_note_nr_crash") app_.nr_row_note.clear();
+            if(on&&s.upscaling.neural_rendering!=pt::NeuralRenderingKey(pt::NeuralRenderingKind::Dlss5)) s.upscaling.neural_model="small";
             s.upscaling.neural_rendering=pt::NeuralRenderingKey(on?pt::NeuralRenderingKind::Dlss5:pt::NeuralRenderingKind::Off);
             ApplyNeuralToScene(app_);
             break;
@@ -3293,7 +3381,14 @@ public:
         case kFgUnlock: app_.fg_unlock_choice=std::clamp(value,0,1);break;
         case kNeuralUnlock: app_.nr_unlock_choice=std::clamp(value,0,1);break;
         case kNeuralStyle: s.upscaling.neural_style=pt::NeuralStyleKey(static_cast<pt::NeuralStyle>(std::clamp(value,0,2)));ApplyNeuralToScene(app_);break;
-        case kNeuralIntensity: s.upscaling.neural_intensity=static_cast<float>(std::clamp(value,0,3)+1)*.25f;ApplyNeuralToScene(app_);break;
+        case kNeuralModel: s.upscaling.neural_model=value == 0 ? "small" : "large";ApplyNeuralToScene(app_);break;
+        case kNeuralQuality: {
+            static constexpr const char* kQualities[] = {"performance", "quality", "ultra"};
+            s.upscaling.neural_quality = kQualities[std::clamp(value, 0, 2)];
+            ApplyNeuralToScene(app_);
+            break;
+        }
+        case kNeuralIntensity: s.upscaling.neural_intensity=static_cast<float>(std::clamp(value,0,11)+1)*.25f;ApplyNeuralToScene(app_);break;
         case kRtShadows:
             s.ray_tracing.shadows = std::clamp(value, 0, 2);
             app_.scene.raytracing.shadows = s.ray_tracing.shadows > 0;
@@ -3315,9 +3410,6 @@ public:
             s.graphics.anisotropy = kAnisotropySteps[std::clamp(value, 0, static_cast<int>(std::size(kAnisotropySteps)) - 1)];
             app_.textures.SetAnisotropy(s.graphics.anisotropy);
             break;
-        case kEnhancedTextures:
-            RequestEnhancedTextures(app_, value == 1);
-            break;
         default:
             return;
         }
@@ -3329,6 +3421,7 @@ public:
         switch(page_) {
         case kLoopPage:return "pc_loop_browser";
         case kStreetPage:return game_.SpeedrunResultsPending() ? "pc_speedrun_results" : "pc_street_title";
+        case kUpdatePage:return "pc_update_title";
         case kGraphicsPage:return "pc_graphics";
         case kLightingPage:return "pc_graphics_lighting";
         case kTexturesPage:return "pc_section_textures";
@@ -3436,9 +3529,34 @@ public:
             panel.audio = true;
             if (!app_.transcripts) break;
             const float now = voice_entry_ == entry ? VoiceSeconds() : -1.0f;
-            for (const auto& line : app_.transcripts->Transcript(SubtitleOf(*entry), language)) {
-                if (now >= 0.0f && now >= line.start) panel.current_line = static_cast<int>(panel.lines.size());
-                panel.lines.push_back(line.text);
+            const std::span<const pt::game::MuseumLine> full = pt::game::MuseumTranscript(entry->id);
+            if (!full.empty()) {
+                std::string_view loaded_id;
+                std::vector<pt::game::SubtitlePlayer::TranscriptLine> loaded;
+                for (const pt::game::MuseumLine& line : full) {
+                    std::string text;
+                    if (!line.subtitle.empty()) {
+                        if (line.subtitle != loaded_id) {
+                            loaded_id = line.subtitle;
+                            loaded = app_.transcripts->Transcript(line.subtitle, language);
+                        }
+                        if (line.subtitle_line >= 0 && line.subtitle_line < static_cast<int>(loaded.size())) text = loaded[line.subtitle_line].text;
+                    } else {
+                        text = std::string(line.original);
+                        if (!line.key.empty()) {
+                            const std::string translated(pt::game::PcText(line.key, language));
+                            text = text.empty() ? translated : text + "\n(" + translated + ")";
+                        }
+                    }
+                    if (text.empty()) continue;
+                    if (now >= 0.0f && now >= line.start) panel.current_line = static_cast<int>(panel.lines.size());
+                    panel.lines.push_back(std::move(text));
+                }
+            } else {
+                for (const auto& line : app_.transcripts->Transcript(SubtitleOf(*entry), language)) {
+                    if (now >= 0.0f && now >= line.start) panel.current_line = static_cast<int>(panel.lines.size());
+                    panel.lines.push_back(line.text);
+                }
             }
             if (now >= 0.0f && panel.current_line < 0 && !panel.lines.empty()) panel.current_line = 0;
             break;
@@ -3464,7 +3582,18 @@ public:
     void CursorMoved() override { StopVoice(); }
     int TakeCursor() override { return std::exchange(pending_cursor_, -1); }
     bool KeepsCursor() const override { return keep_cursor_; }
-    std::string_view Question() const override { return page_ == kStreetPage && !game_.SpeedrunResultsPending() ? "pc_street_question" : std::string_view(); }
+    std::string_view Question() const override {
+        if (page_ == kUpdatePage) {
+            const auto newer = app_.updates.Newer();
+            update_question_text_ = newer ? std::format("pc_update_question{}{}{}{}", pt::game::kPcNoteArgument, UpdateVersionLabel(*newer),
+                                                        pt::game::kPcNoteArgument, pt::update::CurrentVersion())
+                                          : std::string("pc_update_title");
+            return update_question_text_;
+        }
+        return page_ == kStreetPage && !game_.SpeedrunResultsPending() ? "pc_street_question" : std::string_view();
+    }
+    mutable std::string update_question_text_;
+    bool QuestionBackShown() const override { return page_ != kUpdatePage; }
 
     bool CompactRows() const override { return page_ == kLoopPage || (page_ == kStreetPage && game_.SpeedrunResultsPending()); }
     std::string_view Credit() const override {
@@ -3553,14 +3682,34 @@ public:
         if(id==kTextures) page_=kTexturesPage;
         if(id==kEffects) page_=kEffectsPage;
         if (id == kMods) page_ = kModsPage;
-        if (id == kUpdateNow && !app_.update_requested) {
+        if (id == kUpdateLater) {
+            app_.update_question = false;
+            page_ = last_tab_;
+            game_.RequestMenuClose();
+            pt::LogInfo("update: the player chose Not now at the start's question");
+        }
+        if ((id == kUpdateNow || id == kUpdateYes) && !app_.update_requested) {
             app_.update_requested = true;
             app_.update_language = game_.Options().subtitle_language;
             Save();
             game_.RequestQuit();
             pt::LogInfo("update: the player chose to update to {}", app_.updates.Newer() ? app_.updates.Newer()->version : std::string("?"));
         }
-        if ((id == kNeuralUnlock || id == kNeuralUninstall || id == kNeuralReinstall) && app_.NrPending() == 0 && !app_.nr_job.Busy()) {
+        if ((id == kNeuralUnlock || id == kNeuralUninstall || id == kNeuralReinstall) && kCommunityRouteRetired && !app_.nr_native_job.Busy() &&
+            !app_.nr_native_remove_pending) {
+            const auto kind = id == kNeuralUninstall ? pt::nr_native::Job::Kind::Remove
+                              : id == kNeuralReinstall ? pt::nr_native::Job::Kind::Reinstall : pt::nr_native::Job::Kind::Install;
+            if (kind != pt::nr_native::Job::Kind::Install && app_.settings.upscaling.neural_rendering != "off") {
+                app_.settings.upscaling.neural_rendering = "off";
+                ApplyNeuralToScene(app_);
+            }
+            app_.nr_row_note.clear();
+            if (app_.nr_native_job.Start(kind, NrDataDir(app_.settings_path), app_.nr_arch)) {
+                pt::LogInfo("neural rendering: DLSS 5 {} started (runtime {}{})", kind == pt::nr_native::Job::Kind::Remove ? "remove" : "install",
+                            pt::nr_native::kRuntimeVersion, app_.nr_arch > 0 ? std::format(", GPU code sm_{}", app_.nr_arch) : std::string());
+            }
+        }
+        if ((id == kNeuralUnlock || id == kNeuralUninstall || id == kNeuralReinstall) && !kCommunityRouteRetired && app_.NrPending() == 0 && !app_.nr_job.Busy()) {
             const int request = id == kNeuralUninstall ? 2 : id == kNeuralReinstall ? 3 : 1;
             const char* what = id == kNeuralUninstall ? "uninstall" : id == kNeuralReinstall ? "reinstall" : "unlock";
             const auto kind = request == 2 ? pt::nr_unlock::Job::Kind::Remove : pt::nr_unlock::Job::Kind::Install;
@@ -3576,6 +3725,11 @@ public:
         }
         if ((id == kFgUnlock || id == kFgUninstall || id == kFgReinstall) && app_.FgPending() == 0 && !app_.fg_job.Busy()) {
             const int request = id == kFgUninstall ? 2 : id == kFgReinstall ? 3 : 1;
+            if (request != 2 && app_.renderer.Backend() != pt::gpu::Backend::D3D12) {
+                app_.fg_row_note = "pc_note_fg_unlock_d3d12";
+                pt::LogInfo("frame generation: community install requires the DirectX 12 backend");
+                return;
+            }
             const char* what = id == kFgUninstall ? "uninstall" : id == kFgReinstall ? "reinstall" : "unlock";
             const auto kind = request == 2 ? pt::fg_unlock::Job::Kind::Remove : request == 3 ? pt::fg_unlock::Job::Kind::Reinstall : pt::fg_unlock::Job::Kind::Install;
             const std::filesystem::path work = (app_.settings_path.empty() ? UserDataDir() : app_.settings_path.parent_path()) / "dlssg-unlock";
@@ -3585,7 +3739,7 @@ public:
                 app_.update_language = game_.Options().subtitle_language;
                 app_.pending_notices.push_back("pc_notice_fg_remove_ready");
                 pt::LogInfo("frame generation: community uninstall queued for the next start");
-            } else if (app_.fg_job.Start(kind, work)) {
+            } else if (app_.fg_job.Start(kind, work, request == 1 && pt::streamline::ActiveD3D12() ? pt::ExecutableDir() : std::filesystem::path())) {
                 app_.fg_job_serial = app_.fg_job.Get().serial;
                 app_.fg_job_request = request;
                 pt::LogInfo("frame generation: community {} started (downloading {} {})", what, pt::fg_unlock::kToolName, pt::fg_unlock::kToolVersion);
@@ -3649,7 +3803,7 @@ public:
     }
 
     void Opened() override {
-        page_ = game_.StreetOfferPending() ? kStreetPage : last_tab_;
+        page_ = game_.StreetOfferPending() ? kStreetPage : app_.update_question ? kUpdatePage : last_tab_;
         input_.ClearGyroCalibration();
         gyro_calibrate_no_pad_ = false;
         app_.microphone_test = app_.microphone_monitor = false;
@@ -3664,6 +3818,11 @@ public:
         StopVoice();
         StopMusic();
         if (game_.StreetOfferPending()) game_.AnswerStreetOffer(false);
+        if (app_.update_question) {
+            app_.update_question = false;
+            if (page_ == kUpdatePage) page_ = last_tab_;
+            pt::LogInfo("update: the start's question closed without updating");
+        }
     }
 
     int RefreshEveryFrames() const override { return page_ == kMicrophonePage || input_.GyroCalibration() == pt::GyroTracker::Calibration::Running || voice_entry_ || music_.Playing() ? 3 : 15; }
@@ -3708,14 +3867,13 @@ private:
         kDisplayMode,
         kResolution,
         kVsync, kFpsLimit, kHdr, kHdrPaperWhite, kHdrPeak, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile, kPromptStyle,
-        kFocusPause,
-        kFocusMute,
         kUpscaler,
         kQuality,
         kSharpness,
         kDlssModel,
         kRayReconstruction,
         kFrameGeneration,
+        kDlssgMultiplier,
         kVolume,
         kMicrophoneEnabled,
         kMicrophone,
@@ -3730,13 +3888,12 @@ private:
         kDeadZone,
         kReset,
         kSendLog,
-        kUpdateNow,
+        kUpdateNow, kUpdateYes, kUpdateLater,
         kRtShadows,
         kGraphics,
         kRtContact,
         kRtAo,
         kAnisotropy,
-        kEnhancedTextures,
         kRtReflections,
         kGraphicsPreset,kRayTracing,kLighting,kTextures,kEffects,
         kShadowQuality,kRasterAo,kRasterReflections,kRayQuality,kTextureDetail,
@@ -3746,9 +3903,9 @@ private:
         kArchive, kArchiveLock,
         kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
         kFastWalk,
-        kAccessibility, kSoundCaptions, kGyro, kGyroSensitivity, kGyroCalibrate, kFieldOfView,
+        kAccessibility, kSoundCaptions, kFpsCounter, kGyro, kGyroSensitivity, kGyroCalibrate, kFieldOfView,
         kRenderingApi,
-        kNeuralRendering, kNeuralStyle, kNeuralIntensity, kNeuralUnlock, kNeuralUninstall, kNeuralReinstall,
+        kNeuralRendering, kNeuralStyle, kNeuralModel, kNeuralQuality, kNeuralIntensity, kNeuralUnlock, kNeuralUninstall, kNeuralReinstall,
         kFgUnlock, kFgReinstall, kFgUninstall,
         kPatreon,
         kLoopFirst = 1000,
@@ -4075,6 +4232,7 @@ private:
     static constexpr int kModsPage = 7;
     static constexpr int kExtrasPage = 8;
     static constexpr int kStreetPage = 9;
+    static constexpr int kUpdatePage = 18;
     static constexpr int kVrPage = 12;
     static constexpr int kMaxModRows = 20;
     static constexpr int kMainPage = 0;
@@ -4178,22 +4336,6 @@ private:
         return row;
     }
 
-    pt::game::PcSettingRow EnhancedRow() const {
-        auto values=OffOn();
-        const bool preparing=app_.texture_requested;
-        if(preparing) values[1]="pc_texture_preparing";
-        const auto job=app_.texture_job.GetStatus();
-        std::string note=preparing?"pc_note_texture_preparing":"pc_note_enhanced_textures";
-        if(preparing && job.state==pt::EnhancedTextureJob::State::Running && job.total>job.done) {
-            note=std::format("pc_note_texture_progress{}{}{}{}",pt::game::kPcNoteArgument,job.done,pt::game::kPcNoteArgument,job.total);
-        }
-        if(!preparing && job.state==pt::EnhancedTextureJob::State::Failed) {
-            note=job.note=="Enhanced texture tools or model are missing."?"pc_note_texture_tools_missing":
-                 job.note=="Texture generation is already running in another instance."?"pc_note_texture_busy":"pc_note_texture_failed";
-        }
-        return Row(kEnhancedTextures,"pc_enhanced_textures",std::move(values),app_.settings.graphics.enhanced_textures?1:0,std::move(note));
-    }
-
     std::vector<pt::game::PcSettingSection> GraphicsSections() const {
         const auto& s=app_.settings;
         std::string reason;
@@ -4239,13 +4381,14 @@ private:
         if(supported) ray_values.push_back("pc_ray_path_traced");
         const int ray_index=g.ray_quality>=4?3:g.ray_quality>=2?2:std::max(g.ray_quality,0);
         auto quality=Row(kRayQuality,"pc_ray_quality",std::move(ray_values),supported?ray_index:std::min(ray_index,2),"pc_note_ray_quality");
-        quality.enabled=supported&&(rt_shadows>0||rt_ao||rt_reflections||path);lighting.rows.push_back(std::move(quality));
+        quality.enabled=supported&&(rt_shadows>0||rt_ao||rt_reflections||g.ray_quality>=4);lighting.rows.push_back(std::move(quality));
         if(supported&&(g.ray_quality>=3||rt_shadows>0||rt_ao||rt_reflections||s.ray_tracing.contact_shadows)){
             const auto& u=app_.scene.upscale;
             std::string rr_reason;
-            const bool rr=u.kind==pt::UpscalerKind::Dlss&&app_.scene.RayReconstructionAvailable(rr_reason);
-            auto reconstruction=Row(kRayReconstruction,"pc_ray_reconstruction",OffOn(),rr&&u.ray_reconstruction?1:0,
-                                    rr?"pc_note_ray_reconstruction":"pc_note_rr_unavailable");
+            const bool fsr=u.kind==pt::UpscalerKind::Fsr4;
+            const bool rr=app_.scene.RayReconstructionAvailable(rr_reason);
+            auto reconstruction=Row(kRayReconstruction,fsr?"pc_fsr_ray_regeneration":"pc_ray_reconstruction",OffOn(),rr&&u.ray_reconstruction?1:0,
+                                    fsr?"pc_note_fsr_rr":rr?"pc_note_ray_reconstruction":"pc_note_rr_unavailable");
             reconstruction.enabled=rr;lighting.rows.push_back(std::move(reconstruction));
         }
         return {std::move(lighting)};
@@ -4254,7 +4397,6 @@ private:
     std::vector<pt::game::PcSettingSection> TextureSections() const {
         const auto& g=app_.settings.graphics;
         pt::game::PcSettingSection textures{"pc_section_textures",0,{}};
-        textures.rows.push_back(EnhancedRow());
         auto anisotropy=Row(kAnisotropy,"pc_anisotropy",{"pc_off","2x","4x","8x","16x"},g.anisotropy>=16?4:g.anisotropy>=8?3:g.anisotropy>=4?2:g.anisotropy>=2?1:0,"pc_note_anisotropy");
         anisotropy.wrap=false;textures.rows.push_back(std::move(anisotropy));
         textures.rows.push_back(Row(kTextureDetail,"pc_texture_detail",{"pc_detail_reduced","pc_preset_original","pc_detail_fine"},g.texture_detail,"pc_note_texture_detail"));
@@ -4434,6 +4576,11 @@ private:
 struct FocusTrace {
     std::string last_event = "none";
     uint64_t events = 0;
+    uint64_t frame = 0;
+    float zoom = 1.0f;
+    bool peephole = false;
+    bool right_down = false;
+    unsigned input_logs = 0;
 };
 FocusTrace g_focus_trace;
 
@@ -4445,6 +4592,29 @@ std::string DescribeForeground(const pt::os::ForegroundWindow& fg) {
 
 void* WindowHandle(SDL_Window* window) {
     return window ? SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) : nullptr;
+}
+
+std::string DescribeWindowInput(SDL_Window* window) {
+    if (!window) {
+        return std::format("frame {}, zoom {:.3f}, peephole {}, no window", g_focus_trace.frame, g_focus_trace.zoom, g_focus_trace.peephole);
+    }
+    int width = 0, height = 0;
+    SDL_GetWindowSizeInPixels(window, &width, &height);
+    return std::format("frame {}, zoom {:.3f}, peephole {}, right event {}, buttons {:#x}, flags {:#x}, relative {}, "
+                       "keyboard focus {}, mouse focus {}, pixels {}x{}",
+                       g_focus_trace.frame, g_focus_trace.zoom, g_focus_trace.peephole, g_focus_trace.right_down,
+                       SDL_GetMouseState(nullptr, nullptr), SDL_GetWindowFlags(window), SDL_GetWindowRelativeMouseMode(window),
+                       SDL_GetKeyboardFocus() == window, SDL_GetMouseFocus() == window, width, height);
+}
+
+void LogWindowInput(SDL_Window* window, std::string_view reason) {
+    if (g_focus_trace.input_logs < 128) {
+        ++g_focus_trace.input_logs;
+        pt::LogInfo("window input: {}; {}", reason, DescribeWindowInput(window));
+    } else if (g_focus_trace.input_logs == 128) {
+        ++g_focus_trace.input_logs;
+        pt::LogInfo("window input: event detail limit reached; focus losses still include the current state");
+    }
 }
 
 bool WindowActive(SDL_Window* window) {
@@ -4463,6 +4633,11 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+            event.button.windowID == SDL_GetWindowID(app.window) && event.button.button == SDL_BUTTON_RIGHT) {
+            g_focus_trace.right_down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            LogWindowInput(app.window, g_focus_trace.right_down ? "right button down" : "right button up");
+        }
         ImGui_ImplSDL3_ProcessEvent(&event);
         if (input) {
             input->ProcessEvent(event);
@@ -4482,7 +4657,18 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
                 pt::SaveAppSettings(app.settings_path, app.settings);
             }
         } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            LogWindowInput(app.window, std::format("pixel size event from SDL window {}, game window {}, requested {}x{}",
+                                                  event.window.windowID, SDL_GetWindowID(app.window), event.window.data1, event.window.data2));
             app.renderer.Resize(static_cast<uint32_t>(event.window.data1), static_cast<uint32_t>(event.window.data2));
+        } else if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
+                   event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED) {
+            LogWindowInput(app.window, std::format("display/HDR event {:#x} from SDL window {}, game window {}, data {} {}, game display {}",
+                                                  event.type, event.window.windowID, SDL_GetWindowID(app.window), event.window.data1,
+                                                  event.window.data2, SDL_GetDisplayForWindow(app.window)));
+        } else if (event.type >= SDL_EVENT_DISPLAY_FIRST && event.type <= SDL_EVENT_DISPLAY_LAST) {
+            LogWindowInput(app.window, std::format("display event {:#x} from SDL display {}, data {} {}, game window {}, game display {}",
+                                                  event.type, event.display.displayID, event.display.data1, event.display.data2,
+                                                  SDL_GetWindowID(app.window), SDL_GetDisplayForWindow(app.window)));
         }
         const char* focus_event = nullptr;
         switch (event.type) {
@@ -4505,9 +4691,10 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             ++g_focus_trace.events;
             const bool loss = event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_HIDDEN;
             if (loss) {
-                pt::LogInfo("focus: SDL {}; {}", g_focus_trace.last_event, DescribeForeground(pt::os::GetForegroundWindowInfo()));
+                pt::LogInfo("focus: SDL {}; {}; {}", g_focus_trace.last_event, DescribeForeground(pt::os::GetForegroundWindowInfo()),
+                            DescribeWindowInput(app.window));
             } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED || event.type == SDL_EVENT_WINDOW_RESTORED) {
-                pt::LogInfo("focus: SDL {}", g_focus_trace.last_event);
+                pt::LogInfo("focus: SDL {}; {}", g_focus_trace.last_event, DescribeWindowInput(app.window));
             } else {
                 pt::LogDebug("focus: SDL {}", g_focus_trace.last_event);
             }
@@ -4604,7 +4791,6 @@ int RunViewer(App& app, pt::Vfs& vfs) {
         if (!PumpEvents(app, nullptr, running)) {
             continue;
         }
-        PollEnhancedTextures(app);
         if (app.window) {
             const uint64_t now = SDL_GetTicksNS();
             const float dt = static_cast<float>(now - last_ticks) * 1e-9f;
@@ -4744,14 +4930,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
     float boot_splash_seconds = 0.0f;
     uint32_t boot_splash_texture = pt::TextureManager::kWhite;
     const bool shader_screen_wanted = ui_ready && app.window && options.input_script.empty() && app.renderer.Context().pipeline_cache_cold;
-    const char* texture_screen_test = std::getenv("PT_TEST_TEXTURE_SCREEN");
-    const bool texture_screen_wanted = ui_ready && ((app.window && options.input_script.empty() && app.texture_requested && !pt::EnhancedManifestCurrent(app.vfs->GameDir(), app.texture_cache, app.texture_runtime, app.texture_kinds, app.texture_max_output)) || (texture_screen_test && *texture_screen_test));
     if (ui_ready && app.window && options.input_script.empty()) {
         const uint32_t splash = app.textures.LoadImageFile(options.game_dir / "sce_sys" / "pic1.png", "boot_splash");
         if (splash != pt::TextureManager::kWhite) {
             boot_splash_seconds = 4.0f;
             boot_splash_texture = splash;
-            if (!shader_screen_wanted && !texture_screen_wanted) ui.ShowBootSplash(splash, boot_splash_seconds);
+            if (!shader_screen_wanted) ui.ShowBootSplash(splash, boot_splash_seconds);
         } else {
             pt::LogInfo("boot: no title picture at {} (the setup copies it from the dump or package), the start goes to its loading screen",
                         pt::os::PathToUtf8(options.game_dir / "sce_sys" / "pic1.png"));
@@ -4883,18 +5067,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
     const bool shaders_cold = app.renderer.Context().pipeline_cache_cold;
     bool pipelines_warm = false;
     bool shader_screen = shader_screen_wanted;
-    int texture_screen = texture_screen_wanted ? 1 : 0;
-    bool texture_asking = false;
-    uint64_t texture_screen_start = SDL_GetTicksNS();
-    const uint32_t texture_test_maps = texture_screen_test ? static_cast<uint32_t>(std::strtoul(texture_screen_test, nullptr, 10)) : 0u;
-    uint64_t texture_test_frame = 0;
-    const auto texture_job_status = [&](uint64_t now_frame) {
-        if (!texture_test_maps) return app.texture_job.GetStatus();
-        if (!texture_test_frame) texture_test_frame = now_frame + 1;
-        const uint32_t done = std::min<uint32_t>(texture_test_maps, static_cast<uint32_t>((now_frame + 1 - texture_test_frame) / 2));
-        return pt::EnhancedTextureJob::Status{done >= texture_test_maps ? pt::EnhancedTextureJob::State::Ready : pt::EnhancedTextureJob::State::Running, done,
-                                              texture_test_maps, {}};
-    };
     const std::filesystem::path boot_shots = std::getenv("PT_BOOT_SHOTS") ? std::filesystem::path(std::getenv("PT_BOOT_SHOTS")) : std::filesystem::path();
     pt::game::RenderSceneBuilder scene_builder;
     pt::SceneLighting lighting;
@@ -4913,6 +5085,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
     pt::Camera tick_camera_from = game.ViewCamera();
     pt::Camera motion_camera_from = tick_camera_from;
     const bool paced = app.window != nullptr || options.display_rate > 0.0f;
+    const int headless_fps_limit = options.headless && std::getenv("PT_HEADLESS_FPS_LIMIT")
+                                       ? std::clamp(std::atoi(std::getenv("PT_HEADLESS_FPS_LIMIT")), 0, 60) : 0;
+    std::chrono::steady_clock::time_point headless_frame_deadline{};
+    if (headless_fps_limit > 0) pt::LogInfo("headless: rendering limited to {} FPS (PT_HEADLESS_FPS_LIMIT)", headless_fps_limit);
     TickState tick_state;
     std::vector<glm::mat4> blended_skins;
     static const bool render_trace = std::getenv("PT_RENDER_TRACE") != nullptr;
@@ -5062,7 +5238,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
             photo_paused = true;
             if (game.Audio()) game.Audio()->PostEvent("Pause_All", nullptr);
         }
-        pt::LogInfo("extras: photo mode on");
+        const auto& photo = photo_panel.Settings();
+        pt::LogInfo("extras: photo mode on, lens {} mm, roll {}, exposure {}, aspect {}, resolution {}, filter {}",
+                    photo.focal_length_mm, photo.roll, photo.exposure, photo.aspect, static_cast<int>(photo.resolution),
+                    static_cast<int>(photo.filter));
     };
     struct TheaterView {
         std::unique_ptr<pt::game::ArchiveTheater> theater;
@@ -5202,22 +5381,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
     uint64_t boot_wait_start = SDL_GetTicksNS();
     const uint64_t shader_screen_start = boot_wait_start;
     double boot_splash_gone = -1.0;
-    bool enhanced_under_way = false;
-    uint64_t enhanced_notice_ms = 0;
-    auto end_texture_screen = [&](const char* why) {
-        const double on_screen = static_cast<double>(SDL_GetTicksNS() - texture_screen_start) * 1e-9;
-        texture_screen = 0;
-        texture_asking = false;
-        ui.SetTexturesScreen({}, 0.0f, false);
-        boot_wait_start = SDL_GetTicksNS();
-        if (boot_splash_texture != pt::TextureManager::kWhite) ui.ShowBootSplash(boot_splash_texture, boot_splash_seconds);
-        pt::LogInfo("boot: enhanced textures screen over after {:.1f} s ({})", on_screen, why);
-        if (std::string_view(why) == "prepared") enhanced_under_way = false;
-    };
     float applied_volume = -1.0f;
     pt::ControllerSpeakerOutput controller_speaker;
     SDL_JoystickID speaker_gamepad_id = 0;
-    SDL_JoystickID attempted_speaker_gamepad_id = 0;
     uint64_t next_speaker_retry_ns = 0;
     std::string last_speaker_error;
     bool speaker_route_requested = false;
@@ -5276,6 +5442,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         const SDL_Scancode next_voice_key = app.settings.voice.key.empty() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(app.settings.voice.key.c_str());
         if(next_voice_key!=voice_key) { voice_key_press.Discard(); voice_key=next_voice_key; }
+        g_focus_trace.frame = frame;
+        g_focus_trace.zoom = game.GetPlayer().zoom;
+        const bool peephole = game.Nazo().IsPeepholeTheaterActive();
+        if (g_focus_trace.peephole != peephole) {
+            g_focus_trace.peephole = peephole;
+            if (app.window) LogWindowInput(app.window, peephole ? "peephole entered" : "peephole left");
+        }
         bool visible = PumpEvents(app, &input, running, &voice_key_press, static_cast<uint32_t>(voice_key)) || vr != nullptr;
         if (audio_device_pending && !pt::devices::AudioStarting()) {
             audio_device_pending = false;
@@ -5287,17 +5460,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (!vr->Host().SessionRunning()) {
                 visible = false;
                 SDL_Delay(10);
-            }
-        }
-        PollEnhancedTextures(app);
-        app.textures.PumpEnhancedTextures(boot_wait ? 12.0 : 3.0);
-        if (const bool pause_textures = app.window && texture_screen != 2 && (boot_wait || (!frozen && !show_settings && !(ui_ready && ui.MenuOpen()) && !game.Paused() &&
-                                                                      !photo_mode));
-            pause_textures != app.texture_job.Paused()) {
-            app.texture_job.SetPaused(pause_textures);
-            if (const auto job = app.texture_job.GetStatus(); job.state == pt::EnhancedTextureJob::State::Running && job.total > job.done) {
-                pt::LogInfo("enhanced textures: {} at {} / {}", pause_textures ? "paused while playing or loading" : "going on (menu, pause or background)", job.done,
-                            job.total);
             }
         }
         if (!pipelines_warm && pipeline_warmup.Done()) {
@@ -5314,67 +5476,24 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 shader_screen = false;
                 ui.SetShaderScreen({});
                 boot_wait_start = SDL_GetTicksNS();
-                texture_screen_start = boot_wait_start;
-                if (!texture_screen && boot_splash_texture != pt::TextureManager::kWhite) ui.ShowBootSplash(boot_splash_texture, boot_splash_seconds);
+                if (boot_splash_texture != pt::TextureManager::kWhite) ui.ShowBootSplash(boot_splash_texture, boot_splash_seconds);
                 pt::LogInfo("boot: shader preparation screen shown for {:.1f} s{}", on_screen, pipelines_warm ? "" : " (pipelines still being made)");
             } else {
                 ui.SetShaderScreen(std::format("pc_boot_preparing_shaders{}{}", pt::game::kPcNoteArgument,
                                                100u * pipeline_warmup.Finished() / std::max(1u, pipeline_warmup.Total())));
             }
         }
-        if (texture_screen && !shader_screen) {
-            const double waited_here = static_cast<double>(SDL_GetTicksNS() - texture_screen_start) * 1e-9;
-            const pt::EnhancedTextureJob::Status job = texture_job_status(frame);
-            const bool checking = job.state == pt::EnhancedTextureJob::State::Running && job.total == 0;
-            const bool incomplete = job.state == pt::EnhancedTextureJob::State::Running && job.total > job.done;
-            const char* over = nullptr;
-            if (texture_screen == 1) {
-                if (incomplete) {
-                    texture_screen = 2;
-                    pt::LogInfo("boot: enhanced textures screen shown, {} of {} made", job.done, job.total);
-                } else if (!checking || waited_here > 20.0) {
-                    over = checking ? "the cache check took too long" : "nothing to make";
-                }
-            } else if (!incomplete) {
-                over = job.state == pt::EnhancedTextureJob::State::Ready || job.done >= job.total ? "prepared" : "stopped";
-            }
-            if (texture_screen == 2 && !over) {
-                ui.SetTexturesScreen(std::format("pc_boot_preparing_textures{}{}{}{}", pt::game::kPcNoteArgument, job.done, pt::game::kPcNoteArgument, job.total),
-                                     static_cast<float>(job.done) / static_cast<float>(std::max(1u, job.total)), texture_asking);
-            }
-            if (over) end_texture_screen(over);
-        }
-        if (ui_ready && !vr && texture_screen == 0 && (app.texture_requested || texture_test_maps)) {
-            const auto job = texture_job_status(frame);
-            if (job.state == pt::EnhancedTextureJob::State::Running && job.total > job.done) {
-                enhanced_under_way = true;
-                const uint64_t now_ms = SDL_GetTicks();
-                if (!app.texture_job.Paused() && (enhanced_notice_ms == 0 || now_ms - enhanced_notice_ms > 600000)) {
-                    enhanced_notice_ms = now_ms;
-                    ui.ShowNotice("pc_notice_enhanced_working");
-                }
-            } else if (job.state == pt::EnhancedTextureJob::State::Ready && enhanced_under_way) {
-                enhanced_under_way = false;
-                ui.ShowNotice("pc_notice_enhanced_ready");
-            } else if (job.state == pt::EnhancedTextureJob::State::Failed || job.state == pt::EnhancedTextureJob::State::Cancelled) {
-                enhanced_under_way = false;
-            }
-        }
         if (boot_wait) {
-            const auto texture_job_status = app.texture_job.GetStatus();
-            const bool checking_cache = app.texture_requested && texture_job_status.state == pt::EnhancedTextureJob::State::Running &&
-                                        texture_job_status.done >= texture_job_status.total;
-            const bool preparing = checking_cache || app.textures.EnhancedPending();
             const double waited = static_cast<double>(SDL_GetTicksNS() - boot_wait_start) * 1e-9;
             const bool splash = ui_ready && ui.BootSplashShown() && waited < 30.0;
             if (splash) boot_splash_gone = waited;
             const bool after_splash = boot_splash_gone >= 0.0 && waited < boot_splash_gone + 1.0;
             const bool warming = !pipelines_warm && (shader_screen || waited < 60.0);
-            const bool hold = ((preparing && waited < 20.0) || warming || waited < boot_splash_seconds + 1.0 || splash || after_splash || texture_screen != 0) &&
+            const bool hold = (warming || waited < boot_splash_seconds + 1.0 || splash || after_splash) &&
                               game.Controller().Step() <= 5;
             if (!hold) {
                 boot_wait = false;
-                pt::LogInfo("start: loading screen released after {:.1f} s{}{}", waited, preparing ? " (enhanced textures still loading)" : "",
+                pt::LogInfo("start: loading screen released after {:.1f} s{}", waited,
                             pipelines_warm ? "" : " (pipelines still being made)");
             }
             game.SetBootHold(hold);
@@ -5393,25 +5512,18 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 pt::LogInfo("focus: window not in front yet, raise {} of 4: {} ({})", activate_tries, in_front ? "in front" : "still behind",
                             DescribeForeground(pt::os::GetForegroundWindowInfo()));
             }
-            const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
-#ifdef __APPLE__
-            const bool startup_ticked = game.Controller().Step() >= 0;
-#else
-            const bool startup_ticked = true;
-#endif
-            if (was_focused && !focused && pause && ui_ready && startup_ticked && !ui.MenuOpen() && !lisa_date && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
+            if (vr && was_focused && !focused && ui_ready && game.Controller().Step() >= 0 && !ui.MenuOpen() && !lisa_date &&
+                !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
                 stop_freecam();
                 ui.OpenMenu(game, false);
-                pt::LogInfo("focus: window in the background, pause menu opened");
             }
             if (was_focused && !focused) {
-                pt::LogInfo("focus: lost at frame {}: {}; last SDL event {}", frame, DescribeForeground(pt::os::GetForegroundWindowInfo()),
-                            g_focus_trace.last_event);
+                pt::LogInfo("focus: lost at frame {}: {}; last SDL event {}; {}", frame, DescribeForeground(pt::os::GetForegroundWindowInfo()),
+                            g_focus_trace.last_event, DescribeWindowInput(app.window));
             }
             was_focused = focused;
             ever_focused = ever_focused || focused;
-            const bool focus_rules = ever_focused || forced_focus;
-            const bool freeze = !visible || (!focused && focus_rules && pause && !(ui_ready && ui.MenuOpen()));
+            const bool freeze = !visible || (vr && !focused && !(ui_ready && ui.MenuOpen()));
             if (freeze != frozen) {
                 frozen = freeze;
                 if (sound.Ready()) {
@@ -5425,37 +5537,43 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
                 last_ticks = SDL_GetTicksNS();
             }
-            const float volume = !focused && focus_rules && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
+            const float volume = app.settings.audio.volume;
             if (sound.Ready() && volume != applied_volume) {
                 sound.System().SetMasterVolume(volume);
                 applied_volume = volume;
             }
         }
-        const bool speaker_audio_requested = app.settings.audio.controller_speaker && app.settings.audio.controller_speaker_volume > 0.0f;
+        SDL_Gamepad* selected_gamepad = (app.window || options.virtual_pads) ? input.LastUsedGamepad() : nullptr;
+        const pt::SonyPadAudio selected_model = selected_gamepad ?
+            pt::SonyPadAudioModel(SDL_GetGamepadVendor(selected_gamepad), SDL_GetGamepadProduct(selected_gamepad)) : pt::SonyPadAudio::None;
+        const bool speaker_audio_requested = pt::ControllerSpeakerAudioEnabled(selected_model, app.settings.audio.controller_speaker) &&
+                                             app.settings.audio.controller_speaker_volume > 0.0f;
         const pt::ControllerFeedbackFeatures feedback =
             pt::FeaturesForRumbleProfile(app.settings.input.rumble_profile, app.settings.input.rumble);
         const bool speaker_requested = (app.window || options.virtual_pads) && (speaker_audio_requested || feedback.dualsense_haptics);
         if (speaker_requested != speaker_route_requested) {
             controller_speaker.Close();
-            speaker_gamepad_id = attempted_speaker_gamepad_id = 0;
+            speaker_gamepad_id = 0;
             next_speaker_retry_ns = 0;
             last_speaker_error.clear();
             speaker_route_requested = speaker_requested;
         }
-        const float controller_volume = !was_focused && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
+        const float controller_volume = app.settings.audio.volume;
         const bool capture_allowed = speaker_requested && sound.Ready() && visible && !frozen && controller_volume > 0.0f;
-        SDL_Gamepad* selected_gamepad = speaker_requested ? input.LastUsedGamepad() : nullptr;
         const SDL_JoystickID selected_gamepad_id = selected_gamepad ? SDL_GetGamepadID(selected_gamepad) : 0;
         if (selected_gamepad_id != speaker_gamepad_id) {
-            controller_speaker.Close();
+            const bool had_route = controller_speaker.IsOpen();
+            if (!controller_speaker.MatchesGamepad(selected_gamepad)) controller_speaker.Close();
             speaker_gamepad_id = selected_gamepad_id;
-            attempted_speaker_gamepad_id = 0;
-            next_speaker_retry_ns = 0;
-            last_speaker_error.clear();
+            if (had_route) {
+                next_speaker_retry_ns = 0;
+                last_speaker_error.clear();
+            }
         }
-        if (capture_allowed && selected_gamepad && !controller_speaker.IsOpen() &&
-            (attempted_speaker_gamepad_id != selected_gamepad_id || SDL_GetTicksNS() >= next_speaker_retry_ns)) {
-            attempted_speaker_gamepad_id = selected_gamepad_id;
+        if (!speaker_audio_requested && controller_speaker.Route() == pt::ControllerPcmRoute::DualShock4BluetoothSpeaker) controller_speaker.Close();
+        const bool selected_dualsense = selected_model == pt::SonyPadAudio::DualSense;
+        if (capture_allowed && selected_gamepad && (speaker_audio_requested || selected_dualsense) && !controller_speaker.IsOpen() &&
+            SDL_GetTicksNS() >= next_speaker_retry_ns) {
             next_speaker_retry_ns = SDL_GetTicksNS() + 2'000'000'000ull;
             std::string reason;
             if (!controller_speaker.OpenForGamepad(selected_gamepad, &reason)) {
@@ -5482,11 +5600,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pt::audio::ControllerPcmBlock controller_block;
         while (sound.Ready() && sound.System().TryReadControllerPcm(controller_block)) {
             if (capture_allowed && route_has_output) {
-                if (!controller_speaker.WriteCapturedBlock(controller_block, app.settings.audio.controller_speaker,
+                if (!controller_speaker.WriteCapturedBlock(controller_block, speaker_audio_requested,
                                                            controller_haptics && app.settings.input.rumble,
                                                            controller_volume * app.settings.audio.controller_speaker_volume, controller_volume)) {
+                    pt::LogWarn("input: controller PCM write failed for '{}': {}", controller_speaker.DeviceName(), SDL_GetError());
                     controller_speaker.Close();
-                    next_speaker_retry_ns = 0;
+                    next_speaker_retry_ns = SDL_GetTicksNS() + 2'000'000'000ull;
                 }
             }
         }
@@ -5547,10 +5666,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                         pt::LogWarn("input: cannot capture mouse with relative mode ({}) or SDL mouse grab ({}) (driver {})",
                                     relative_error, SDL_GetError(), driver ? driver : "none");
                     }
+                    LogWindowInput(app.window, mouse_captured ? "gameplay mouse captured" : "gameplay mouse capture failed");
                 } else {
                     SDL_SetWindowRelativeMouseMode(app.window, false);
                     SDL_SetWindowMouseGrab(app.window, false);
                     mouse_captured = false;
+                    LogWindowInput(app.window, "gameplay mouse capture released");
                 }
             }
         }
@@ -5631,35 +5752,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pending_input.wheel += polled.wheel;
         pending_input.house_pressed = pending_input.house_pressed || polled.house_pressed;
         pending_input.pointer_valid = false;
-        if (texture_screen == 2) {
-            const bool accept = polled.confirm || (polled.raw_pressed & pt::kRawCross) || polled.click;
-            const bool back = polled.cancel || polled.pause || (polled.raw_pressed & pt::kRawCircle) || polled.right_click;
-            if (!texture_asking) {
-                texture_asking = accept;
-            } else if (ui_ready) {
-                pt::InputState question = polled;
-                if (app.window) {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                    SDL_GetMouseState(&x, &y);
-                    question.pointer = glm::vec2(x, y) * SDL_GetWindowPixelDensity(app.window);
-                    question.pointer_valid = true;
-                }
-                const auto answer = ui.AnswerTexturesQuestion(question);
-                if (answer.yes) {
-                    end_texture_screen("skipped");
-                } else if (answer.result != pt::game::dialog::Result::None || back) {
-                    texture_asking = false;
-                }
-            }
-            pending_input.pause = pending_input.confirm = pending_input.cancel = pending_input.any_button = false;
-            pending_input.click = pending_input.right_click = pending_input.house_pressed = false;
-            pending_input.wheel = 0.0f;
-            pending_input.menu_keys_pressed = 0;
-            pending_input.music_pressed = 0;
-            pending_input.raw_pressed = 0;
-            pending_input.pressed = 0;
-        }
         if (app.window && !mouse_captured && (!ending_outro || photo_mode)) {
             float x = 0.0f;
             float y = 0.0f;
@@ -5721,9 +5813,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
             game.SetCameraOverride(freecam_camera);
             pt::LogInfo("extras: photo camera at ({:.2f} {:.2f} {:.2f}) looking at ({:.2f} {:.2f} {:.2f})", view->first.x, view->first.y,
                         view->first.z, view->second.x, view->second.y, view->second.z);
-        }
-        if (const int request = game.TakeEnhancedTexturesRequest(); request != 0) {
-            RequestEnhancedTextures(app, request == 1);
         }
         if (const int request = game.TakeNeuralRenderingRequest(); request != 0) {
             const int value = request - 1;
@@ -5818,6 +5907,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                         freecam_camera.yaw = photo_start_camera.yaw;
                         freecam_camera.pitch = photo_start_camera.pitch;
                         game.SetCameraOverride(freecam_camera);
+                    } else if (action == pt::game::PhotoPanel::Action::ResetSettings) {
+                        photo_status.clear();
+                        photo_status_time = 0.0f;
+                        pt::LogInfo("extras: photo settings reset");
                     }
                 }
                 if (usable && ((polled.raw_pressed & pt::kRawCircle) || polled.cancel)) {
@@ -5957,7 +6050,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (const auto newer = app.updates.Newer()) {
                 pt::LogInfo("update: version {} available at {}{}{}", newer->version, newer->url, newer->notes.empty() ? "" : ": ", newer->notes);
                 if (newer->download_bytes) pt::LogInfo("update: the in-game update downloads about {} bytes", newer->download_bytes);
-                if (ui_ready) ui.ShowUpdateNotice(UpdateNoticeKey(*newer));
+                if (ui_ready && InGameUpdate(*newer) && !options.update_now) {
+                    app.update_question = true;
+                    ui.AskUpdate();
+                    pt::LogInfo("update: asking at the start to update to {}", newer->version);
+                } else if (ui_ready) {
+                    ui.ShowUpdateNotice(UpdateNoticeKey(*newer));
+                }
             }
         }
         if (options.update_now && !app.update_requested && app.updates.Done()) {
@@ -5986,6 +6085,35 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             }
         }
+        if (const pt::nr_native::Job::Status job = app.nr_native_job.Get(); job.serial != app.nr_native_serial) {
+            app.nr_native_serial = job.serial;
+            if (job.phase == pt::nr_native::Job::Phase::Done && job.kind == pt::nr_native::Job::Kind::Remove) {
+                app.nr_install_usable = false;
+                app.nr_native_remove_pending = job.deferred;
+                app.settings.upscaling.neural_rendering = "off";
+                ApplyNeuralToScene(app);
+                Save(app);
+                if (ui_ready) ui.ShowNotice(job.deferred ? "pc_note_nr_remove_restart" : "pc_notice_nr_removed");
+                pt::LogInfo("neural rendering: DLSS 5 removed{}", job.deferred ? " at the next start" : "");
+            } else if (job.phase == pt::nr_native::Job::Phase::Done) {
+                pt::nr_native::Startup(NrDataDir(app.settings_path));
+                app.nr_install_usable = pt::nr_native::UseCard(app.nr_arch);
+                pt::ConfigureNativeNeuralRuntime(app.settings.upscaling.neural_runtime);
+                app.nr_route_failed = false;
+                app.nr_row_note.clear();
+                if (ui_ready) ui.ShowNotice(app.nr_install_usable ? "pc_notice_nr_installed" : "pc_note_nr_unlock_failed");
+                pt::LogInfo("neural rendering: DLSS 5 installed and ready{}", app.nr_install_usable ? "" : ", but it does not read back for this card");
+            } else if (job.phase == pt::nr_native::Job::Phase::Failed) {
+                app.nr_row_note = job.failure;
+                pt::LogWarn("neural rendering: the DLSS 5 install failed: {}", job.detail);
+            }
+        }
+        if (pt::nr_native::Active() && app.scene.neural.enabled && !app.nr_route_failed) {
+            if (const auto* status = app.scene.NativeNeuralStatus(); status && !status->available && !status->note.empty()) {
+                DisableNeuralRoute(app, status->note.c_str(), status->reason);
+                if (ui_ready) ui.ShowNotice("pc_notice_nr_failed");
+            }
+        }
         if (frame >= 1) MarkUpdateStarted();
         SyncNeuralToggle(app);
         if (NeuralRouteActive(app) && app.nr_reshade_loaded && app.nr_route_armed && !app.nr_route_failed) {
@@ -6010,7 +6138,22 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const pt::fg_unlock::Job::Status job = app.fg_job.Get();
             if (job.serial != app.fg_job_serial) {
                 app.fg_job_serial = job.serial;
-                if (job.phase == pt::fg_unlock::Job::Phase::Ready) {
+                if (job.phase == pt::fg_unlock::Job::Phase::Ready && job.installed_live) {
+                    app.renderer.Gpu().WaitIdle();
+                    ArmFgRoute(app, true);
+                    app.scene.PrepareNgxReload();
+                    std::string reason;
+                    const bool ready = pt::fg_unlock::LoadLiveProxy(pt::ExecutableDir(), reason) && pt::streamline::ReloadD3D12(reason);
+                    ArmFgRoute(app, false);
+                    pt::UpscaleHost::Get().SetDlssFrameGenFailed(!ready);
+                    app.fg_install = pt::fg_unlock::ReadInstall(pt::ExecutableDir());
+                    app.fg_install_usable = app.fg_install && pt::fg_unlock::Usable(*app.fg_install);
+                    app.fg_route_failed = !ready;
+                    app.fg_row_note = ready ? "" : "pc_note_fg_unlock_failed";
+                    app.fg_job_request = 0;
+                    if (ui_ready) ui.ShowNotice(ready ? "pc_notice_fg_installed" : "pc_notice_fg_failed");
+                    pt::LogInfo("frame generation: live unlock {}{}", ready ? "ready without restarting the game" : "activation failed: ", reason);
+                } else if (job.phase == pt::fg_unlock::Job::Phase::Ready) {
                     app.routes.Request(pt::route_queue::Route::Fg, static_cast<pt::route_queue::Op>(app.fg_job_request));
                     app.update_language = game.Options().subtitle_language;
                     app.fg_row_note.clear();
@@ -6347,7 +6490,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const auto s = ui.SubliminalString();
             app.scene.SetSubliminalString({s.texture, s.position, s.value});
         }
-        app.renderer.plain_output = ui.BootSplashShown() || ui.ShaderScreenShown() || ui.TexturesScreenShown();
+        app.renderer.plain_output = ui.BootSplashShown() || ui.ShaderScreenShown();
         draw_items.clear();
         pt::Camera camera = game.ViewCamera();
         const bool date_scene = lisa_date && lisa_date->ShowingScene();
@@ -6513,6 +6656,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         ++frame;
         pt::LogSetTick(frame);
+        app.scene.resumed_threshold_artifact = view.ResumedThresholdArtifact();
         app.scene.AdvanceTime(dt);
         app.scene.toggles.draw_occlusion = !freecam;
         bool warmed = false;
@@ -6704,7 +6848,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (!first_frame_shown) {
                 first_frame_shown = true;
                 pt::boot::Phase("first frame", ui_ready && ui.ShaderScreenShown()     ? "the shader preparation screen"
-                                               : ui_ready && ui.TexturesScreenShown() ? "the enhanced textures screen"
                                                : ui_ready && ui.BootSplashShown()     ? "the title picture"
                                                                                       : "the loading screen");
             }
@@ -6809,6 +6952,39 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             }
         }
+        if (ui_ready) {
+            static auto fps_start = std::chrono::steady_clock::now();
+            static uint64_t fps_frames = 0;
+            static int fps_shown = 0;
+            static pt::streamline::FrameGenCounters last_dlss_counts;
+            static double dlss_ratio = 1.0;
+            ++fps_frames;
+            const auto fps_now = std::chrono::steady_clock::now();
+            const double fps_seconds = std::chrono::duration<double>(fps_now - fps_start).count();
+            if (fps_seconds >= 0.5) {
+                fps_shown = static_cast<int>(std::lround(static_cast<double>(fps_frames) / fps_seconds));
+                fps_frames = 0;
+                fps_start = fps_now;
+                const auto counts = pt::streamline::FrameGenStatistics();
+                const uint64_t rendered = counts.rendered >= last_dlss_counts.rendered ? counts.rendered - last_dlss_counts.rendered : 0;
+                const uint64_t presented = counts.presented >= last_dlss_counts.presented ? counts.presented - last_dlss_counts.presented : 0;
+                dlss_ratio = rendered ? std::max(1.0, static_cast<double>(presented) / rendered) : 1.0;
+                last_dlss_counts = counts;
+            }
+#if defined(_WIN32)
+            bool generating = app.renderer.FrameGeneratingD3D12();
+#else
+            bool generating = false;
+#endif
+            for (pt::FrameGeneration* fg : {pt::UpscaleHost::Get().FrameGen(), pt::UpscaleHost::Get().XefgFrameGen(),
+                                            pt::UpscaleHost::Get().MetalFxFrameGen(),
+                                            pt::streamline::Active() ? pt::UpscaleHost::Get().DlssFrameGenImpl() : nullptr}) {
+                generating = generating || (fg && fg->Generating());
+            }
+            const int presented_fps = !generating ? fps_shown : app.scene.upscale.frame_generation == pt::FrameGenKind::Dlss
+                ? static_cast<int>(std::lround(fps_shown * dlss_ratio)) : fps_shown * 2;
+            ui.SetFpsCounter(app.settings.accessibility.fps_counter, fps_shown, presented_fps);
+        }
         static const bool status_log = app.window || std::getenv("PT_STATUS_LOG") != nullptr;
         if (status_log) {
             static auto status_start = std::chrono::steady_clock::now();
@@ -6816,11 +6992,17 @@ int RunGame(App& app, pt::Vfs& vfs) {
             static double status_gpu = 0.0;
             static std::array<double, 6> status_pass{};
             static std::array<double, 6> status_light{};
+            static std::array<double, 4> status_rt{};
+            static std::array<double, 4> status_path{};
             ++status_frames;
             status_gpu += app.scene.Stats().gpu_ms;
             for (size_t i = 0; i < 6; ++i) {
                 status_pass[i] += app.scene.Stats().pass_ms[i];
                 status_light[i] += app.scene.Stats().light_ms[i];
+            }
+            for (size_t i = 0; i < 4; ++i) {
+                status_rt[i] += app.scene.Stats().rt_ms[i];
+                status_path[i] += app.scene.Stats().pt_ms[i];
             }
             const auto status_now = std::chrono::steady_clock::now();
             const double status_seconds = std::chrono::duration<double>(status_now - status_start).count();
@@ -6833,11 +7015,19 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 const VkExtent2D render_extent = pt::gpu::vk::Native(app.renderer.RenderExtent());
                 const std::string cpu_status = frame_phases.StatusAndReset();
                 const double n = static_cast<double>(std::max<uint64_t>(status_frames, 1));
-                const std::string passes = std::format(" (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f} [velocity {:.2f}, occlusion "
+                std::string passes = std::format(" (shadows {:.2f}, mirror {:.2f}, gbuffer {:.2f}, lighting {:.2f} [velocity {:.2f}, occlusion "
                                                        "{:.2f}, rt ao {:.2f}, probes {:.2f}, lights {:.2f}, sss {:.2f}], compose {:.2f}, post {:.2f})",
                                                        status_pass[0] / n, status_pass[1] / n, status_pass[2] / n, status_pass[3] / n,
                                                        status_light[0] / n, status_light[1] / n, status_light[2] / n, status_light[3] / n,
                                                        status_light[4] / n, status_light[5] / n, status_pass[4] / n, status_pass[5] / n);
+                std::string traced;
+                if (status_rt[0] + status_rt[1] + status_rt[2] + status_rt[3] > 0.0)
+                    traced += std::format(", ultra tier [classify {:.2f}, bounce light {:.2f}, glossy {:.2f}, resolve {:.2f}]", status_rt[0] / n,
+                                          status_rt[1] / n, status_rt[2] / n, status_rt[3] / n);
+                if (status_path[0] + status_path[1] + status_path[2] + status_path[3] > 0.0)
+                    traced += std::format(", path traced [direct {:.2f}, indirect {:.2f}, denoise {:.2f}, layers {:.2f}]", status_path[0] / n,
+                                          status_path[1] / n, status_path[2] / n, status_path[3] / n);
+                if (!traced.empty()) passes.insert(passes.size() - 1, traced);
                 const double active_seconds = std::max(status_seconds - frozen_seconds, 0.001);
                 const std::string frozen_note = frozen_seconds > 0.05 ? std::format(", {:.1f} s frozen in the background (not counted)", frozen_seconds) : "";
                 frozen_seconds = 0.0;
@@ -6853,6 +7043,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 status_gpu = 0.0;
                 status_pass = {};
                 status_light = {};
+                status_rt = {};
+                status_path = {};
             }
         }
         if (app.window && !vr) {
@@ -6894,6 +7086,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
             } else {
                 frame_deadline = {};
             }
+        }
+        if (headless_fps_limit > 0) {
+            const auto period = std::chrono::nanoseconds(1000000000LL / headless_fps_limit);
+            const auto now = std::chrono::steady_clock::now();
+            if (headless_frame_deadline.time_since_epoch().count() == 0 || now - headless_frame_deadline > period) {
+                headless_frame_deadline = now;
+            }
+            headless_frame_deadline += period;
+            std::this_thread::sleep_until(headless_frame_deadline);
         }
         if (!boot_shots.empty() && app.window) {
             const double seconds = static_cast<double>(SDL_GetTicksNS() - boot_wait_start) * 1e-9;
@@ -6939,6 +7140,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
     }
     microphone.Close();
+    app.fg_job.Cancel();
     input.Shutdown();
     if (script.Expectations() > 0) {
         pt::LogInfo("input script: {} expectations, {} failed", script.Expectations(), script.Failures());
@@ -6976,6 +7178,7 @@ bool WouldOpenWindow(const Options& options) {
 }
 
 int main(int argc, char** argv) {
+    if (const int probe = pt::VoiceCpuProbe(argc, argv); probe >= 0) return probe;
 #ifdef _WIN32
     const HANDLE inherited = GetStdHandle(STD_ERROR_HANDLE);
     if ((inherited == nullptr || inherited == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
@@ -7010,12 +7213,36 @@ int main(int argc, char** argv) {
     g_output_dir = log_path.parent_path();
     g_log_path = log_path;
     if (!tool) pt::PreserveCrashLog(log_path);
+    if (!tool) {
+        std::error_code ec;
+        if (std::filesystem::exists(log_path, ec))
+            std::filesystem::copy_file(log_path, log_path.parent_path() / "pt-previous.log", std::filesystem::copy_options::overwrite_existing, ec);
+    }
     pt::LogSetFile(log_path);
     if (UpdateJournalAtStart(options) == JournalAtStart::Relaunch) {
         pt::LogExit(0, "restarted after an interrupted update was undone");
         return 0;
     }
 #ifdef _WIN32
+    pt::nr_native::Startup(NrDataDir(options.settings_path));
+    if (!options.dlss5_install.empty()) {
+        std::string key, detail;
+        int last = -1;
+        const bool ok = pt::nr_native::InstallTo(options.dlss5_install, options.dlss5_arch, [&](int p) {
+            if (p / 10 != last) { last = p / 10; pt::LogInfo("dlss5 install: {}%", p); }
+        }, {}, &key, &detail);
+        pt::LogInfo("dlss5 install: {}{}{}", ok ? "done" : "failed", ok ? "" : " - " + key + ": ", detail);
+        return ok ? 0 : 1;
+    }
+    if (kCommunityRouteRetired) {
+        const std::filesystem::path game_root = pt::ExecutableDir();
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+        localtime_s(&local, &now);
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+        pt::nr_unlock::RetireRouteFiles(game_root, game_root / "data" / "retired-dlss5-route" / stamp);
+    }
     if (!tool) {
         const std::filesystem::path game_root = pt::ExecutableDir();
         const std::optional<pt::nr_unlock::Install> install = pt::nr_unlock::ReadInstall(game_root);
@@ -7034,7 +7261,7 @@ int main(int argc, char** argv) {
                 pt::ParseRenderingApi(peek.display.rendering_api, api);
                 if (options.backend == "d3d12") api = pt::RenderingApi::D3D12;
                 else if (options.backend == "vulkan") api = pt::RenderingApi::Vulkan;
-                route_load = route_usable && api == pt::RenderingApi::D3D12 && !peek.upscaling.neural_route_armed;
+                route_load = !kCommunityRouteRetired && !pt::nr_native::Enabled() && route_usable && api == pt::RenderingApi::D3D12 && !peek.upscaling.neural_route_armed;
                 route_on = route_load && kind == pt::NeuralRenderingKind::Dlss5;
                 app.nr_marker_read = true;
                 app.nr_marker_at_start = peek.upscaling.neural_route_armed;
@@ -7076,6 +7303,7 @@ int main(int argc, char** argv) {
             SetEnvironmentVariableW(L"DISABLE_VK_LAYER_reshade_1", L"1");
             pt::LogWarn("neural rendering: ReShade.ini could not be written; ReShade's Vulkan layer is kept out of this start");
         }
+        if (const char* preload = std::getenv("PT_TEST_PRELOAD_DXGI"); preload && *preload == '1') LoadLibraryW((game_root / L"dxgi.dll").c_str());
         app.nr_reshade_loaded = pt::nr_unlock::LoadDxgiForRoute(game_root, install.has_value(), route_load);
         app.nr_addon_boot_on = route_on;
     }
@@ -7140,7 +7368,7 @@ int main(int argc, char** argv) {
                 pt::LogInfo("user data: question {} (language {}) answered '{}' by PT_TEST_SAVE_MOVE:\n{}", key, save_move_lang, test_answer, text);
                 return test_answer == "yes";
             }
-            if (options.headless) return std::nullopt;
+            if (options.headless || !options.input_script.empty()) return std::nullopt;
             const std::string title(pt::game::PcText("pc_save_move_title", save_move_lang));
             const std::string yes(pt::game::PcText("pc_save_move_yes", save_move_lang));
             const std::string no(pt::game::PcText("pc_save_move_no", save_move_lang));
@@ -7331,6 +7559,7 @@ int main(int argc, char** argv) {
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
+    if (pt::nr_native::Enabled()) pt::ConfigureNativeNeuralRuntime(app.settings.upscaling.neural_runtime);
 #ifdef PT_D3D12_GAME
     pt::SetD3D12RunsGame(true);
     pt::SetD3D12Probe(&ProbeD3D12);
@@ -7520,11 +7749,25 @@ int main(int argc, char** argv) {
         const pt::gpu::DeviceInfo& info = app.renderer.Gpu().Info();
         app.nr_gpu = pt::nr_unlock::ClassifyGpu(info.vendor_id, info.device_id, info.adapter);
         app.nr_install = pt::nr_unlock::ReadInstall(pt::ExecutableDir());
-        app.nr_install_usable = app.nr_install && pt::nr_unlock::Usable(*app.nr_install);
+        app.nr_arch = pt::nr_native::CodeArchFor(info.vendor_id, info.device_id, info.adapter);
+        app.nr_install_usable = pt::nr_native::UseCard(app.nr_arch) ||
+                                (!kCommunityRouteRetired && app.nr_install && pt::nr_unlock::Usable(*app.nr_install));
+        if (app.nr_install && !pt::nr_native::Active()) {
+            pt::LogInfo("neural rendering: an old community DLSS 5 install is next to pt.exe; it is no longer used (Install or Unlock sets up DLSS 5)");
+        }
         if (const char* fake = std::getenv("PT_TEST_NR_INSTALLED"); fake && *fake == '1') {
             app.nr_gpu = pt::nr_unlock::GpuClass::NeedsUnlock;
             app.nr_install_usable = true;
             app.nr_reshade_loaded = true;
+            app.nr_addon_boot_on = app.settings.upscaling.neural_rendering == "dlss5";
+            if (const char* state = std::getenv("PT_TEST_ROUTE_STATE"); state && std::string_view(state) == "nr=rtx50") {
+                app.nr_gpu = pt::nr_unlock::GpuClass::Native;
+            } else if (state && std::string_view(state) == "nr=toggle-unreachable") {
+                app.nr_hook_failed = true;
+            }
+        }
+        if (NeuralRouteNeedsRestart(app)) {
+            pt::LogInfo("neural rendering: DLSS 5 on and off apply at the next start (the add-on's live toggle is unavailable)");
         }
         if (app.nr_install) {
             pt::LogInfo("neural rendering: community DLSS 5 route found ({}), {} (ReShade {}, add-on {}, runtime {}){}",
@@ -7547,7 +7790,15 @@ int main(int argc, char** argv) {
         if (app.nr_prearmed) app.nr_route_armed = true;
         const bool prearmed_live = app.nr_prearmed && NeuralRouteActive(app) && app.nr_reshade_loaded && wanted_kind == pt::NeuralRenderingKind::Dlss5;
         if (marker_at_start && app.nr_install_usable && wanted_kind == pt::NeuralRenderingKind::Dlss5) {
-            DisableNeuralRoute(app, "pc_note_nr_crash", "the crash marker was set at start: the last run crashed or lost the device with neural rendering on");
+            if (pt::nr_native::Active()) {
+                pt::LogWarn("neural rendering: DLSS 5 held off for this session: the last run ended with it on (crash marker); pt.ini keeps it on");
+                app.nr_crash_hold = true;
+                app.nr_row_note = "pc_note_nr_crash";
+                ArmNeuralRoute(app, false);
+                ApplyNeuralToScene(app);
+            } else {
+                DisableNeuralRoute(app, "pc_note_nr_crash", "the crash marker was set at start: the last run crashed or lost the device with neural rendering on");
+            }
         } else if (prearmed_live) {
         } else if (app.settings.upscaling.neural_route_armed && !(app.nr_prearmed && NeuralRouteActive(app) && wanted_kind == pt::NeuralRenderingKind::Dlss5)) {
             ArmNeuralRoute(app, false);
@@ -7573,12 +7824,17 @@ int main(int argc, char** argv) {
             pt::UpscaleHost::Get().CheckDlssFrameGenD3D12(info.vendor_id, info.device_id, info.luid);
         }
         const pt::DlssFrameGenSupport& fg = pt::UpscaleHost::Get().DlssFrameGen();
-        app.fg_applicable = pt::fg_unlock::Applicable(info.vendor_id, fg.note);
         app.fg_install = pt::fg_unlock::ReadInstall(pt::ExecutableDir());
         app.fg_install_usable = app.fg_install && pt::fg_unlock::Usable(*app.fg_install);
+        app.fg_applicable = pt::fg_unlock::Applicable(app.nr_arch, fg.note, app.fg_install_usable);
         if (const char* fake = std::getenv("PT_TEST_FG_INSTALLED"); fake && *fake == '1') {
             app.fg_applicable = true;
             app.fg_install_usable = true;
+        }
+        if (const char* arch = std::getenv("PT_TEST_FG_ARCH")) {
+            const std::string_view value = arch;
+            const int code = value == "75" ? 75 : value == "86" ? 86 : value == "89" ? 89 : value == "0" ? 0 : -1;
+            app.fg_applicable = pt::fg_unlock::Applicable(code, "pc_note_dlssg_gpu", app.fg_install_usable);
         }
         {
             const std::filesystem::path data = app.settings_path.empty() ? UserDataDir() : app.settings_path.parent_path();
@@ -7682,25 +7938,6 @@ int main(int argc, char** argv) {
         pt::LogInfo("startup: scene renderer ready");
         app.textures.SetAnisotropy(AnisotropyFromApp(app.settings));
         app.vfs = &vfs;
-        app.texture_runtime = pt::ExecutableDir() / "texture-tools";
-        std::filesystem::path texture_data = app.settings_path.parent_path();
-        if (!options.save_dir.empty()) texture_data = options.save_dir;
-        if (texture_data.empty()) {
-            texture_data = UserDataDir();
-        }
-        {
-            const uint64_t local = d3d12 ? app.renderer.Gpu().Info().dedicated_video_memory : app.renderer.Context().DeviceLocalBytes();
-            app.texture_max_output = local >= 10ull * 1000 * 1000 * 1000 ? 0u : 2048u;
-            if (const char* cap = std::getenv("PT_ENHANCED_TEXTURES_CAP")) app.texture_max_output = static_cast<uint32_t>(std::atoi(cap));
-            app.texture_kinds = local >= 6ull * 1000 * 1000 * 1000 ? pt::kEnhancedAllKinds : pt::kEnhancedColourKinds;
-            if (const char* kinds = std::getenv("PT_ENHANCED_TEXTURES_KINDS")) app.texture_kinds = static_cast<uint32_t>(std::strtoul(kinds, nullptr, 0)) & pt::kEnhancedAllKinds;
-            pt::LogInfo("enhanced textures: {:.1f} GB device-local video memory, {} mode, {}", static_cast<double>(local) / (1024.0 * 1024.0 * 1024.0),
-                        app.texture_max_output ? std::format("capped ({} px)", app.texture_max_output) : std::string("full (2x, up to 4096 px)"),
-                        app.texture_kinds == pt::kEnhancedAllKinds ? "colour, normal and material maps"
-                        : app.texture_kinds == pt::kEnhancedColourKinds ? "colour maps only" : std::format("kinds 0x{:x}", app.texture_kinds));
-        }
-        app.texture_cache = texture_data / (app.texture_max_output ? std::format("enhanced-textures-{}", app.texture_max_output) : std::string("enhanced-textures"));
-        if (app.settings.graphics.enhanced_textures) RequestEnhancedTextures(app, true);
         static std::string imgui_ini;
         if (app.window && !g_output_dir.empty()) {
             imgui_ini = pt::os::PathToUtf8((g_output_dir / "pt_imgui.ini"));
@@ -7730,7 +7967,6 @@ int main(int argc, char** argv) {
 #endif
         pt::LogInfo("startup: {}", viewer ? "viewer" : "game");
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
-        app.texture_job.Cancel();
         app.renderer.Gpu().WaitIdle();
         if (app.xr) {
             app.xr->Shutdown();

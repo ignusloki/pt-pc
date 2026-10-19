@@ -98,8 +98,6 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.height", out.display.height);
     Read(v, "display.fullscreen", out.display.fullscreen);
     Read(v, "display.vsync", out.display.vsync);
-    Read(v, "display.pause_on_focus_loss", out.display.pause_on_focus_loss);
-    Read(v, "display.mute_in_background", out.display.mute_in_background);
     Read(v, "display.fps_limit", out.display.fps_limit);
     Read(v, "display.hdr", out.display.hdr);
     Read(v, "display.hdr_paper_white", out.display.hdr_paper_white);
@@ -133,11 +131,18 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "upscaling.sharpness", out.upscaling.sharpness);
     Read(v, "upscaling.dlss_model", out.upscaling.dlss_model);
     Read(v, "upscaling.frame_generation", out.upscaling.frame_generation);
+    Read(v, "upscaling.dlssg_multiplier", out.upscaling.dlssg_multiplier);
+    out.upscaling.dlssg_multiplier = std::clamp(out.upscaling.dlssg_multiplier, 2, 4);
     Read(v, "upscaling.ray_reconstruction", out.upscaling.ray_reconstruction);
     Read(v, "upscaling.neural_rendering", out.upscaling.neural_rendering);
     Read(v, "upscaling.neural_style", out.upscaling.neural_style);
+    Read(v, "upscaling.neural_quality", out.upscaling.neural_quality);
+    Read(v, "upscaling.neural_model", out.upscaling.neural_model);
+    if (out.upscaling.neural_model != "small" && out.upscaling.neural_model != "large") out.upscaling.neural_model = "small";
+    if (out.upscaling.neural_quality != "performance" && out.upscaling.neural_quality != "ultra") out.upscaling.neural_quality = "quality";
     Read(v, "upscaling.neural_intensity", out.upscaling.neural_intensity);
-    Read(v, "upscaling.neural_scale", out.upscaling.neural_scale);
+    if (!std::isfinite(out.upscaling.neural_intensity)) out.upscaling.neural_intensity = 1.0f;
+    out.upscaling.neural_intensity = std::clamp(out.upscaling.neural_intensity, 0.25f, 3.0f);
     Read(v, "upscaling.neural_runtime", out.upscaling.neural_runtime);
     Read(v, "upscaling.neural_route_armed", out.upscaling.neural_route_armed);
     Read(v, "upscaling.dlssg_route_armed", out.upscaling.dlssg_route_armed);
@@ -149,7 +154,6 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "raytracing.bounce_light", out.ray_tracing.bounce_light);
     Read(v, "raytracing.glossy_reflections", out.ray_tracing.glossy_reflections);
     Read(v, "graphics.anisotropy", out.graphics.anisotropy);
-    Read(v, "graphics.enhanced_textures", out.graphics.enhanced_textures);
     Read(v, "graphics.shadow_quality", out.graphics.shadow_quality);
     Read(v, "graphics.ambient_occlusion", out.graphics.ambient_occlusion);
     Read(v, "graphics.reflections", out.graphics.reflections);
@@ -204,6 +208,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     }
     Read(v, "extras.fast_walk", out.extras.fast_walk);
     Read(v, "accessibility.sound_captions", out.accessibility.sound_captions);
+    Read(v, "accessibility.fps_counter", out.accessibility.fps_counter);
     Read(v, "accessibility.gyro", out.accessibility.gyro);
     Read(v, "accessibility.gyro_sensitivity", out.accessibility.gyro_sensitivity);
     Read(v, "accessibility.gyro_tightening", out.accessibility.gyro_tightening);
@@ -288,9 +293,6 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; 0 window, 1 borderless fullscreen, 2 exclusive fullscreen at the desktop mode (Alt+Enter toggles)\n"
          << "fullscreen = " << s.display.fullscreen << "\n"
          << "vsync = " << (s.display.vsync ? 1 : 0) << "\n"
-         << "; open the game's pause menu when the window goes to the background (frozen where the game cannot pause)\n"
-         << "pause_on_focus_loss = " << (s.display.pause_on_focus_loss ? 1 : 0) << "\n"
-         << "mute_in_background = " << (s.display.mute_in_background ? 1 : 0) << "\n"
          << "; frames per second at most, 0 for no limit (menus and the paused game stay at 60 or less either way)\n"
          << "fps_limit = " << s.display.fps_limit << "\n"
          << "hdr = " << (s.display.hdr ? 1 : 0) << "\n"
@@ -333,6 +335,7 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "surround = " << (s.audio.surround ? 1 : 0) << "\n"
          << "; 1: the 7.1 mix through Windows spatial sound (Windows Sonic, Dolby Atmos, DTS:X) when Windows has one on for the device\n"
          << "spatial = " << (s.audio.spatial ? 1 : 0) << "\n\n"
+         << "; DualSense speaker toggle; DualShock 4 Bluetooth speaker starts automatically\n"
          << "controller_speaker = " << (s.audio.controller_speaker ? 1 : 0) << "\n"
          << "; separate controller-speaker level, 0 to 1; does not change game volume or DualSense haptics\n"
          << "controller_speaker_volume = " << s.audio.controller_speaker_volume << "\n\n"
@@ -366,16 +369,20 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; dlss (NVIDIA DLSS Frame Generation, experimental: RTX 40 or newer, starts with the next launch),\n"
          << "; metalfx (Apple MetalFX, macOS 26 or newer, always with v-sync); 1 reads as fsr3\n"
          << "frame_generation = " << s.upscaling.frame_generation << "\n"
+         << "; DLSS frame multiplier: 2, 3 or 4; limited to the current runtime capability\n"
+         << "dlssg_multiplier = " << std::clamp(s.upscaling.dlssg_multiplier, 2, 4) << "\n"
          << "; NVIDIA DLSS Ray Reconstruction with the Path traced ray quality and dlss (RTX GPUs): 1 it denoises and upscales the path\n"
          << "; traced light, 0 the port's denoiser and DLSS Super Resolution\n"
          << "ray_reconstruction = " << (s.upscaling.ray_reconstruction ? 1 : 0) << "\n"
-         << "; NVIDIA DLSS 5 neural rendering: off or dlss5 (needs an RTX 50 GPU and a runtime NVIDIA publishes for other games;\n"
-         << "; none exists yet, so it stays off), neural_style default, natural or cinematic, neural_intensity 0.25 to 1\n"
+         << "; NVIDIA DLSS 5 neural rendering: off or dlss5, requires the runtime installed through PC Settings\n"
+         << "; neural_style: default, natural or cinematic; neural_intensity: 0.25 to 3 (above 1 amplifies the neural change)\n"
          << "neural_rendering = " << s.upscaling.neural_rendering << "\n"
          << "neural_style = " << s.upscaling.neural_style << "\n"
          << "neural_intensity = " << s.upscaling.neural_intensity << "\n"
-         << "; neural rendering input scale (0.5 to 1): a smaller input for the model where it is too slow (RTX 20 and 30)\n"
-         << "neural_scale = " << s.upscaling.neural_scale << "\n"
+         << "; neural rendering quality: performance, quality or ultra; every rendered frame\n"
+         << "neural_quality = " << s.upscaling.neural_quality << "\n"
+         << "; independently chosen network: small or large; no automatic model downgrade\n"
+         << "neural_model = " << s.upscaling.neural_model << "\n"
          << "; a path to the player's nvngx_dlssnr.dll (a file or its folder) when it is not next to pt.exe; never shipped\n"
          << "neural_runtime = " << s.upscaling.neural_runtime << "\n"
          << "; set while the community DLSS 5 route runs, cleared on a clean exit; a start that finds it set keeps DLSS 5 off (it crashed last time)\n"
@@ -402,8 +409,6 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; not in the original; 0 keeps the original's look\n"
          << "; anisotropic filtering of the textures: 0 (the original's trilinear filtering), 2, 4, 8 or 16\n"
          << "anisotropy = " << s.graphics.anisotropy << "\n"
-         << "; textures upscaled from the game files by the bundled upscaler, generated once into the user data folder\n"
-         << "enhanced_textures = " << (s.graphics.enhanced_textures ? 1 : 0) << "\n"
          << "shadow_quality = " << s.graphics.shadow_quality << "\n"
          << "ambient_occlusion = " << s.graphics.ambient_occlusion << "\n"
          << "reflections = " << s.graphics.reflections << "\n"
@@ -452,6 +457,7 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; a caption for the sounds you need to hear (a baby laughing, a phone ringing, steps behind you), with a side hint and a short\n"
          << "; rumble where vibration is on; the game's own subtitles are the options screen's\n"
          << "sound_captions = " << (s.accessibility.sound_captions ? 1 : 0) << "\n"
+         << "fps_counter = " << (s.accessibility.fps_counter ? 1 : 0) << "\n"
          << "; the controller's motion sensor (DualSense, DualShock 4, Switch Pro): 0 off, 1 turns the camera, 2 aims the flashlight apart\n"
          << "; from the view (it comes back to the middle when the pad is still or L3 is pressed)\n"
          << "gyro = " << s.accessibility.gyro << "\n"

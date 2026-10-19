@@ -19,6 +19,9 @@ constexpr uint64_t kMirrorLightId = 0x4D4952524F524C54ull;
 constexpr uint64_t kHandyReflectionId = 0x5245464C45435430ull;
 
 struct SceneLight {
+    bool path_stair_ceiling = false;
+    bool stair_area = false;
+    uint32_t light_fitting = 0;
     LightType type = LightType::Point;
     uint64_t id = 0;
     glm::vec3 position{0.0f};
@@ -102,6 +105,7 @@ struct ScreenSettings {
     glm::vec2 grain_offset{0.0f};
     bool screen_distortion = true;
     bool full_screen_blur = false;
+    bool mesh_occlusion = false;
     float blur_blend_rate = 0.85f;
     float blur_fetch_band = 2.5f;
     bool depth_of_field = true;

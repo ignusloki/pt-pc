@@ -33,6 +33,7 @@ public:
     uint16_t TabPrevText() const { return tab_prev_text_; }
     uint16_t TabNextText() const { return tab_next_text_; }
     uint16_t DonateText() const { return donate_text_; }
+    uint16_t UpdateText() const { return footer_text_; }
     bool Tabbed() const { return source_ && source_->TabCount() > 0; }
     std::string_view ShownTab() const { return Tabbed() ? source_->TabLabel(source_->Tab()) : std::string_view(); }
     bool StripFocused() const { return Tabbed() && cursor_ < 0; }
@@ -41,7 +42,7 @@ public:
     int ScrollFlags() const { const ScrollBar bar = Bar(); return (bar.scrollable ? 1 : 0) | (bar.above ? 2 : 0) | (bar.below ? 4 : 0); }
     void SetFlash(const ui::UiaAnimation* animation) { flash_animation_ = animation; }
     void Open(PcSettingsSource* source);
-    void Refresh();
+    void Refresh(bool preserve_focus = true);
     Result Update(Game& game, const MenuInput& input, float dt);
     void Step(bool active);
     void Apply(UifView& view, int language) const;
@@ -150,6 +151,16 @@ private:
     Result UpdateDialog(Game& game, const MenuInput& input);
     Result UpdateQuestion(Game& game, const MenuInput& input);
 
+    bool UpdateDialogOpen() const { return confirming_ && update_dialog_ && footer_.has_value(); }
+    bool UpdateAt(glm::vec2 units) const;
+    void OpenUpdateDialog(Game& game);
+    std::optional<PcSettingRow> footer_;
+    uint16_t footer_text_ = 0;
+    bool update_dialog_ = false;
+    mutable bool update_hover_ = false;
+    mutable glm::vec4 update_rect_{0.0f};
+    mutable std::string update_latch_text_;
+    mutable float update_latched_ = 0.0f;
     PcSettingsSource* source_ = nullptr;
     std::vector<PcSettingSection> sections_;
     std::vector<Placed> rows_;

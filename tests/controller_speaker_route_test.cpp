@@ -12,6 +12,26 @@ int main() {
         failures += !ok;
     };
 
+    check(pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::DualShock4, false) &&
+              pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::DualShock4, true),
+          "DS4 speaker starts automatically regardless of the existing speaker toggle");
+    check(!pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::DualSense, false) &&
+              pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::DualSense, true),
+          "DualSense speaker still follows its existing off/on setting");
+    check(!pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::None, false) &&
+              pt::ControllerSpeakerAudioEnabled(pt::SonyPadAudio::None, true),
+          "other controllers retain the existing speaker policy");
+
+    const std::array ds4_hids{pt::ControllerSpeakerHidPath{"usb-ds4", false, true},
+                              pt::ControllerSpeakerHidPath{"bt-ds4", true, false}};
+    check(pt::MatchDs4SpeakerHidPath("bt-ds4", ds4_hids) == 1, "physical Bluetooth DS4 matches its own speaker transport");
+    check(!pt::MatchDs4SpeakerHidPath("usb-ds4", ds4_hids), "USB DS4 never steals another controller's Bluetooth speaker");
+    check(pt::MatchDs4SpeakerHidPath("vigem-virtual", ds4_hids) == 1, "a virtual DS4 can use the sole physical Bluetooth DS4");
+    const std::array two_bt{pt::ControllerSpeakerHidPath{"bt-one", true, false}, pt::ControllerSpeakerHidPath{"bt-two", true, false}};
+    check(!pt::MatchDs4SpeakerHidPath("vigem-virtual", two_bt), "ambiguous physical speakers behind a virtual pad fail closed");
+    check(pt::MatchDs4SpeakerHidPath("bt-two", two_bt) == 1, "an exact physical speaker stays selectable with two Bluetooth DS4 pads");
+    check(!pt::MatchDs4SpeakerHidPath("vigem-virtual", {}), "no physical HID speaker means no speaker route");
+
     const std::array endpoints{pt::ControllerSpeakerEndpointName{"DualSense USB", 4}};
     const std::array devices{pt::ControllerAudioEndpointName{10, "Speakers", 2},
                              pt::ControllerAudioEndpointName{11, "DualSense USB", 2},

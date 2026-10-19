@@ -12,6 +12,7 @@
 #include "engine/core/strcode.h"
 #include "engine/audio/wwise_bank.h"
 #include "engine/vfx/vfx_file.h"
+#include "engine/vfx/vfx_system.h"
 #include "game/archive.h"
 
 namespace pt::game {
@@ -506,6 +507,7 @@ void GameSound::OnStageLoaded(Stage& stage) {
                 sound.play = node->second->play;
                 sound.stop = node->second->stop;
                 sound.stop_playing = node->second->stop_playing;
+                sound.on_emit = node->second->on_emit;
                 sound.stop_fade = node->second->fade;
                 sound.stop_curve = std::min(node->second->curve, 9u);
                 const glm::mat4 world = stage.ToWorld(f.WorldTransform(e));
@@ -619,8 +621,17 @@ audio::PlayingId GameSound::PostVfxEvent(const std::string& event, audio::GameOb
     return system_.PostEvent(event, object);
 }
 
-void GameSound::UpdateVfxSounds(float dt) {
+void GameSound::UpdateVfxEmissions(const vfx::System& effects) {
+    if (ready_) {
+        UpdateVfxSounds(&effects);
+    }
+}
+
+void GameSound::UpdateVfxSounds(const vfx::System* effects) {
     for (VfxSound& v : vfx_sounds_) {
+        if (v.on_emit != (effects != nullptr)) {
+            continue;
+        }
         Stage* stage = game_.Stages().FindById(v.stage_id);
         if (!stage) {
             continue;
@@ -636,22 +647,17 @@ void GameSound::UpdateVfxSounds(float dt) {
         }
         if (!v.visible) {
             v.visible = true;
-            v.delay = 0.0f;
-            SetAreaSends(v.object, v.position);
-            v.playing = PostVfxEvent(v.play, v.object);
-            LogDebug("sound: vfx {} at ({:.2f} {:.2f} {:.2f})", v.play, v.position.x, v.position.y, v.position.z);
-        } else if (!v.playing || !system_.IsPlaying(v.playing)) {
-            if (v.play == "Play_sfx_water_drop_b") {
-                v.delay -= dt;
-                if (v.delay <= 0.0f) {
-                    SetAreaSends(v.object, v.position);
-                    v.playing = PostVfxEvent(v.play, v.object);
-                    LogDebug("sound: vfx {} again at ({:.2f} {:.2f} {:.2f}), playing {}", v.play, v.position.x, v.position.y, v.position.z,
-                             v.playing);
-                    v.delay = 0.8f + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * 1.0f;
-                }
-            }
+        } else if (!v.on_emit) {
+            continue;
         }
+        if (v.on_emit && (!effects->Emitted({stage->id, reinterpret_cast<uintptr_t>(v.entity)}) ||
+                          (v.playing && system_.IsPlaying(v.playing)))) {
+            continue;
+        }
+        SetAreaSends(v.object, v.position);
+        v.playing = PostVfxEvent(v.play, v.object);
+        LogDebug("sound: vfx {} at ({:.2f} {:.2f} {:.2f}), frame {}, sample {}, emission {}", v.play, v.position.x, v.position.y,
+                 v.position.z, game_.Frame(), system_.RenderedFrames(), v.on_emit);
     }
 }
 
@@ -713,7 +719,7 @@ void GameSound::Update(float dt) {
     }
     UpdateAreas(dt);
     UpdateEmitters();
-    UpdateVfxSounds(dt);
+    UpdateVfxSounds();
     UpdateAnimObjects();
     UpdateGimmickDialogue();
     system_.Update(dt);

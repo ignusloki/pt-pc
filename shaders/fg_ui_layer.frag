@@ -1,5 +1,7 @@
 #version 460
 
+#include "composite_output.glsl"
+
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_layer;
 
@@ -39,19 +41,9 @@ void main() {
         color = mix(color, noise, alpha);
     }
     color = color * (1.0 - top.a) + top.rgb;
-    vec3 shown = pow(clamp(color, 0.0, 1.0), vec3(1.0 / params.brightness));
+    sampled.a = mix(sampled.a, 1.0, top.a);
+    vec3 shown = CompositeDisplayColor(color, sampled.a, params.brightness, params.grain_offset.w, params.hdr.xy);
     vec3 base = texelFetch(hudless, ivec2(gl_FragCoord.xy), 0).rgb;
-    vec3 change = shown - base;
-    if (all(lessThanEqual(abs(change), vec3(1.5 / 255.0)))) {
-        out_layer = vec4(max(change, vec3(0.0)), 0.0);
-        return;
-    }
-    float a = max(abs(change.r), max(abs(change.g), abs(change.b)));
-    for (int c = 0; c < 3; ++c) {
-        if (base[c] > 0.0) {
-            a = max(a, 1.0 - shown[c] / base[c]);
-        }
-    }
-    a = clamp(a, 0.0, 1.0);
-    out_layer = vec4(max(shown - (1.0 - a) * base, vec3(0.0)), a);
+    float tolerance = params.grain_offset.w > 1.5 ? 1.5 / 1023.0 : 1.5 / 255.0;
+    out_layer = CompositeUiLayer(shown, base, tolerance);
 }

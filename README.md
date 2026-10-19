@@ -5,7 +5,7 @@
 If the port is worth something to you, you can buy me a coffee: [ko-fi.com/loreanxavier](https://ko-fi.com/loreanxavier). It keeps the testing hardware and the releases coming.
 
 This is a native PC port of P.T., the 2014 PS4 teaser by Kojima Productions. It is not an emulator. The game logic was
-rebuilt in C++ from the original's behaviour and the renderer is written on Vulkan; every level, model, texture, sound,
+rebuilt in C++ from the original's behaviour, with Vulkan and DirectX 12 renderers; every level, model, texture, sound,
 script and cutscene is read at run time from your own copy of the PS4 game. There is no game data in this repository
 and none in the installer.
 
@@ -25,7 +25,7 @@ the street, with the voice part included.
   and SteamOS), or macOS 14 or newer on an Apple silicon or Intel Mac.
 - A GPU and driver with Vulkan 1.3; on macOS the port brings MoltenVK, which runs Vulkan on Metal. The optional
   ray-traced shadows, ambient occlusion and reflections need a GPU with Vulkan ray queries (not on macOS). DLSS needs a
-  GeForce RTX card; FSR and XeSS run on any recent GPU (Windows only). The settings page greys out what your machine
+  GeForce RTX card. Available upscalers depend on the platform and renderer; see docs/upscaling.md. The settings page greys out what your machine
   cannot run and says why.
 - A microphone for one part of the game, as on the PS4. PC Settings → Sound can enable/disable microphone input and
   test it. Mac startup requests permission before gameplay when input is enabled. If you have none, `key = J` under
@@ -50,16 +50,15 @@ steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The
 fork with upstream's 1.0.3 line. See the [Mac release notes](docs/release-notes-macos-1.0.7.md) and
 [integration report](docs/integration/upstream-regression-20261012.md) for validation and Intel GPU limitations.
 
-The published 1.0.1 release contains setup downloads, not a portable ZIP. The earlier README incorrectly claimed
-a ZIP was available. The setup accepts an already extracted dump folder as well as a fake PKG.
+Windows and Linux releases include installers and portable ZIPs. To update an existing installation, use the game's update
+button or run the new installer over it. Your game archives, settings, saves and mods stay.
 
-This source tree contains the upcoming 1.0.2 changes; its new features and macOS packages are not yet published release
-downloads. On Windows and Linux, 1.0.2 stores settings, saves, logs and cache in `data/` beside the executable and migrates
+On Windows and Linux, settings, saves, logs and cache live in `data/` beside the executable. The game migrates
 existing user data without overwriting newer files. On macOS, these stay in `~/Library/Application Support/pt-port/pt/`.
 The game checks GitHub Releases for a newer version at startup; `[network] check_updates = 0` disables that check.
 
 Thanks to ahm3texe for the Apple silicon port, totsu0jv for Czech translation, and yewhochen for the Linux library-loading
-and startup-focus fixes. Their contributions are incorporated here, with platform and release changes adapted for 1.0.2.
+and startup-focus fixes.
 
 ## Playing
 
@@ -71,20 +70,23 @@ only play on a first start.
 
 ## What the port adds
 
-Everything below is off or set to the original's behaviour by default. The PS4 look is the baseline; the extras are
-there if you want them.
+The Original preset keeps the PS4 look. The port also includes the following features.
 
 Display and image
 
 - Windowed, borderless or exclusive fullscreen, with a selectable render resolution and v-sync on or off. Exclusive
   fullscreen lists supported display modes; borderless keeps the desktop window and can render at another selected size.
-- Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS on Windows, plus Apple MetalFX on
-  supported Mac hardware, in the usual quality steps or a custom scale. Native-resolution anti-aliasing is also available.
-- Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer.
+- Upscalers: AMD FSR 3.1 and FSR 4, NVIDIA DLSS (with a choice of model) and Intel XeSS on Windows, plus Apple MetalFX on supported Macs, in the usual quality steps or a
+  custom scale, plus native-resolution anti-aliasing (FSR native AA, DLAA).
+- Frame generation: AMD FSR 3 and NVIDIA DLSS Frame Generation, with an optional unlock for RTX 20 and 30 and a multi frame
+  generation multiplier where supported. DLSS Frame Generation requires DirectX 12. Apple MetalFX frame generation is
+  experimental and available on supported Apple silicon with macOS 26 or newer.
+- DLSS 5 neural rendering on DirectX 12, installed from inside the game, with separate neural model, quality and strength controls.
+- Path traced lighting, NVIDIA Ray Reconstruction, and experimental AMD FSR Ray Regeneration with FSR 4 on supported
+  Radeon RX 9000 cards, DirectX 12 and Windows 11. Radeon hardware validation is still pending.
 - Graphics presets Low, Medium, Original (PS4), High, Ultra and Custom. The individual controls cover shadow map size,
   ray-traced shadows (sharp like the original or soft), contact shadows, ray-traced ambient occlusion, ray-traced floor
-  reflections, anisotropic filtering, enhanced textures (2x upscaled once from your own files with Real-ESRGAN, cached
-  on disk), film grain, motion blur, depth of field, the original's lens flare ghosts and the curved lens with colour
+  reflections, anisotropic filtering, film grain, motion blur, depth of field, the original's lens flare ghosts and the curved lens with colour
   fringing. Each one can go back to the PS4 setting on its own.
 
 Extras
@@ -99,9 +101,9 @@ Extras
   unused content, as you reach them in play. Pan model exhibits with WASD or the left stick; orbit with arrows or the
   right stick.
 - Controller feedback: Original vibration is the default. Enhanced adds supported trigger vibration and, on supported
-  wired USB DualSense controllers on Windows, haptics from filtered Lisa cries. The optional controller speaker and
-  its volume are separate from vibration; the main game and headphone mix continue unchanged. Physical controller
-  output still needs hardware validation.
+  wired USB DualSense controllers on Windows, haptics from filtered Lisa cries. DualSense speaker playback remains optional.
+  Experimental DualShock 4 speaker playback starts automatically over Bluetooth. Speaker volume is separate from vibration;
+  the main game and headphone mix continue unchanged. Physical DS4 speaker output has not been verified.
 - Game+: the content a finished game unlocks.
 - Speedrun timer with a split at every loop, real time and game time, personal bests, and a LiveSplit server
   connection (Control > Start TCP Server in LiveSplit).
@@ -111,7 +113,7 @@ Extras
 
 Languages
 - The original's English, French, German, Spanish, Italian, Portuguese and Japanese, plus Turkish, Simplified Chinese,
-  Arabic, Russian, Ukrainian and Czech added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
+  Arabic, Russian, Ukrainian, Polish and Czech added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
   original English, and the word the microphone listens for is always "Jack".
 
 Mods
@@ -125,12 +127,12 @@ Windows: Visual Studio 2022 Build Tools, LLVM (clang-cl), the Vulkan SDK, CMake 
     tools\build_pt.bat release
 
 gives `build\release\pt.exe`. CMake fetches the dependencies (SDL3, zlib, volk, VMA, glm, Dear ImGui, stb, Lua 5.1,
-libogg, libvorbis, whisper.cpp) and downloads the Whisper and Silero models and the upscaler SDK files, each checked by
-SHA-256. A failed SDK download leaves that upscaler out; `-DPT_UPSCALERS=OFF` builds without any. `python
+libogg, libvorbis, whisper.cpp and Google libsbc) and downloads the Whisper and Silero models and the upscaler SDK files, each checked by
+SHA-256. Windows release builds require the upscaler SDKs and stop if required downloads fail. `python
 tools\package.py` turns the build into the portable folder and zip.
 
 Linux: `cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build/linux --target pt`.
-GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-only SDKs and are left out there.
+GCC 13 or clang 17, the Vulkan headers and `glslc`. Linux includes DLSS and FSR 3.1; XeSS and DLSS Frame Generation are Windows-only.
 `tools/linux/` has the cross build I use from Windows. More in docs/linux.md.
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
@@ -157,7 +159,7 @@ The shadPS4 emulator was my reference for how the original behaves on the PS4 an
 against it. Thanks to its developers.
 
 The port is built on SDL3, Vulkan (volk, VMA), glm, Dear ImGui, stb, Lua 5.1, libogg and libvorbis, whisper.cpp with
-OpenAI's Whisper model and the Silero VAD for the voice part, Real-ESRGAN with ncnn for the enhanced textures, AMD
+OpenAI's Whisper model and the Silero VAD for the voice part, Google libsbc for the DS4 speaker, AMD
 FidelityFX, NVIDIA DLSS and Intel XeSS for the upscalers, the Khronos OpenXR loader for VR, HarfBuzz on Linux and the
 Noto fonts for the added languages, and LibOrbisPkg in the installer. Their notices ship in `licenses/` next to the
 executable.
@@ -172,5 +174,5 @@ licenses.
 AI coding tools were used in developing and debugging this port. My focus has been on matching the original P.T.:
 comparing builds with PS4 references, identifying discrepancies, testing gameplay and prioritizing fixes.
 
-The project uses the original game assets from the player's own PS4 copy. Optional enhanced textures use
-machine-learning upscaling on existing textures.
+The project uses the original game assets from the player's own PS4 copy. Optional upscalers and neural rendering use
+machine-learning models when enabled.

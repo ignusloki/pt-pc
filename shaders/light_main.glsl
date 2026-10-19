@@ -5,6 +5,7 @@
 #endif
 #ifdef PT_RT_FULL
 #include "rt_full.glsl"
+#include "rt_skin_shadow_receiver.glsl"
 #endif
 #include "lighting.glsl"
 
@@ -51,7 +52,12 @@ void main() {
         uint samples = (uint(l.info.x) >> 16u) & 0xFFu;
         float offset = max(0.003, 0.001 * s.P.z);
         vec3 ng = normalize(mat3(v.inv_view) * RtFaceNormal(v, pixel, ivec2(v.viewport.xy), s.P));
-        float raw = RtFullShadow(l, s.world, ng, offset, g_full_n, g_full_shadow_cone, samples, gl_FragCoord.xy, v.exposure.w);
+        vec2 biases = vec2(l.range.w, l.direction.w);
+        bool native_skin = RtSkinUsesNativeReceiver(uint(ImgFetch(IMG_MATERIAL, pixel).z * 255.0 + 0.5), l.position.w > 0.5,
+                                                     (uint(l.info.x) & kRtFullOriginalShadow) != 0u,
+                                                     RtFullCasters(l) == kRtMirrorLightMask, biases);
+        vec3 receiver = native_skin ? RtSkinNativeReceiver(s.world, v.inv_view[2].xyz, l.direction.xyz, biases) : s.world;
+        float raw = RtFullShadow(l, receiver, ng, native_skin ? 0.0 : offset, g_full_n, g_full_shadow_cone, samples, gl_FragCoord.xy, v.exposure.w);
         vis = 1.0 + strength * (raw - 1.0);
     }
     float spec = Luma709(specular);

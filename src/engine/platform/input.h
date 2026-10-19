@@ -60,13 +60,15 @@ enum class KeyAction : uint8_t {
     DateAuto, DateSkip,
     PhotoSave, PhotoHide, FreeRise, FreeSink, FreeFast,
     MusicBack, MusicForward, MusicRestart, MusicLoop,
-    MenuTabPrev, MenuTabNext, MenuDonate
+    MenuTabPrev, MenuTabNext, MenuDonate,
+    MenuUpdate
 };
 
 inline constexpr uint32_t kMenuKeyTabPrev = 1;
 inline constexpr uint32_t kMenuKeyTabNext = 2;
 inline constexpr uint32_t kMenuKeyDonate = 4;
 inline constexpr uint32_t kMenuKeyFromE = 8;
+inline constexpr uint32_t kMenuKeyUpdate = 16;
 
 inline constexpr uint32_t kMusicPressBack = 1;
 inline constexpr uint32_t kMusicPressForward = 2;

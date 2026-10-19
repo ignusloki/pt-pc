@@ -41,6 +41,10 @@ class PackagingTests(unittest.TestCase):
         (self.build/'lisa_date/text/eng.txt').write_text('Fixture dialogue')
         (self.build/'licenses/enhanced-textures').mkdir(parents=True)
         (self.build/'licenses/enhanced-textures/notice.txt').write_text('Fixture texture tool license')
+        (self.build/'licenses/bc7enc.txt').write_text('Retired encoder license')
+        (self.build/'licenses/Real-ESRGAN-fixture.txt').write_text('Retired model license')
+        (self.build/'texture-tools').mkdir()
+        (self.build/'texture-tools/retired-tool').write_bytes(b'old build cache')
         for shader in (REPO/'shaders').iterdir():
             if shader.suffix in {'.vert','.frag','.comp'}:(self.build/'shaders'/f'{shader.name}.spv').write_bytes(b'SPIR-V fixture')
         (self.source/'LICENSE.txt').write_text('Fixture license')
@@ -81,6 +85,9 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('extractor/PT.PkgExtract',files)
         self.assertEqual(files[prefix+'Resources/lisa_date/script.txt'],b'Fixture script')
         self.assertEqual(files[prefix+'Resources/lisa_date/music.ogg'],b'Fixture audio')
+        self.assertFalse(any('texture-tools/' in name or 'enhanced-textures/' in name or
+                             name.endswith('bc7enc.txt') or 'Real-ESRGAN-' in name for name in files))
+        self.assertEqual(files[prefix+'Resources/licenses/PT-MIT.txt'], (REPO/'LICENSE').read_bytes())
         self.assertIn('pt-files.json',files)
         with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r osx-arm64',z.read('BUILD.txt').decode())
         self.assertEqual(set(files),set(json.loads((out/'payload-manifest.json').read_text())))

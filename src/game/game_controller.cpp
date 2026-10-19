@@ -194,7 +194,7 @@ void GameController::RunStep(int step) {
         return;
     case 7:
         g.Status().Acquire(kPauseFlag, kPauseHolder);
-        if (option_menu_open_) {
+        if (option_menu_open_ || g.LoopReloadPending()) {
             return;
         }
         if (close_wait_ > 0.0f) {

@@ -665,6 +665,7 @@ void System::Update(float dt, const ViewInfo& view) {
                      glm::dot(last_view_->forward, view.forward) < kCameraCutCos;
     last_view_ = view;
     for (auto& [key, inst] : instances_) {
+        inst.emitted = false;
         const EffectDef& def = *inst.def;
         for (size_t i = 0; i < def.flares.size(); ++i) {
             UpdateFlare(inst, def.flares[i], inst.flares[i], dt, view, cut);
@@ -723,7 +724,11 @@ void System::Update(float dt, const ViewInfo& view) {
         }
         for (size_t i = 0; i < inst.shapes.size(); ++i) {
             const int n = Emit(inst, inst.shapes[i], def, def.shapes[i].emit, dframes, view);
+            inst.emitted |= n > 0;
             Spawn(inst, i, n, view);
+        }
+        if (inst.emitted && std::getenv("PT_VFX_TRACE_LOG")) {
+            LogDebug("vfx: emitted {} at frame {:.3f}, loop {}, owner {}", def.name, inst.frame, inst.loop, key.owner);
         }
     }
 }
@@ -967,6 +972,7 @@ void System::Build(const ViewInfo& view, const TextureResolver& textures, const 
             const size_t first = lights.size();
             BuildShape(inst, world, def.shapes[i], inst.shapes[i], view, textures, cubes, lighting, out, lights);
             for (size_t k = first; k < lights.size(); ++k) {
+                lights[k].owner = key.owner;
                 lights[k].id = (key.owner * 0x9E3779B97F4A7C15ull) ^ (key.id << 12) ^ (uint64_t(i) << 6) ^ (k - first) ^ 0xFA00000000000000ull;
             }
         }

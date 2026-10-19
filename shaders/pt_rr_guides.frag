@@ -45,6 +45,13 @@ void main() {
     out_diffuse_albedo = vec4(albedo * (1.0 - amount), 1.0);
     out_specular_albedo = vec4(specular * (1.0 - amount) + amount, 1.0);
     vec3 world_n = normalize(mat3(v.inv_view) * n);
-    out_normal_roughness = vec4(world_n, Saturate(max(g.x, mat1.w)));
+    float roughness = Saturate(max(g.x, mat1.w));
+    if (pass.ids.y != 0u && kind == 1.0 && amount > 0.0) {
+        vec3 coat_n = imageLoad(pt_layer_geometry, pixel).xyz;
+        float coat_share = amount / max(Luma709(specular * (1.0 - amount)) + amount, 1.0e-6);
+        world_n = normalize(mix(world_n, coat_n, coat_share));
+        roughness *= 1.0 - coat_share;
+    }
+    out_normal_roughness = vec4(world_n, roughness);
     out_hit_distance = vec4(max(imageLoad(rt_glossy_raw, pixel).a, 0.0), 0.0, 0.0, 0.0);
 }

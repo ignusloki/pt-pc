@@ -1,7 +1,7 @@
 # DLSS Frame Generation (Streamline, experimental) in a window, for a tester with a GeForce RTX 40 or 50 and hardware-accelerated
 # GPU scheduling on (upscaling.md, DLSS Frame Generation through Streamline). On RTX 20/30 pt.log reports "DLSS Frame
 # Generation no supported adapter" and the frames are the plain ones (Streamline still runs DLSS through sl.dlss).
-# pt.ini: [display] pause_on_focus_loss = 0 (the window opens without the focus), [upscaling] upscaler = dlss,
+# pt.ini: [upscaling] upscaler = dlss,
 # quality = quality, frame_generation = dlss (the option loads Streamline at start).
 # SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_AUDIO_DRIVER=dummy PT_FRAME_STATS=1 pt.exe --virtual-pads --no-save --settings <pt.ini>
 #   --frames 5000 --input-script tests/pad/dlss_frame_generation.txt

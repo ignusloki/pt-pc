@@ -1,5 +1,5 @@
-# street walk (loop browser street entry): the option screen shows "Return to the house" only in the walk; H once asks, H again
-# closes the menu and ends the walk with the ending's restart (step 29), which plays the preface and the opening to StartGame
+# street walk: H opens the return question, repeating H leaves it open, and choosing Yes ends the walk with the
+# ending restart (step 29), which plays the preface and the opening to StartGame
 sstep 15
 swait 30
 sktap Escape
@@ -22,6 +22,9 @@ swait 10
 sexpect menu 1
 sshot {shots}/street_menu_confirm.png
 sktap H
+swait 10
+sexpect menu 1
+sktap Return
 swait 90
 sexpect menu 0
 sstep 14

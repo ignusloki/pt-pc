@@ -29,12 +29,30 @@ SonyPadAudio SonyPadAudioModel(uint16_t vendor, uint16_t product) {
     return SonyPadAudio::None;
 }
 
+bool ControllerSpeakerAudioEnabled(SonyPadAudio model, bool speaker_setting) {
+    return model == SonyPadAudio::DualShock4 || speaker_setting;
+}
+
 bool ControllerEndpointChannelsFit(SonyPadAudio model, int channels) {
     switch (model) {
         case SonyPadAudio::DualShock4: return channels == 1 || channels == 2;
         case SonyPadAudio::DualSense: return channels == 4;
         default: return false;
     }
+}
+
+std::optional<size_t> MatchDs4SpeakerHidPath(std::string_view selected, std::span<const ControllerSpeakerHidPath> devices) {
+    std::optional<size_t> unique;
+    unsigned count = 0;
+    for (size_t i = 0; i < devices.size(); ++i) {
+        const auto& d = devices[i];
+        if (!selected.empty() && d.path == selected) {
+            if (d.bluetooth) return i;
+            if (d.usb) return std::nullopt;
+        }
+        if (d.bluetooth) { unique = i; ++count; }
+    }
+    return count == 1 ? unique : std::nullopt;
 }
 
 std::optional<uint32_t> MatchUniqueControllerAudioEndpoint(std::span<const ControllerSpeakerEndpointName> endpoints,

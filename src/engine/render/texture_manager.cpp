@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "engine/assets/ftex.h"
-#include "engine/assets/enhanced_textures.h"
 #include "engine/core/log.h"
 #include "engine/fs/mods.h"
 #include "engine/render/vk/vk_device.h"
@@ -153,6 +152,8 @@ bool TextureManager::Init(gpu::Device& device) {
     materials.size = sizeof(MaterialGpu) * kMaxMaterials;
     materials.usage = gpu::BufferUsage::StorageBuffer;
     materials.host_visible = true;
+    materials.gpu_read_only = true;
+    materials.name = "materials";
     if (!device.CreateBuffer(materials, material_buffer_)) {
         return false;
     }
@@ -197,7 +198,6 @@ bool TextureManager::Init(gpu::Device& device) {
 }
 
 void TextureManager::Shutdown() {
-    StopEnhancedWorker();
     for (const std::shared_ptr<ParallelTask>& worker : decode_workers_) {
         worker->Wait();
     }
@@ -219,11 +219,6 @@ void TextureManager::Shutdown() {
     free_.clear();
     by_name_.clear();
     cube_slots_.clear();
-    fox_sources_.clear();
-    enhanced_images_.clear();
-    enhanced_bytes_ = 0;
-    enhanced_qar_ = nullptr;
-    enhanced_enabled_ = false;
     device_->DestroyBuffer(material_buffer_);
     device_->DestroyBindingPool(pool_);
     device_->DestroyBindingLayout(set_layout_);
@@ -268,9 +263,6 @@ int TextureManager::SetAnisotropy(int level) {
     std::vector<gpu::ImageBinding> infos(images_.size());
     for (size_t i = 0; i < images_.size(); ++i) {
         uint32_t shown = static_cast<uint32_t>(i);
-        if (enhanced_enabled_) {
-            if (auto it = enhanced_images_.find(shown); it != enhanced_images_.end()) shown = it->second;
-        }
         const uint32_t view = cube_[i] || !images_[shown].view ? kWhite : shown;
         infos[i] = {images_[view].view, gpu::Layout::ShaderReadOnly, sampler, &images_[view]};
     }
@@ -331,7 +323,6 @@ uint64_t TextureManager::FreeTexture(uint32_t index) {
         model_refs_[slot] = 0;
         pinned_[slot] = 0;
         cube_[slot] = 0;
-        fox_sources_.erase(slot);
         if (redirects_.erase(slot) > 0) materials_dirty_ = true;
         for (auto it = redirects_.begin(); it != redirects_.end();) {
             if (it->second == slot) {
@@ -343,14 +334,6 @@ uint64_t TextureManager::FreeTexture(uint32_t index) {
         }
         free_.push_back(slot);
     };
-    if (auto it = enhanced_images_.find(index); it != enhanced_images_.end()) {
-        const uint32_t replacement = it->second;
-        enhanced_images_.erase(it);
-        const uint64_t before = bytes;
-        destroy(replacement);
-        enhanced_bytes_ -= std::min(enhanced_bytes_, bytes - before);
-        UpdateTextureDescriptor(replacement);
-    }
     destroy(index);
     UpdateTextureDescriptor(index);
     return bytes;
@@ -364,11 +347,10 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     if (mips.empty() || (images_.size() >= kMaxTextures && (free_.empty() || cube))) {
         return kWhite;
     }
-    const bool enhanced = name.find("#enhanced-") != std::string::npos;
     gpu::ImageResource image;
     uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;
     uint32_t dropped = 0;
-    if (memory_short_ && !enhanced && layers == 1 && mip_count > 1 && std::max(mips[0].width, mips[0].height) > 512) {
+    if (memory_short_ && layers == 1 && mip_count > 1 && std::max(mips[0].width, mips[0].height) > 512) {
         mips = mips.subspan(1);
         --mip_count;
         ++dropped;
@@ -381,16 +363,10 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         desc.mip_levels = mip_count;
         desc.layers = layers;
         desc.cube = cube;
-        desc.name = enhanced ? "enhanced textures" : "textures";
+        desc.name = "textures";
         return device_->CreateImage(desc, image);
     };
     while (!create_image()) {
-        if (enhanced) {
-            return kWhite;
-        }
-        if (ReleaseEnhancedTextures("video memory short")) {
-            continue;
-        }
         if (!memory_short_) {
             memory_short_ = true;
             LogWarn("textures: out of video memory: from now on textures over 512 px load without their largest mip");
@@ -415,7 +391,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     staging_desc.size = total;
     staging_desc.usage = gpu::BufferUsage::TransferSrc;
     staging_desc.host_visible = true;
-    staging_desc.name = enhanced ? "enhanced textures" : "textures";
+    staging_desc.name = "textures";
     if (!device_->CreateBuffer(staging_desc, staging)) {
         device_->DestroyImage(image);
         LogWarn("texture: {} not uploaded: staging allocation failed", name);
@@ -575,10 +551,6 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
     const auto upload_started = std::chrono::steady_clock::now();
     const uint32_t index = Create(key, ftex.Format(), mips, ftex.faces, ftex.faces == 6);
     upload_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - upload_started).count();
-    if (index != kWhite && !raw && EnhancedTextureEligible(stem, ftex)) {
-        fox_sources_[index] = stem;
-        if (enhanced_enabled_) LoadEnhancedTexture(index, stem, &ftex);
-    }
     if (ok) {
         *ok = index != kWhite;
     }
@@ -722,216 +694,14 @@ uint32_t TextureManager::LoadImageFile(const std::filesystem::path& path, const 
     return Create(key, gpu::Format::R8G8B8A8Unorm, mips);
 }
 
-namespace {
-bool ReadEnhancedCache(const std::filesystem::path& file, uint64_t key, FtexTexture& cached) {
-    if (ReadTextureCache(file, key, cached)) return true;
-    if (TextureCacheCurrent(file, key)) {
-        std::error_code ec;
-        std::filesystem::remove(file, ec);
-        LogWarn("textures: enhanced texture {} failed its check and was removed; it is made again at the next start", pt::os::PathToUtf8(file.filename()));
-    }
-    return false;
-}
-}
-
-void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std::filesystem::path& cache, uint64_t model, uint32_t kinds) {
-    enhanced_kinds_ = kinds;
-    if(enhanced_qar_ == &qar && enhanced_cache_ == cache && enhanced_model_ == model) return;
-    SetEnhancedTextures(false);
-    enhanced_qar_ = &qar;
-    enhanced_cache_ = cache;
-    enhanced_model_ = model;
-    enhanced_images_.clear();
-    enhanced_bytes_ = 0;
-}
-
-void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path, const FtexTexture* source) {
-    if (!enhanced_qar_ || !enhanced_model_ || enhanced_suspended_ || enhanced_images_.contains(index)) return;
-    FtexTexture loaded, cached;
-    if (!source) {
-        if (!LoadFtex(*enhanced_qar_, path, loaded)) return;
-        source = &loaded;
-    }
-    const EnhancedKind kind = EnhancedTextureKindOf(path, *source);
-    if (!(enhanced_kinds_ & EnhancedKindBit(kind))) return;
-    const uint64_t key = EnhancedTextureKey(*source, enhanced_model_, kind);
-    if (!ReadEnhancedCache(EnhancedCacheFile(enhanced_cache_, path), key, cached)) return;
-    const bool doubled = cached.width == source->width * 2 && cached.height == source->height * 2;
-    const bool kept = cached.width == source->width && cached.height == source->height;
-    if (!(doubled || kept) || cached.Srgb() != source->Srgb()) return;
-    std::vector<TextureMip> mips;
-    uint64_t bytes = 0;
-    for (uint32_t level = 0; level < cached.mip_count; ++level) {
-        mips.push_back({cached.MipWidth(level), cached.MipHeight(level), cached.mips[level]});
-        bytes += cached.mips[level].size();
-    }
-    const uint32_t replacement = Create(path + std::format("#enhanced-{:016x}", key), cached.Format(), mips);
-    if (replacement == kWhite) return;
-    enhanced_images_[index] = replacement;
-    enhanced_bytes_ += bytes;
-    if (enhanced_enabled_) {
-        device_->WaitIdle();
-        UpdateTextureDescriptor(index);
-    }
-}
-
-bool TextureManager::ReleaseEnhancedTextures(const char* why) {
-    if (enhanced_images_.empty() && !enhanced_queue_) return false;
-    StopEnhancedWorker();
-    enhanced_suspended_ = true;
-    device_->WaitIdle();
-    uint64_t bytes = 0;
-    const size_t count = enhanced_images_.size();
-    for (const auto& [index, replacement] : std::exchange(enhanced_images_, {})) {
-        if (replacement < images_.size() && images_[replacement].image) {
-            bytes += device_->ImageBytes(images_[replacement]);
-            device_->DestroyImage(images_[replacement]);
-            if (auto it = by_name_.find(names_[replacement]); it != by_name_.end() && it->second == replacement) by_name_.erase(it);
-            names_[replacement].clear();
-            model_refs_[replacement] = 0;
-            pinned_[replacement] = 0;
-            free_.push_back(replacement);
-            UpdateTextureDescriptor(replacement);
-        }
-        UpdateTextureDescriptor(index);
-    }
-    enhanced_bytes_ = 0;
-    LogWarn("textures: enhanced textures released ({}): {} replacements, {:.0f} MB; the original textures stay for this session", why, count,
-            static_cast<double>(bytes) / 1048576.0);
-    return count > 0;
-}
-
 void TextureManager::UpdateTextureDescriptor(uint32_t index) {
     uint32_t shown = index;
-    if (enhanced_enabled_) {
-        if (auto it = enhanced_images_.find(index); it != enhanced_images_.end()) shown = it->second;
-    }
     const gpu::ImageResource& view = images_[shown].view ? images_[shown] : images_[kWhite];
     const gpu::ImageBinding info{view.view, gpu::Layout::ShaderReadOnly, sampler_, &view};
     gpu::BindingWrite write;
     write.set = set_; write.binding = 0; write.first = index;
     write.type = gpu::BindingType::CombinedImageSampler; write.images = std::span(&info, 1);
     device_->WriteBindings(std::span(&write, 1));
-}
-
-void TextureManager::StopEnhancedWorker() {
-    if (enhanced_queue_) enhanced_queue_->stop = true;
-    if (enhanced_worker_.valid()) enhanced_worker_.wait();
-    enhanced_worker_ = {};
-    enhanced_queue_.reset();
-}
-
-void TextureManager::StartEnhancedWorker(bool only_cached) {
-    std::vector<std::pair<uint32_t, std::string>> todo;
-    for (const auto& [index, path] : fox_sources_) {
-        if (!enhanced_images_.contains(index)) todo.emplace_back(index, path);
-    }
-    auto queue = std::make_shared<EnhancedQueue>();
-    queue->total = todo.size();
-    queue->refresh = only_cached;
-    enhanced_queue_ = queue;
-    const QarArchive* qar = enhanced_qar_;
-    const std::filesystem::path cache = enhanced_cache_;
-    const uint64_t model = enhanced_model_;
-    const uint32_t kinds = enhanced_kinds_;
-    enhanced_worker_ = std::async(std::launch::async, [queue, todo = std::move(todo), qar, cache, model, kinds, only_cached] {
-        for (const auto& [index, path] : todo) {
-            if (queue->stop) break;
-            std::error_code ec;
-            if (only_cached && !std::filesystem::exists(EnhancedCacheFile(cache, path), ec)) { ++queue->done; continue; }
-            FtexTexture source;
-            EnhancedPrepared prepared;
-            if (LoadFtex(*qar, path, source) && (kinds & EnhancedKindBit(EnhancedTextureKindOf(path, source)))) {
-                prepared.key = EnhancedTextureKey(source, model, EnhancedTextureKindOf(path, source));
-                if (ReadEnhancedCache(EnhancedCacheFile(cache, path), prepared.key, prepared.cached)) {
-                    const FtexTexture& c = prepared.cached;
-                    const bool doubled = c.width == source.width * 2 && c.height == source.height * 2;
-                    const bool kept = c.width == source.width && c.height == source.height;
-                    if ((doubled || kept) && c.Srgb() == source.Srgb()) {
-                        prepared.index = index;
-                        prepared.path = path;
-                        std::lock_guard lock(queue->mutex);
-                        queue->ready.push_back(std::move(prepared));
-                    }
-                }
-            }
-            ++queue->done;
-        }
-    });
-}
-
-void TextureManager::SetEnhancedTextures(bool enabled) { SetEnhancedTexturesFrom(enabled, false); }
-
-void TextureManager::SetEnhancedTexturesFrom(bool enabled, bool only_cached) {
-    if (!device_ || enabled == enhanced_enabled_) return;
-    StopEnhancedWorker();
-    if (enabled && enhanced_qar_ && enhanced_model_ && !enhanced_suspended_) StartEnhancedWorker(only_cached);
-    device_->WaitIdle();
-    enhanced_enabled_ = enabled;
-    for (const auto& [index, replacement] : enhanced_images_) UpdateTextureDescriptor(index);
-    LogInfo("textures: enhanced textures {}, {} loaded replacements ({:.0f} MB of texture data)", enabled ? "on" : "off", enhanced_images_.size(),
-            static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
-}
-
-void TextureManager::RefreshEnhancedTextures() {
-    if (!device_ || !enhanced_qar_ || !enhanced_model_ || enhanced_suspended_) return;
-    if (!enhanced_enabled_) { SetEnhancedTexturesFrom(true, true); return; }
-    if (enhanced_queue_) return;
-    StartEnhancedWorker(true);
-}
-
-std::vector<std::string> TextureManager::LoadedTextureStems() const {
-    std::vector<std::string> stems;
-    stems.reserve(fox_sources_.size());
-    for (const auto& [index, path] : fox_sources_) stems.push_back(path);
-    return stems;
-}
-
-void TextureManager::PumpEnhancedTextures(double budget_ms) {
-    if (!enhanced_queue_ || !device_) return;
-    const auto start = std::chrono::steady_clock::now();
-    std::vector<uint32_t> swapped;
-    for (;;) {
-        EnhancedPrepared prepared;
-        {
-            std::lock_guard lock(enhanced_queue_->mutex);
-            if (enhanced_queue_->ready.empty()) break;
-            prepared = std::move(enhanced_queue_->ready.front());
-            enhanced_queue_->ready.pop_front();
-        }
-        const auto source = fox_sources_.find(prepared.index);
-        if (!enhanced_images_.contains(prepared.index) && source != fox_sources_.end() && source->second == prepared.path) {
-            std::vector<TextureMip> mips;
-            uint64_t bytes = 0;
-            for (uint32_t level = 0; level < prepared.cached.mip_count; ++level) {
-                mips.push_back({prepared.cached.MipWidth(level), prepared.cached.MipHeight(level), prepared.cached.mips[level]});
-                bytes += prepared.cached.mips[level].size();
-            }
-            const uint32_t replacement = Create(prepared.path + std::format("#enhanced-{:016x}", prepared.key), prepared.cached.Format(), mips);
-            if (replacement != kWhite) {
-                enhanced_images_[prepared.index] = replacement;
-                enhanced_bytes_ += bytes;
-                swapped.push_back(prepared.index);
-                ++enhanced_queue_->applied;
-            }
-        }
-        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budget_ms) break;
-    }
-    if (!swapped.empty() && enhanced_enabled_) {
-        device_->WaitIdle();
-        for (const uint32_t index : swapped) UpdateTextureDescriptor(index);
-    }
-    bool finished = false;
-    {
-        std::lock_guard lock(enhanced_queue_->mutex);
-        finished = enhanced_queue_->ready.empty() && enhanced_queue_->done.load() >= enhanced_queue_->total;
-    }
-    if (finished) {
-        const bool quiet = enhanced_queue_->refresh && enhanced_queue_->applied == 0;
-        StopEnhancedWorker();
-        if (!quiet) LogInfo("textures: enhanced textures ready, {} replacements ({:.0f} MB of texture data)", enhanced_images_.size(),
-                            static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
-    }
 }
 
 uint32_t TextureManager::AddMaterial(const MaterialGpu& material) {

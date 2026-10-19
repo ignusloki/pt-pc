@@ -258,6 +258,7 @@ void RenderSceneBuilder::AddLight(const fox2::DataSetFile& f, const fox2::Entity
     const std::string_view last = std::string_view(name).substr(name.rfind('|') == std::string::npos ? 0 : name.rfind('|') + 1);
     if (spot && (last == "8SL_stairs_down0000" || last == "8SL_stairs_down0002")) {
         lumen = 40.0f;
+        l.stair_area = true;
     }
     const glm::vec3 rgb = light_math::ColorFromTemperature(f.GetFloat(e, "temperature", 0, 6500.0f), f.GetFloat(e, "colorDeflection"), lumen, color);
     l.inner_range = f.GetFloat(e, "innerRange");
@@ -1086,6 +1087,7 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     screen.reflect_edge = fx.reflect_edge;
     screen.subsurface_scatter = fx.subsurface_scatter;
     screen.full_screen_blur = fx.full_screen_blur;
+    screen.mesh_occlusion = game.Nazo().IsPeepholeTheaterActive();
     screen.colour_banding_canceller = fx.colour_banding_canceller;
     screen.blur_blend_rate = fx.blur_blend_rate;
     screen.blur_fetch_band = fx.blur_fetch_band;

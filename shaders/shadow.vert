@@ -17,6 +17,7 @@ layout(push_constant) uniform DrawPush {
 } draw;
 
 layout(location = 0) out vec2 out_uv0;
+layout(location = 1) out float out_hemisphere;
 
 out gl_PerVertex {
     vec4 gl_Position;
@@ -35,12 +36,14 @@ void main() {
     }
     vec4 world = draw.model * vec4(position, 1.0);
     out_uv0 = in_uv0;
+    out_hemisphere = 1.0;
     if (v.projection_param.w == 2.0) {
         vec3 d = (v.view * world).xyz;
         float len = max(length(d), 1.0e-5);
         float side = v.eye.w;
-        vec2 p = vec2(-d.x, d.y) / (len + abs(d.z));
-        gl_ClipDistance[0] = side * d.z + 1.0e-4 * len;
+        vec2 p = 0.99902344 * vec2(-d.x, d.y) / max(len + side * d.z, 1.0e-7);
+        out_hemisphere = side * d.z - v.shadow.y;
+        gl_ClipDistance[0] = 1.0;
         gl_Position = vec4(p.x, -p.y, 1.0 - len * v.shadow.x, 1.0);
     } else {
         gl_ClipDistance[0] = 1.0;

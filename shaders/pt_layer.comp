@@ -40,6 +40,30 @@ float LayerEnd(float t) {
     return t - max(1.0e-3, 2.0e-4 * t);
 }
 
+bool FindMirror(vec3 eye, vec3 dir, float t_end, inout float t_mirror, out RtSurfaceHit mirror_hit) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT | gl_RayFlagsNoOpaqueEXT, 4u, eye, 0.0, dir, t_end);
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+            if (materials[rt_records[record].material].kind == KIND_PARALLAX) {
+                rayQueryConfirmIntersectionEXT(rq);
+            }
+        }
+    }
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                        rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+        if (materials[hs.material].kind == KIND_PARALLAX) {
+            mirror_hit = hs;
+            t_mirror = rayQueryGetIntersectionTEXT(rq, true);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool FindGlass(vec3 eye, vec3 dir, float t_end, inout float t_glass, out RtSurfaceHit glass_hit) {
     float t_start = 0.0;
     for (int k = 0; k < 3; ++k) {
@@ -88,29 +112,14 @@ void Trace(ivec2 pixel, ivec2 size) {
     float t_mirror = t_surface;
     RtSurfaceHit mirror_hit;
     bool mirror = false;
-    {
-        rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, 4u, eye, 0.0, dir, LayerEnd(t_surface));
-        while (rayQueryProceedEXT(rq)) {
-            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                rayQueryConfirmIntersectionEXT(rq);
-            }
-        }
-        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
-            uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-            RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
-                                            rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
-            if (materials[hs.material].kind == KIND_PARALLAX) {
-                mirror = true;
-                mirror_hit = hs;
-                t_mirror = rayQueryGetIntersectionTEXT(rq, true);
-            }
-        }
-    }
+    mirror = FindMirror(eye, dir, LayerEnd(t_surface), t_mirror, mirror_hit);
     RtSurfaceHit glass_hit;
     float t_glass = t_mirror;
     bool glass = FindGlass(eye, dir, LayerEnd(t_mirror), t_glass, glass_hit);
     float first;
+    float mirror_distance = 0.0;
+    float coat_distance = 0.0;
+    vec3 coat_normal = vec3(0.0);
     if (glass) {
         Material m = materials[glass_hit.material];
         vec3 I = dir;
@@ -123,8 +132,12 @@ void Trace(ivec2 pixel, ivec2 size) {
         float a = Saturate(F * textureLod(PT_TEX2D(m.albedo), glass_hit.uv, 0.0).x);
         vec3 p = eye + dir * t_glass;
         vec3 d = Rw;
+        bool window = (m.flags & MAT_COMMON_REFLECTION) == 0u && m.params.y <= 0.001 && m.albedo_factor.w >= 0.999 &&
+                      all(greaterThanEqual(m.albedo_factor.rgb, vec3(0.999))) && all(greaterThanEqual(m.extra.rgb, vec3(0.999)));
         g_pt_first_mask = kPtSurfaceMask | 2u;
+        g_pt_first_through_unlit = window;
         vec3 L = Clamp(PtTracePath(p + glass_hit.normal * 0.002, d, vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
+        g_pt_first_through_unlit = false;
         g_pt_first_mask = kPtSurfaceMask;
         vec3 tint = (1.0 - F) * m.albedo_factor.w * max(m.albedo_factor.rgb, vec3(0.0));
         if (Luma709(tint) > 1.0e-4 && a > 0.0) {
@@ -144,6 +157,10 @@ void Trace(ivec2 pixel, ivec2 size) {
             g_pt_seen_emissive = true;
             L += Clamp(G);
         }
+        if (window) {
+            float reflected_luma = Luma709(L) * a * max(v.exposure.x, 0.0);
+            L *= 1.0 + 0.22 * (1.0 - smoothstep(0.015, 0.08, reflected_luma));
+        }
         result = vec4(L, 4.0 + a);
     } else if (mirror) {
         Material m = materials[mirror_hit.material];
@@ -151,7 +168,10 @@ void Trace(ivec2 pixel, ivec2 size) {
         vec3 N = mirror_hit.normal;
         vec4 dirt = m.params.w > 0.5 ? textureLod(PT_TEX2D(m.aux2), clamp(mirror_hit.uv, 0.0, 1.0), 0.0) : vec4(0.0);
         g_pt_first_mask = kPtSurfaceMask | 2u;
+        g_pt_mirror_view = true;
         vec3 R = Clamp(PtTracePath(p + N * 0.002, reflect(dir, N), vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
+        mirror_distance = first;
+        g_pt_mirror_view = false;
         g_pt_first_mask = kPtSurfaceMask;
         vec3 D = vec3(0.0);
         if (dirt.a > 0.02) {
@@ -183,18 +203,31 @@ void Trace(ivec2 pixel, ivec2 size) {
         float a = PtCoatAmount(N, ng, n_view, pass.f1.xyz, roughness, pass.f2.x, pass.f2.y);
         if (a > 0.0) {
             vec3 V = -dir;
-            vec3 d = PtCoatDirection(N, ng, V, roughness, vec2(RtRandom(rng), RtRandom(rng)));
+            coat_normal = PtCoatNormal(N, ng, V);
+            vec3 d = PtCoatDirection(N, ng, V);
             if (dot(d, ng) <= 0.0) {
                 d = normalize(d - 2.0 * dot(d, ng) * ng);
             }
             vec3 L = Clamp(PtTracePath(world + ng * max(0.003, 0.0015 * c.z), d, vec3(1.0), bounces, reach, 2.0, pass.ids.y, Cutoff(), rng, first));
             bool hit = first < reach || max(L.r, max(L.g, L.b)) > 0.0;
+            coat_distance = hit ? first : 0.0;
             result = hit ? vec4(L, 2.0 + a) : vec4(0.0, 0.0, 0.0, 2.0);
         }
     }
     float peak = max(result.r, max(result.g, result.b));
     vec3 stored = glass ? (peak > 60000.0 ? result.rgb * (60000.0 / peak) : result.rgb) : min(result.rgb, vec3(64.0));
     imageStore(pt_layer_raw, pixel, vec4(stored, result.a));
+    imageStore(pt_layer_geometry, pixel, vec4(coat_normal, coat_distance));
+    if ((uint(pass.f1.w + 0.5) & 4u) != 0u && mirror && !glass) {
+        vec4 glossy = imageLoad(rt_glossy_raw, pixel);
+        glossy.a = mirror_distance;
+        imageStore(rt_glossy_raw, pixel, glossy);
+    }
+    if ((uint(pass.f1.w + 0.5) & 8u) != 0u && floor(result.a * 0.5) == 1.0 && result.a > 2.0) {
+        vec4 glossy = imageLoad(rt_glossy_raw, pixel);
+        glossy.a = coat_distance;
+        imageStore(rt_glossy_raw, pixel, glossy);
+    }
 }
 
 bool PreviousSecond() {
@@ -206,7 +239,13 @@ void Temporal(ivec2 pixel, ivec2 size) {
     float kind = floor(raw.a * 0.5);
     bool second = !PreviousSecond();
     float depth = ImgFetch(IMG_DEPTH, pixel).x;
-    vec2 ndc = (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
+    if ((uint(pass.f1.w + 0.5) & 4u) != 0u && depth > 0.0) {
+        vec4 value = vec4(raw.rgb, 1.0);
+        if (second) imageStore(pt_layer_history1, pixel, value); else imageStore(pt_layer_history0, pixel, value);
+        return;
+    }
+    bool coat = kind == 1.0 && raw.a > 2.0;
+    vec2 ndc = coat ? PixelNdc(v, vec2(pixel) + 0.5) : (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
     float t_layer = 0.0;
     if (kind >= 2.0 && depth <= 0.0) {
         vec3 dir = normalize(mat3(v.inv_view) * normalize(vec3(ndc * v.projection_param.xy, 1.0)));
@@ -250,17 +289,8 @@ void Temporal(ivec2 pixel, ivec2 size) {
         float t_hit = -1.0;
         RtSurfaceHit hit;
         if (kind >= 3.0) {
-            rayQueryEXT rq;
-            rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, 4u, v.eye.xyz, 0.0, dir, t_end);
-            while (rayQueryProceedEXT(rq)) {
-                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                    rayQueryConfirmIntersectionEXT(rq);
-                }
-            }
-            if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
-                t_hit = rayQueryGetIntersectionTEXT(rq, true);
-                hit = RtFullSurface(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true), rayQueryGetIntersectionPrimitiveIndexEXT(rq, true),
-                                    rayQueryGetIntersectionBarycentricsEXT(rq, true), rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
+            if (!FindMirror(v.eye.xyz, dir, t_end, t_hit, hit)) {
+                t_hit = -1.0;
             }
         } else if (!FindGlass(v.eye.xyz, dir, t_end, t_hit, hit)) {
             t_hit = -1.0;
@@ -270,8 +300,19 @@ void Temporal(ivec2 pixel, ivec2 size) {
             vec3 r = reflect(dir, hit.normal);
             float t_far = 100.0;
             rayQueryEXT rq;
-            rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsOpaqueEXT, kPtSurfaceMask | 2u, p + hit.normal * 0.002, 0.0, r, t_far);
+            bool mirror_view = kind >= 3.0;
+            rayQueryInitializeEXT(rq, rt_casters, mirror_view ? gl_RayFlagsNoOpaqueEXT : gl_RayFlagsOpaqueEXT,
+                                  kPtSurfaceMask | 2u, p + hit.normal * 0.002, 0.0, r, t_far);
             while (rayQueryProceedEXT(rq)) {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                    uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+                    uint flags = rt_records[record].flags;
+                    if ((flags & 1024u) == 0u &&
+                        ((flags & 9u) == 0u || PtCasterOpaque(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                                            rayQueryGetIntersectionBarycentricsEXT(rq, false), 0.5))) {
+                        rayQueryConfirmIntersectionEXT(rq);
+                    }
+                }
             }
             if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
                 t_far = rayQueryGetIntersectionTEXT(rq, true);
@@ -281,11 +322,17 @@ void Temporal(ivec2 pixel, ivec2 size) {
             reflected = false;
         }
     }
+    if (coat) {
+        float t_far = imageLoad(pt_layer_geometry, pixel).w;
+        vec3 dir = normalize(world - v.eye.xyz);
+        world += dir * t_far;
+        reflected = true;
+    }
     vec3 history = vec3(0.0);
     float count = 0.0;
     vec4 previous = pass.m * vec4(world, 1.0);
     if ((pass.ids.w & 2u) == 0u && previous.w > 1.0e-4) {
-        vec2 at = ((previous.xy / previous.w - pass.f2.zw) * 0.5 + 0.5) * v.viewport.xy - 0.5;
+        vec2 at = ((previous.xy / previous.w - (coat ? vec2(0.0) : pass.f2.zw)) * 0.5 + 0.5) * v.viewport.xy - 0.5;
         ivec2 base = ivec2(floor(at));
         vec2 f = at - vec2(base);
         float weights[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
@@ -334,6 +381,7 @@ void Spatial(ivec2 pixel, ivec2 size) {
     vec4 center = written_second ? imageLoad(pt_layer_history1, pixel) : imageLoad(pt_layer_history0, pixel);
     float depth = ImgFetch(IMG_DEPTH, pixel).x;
     bool background = depth <= 0.0;
+    if ((uint(pass.f1.w + 0.5) & 4u) != 0u && !background) return;
     if (kind < 1.0 || (background && kind < 2.0)) {
         imageStore(pt_layer_raw, pixel, vec4(center.rgb, raw.a));
         return;
