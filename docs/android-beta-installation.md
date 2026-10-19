@@ -1,13 +1,13 @@
-# P.T. Android Beta 3 — installation and testing
+# P.T. Android Beta 4 — installation and testing
 
-Version **1.0.8-android-beta.3**, an experimental GitHub prerelease.
-[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.8-android-beta.3).
-The file is **PT-1.0.8-android-beta.3-arm64.apk**. Android releases are separate
-from the desktop releases.
+Version **1.0.9-android-beta.4**, the experimental Android build in the unified **v1.0.9** release.
+[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.9).
+The file is **PT-1.0.9-android-beta.4-arm64.apk**. Apple silicon, Intel and Android downloads share the same release page;
+Android remains beta software.
 
 Existing beta users: install this signed APK over **P.T. Android Beta** to retain
 imported files, settings and progress. Do not uninstall or clear storage. Version
-code **11** also updates the local synchronization test builds (codes 8–10).
+code **13** also updates earlier public betas and local test builds through code 12.
 The older prototype remains a separate app and keeps its own profile.
 
 The APK includes the port, fonts, shaders and speech-recognition models. **It does
@@ -39,7 +39,7 @@ not be added to those figures as a separate VRAM requirement.
 
 ## Install the APK
 
-1. Open the linked GitHub prerelease on your phone and download the APK. The
+1. Open the linked GitHub release on your phone and download the APK. The
    accompanying `SHA256SUMS` and `BUILD.json` identify the download and build.
 2. Open the downloaded APK in your browser or Files app. If Android asks, allow
    **Install unknown apps** for that browser or file manager, then install
@@ -72,8 +72,8 @@ first test. The Android render surface is fixed at **960 pixels wide**, with
 height chosen for your screen's aspect ratio; it was 960×443 on the S22.
 Original texture uploads are limited to a 1,024-pixel mip level to reduce memory.
 
-HDR, enhanced textures, ray queries, desktop upscalers, frame generation and VR
-are unavailable in this build. Desktop-style resolution/window choices do not
+HDR, ray queries, desktop upscalers, frame generation and VR are unavailable
+in this build. Enhanced Textures was removed upstream. Desktop-style resolution/window choices do not
 change the Android activity's fixed render surface. Establish a working baseline
 before experimenting with other graphics options or reflections.
 
@@ -94,7 +94,7 @@ shortcut. They are not yet a complete replacement for all desktop extras.
 
 ## Test the microphone
 
-Open the **Microphone** page in **PC Settings**, enable input and start its test.
+Open **PC Settings → Sound**, enable microphone input and open **Microphone test**.
 Speak **“Jack”**, then pause. The meter should respond and the recognized word
 should appear. S22 recognition sometimes took about **7 seconds**; the input
 level responds sooner than the recognized text. Final-puzzle timing still needs

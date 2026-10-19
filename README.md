@@ -1,10 +1,10 @@
 # P.T. for PC
 
-**Experimental Android support** is included alongside the macOS port in this
-branch. [Android Beta 3](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.8-android-beta.3)
-is the published Android build; see the [installation and phone requirements](docs/android-beta-installation.md).
-The current combined source includes newer upstream changes; see the
-[merge and validation record](docs/integration/android-macos-1.0.9.md).
+**Unified macOS and Android release:** [v1.0.9](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.9)
+includes Apple silicon and Intel Mac packages plus **Android Beta 4**. Android
+remains experimental; read its [installation and phone requirements](docs/android-beta-installation.md).
+See the [release notes](docs/release-notes-1.0.9.md) and
+[shared-source validation](docs/integration/android-macos-1.0.9.md).
 
 ![Lisa in the hallway](docs/media/lisa.gif)
 
@@ -52,8 +52,7 @@ macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later
 `P.T.PC.Port.Setup-macOS-x64.zip` (Intel). Unzip `P.T. PC Port Setup.app`, select your own complete fake PKG or decrypted
 folder, and choose an installation location. The portable `P.T.PC.Port-macOS-arm64.zip` / `...-x64.zip` apps still accept
 an extracted folder directly. Both apps use the selected forest/P.T. icon. Downloads are signed ad hoc; the opening
-steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The stable macOS 1.0.8 release includes
-upstream 1.0.5. The accepted Mac 1.0.9 candidate incorporates upstream 1.0.7; publication is on hold. See the
+steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The unified 1.0.9 release incorporates upstream 1.0.7. See the
 [integration report](docs/integration/upstream-1.0.7.md) for changes and the regression checklist.
 
 Windows and Linux releases include installers and portable ZIPs. To update an existing installation, use the game's update

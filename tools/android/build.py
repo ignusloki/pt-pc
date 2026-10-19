@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 NDK_VERSION = "28.2.13676358"
-VERSION = "1.0.8-android-beta.3"
+VERSION = "1.0.9-android-beta.4"
 
 
 def run(*args, env=None):
@@ -110,7 +110,7 @@ def main():
     parser.add_argument("--native-only", action="store_true")
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
     parser.add_argument("--version", default=VERSION)
-    parser.add_argument("--version-code", type=int, default=11)
+    parser.add_argument("--version-code", type=int, default=13)
     parser.add_argument("--keystore", type=Path, help="Private APK signing key; required for Release")
     parser.add_argument("--key-alias", help="Alias in the private signing keystore")
     parser.add_argument("--password-file", type=Path, help="Private file containing the keystore/key password")
