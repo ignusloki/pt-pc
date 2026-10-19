@@ -46,9 +46,9 @@ macOS: the native Setup ZIP is `P.T.PC.Port.Setup-macOS-arm64.zip` (M1 and later
 `P.T.PC.Port.Setup-macOS-x64.zip` (Intel). Unzip `P.T. PC Port Setup.app`, select your own complete fake PKG or decrypted
 folder, and choose an installation location. The portable `P.T.PC.Port-macOS-arm64.zip` / `...-x64.zip` apps still accept
 an extracted folder directly. Both apps use the selected forest/P.T. icon. Downloads are signed ad hoc; the opening
-steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The macOS 1.0.7 release synchronizes this
-fork with upstream's 1.0.3 line. See the [Mac release notes](docs/release-notes-macos-1.0.7.md) and
-[integration report](docs/integration/upstream-regression-20261012.md) for validation and Intel GPU limitations.
+steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The stable macOS 1.0.8 release includes
+upstream 1.0.5. The Mac 1.0.9 candidate incorporates upstream 1.0.7 and awaits player validation; see the
+[integration report](docs/integration/upstream-1.0.7.md) for changes and the regression checklist.
 
 Windows and Linux releases include installers and portable ZIPs. To update an existing installation, use the game's update
 button or run the new installer over it. Your game archives, settings, saves and mods stay.
