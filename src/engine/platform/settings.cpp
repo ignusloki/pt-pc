@@ -138,6 +138,8 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "upscaling.neural_style", out.upscaling.neural_style);
     Read(v, "upscaling.neural_quality", out.upscaling.neural_quality);
     Read(v, "upscaling.neural_model", out.upscaling.neural_model);
+    if (out.upscaling.neural_quality == "balanced" && !v.contains("upscaling.neural_model"))
+        out.upscaling.neural_model = "large";
     if (out.upscaling.neural_model != "small" && out.upscaling.neural_model != "large") out.upscaling.neural_model = "small";
     if (out.upscaling.neural_quality != "performance" && out.upscaling.neural_quality != "ultra") out.upscaling.neural_quality = "quality";
     Read(v, "upscaling.neural_intensity", out.upscaling.neural_intensity);

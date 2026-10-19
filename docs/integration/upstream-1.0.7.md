@@ -33,6 +33,9 @@ retain their platform gates; this sync does not enable them on Mac.
 - The first compilation found two new neural-runtime metadata readers using upstream's old
   `pt::json` namespace. Use the fork's `pt::metadata_json` reader, retaining the parser isolation
   that prevents the earlier asset/update JSON type collision at startup.
+- Upstream's settings regression exposed a missing legacy neural-quality migration in its loader.
+  An older `balanced` value without an explicit model becomes Quality/Large, as its existing test
+  requires; explicit model choices and the new default remain unchanged. Mac graphics stay gated.
 - Adopt linked data-folder resolution for symlinks and Finder aliases on mounted writable drives.
   Existing links and saves are preserved; unresolved or unwritable destinations remain errors.
 - Remove retired texture-tool packaging and test targets. Exclude their stale licenses/tools when
