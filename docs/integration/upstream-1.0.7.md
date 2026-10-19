@@ -2,7 +2,8 @@
 
 The Mac branch incorporates upstream `ac71cac` (1.0.7), advancing from `d0a9b8f` (1.0.5).
 The previous Mac release is 1.0.8; this update prepares Mac 1.0.9, with local candidate
-`1.0.9-rc1`. Tagging follows player validation. No release is published by this preparation.
+`1.0.9-rc1`. The player accepted the Apple silicon candidate. Tagging and publication are on hold
+at the user's request while integration of the Android beta is assessed.
 
 Before merging, the previous source was preserved as
 `codex/backup-before-upstream-1.0.7-20261019`, and both save slots plus `pt.ini` were copied
@@ -69,5 +70,29 @@ Frame generation Off; then compare MetalFX Quality, HDR and frame generation ind
 6. If normally used, check a linked profile on an already mounted external drive and controller audio.
    These paths do not need to be introduced into a working installation just for regression.
 
-Build results and package provenance are recorded with the local candidate after compilation.
-Player acceptance is required before creating the Mac 1.0.9 tag.
+## Validation result and publication hold
+
+The user accepted `1.0.9-rc1` on Apple silicon after the regression check. Its game source is
+`3d5a60d737d01591ad43a6de79bad45164260744`, containing the reconciled upstream 1.0.7 update.
+
+- The local build helper passed all 42 native suites, including 19 linked-folder checks, 28 native
+  HDR presentation assertions and 144 MetalFX HDR transport checks. Extractor scenarios, packaged
+  voice loading and the graphical installer self-test passed. Additional automated gameplay
+  routes were not run.
+- Package verification passed for architecture, minimum macOS 14, signatures, icons, all 349
+  embedded payload file hashes and the fork's updater endpoint. The installer excludes original
+  game assets, player data, retired texture tools and temporary diagnostic instrumentation.
+- [Native Mac workflow 39308617988](https://github.com/ignusloki/pt-pc/actions/runs/39308617988)
+  completed successfully for Apple silicon and Intel at that source commit. This verifies native
+  builds and packaging; physical Intel gameplay has not been repeated for this upstream sync.
+- Both save slots and settings matched their pre-build backup hashes before player validation.
+  The backup remains in `.local-backups/player-profile-20261019-before-upstream-1.0.7/`.
+- The retained installer is `dist/macos-1.0.9-rc1/arm64/P.T. PC Port Setup.app`. Its Setup ZIP
+  SHA-256 is `7a532e17b65d46d96c0abf1999cedb04d6acc3b1d82b6e1f0f2fa0857ff16ec1`.
+  `BUILD.json` and `SHA256SUMS.txt` accompany it. Duplicate packaging and extractor staging were
+  removed after verification, reclaiming approximately 1.2 GiB of logical files.
+
+The fork's `main` mirrors upstream `ac71cac`; the Mac integration remains on
+`codex/macos-arm64-port`. The Android beta branch remains separate. The user requested committing
+and pushing this accepted Mac checkpoint, with no release yet, before assessing the Android merge.
+No new tag or release is created by recording this acceptance.
