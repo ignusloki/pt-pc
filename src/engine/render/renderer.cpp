@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "engine/core/log.h"
+#include "engine/platform/android.h"
 #include "engine/core/crash_report.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/pipeline_cache_store.h"
@@ -32,6 +33,22 @@ namespace pt {
 namespace {
 
 VkFormat g_imgui_format = VK_FORMAT_UNDEFINED;
+
+bool RecreateForSuboptimal(const vk::Context& context, SDL_Window* window) {
+#ifdef __ANDROID__
+    // The deliberate identity transform asks Android to compose the landscape buffer, so a rotated display keeps
+    // returning SUBOPTIMAL. The image remains usable; recreate on actual extent changes or OUT_OF_DATE instead.
+    VkSurfaceCapabilitiesKHR caps{};
+    if (!context.surface || vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context.physical, context.surface, &caps) != VK_SUCCESS) return true;
+    if (caps.currentExtent.width != UINT32_MAX)
+        return caps.currentExtent.width != context.swapchain.extent.width || caps.currentExtent.height != context.swapchain.extent.height;
+    int width = 0, height = 0;
+    return !window || !SDL_GetWindowSizeInPixels(window, &width, &height) || width != static_cast<int>(context.swapchain.extent.width) ||
+           height != static_cast<int>(context.swapchain.extent.height);
+#else
+    return true;
+#endif
+}
 
 gpu::SamplerDesc LinearClamp() {
     gpu::SamplerDesc s;
@@ -101,6 +118,10 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     if (!ctx_.Init(window_, settings.validation, settings.hdr && !settings.headless)) {
         return false;
     }
+#ifdef __ANDROID__
+    android_surface_generation_ = AndroidSurfaceGeneration();
+    if (window_) android_native_window_ = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+#endif
     gpu_ = std::make_unique<gpu::vk::Device>(ctx_);
     uint32_t width = settings.width;
     uint32_t height = settings.height;
@@ -545,7 +566,60 @@ void Renderer::Resize(uint32_t width, uint32_t height) {
     swapchain_dirty_ = true;
 }
 
+#ifdef __ANDROID__
+bool Renderer::RestoreAndroidSurface() {
+    const uint64_t generation = AndroidSurfaceGeneration();
+    void* native_window = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+    if (!AndroidAppForeground() || !native_window) return false;
+    ctx_.android_surface_lost = true;
+    if (!ctx_.RecreateAndroidSurface(window_)) return false;
+
+    // Device idle also covers any frame interrupted by surface loss. Use fresh binary
+    // acquisition semaphores and signaled fences instead of retaining their old WSI state.
+    for (Frame& frame : frames_) {
+        vkDestroySemaphore(ctx_.device, frame.image_available, nullptr);
+        vkDestroySemaphore(ctx_.device, frame.gen_available, nullptr);
+        vkDestroyFence(ctx_.device, frame.in_flight, nullptr);
+        vkDestroyFence(ctx_.device, frame.gen_in_flight, nullptr);
+        frame.image_available = frame.gen_available = VK_NULL_HANDLE;
+        frame.in_flight = frame.gen_in_flight = VK_NULL_HANDLE;
+        frame.gen_pending = false;
+        VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        if (!vk::Check(vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.image_available), "Android acquisition semaphore") ||
+            !vk::Check(vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.gen_available), "Android generated acquisition semaphore") ||
+            !vk::Check(vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.in_flight), "Android frame fence") ||
+            !vk::Check(vkCreateFence(ctx_.device, &fence_info, nullptr, &frame.gen_in_flight), "Android generated frame fence")) return false;
+    }
+    android_surface_generation_ = generation;
+    android_native_window_ = native_window;
+    swapchain_dirty_ = true;
+    // A second pause or surface replacement can race this rebuild; retry with that newer window.
+    if (!AndroidAppForeground() || AndroidSurfaceGeneration() != generation ||
+        SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr) != native_window) return false;
+    ctx_.android_surface_lost = false;
+    LogInfo("android: Vulkan surface restored after foreground transition, generation {}", generation);
+    return true;
+}
+#endif
+
 bool Renderer::BeginFrame(bool present) {
+#ifdef __ANDROID__
+    if (window_) {
+        void* native_window = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+        if (!AndroidAppForeground() || !native_window) {
+            SDL_Delay(16);
+            return false;
+        }
+        if (ctx_.android_surface_lost || AndroidSurfaceGeneration() != android_surface_generation_ || native_window != android_native_window_) {
+            if (!RestoreAndroidSurface()) {
+                SDL_Delay(16);
+                return false;
+            }
+        }
+    }
+#endif
     if (d3d12_) {
         return BeginFrameD3D12(present);
     }
@@ -665,6 +739,12 @@ bool Renderer::BeginFrame(bool present) {
             return false;
         }
         if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
+#ifdef __ANDROID__
+            if (acquire == VK_ERROR_SURFACE_LOST_KHR) {
+                ctx_.android_surface_lost = true;
+                LogWarn("android: Vulkan surface lost during image acquisition; recreating on the next foreground frame");
+            }
+#endif
             if (keep_current_swapchain) {
                 FatalError("DLSS Frame Generation could not safely change the swapchain, and the retained swapchain is no longer usable. Restart P.T. and try again.",
                            window_ != nullptr);
@@ -672,7 +752,7 @@ bool Renderer::BeginFrame(bool present) {
             swapchain_dirty_ = true;
             return false;
         }
-        if (acquire == VK_SUBOPTIMAL_KHR) {
+        if (acquire == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_)) {
             swapchain_dirty_ = true;
         }
     }
@@ -1040,7 +1120,13 @@ void Renderer::EndFrame(bool draw_ui) {
         const VkResult result = ctx_.QueuePresent(present);
         streamline::SetMarker(streamline::Marker::PresentEnd);
         ctx_.CheckDeviceLost(result, "present");
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+#ifdef __ANDROID__
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            ctx_.android_surface_lost = true;
+            LogWarn("android: Vulkan surface lost during presentation; recreating on the next foreground frame");
+        }
+#endif
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || (result == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_))) {
             swapchain_dirty_ = true;
         }
     }
@@ -1203,7 +1289,10 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
     present.pImageIndices = &gen_index_;
     const VkResult result = ctx_.QueuePresent(present);
     ctx_.CheckDeviceLost(result, "generated frame present");
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+#ifdef __ANDROID__
+    if (result == VK_ERROR_SURFACE_LOST_KHR) ctx_.android_surface_lost = true;
+#endif
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || (result == VK_SUBOPTIMAL_KHR && RecreateForSuboptimal(ctx_, window_))) {
         swapchain_dirty_ = true;
     }
 }

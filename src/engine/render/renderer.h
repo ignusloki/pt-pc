@@ -158,6 +158,11 @@ private:
     };
 
     bool CreateTargets(uint32_t width, uint32_t height);
+#ifdef __ANDROID__
+    bool RestoreAndroidSurface();
+    uint64_t android_surface_generation_ = 0;
+    void* android_native_window_ = nullptr;
+#endif
     void DestroyTargets();
     void PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui);
     bool CreateCompositePipeline(gpu::Format output_format);

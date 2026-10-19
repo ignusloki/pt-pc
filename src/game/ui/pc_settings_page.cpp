@@ -674,7 +674,8 @@ void PcSettingsPage::PlayCursor(Game& game) {
 
 PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input, float dt) {
     if (source_ && source_->FullScreen()) {
-        const uint32_t pressed = input.held_dirs & ~held_dirs_;
+        // a picture over the whole screen: left and right step through the page's rows, everything else goes back to the page
+        const uint32_t pressed = input.pressed_dirs | (input.held_dirs & ~held_dirs_);
         held_dirs_ = input.held_dirs;
         const int n = static_cast<int>(rows_.size());
         const int step = (pressed & kRawLeft) ? -1 : (pressed & kRawRight) ? 1 : 0;
@@ -829,7 +830,7 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         if (input.music & kMenuMusicRestart) MusicControl(game, L::kMusicRestart, 0.0f);
         if (input.music & kMenuMusicLoop) MusicControl(game, L::kMusicLoop, 0.0f);
     }
-    const uint32_t pressed = input.held_dirs & ~held_dirs_;
+    const uint32_t pressed = input.pressed_dirs | (input.held_dirs & ~held_dirs_);
     uint32_t act = pressed;
     if (pressed) {
         repeat_time_ = -kRepeatDelay;

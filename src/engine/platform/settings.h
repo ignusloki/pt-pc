@@ -21,6 +21,8 @@ struct AppSettings {
         int hdr_paper_white = 200;
         int hdr_peak = 0;
         int letterbox = 0;
+        // Subtitle size relative to the original; Android starts at 1.5, desktop at 1.
+        float subtitle_scale = 1.0f;
         std::string rendering_api = "vulkan";
         bool rendering_api_asked = false;
         int d3d12_crashed = 0;

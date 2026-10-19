@@ -1,6 +1,7 @@
 #include "engine/ui/text_layout.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 
 namespace pt::ui {
@@ -111,11 +112,19 @@ void Emit(TextLayout& layout, std::vector<Pending>& line, const TextStyle& style
 
 }
 
-void NormalizeSubtitleStyle(TextStyle& style) {
-    if (!style.font || !style.font->Unicode()) return;
-    style.font_width = style.font_height = 22.0f;
-    style.text_space = 0.0f;
-    style.line_space = 26.0f - style.font_height * style.font->LineFactor();
+void NormalizeSubtitleStyle(TextStyle& style, float scale) {
+    if (!style.font) return;
+    if (style.font->Unicode()) {
+        // Original FFNT negative tracking compensates its padding; Noto has natural advances.
+        style.font_width = style.font_height = 22.0f;
+        style.text_space = 0.0f;
+        style.line_space = 26.0f - style.font_height * style.font->LineFactor();
+    }
+    scale = std::isfinite(scale) ? std::clamp(scale, 1.0f, 2.0f) : 1.0f;
+    style.font_width *= scale;
+    style.font_height *= scale;
+    style.text_space *= scale;
+    style.line_space *= scale;
 }
 
 TextLayout LayoutText(std::string_view utf8, const TextStyle& style, float max_width) {

@@ -76,6 +76,9 @@ std::string ManifestUrl() {
 std::string_view CurrentVersion() { return PT_VERSION; }
 
 std::string_view Platform() {
+#ifdef __ANDROID__
+    return "android";
+#endif
 #ifdef _WIN32
     return "windows";
 #elif defined(__APPLE__)

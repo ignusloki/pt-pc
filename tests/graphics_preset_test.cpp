@@ -40,6 +40,23 @@ int main(int argc,char** argv) {
     check("unsupported RT retains raster fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.ambient_occlusion && s.graphics.reflections);
     check("unsupported Ultra keeps cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
     check("unsupported Ultra detected",pt::DetectGraphicsPreset(s,false)==pt::GraphicsPreset::Ultra);
+    // A device without ray queries must recognize presets after edits and after saving.
+    for (const auto preset : {pt::GraphicsPreset::Low, pt::GraphicsPreset::Original, pt::GraphicsPreset::High, pt::GraphicsPreset::Ultra}) {
+        pt::AppSettings phone;
+        phone.graphics.clarity = .9f;
+        check("manual phone settings start Custom", pt::DetectGraphicsPreset(phone, false) == pt::GraphicsPreset::Custom);
+        pt::ApplyGraphicsPreset(phone, preset, false);
+        check("phone preset stays recognized without ray queries",
+              phone.ray_tracing == pt::AppSettings::RayTracing{} && pt::DetectGraphicsPreset(phone, false) == preset);
+        if (argc == 2) {
+            pt::AppSettings restored;
+            const auto path = std::filesystem::path(argv[1]);
+            check("phone preset persists with upstream settings", pt::SaveAppSettings(path, phone) &&
+                  pt::LoadAppSettings(path, restored) && pt::DetectGraphicsPreset(restored, false) == preset);
+        }
+        pt::ApplyGraphicsPreset(phone, pt::GraphicsPreset::Low, false);
+        check("phone preset can return to Low", pt::DetectGraphicsPreset(phone, false) == pt::GraphicsPreset::Low);
+    }
     check("unsupported Ultra keeps the Ultra ray quality",s.graphics.ray_quality==3);
     {
         pt::AppSettings traced;pt::ApplyGraphicsPreset(traced,pt::GraphicsPreset::Ultra,true);

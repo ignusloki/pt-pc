@@ -68,6 +68,10 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
     const float ah = static_cast<float>(font.font.AtlasHeight());
     if (shade == ui::UiShade::Border) {
         params.extra = glm::vec4(4.0f / aw, 4.0f / ah, static_cast<float>(batch.Extent().height) / 1080.0f, 0.0f);
+#ifdef __ANDROID__
+        // Retain fractional glyph coverage on the small render surface instead of making every edge pixel opaque.
+        params.extra.w = 1.0f;
+#endif
     }
     std::vector<ui::UiVertex> vertices;
     for (const ui::TextLine& line : layout.lines) {

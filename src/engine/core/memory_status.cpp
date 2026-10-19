@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <new>
+#include <thread>
 
 #include "engine/core/log.h"
 
@@ -64,6 +65,19 @@ SystemMemory QuerySystemMemory() {
         out.free_physical_mb = static_cast<double>(system.ullAvailPhys) / 1048576.0;
         out.commit_headroom_mb = static_cast<double>(system.ullAvailPageFile) / 1048576.0;
     }
+#elif defined(__ANDROID__)
+    // This is available physical RAM, not swap or a separate VRAM pool on the phone's integrated GPU.
+    if (FILE* file = std::fopen("/proc/meminfo", "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof(line), file)) {
+            unsigned long long kib = 0;
+            if (std::sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
+                out.free_physical_mb = out.commit_headroom_mb = static_cast<double>(kib) / 1024.0;
+                break;
+            }
+        }
+        std::fclose(file);
+    }
 #else
     out.free_physical_mb = out.commit_headroom_mb = 1.0e9;
 #endif
@@ -90,6 +104,8 @@ bool WaitForFreeMemory(double free_mb, int seconds) {
         }
 #ifdef _WIN32
         Sleep(1000);
+#elif defined(__ANDROID__)
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 #endif
     }
 }

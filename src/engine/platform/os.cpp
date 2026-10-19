@@ -359,6 +359,10 @@ void LowerCurrentThreadPriority() {
 
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
+#ifdef __ANDROID__
+    // APK libraries run in this process. Desktop executables/upscaling helpers are not supported on Android.
+    return {};
+#else
     ProcessResult result;
     const int log_fd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (log_fd < 0) return result;
@@ -396,11 +400,15 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
     }
     result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     return result;
+#endif
 }
 
 std::wstring QuoteWindowsArgument(const std::wstring& arg) { return arg; }
 
 bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+#ifdef __ANDROID__
+    return false; // Android activities own process startup.
+#else
     std::vector<std::string> owned{program.string()};
     owned.insert(owned.end(), args.begin(), args.end());
     std::vector<char*> argv;
@@ -416,6 +424,7 @@ bool StartDetached(const std::filesystem::path& program, const std::vector<std::
         _exit(127);
     }
     return true;
+#endif
 }
 
 bool ProcessAlive(uint64_t pid) { return pid > 0 && (kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM); }
@@ -425,6 +434,9 @@ std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) { re
 ChildProcess::~ChildProcess() = default;
 
 bool ChildProcess::Start(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
+#ifdef __ANDROID__
+    return false; // Desktop preview executables are not APK entry points.
+#else
     if (handle_ != kNone) return false;
     std::vector<std::string> owned{program.string()};
     owned.insert(owned.end(), args.begin(), args.end());
@@ -441,6 +453,7 @@ bool ChildProcess::Start(const std::filesystem::path& program, const std::vector
     if (!started) return false;
     handle_ = pid;
     return true;
+#endif
 }
 
 bool ChildProcess::Running(int* exit_code) {

@@ -103,6 +103,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.hdr_paper_white", out.display.hdr_paper_white);
     Read(v, "display.hdr_peak", out.display.hdr_peak);
     Read(v, "display.letterbox", out.display.letterbox);
+    Read(v, "display.subtitle_scale", out.display.subtitle_scale);
     Read(v, "display.rendering_api", out.display.rendering_api);
     Read(v, "display.rendering_api_asked", out.display.rendering_api_asked);
     Read(v, "display.d3d12_crashed", out.display.d3d12_crashed);
@@ -260,6 +261,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.fullscreen = std::clamp(out.display.fullscreen, 0, 2);
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
+    out.display.subtitle_scale = std::isfinite(out.display.subtitle_scale) ? std::clamp(out.display.subtitle_scale, 1.0f, 2.0f) : 1.0f;
     out.input.mouse_sensitivity = std::clamp(out.input.mouse_sensitivity, 0.05f, 20.0f);
     out.input.gamepad_sensitivity = std::isfinite(out.input.gamepad_sensitivity) ? std::clamp(out.input.gamepad_sensitivity, 0.25f, 4.0f) : 1.0f;
     out.input.gamepad_dead_zone = std::clamp(out.input.gamepad_dead_zone, 0.0f, 0.9f);
@@ -304,6 +306,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "hdr_peak = " << s.display.hdr_peak << "\n"
          << "; black bars over and under the picture in play and in the cutscenes, not in the original: 0 off, 1 2.39:1, 2 1.85:1\n"
          << "letterbox = " << s.display.letterbox << "\n"
+         << "; subtitle size relative to the original, 1 to 2\n"
+         << "subtitle_scale = " << s.display.subtitle_scale << "\n"
          << "; the graphics API the game draws with at the next start: vulkan, or d3d12 (DirectX 12, Windows)\n"
          << "rendering_api = " << s.display.rendering_api << "\n"
          << "rendering_api_asked = " << (s.display.rendering_api_asked ? 1 : 0) << "\n"

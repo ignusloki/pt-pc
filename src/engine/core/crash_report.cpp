@@ -15,7 +15,9 @@
 #include <windows.h>
 #include <dbghelp.h>
 #else
+#ifndef __ANDROID__
 #include <execinfo.h>
+#endif
 #include <signal.h>
 #include <unistd.h>
 #endif
@@ -73,11 +75,13 @@ void OnFatalSignal(int sig, siginfo_t* info, void*) {
                        : sig == SIGABRT ? "SIGABRT (abort)" : "signal";
     if (g_dumping.fetch_add(1) == 0) {
         LogError("crash: {} ({}) at address {}", name, sig, info ? info->si_addr : nullptr);
+#ifndef __ANDROID__
         void* frames[64];
         const int count = backtrace(frames, 64);
         if (char** lines = backtrace_symbols(frames, count)) {
             for (int i = 0; i < count; ++i) LogError("crash: #{} {}", i, lines[i]);
         }
+#endif
         LogExit(128 + sig, "crash");
     }
     raise(sig);

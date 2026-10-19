@@ -28,7 +28,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
 #include <spawn.h>
 #include <sys/wait.h>
 #ifdef __APPLE__
@@ -223,7 +223,7 @@ uint64_t VariantStateNeeded(std::string_view variant) {
 
 constexpr const char* kProbeOption = "--voice-cpu-probe";
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
 std::filesystem::path OwnExecutable() {
 #ifdef __APPLE__
     char path[4096];
@@ -275,7 +275,16 @@ void TestLoaderStall() {
 #endif
 }
 
-bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& failure) {
+std::filesystem::path RuntimeDirectory(const std::filesystem::path& model_dir) {
+#ifdef __ANDROID__
+    const char* native_libraries = std::getenv("PT_ANDROID_NATIVE_LIBRARIES");
+    if (native_libraries && native_libraries[0]) return std::filesystem::path(native_libraries);
+#endif
+    return model_dir;
+}
+
+bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failure& failure) {
+    const std::filesystem::path dir = RuntimeDirectory(model_dir);
     std::lock_guard lock(g_api_mutex);
     if (g_api.ready) return true;
     TestLoaderStall();
@@ -341,7 +350,8 @@ bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& fai
     for (const auto& [value, path] : ranked) {
         const std::string name = os::PathToUtf8(path.filename());
         const std::string variant = name.substr(std::strlen(kLibraryPrefix) + 9, name.size() - std::strlen(kLibraryPrefix) - 9 - std::strlen(kModuleExtension));
-#ifndef _WIN32
+// Android runs inside app_process, which cannot re-execute the native game as a probe.
+#if !defined(_WIN32) && !defined(__ANDROID__)
         if (const std::string fault = ProbeVariant(dir, variant); !fault.empty()) {
             LogWarn("voice: ggml-cpu-{} (score {}) failed in a test process: {}; trying the next variant", variant, value, fault);
             continue;
@@ -396,7 +406,7 @@ bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& fai
 
 int VoiceCpuProbe(int argc, char** argv) {
     if (argc < 4 || std::strcmp(argv[1], kProbeOption) != 0) return -1;
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
     return 2;
 #else
     rlimit none{0, 0};
@@ -585,9 +595,10 @@ bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::st
     ApplyTune(settings);
     if (const char* prompt = std::getenv("PT_VOICE_PROMPT")) settings.prompt = prompt;
     if (const char* model = std::getenv("PT_VOICE_RESCUE_MODEL")) settings.rescue_model = model;
-    for (const std::string& name : {WhisperModelName(), std::string(kVadModel), LibraryName("whisper")}) {
-        if (!std::filesystem::is_regular_file(model_dir / name)) {
-            LogError("voice: {} is missing from {}", name, os::PathToUtf8(model_dir));
+    for (const auto& file : {model_dir / WhisperModelName(), model_dir / kVadModel,
+                             RuntimeDirectory(model_dir) / LibraryName("whisper")}) {
+        if (!std::filesystem::is_regular_file(file)) {
+            LogError("voice: {} is missing from {}", os::PathToUtf8(file.filename()), os::PathToUtf8(file.parent_path()));
             failure_ = Failure::Files;
             state_ = State::Failed;
             return false;

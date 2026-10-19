@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include "engine/platform/android.h"
 #include "engine/core/ascii.h"
 #include "engine/platform/update_check.h"
 #include "engine/platform/update_journal.h"
@@ -768,6 +769,9 @@ std::filesystem::path GameExecutable() {
 std::filesystem::path UserDataDir();
 
 std::filesystem::path DefaultModsDir() {
+#ifdef __ANDROID__
+    return UserDataDir() / "mods";
+#endif
 #ifdef __APPLE__
     /* the app bundle is no place for user files: mods/ in ~/Library/Application Support/pt-port/pt (docs/macos.md), unless a
        build folder has one next to pt */
@@ -873,6 +877,9 @@ std::filesystem::path g_output_dir;
 std::filesystem::path g_log_path;
 
 std::filesystem::path UserDataDir() {
+#ifdef __ANDROID__
+    return std::filesystem::path(SDL_GetAndroidInternalStoragePath()) / "profile";
+#endif
 #ifdef __APPLE__
     /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
        /Applications; the data folder is then the user's (docs/macos.md). A build folder keeps it next to pt. */
@@ -899,8 +906,8 @@ std::filesystem::path UserDataDir() {
 bool SaveMoveTest() { return !pt::os::GetEnv("PT_TEST_SAVE_MOVE").empty(); }
 
 std::filesystem::path LegacyUserDataDir() {
-#if defined(__APPLE__)
-    return {};
+#if defined(__APPLE__) || defined(__ANDROID__)
+    return {};  // platform-private profiles do not use the desktop legacy migration
 #elif defined(_WIN32)
     if (SaveMoveTest()) {
         const auto value = pt::os::GetEnv("APPDATA");
@@ -2566,6 +2573,15 @@ public:
         }
         const pt::AppSettings& s = app_.settings;
         pt::game::PcSettingSection display{"pc_section_display", 0, {}};
+#ifdef __ANDROID__
+        auto display_mode = Row(kDisplayMode, "pc_display_mode", {"pc_fullscreen"}, 0, "pc_note_android_display");
+        display_mode.enabled = false;
+        display.rows.push_back(std::move(display_mode));
+        const auto extent = app_.renderer.RenderExtent();
+        auto resolution = Row(kResolution, "pc_resolution", {std::format("{} x {}", extent.width, extent.height)}, 0, "pc_note_android_resolution");
+        resolution.enabled = false;
+        display.rows.push_back(std::move(resolution));
+#else
         const int mode = std::clamp(s.display.fullscreen, 0, 2);
         display.rows.push_back(Row(kDisplayMode, "pc_display_mode", {"pc_window", "pc_borderless", "pc_fullscreen"}, mode, "pc_note_display_mode"));
         const char* resolution_note = mode == 0 ? "pc_note_resolution" : "pc_note_resolution_fullscreen";
@@ -2578,6 +2594,7 @@ public:
         resolution.wrap = false;
         resolution.enabled = mode != 1;
         display.rows.push_back(std::move(resolution));
+#endif
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
         const pt::FrameGeneration* native_fg = pt::UpscaleHost::Get().MetalFxFrameGen();
@@ -2593,9 +2610,16 @@ public:
         if (s.display.fps_limit>0 && cap.value==0) { cap.values.push_back(std::to_string(s.display.fps_limit)); cap.value=9; }
         cap.wrap=false;
         display.rows.push_back(std::move(cap));
+#ifdef __ANDROID__
+        constexpr bool hdr_available = false;
+#else
         const bool hdr_available = app_.display_hdr != 0;
+#endif
         pt::game::PcSettingRow hdr = Row(kHdr, "pc_hdr", OffOn(), s.display.hdr && hdr_available ? 1 : 0,
                                          hdr_available ? "pc_note_hdr_restart" : "pc_note_hdr_windows_off");
+#ifdef __ANDROID__
+        hdr.note = "pc_note_android_hdr";
+#endif
         hdr.enabled = hdr_available;
         display.rows.push_back(std::move(hdr));
         if (s.display.hdr && hdr_available) {
@@ -2856,10 +2880,18 @@ public:
 #ifdef __APPLE__
         if (s.voice.microphone_enabled && pt::GetMacMicrophoneAccess() == pt::MacMicrophoneAccess::Denied)
             microphone_note = "pc_mic_permission_denied";
+#elif defined(__ANDROID__)
+        if (s.voice.microphone_enabled && pt::GetAndroidMicrophoneAccess() == pt::AndroidMicrophoneAccess::Denied)
+            microphone_note = "pc_mic_permission_denied";
 #endif
         sound.rows.push_back(Row(kMicrophoneEnabled, "pc_microphone_enabled", OffOn(), s.voice.microphone_enabled ? 1 : 0, microphone_note));
         // The microphone listens on f160 or in its test; the optional trigger is independent of microphone input.
         pt::game::PcSettingRow microphone = Row(kMicrophone, "pc_microphone", {"pc_system_default"}, 0, "pc_note_voice");
+#ifdef __ANDROID__
+        // Phone input is explicitly routed with AAudio, independent of SDL's default recording device.
+        microphone.values = {"pc_phone_microphone"};
+        microphone.enabled = false;
+#else
         microphone.enabled = s.voice.microphone_enabled;
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -2868,6 +2900,7 @@ public:
                 microphone.value = static_cast<int>(i) + 1;
             }
         }
+#endif
         sound.rows.push_back(std::move(microphone));
         std::string trigger_input = s.voice.key.empty() ? "J" : s.voice.key;
         if(input_.Prompts().device != pt::PromptDevice::Keyboard) {
@@ -3105,6 +3138,10 @@ public:
     }
 
     void Set(int id, int value) override {
+#ifdef __ANDROID__
+        // The Android activity owns the fullscreen surface; desktop choices cannot resize it.
+        if (id == kDisplayMode || id == kResolution || id == kHdr || id == kHdrPaperWhite || id == kHdrPeak) return;
+#endif
         pt::AppSettings& s = app_.settings;
         pt::UpscaleSettings& u = app_.scene.upscale;
         if (id >= kModFirst) {
@@ -4013,6 +4050,9 @@ private:
         return false;
     }
     void GenerateMuseumPreviews() {
+#ifdef __ANDROID__
+        return; // Desktop preview subprocesses are unavailable; the archive still opens with placeholder thumbnails.
+#endif
         if (museum_started_ || app_.options.headless || !app_.options.museum_previews.empty()) return;
         const auto dir = MuseumPreviewDirectory();
         if (dir.empty()) return;
@@ -4200,6 +4240,10 @@ private:
         return false;
     }
     void GeneratePreviews() {
+#ifdef __ANDROID__
+        return;
+#endif
+        // at most two runs a session (the second only for the pictures the first dropped); later ones wait for the next start
         if (preview_started_ || preview_runs_ >= 2 || app_.options.headless || !BundledPreviewDirectory().empty()) return;
         const auto dir = PreviewDirectory();
         if (dir.empty()) return;
@@ -4704,6 +4748,12 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
         SDL_Delay(16);
         return false;
     }
+#ifdef __ANDROID__
+    if (!pt::AndroidAppForeground()) {
+        SDL_Delay(16);
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -4952,6 +5002,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 return;
             }
             ui.SetLetterbox(pt::game::LetterboxAspect(app.settings.display.letterbox));
+            ui.SetSubtitleScale(app.settings.display.subtitle_scale);
             if (!hide_game_ui) {
                 if (game.StreetWalkActive() && ui.MenuOpen()) app.renderer.grain[0] = 0.0f;
                 ui.Record(cmd, view, extent,
@@ -5998,7 +6049,41 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 vfx_scene.Update(game, step);
             }
             const auto tick_t2 = std::chrono::steady_clock::now();
+#ifdef __ANDROID__
+            if (ui_ready && !theater && ui.MenuOpen() && ui.Menu().InputReady()) {
+                pt::game::MenuInput touch;
+                switch (pt::TakeAndroidTouchMenuAction()) {
+                case pt::AndroidTouchMenuAction::Accept:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original) ui.OpenPcSettings(game);
+                    else touch.accept = true;
+                    break;
+                case pt::AndroidTouchMenuAction::Back:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original) ui.CloseMenu();
+                    else touch.back = true;
+                    break;
+                case pt::AndroidTouchMenuAction::Up: touch.subtitle_up = true; touch.pressed_dirs = pt::kRawUp; break;
+                case pt::AndroidTouchMenuAction::Down: touch.subtitle_down = true; touch.pressed_dirs = pt::kRawDown; break;
+                case pt::AndroidTouchMenuAction::Left: touch.brightness_down = true; touch.pressed_dirs = pt::kRawLeft; break;
+                case pt::AndroidTouchMenuAction::Right: touch.brightness_up = true; touch.pressed_dirs = pt::kRawRight; break;
+                case pt::AndroidTouchMenuAction::Column:
+                    if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc) {
+                        if (ui.Menu().PcPage().Tabbed()) touch.tab_next = true;
+                        else touch.switch_column = true;
+                    }
+                    break;
+                case pt::AndroidTouchMenuAction::InvertY: touch.toggle_vertical = true; break;
+                case pt::AndroidTouchMenuAction::InvertX: touch.toggle_horizontal = true; break;
+                case pt::AndroidTouchMenuAction::Close: ui.CloseMenu(); break;
+                default: break;
+                }
+                ui.QueueMenuInput(touch);
+            }
+#endif
             ui.Update(theater ? theater->theater->Sandbox() : game, state, step);
+#ifdef __ANDROID__
+            pt::SyncAndroidTouchMenu(ui_ready && ui.MenuOpen() && !theater ?
+                (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Original ? 1 : ui.Menu().PcPage().Tabbed() ? 3 : 2) : 0);
+#endif
             const auto tick_t3 = std::chrono::steady_clock::now();
             frame_phases.current[FramePhases::kTicks] += std::chrono::duration<float, std::milli>(tick_t3 - tick_t0).count();
             static const bool io_log = std::getenv("PT_IO_LOG") != nullptr;
@@ -6364,6 +6449,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pt::LogInfo("voice: microphone input {}", previous_microphone_enabled ? "on" : "off");
 #ifdef __APPLE__
             if (app.window && previous_microphone_enabled && !voice_file) pt::RequestMacMicrophoneAccess();
+#elif defined(__ANDROID__)
+            if (app.window && previous_microphone_enabled && !voice_file) pt::RequestAndroidMicrophoneAccess();
 #endif
         }
         if (active_microphone_device != app.settings.voice.device || previous_microphone_test != app.microphone_test) {
@@ -6389,6 +6476,16 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 access == pt::MacMicrophoneAccess::NotDetermined) {
                 microphone_allowed = false;
                 app.microphone_status = access == pt::MacMicrophoneAccess::Denied ? "pc_mic_permission_denied" : "pc_mic_permission_pending";
+                app.microphone_reason = "pc_mic_st_permission";
+            }
+        }
+#endif
+#ifdef __ANDROID__
+        if (microphone_allowed && app.window && !voice_file) {
+            const auto access = pt::GetAndroidMicrophoneAccess();
+            if (access != pt::AndroidMicrophoneAccess::Granted) {
+                microphone_allowed = false;
+                app.microphone_status = access == pt::AndroidMicrophoneAccess::Denied ? "pc_mic_permission_denied" : "pc_mic_permission_pending";
                 app.microphone_reason = "pc_mic_st_permission";
             }
         }
@@ -7009,6 +7106,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (status_seconds >= 10.0) {
                 double used = 0.0;
                 double budget = 0.0;
+#ifdef __ANDROID__
+                pt::LogAndroidMemoryStatus();
+                pt::LogInfo("android memory: this engine's Vulkan allocation blocks {:.0f} MiB",
+                            static_cast<double>(app.renderer.Gpu().AllocatedBytes()) / 1048576.0);
+#endif
                 app.renderer.Gpu().DeviceLocalUsage(used, budget);
                 static const bool vram_report = std::getenv("PT_VRAM_REPORT") != nullptr;
                 if (vram_report) app.renderer.Context().LogMemoryReport(game.Floor().CurrentFloorName().c_str());
@@ -7320,6 +7422,9 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     const std::string driver_advice = "Install the latest graphics driver from NVIDIA, AMD or Intel (a clean reinstall fixed this for other "
                                       "players), and close overlays such as RivaTuner or MSI Afterburner. P.T. needs a GPU with Vulkan 1.3.";
+#elif defined(__ANDROID__)
+    const std::string driver_advice = "The Android renderer currently requires Vulkan 1.3 and additional GPU features. "
+                                      "Return to the launcher and tap Save diagnostic log to export the GPU capability report and startup log.";
 #else
     const std::string driver_advice = "Make sure your graphics driver provides Vulkan 1.3 (Mesa 23 or newer, or the NVIDIA driver) and that "
                                       "P.T. runs inside your desktop session.";
@@ -7555,11 +7660,30 @@ int main(int argc, char** argv) {
         pt::LogSdlVideoInUse();
         pt::OfferCrashUpload(g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()), true);
     }
+    // a headless run without --settings keeps the defaults, never an installation's own pt.ini
+#ifdef __ANDROID__
+    pt::ApplyGraphicsPreset(app.settings, pt::GraphicsPreset::Low, false);
+    app.settings.display.width = 960;
+    app.settings.display.height = 540;
+    app.settings.display.fps_limit = 30;
+    app.settings.display.subtitle_scale = 1.5f;
+    app.settings.network.check_updates = false;
+    pt::InitAndroidTouchController();
+#endif
     app.settings_path = !options.settings_path.empty() ? options.settings_path
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
     if (pt::nr_native::Enabled()) pt::ConfigureNativeNeuralRuntime(app.settings.upscaling.neural_runtime);
+#ifdef __ANDROID__
+    app.settings.ray_tracing = {};
+    app.settings.vr.enabled = false;
+    app.settings.display.hdr = false;
+    app.settings.display.fullscreen = 1;
+    app.settings.upscaling.frame_generation = "off";
+    pt::LogInfo("android: original textures, 1024 px mip cap, low graphics defaults and private profile");
+    pt::LogInfo("android: subtitle size {}%", app.settings.display.subtitle_scale * 100.0f);
+#endif
 #ifdef PT_D3D12_GAME
     pt::SetD3D12RunsGame(true);
     pt::SetD3D12Probe(&ProbeD3D12);
@@ -7712,6 +7836,9 @@ int main(int argc, char** argv) {
     ApplyGraphicsSettings(app);
     const pt::RayTracingSettings& rt = app.scene.raytracing;
     app.renderer.Context().want_ray_query = true;
+#ifdef __ANDROID__
+    app.renderer.Context().want_ray_query = false;
+#endif
     pt::UpscaleHost::Get().SetStartupUpscaler(app.scene.upscale.kind);
     app.streamline_marker = StartStreamline(app, d3d12);
     int result = 1;
@@ -7964,6 +8091,9 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
         if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
             pt::RequestMacMicrophoneAccess();
+#elif defined(__ANDROID__)
+        if (app.window && !viewer && app.settings.voice.microphone_enabled && !std::getenv("PT_VOICE_INPUT"))
+            pt::RequestAndroidMicrophoneAccess(false);
 #endif
         pt::LogInfo("startup: {}", viewer ? "viewer" : "game");
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
@@ -7988,6 +8118,9 @@ int main(int argc, char** argv) {
     if (app.window) {
         SDL_DestroyWindow(app.window);
     }
+#ifdef __ANDROID__
+    pt::ShutdownAndroidTouchController();
+#endif
     if (pt::devices::Stop()) SDL_Quit();
     if (app.settings.upscaling.neural_route_armed) ArmNeuralRoute(app, false);
     if (app.settings.upscaling.dlssg_route_armed) ArmFgRoute(app, false);

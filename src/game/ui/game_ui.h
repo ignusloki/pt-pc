@@ -77,6 +77,8 @@ public:
     bool SpeechShown() const { return subtitles_.Active() || !queued_subtitles_.empty() || last_caption_ != 0; }
     void OpenMenu(Game& game, bool first_boot, OptionsMenu::Page page = OptionsMenu::Page::Original);
     void OpenPcSettings();
+    // A direct menu button, independent of the original screen's pad shortcuts.
+    void OpenPcSettings(Game& game) { menu_.OpenPcSettings(game); }
     void CloseMenu() { menu_.Close(); }
     void SetPcSettings(PcSettingsSource* source) { menu_.SetPcSource(source); }
     const OptionsMenu& Menu() const { return menu_; }
@@ -88,6 +90,9 @@ public:
     void QueueMenuInput(const MenuInput& input);
     void ShowCaptionKey(uint32_t key, float offset_seconds) { subtitles_.PlayKey(key, offset_seconds); }
     void SetLetterbox(float aspect) { letterbox_ = aspect; }
+    void SetSubtitleScale(float scale) { subtitle_scale_ = scale; }
+    // VR's HUD (docs/vr.md): Record draws on the transparent HUD image, so the full screen fade (VR puts it on the eye images) and
+    // the letterbox's bars stay out, and the UI's coverage goes in alpha
     void SetVrHud(bool enabled) { vr_hud_ = enabled; }
     SubtitlePlayer& Subtitles() { return subtitles_; }
     DemoUi& DemoGraphs() { return demo_ui_; }
@@ -203,6 +208,7 @@ private:
     int fps_presented_ = 0;
     bool update_question_ = false;
     float letterbox_ = 0.0f;
+    float subtitle_scale_ = 1.0f;
     bool vr_hud_ = false;
     bool top_pending_ = false;
     std::string save_dialog_text_;

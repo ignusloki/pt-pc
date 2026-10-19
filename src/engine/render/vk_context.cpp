@@ -28,6 +28,7 @@
 #include "engine/core/log.h"
 #include "engine/platform/os.h"
 #include "engine/render/hdr_output.h"
+#include "engine/render/android_vulkan_diagnostics.h"
 #include "engine/render/pipeline_cache_store.h"
 #include "engine/render/upscale/streamline.h"
 
@@ -158,6 +159,9 @@ std::string VulkanLibraryPath() {
 
 bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     window_ = window;
+#ifdef __ANDROID__
+    CaptureAndroidVulkanCapabilities(window);
+#endif
 #ifdef __APPLE__
     if (!loader) {
         loader = LoadVulkanLibrary(window);
@@ -278,7 +282,14 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     for (VkPhysicalDevice candidate : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(candidate, &props);
+#ifdef __ANDROID__
+        LogInfo("vulkan: Android candidate {} API {}.{}.{} driver {}", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+                VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion), props.driverVersion);
+#endif
         if (props.apiVersion < VK_API_VERSION_1_3) {
+#ifdef __ANDROID__
+            LogWarn("vulkan: candidate rejected by renderer's Vulkan 1.3 version requirement; GPU capability report captured separately");
+#endif
             continue;
         }
         uint32_t family_count = 0;
@@ -288,7 +299,14 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         for (uint32_t i = 0; i < family_count; ++i) {
             VkBool32 present = VK_TRUE;
             if (surface) {
+#ifdef __ANDROID__
+                present = VK_FALSE;
+                const VkResult support = vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &present);
+                LogInfo("vulkan: Android queue {} flags {} present {} query result {}", i, families[i].queueFlags, present, static_cast<int>(support));
+                if (support != VK_SUCCESS) present = VK_FALSE;
+#else
                 vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &present);
+#endif
             }
             if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
                 const int score = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;
@@ -361,13 +379,20 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     features12.scalarBlockLayout = VK_TRUE;
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.pNext = &features12;
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physical, &supported);
     features.features.samplerAnisotropy = VK_TRUE;
+#ifdef __ANDROID__
+    // Some mobile GPUs support the original game's BC1/2/3 formats without the whole BC family (BC5/7).
+    // Texture uploads check individual format support; do not request an unavailable family feature.
+    features.features.textureCompressionBC = supported.textureCompressionBC;
+    LogInfo("vulkan: Android BC family feature {} (individual formats checked at upload)", supported.textureCompressionBC);
+#else
     features.features.textureCompressionBC = VK_TRUE;
+#endif
     features.features.fillModeNonSolid = VK_TRUE;
     features.features.shaderInt16 = VK_TRUE;
     features.features.shaderClipDistance = VK_TRUE;
-    VkPhysicalDeviceFeatures supported{};
-    vkGetPhysicalDeviceFeatures(physical, &supported);
     features.features.independentBlend = supported.independentBlend;
     storage_without_format = supported.shaderStorageImageReadWithoutFormat && supported.shaderStorageImageWriteWithoutFormat;
     features.features.shaderStorageImageReadWithoutFormat = storage_without_format ? VK_TRUE : VK_FALSE;
@@ -642,16 +667,47 @@ void Context::Shutdown() {
     instance = VK_NULL_HANDLE;
 }
 
+#ifdef __ANDROID__
+bool Context::RecreateAndroidSurface(SDL_Window* window) {
+    const VkResult idle = vkDeviceWaitIdle(device);
+    CheckDeviceLost(idle, "Android surface recreation wait");
+    if (!Check(idle, "Android surface recreation wait")) return false;
+    // An old swapchain cannot be supplied when creating one for a different VkSurfaceKHR.
+    DestroySwapchain();
+    if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
+    surface = VK_NULL_HANDLE;
+    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
+        LogWarn("android: waiting for a usable Vulkan surface: {}", SDL_GetError());
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    if (!Check(vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family, surface, &present), "Android surface presentation support") || !present) {
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        surface = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+#endif
+
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
-    vkDeviceWaitIdle(device);
+    const VkResult idle = vkDeviceWaitIdle(device);
+    CheckDeviceLost(idle, "swapchain recreation wait");
+    if (!Check(idle, "swapchain recreation wait")) return false;
+    const auto surface_ok = [&](VkResult result, const char* operation) {
+#ifdef __ANDROID__
+        if (result == VK_ERROR_SURFACE_LOST_KHR) android_surface_lost = true;
+#endif
+        return Check(result, operation);
+    };
     swapchain_refused = false;
     vsync = force_vsync ? true : (vsync && !force_vsync_off);
-    VkSurfaceCapabilitiesKHR caps;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
+    VkSurfaceCapabilitiesKHR caps{};
+    if (!surface_ok(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps), "surface capabilities")) return false;
     uint32_t format_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, nullptr);
+    if (!surface_ok(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, nullptr), "surface format count")) return false;
     std::vector<VkSurfaceFormatKHR> formats(format_count);
-    if (format_count > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data());
+    if (format_count > 0 && !surface_ok(vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &format_count, formats.data()), "surface formats")) return false;
     VkSurfaceFormatKHR chosen{};
     bool hdr_selected = false;
     if (want_hdr) {
@@ -692,9 +748,12 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     LogInfo("vulkan: swapchain format {} color space {}{}", static_cast<int>(chosen.format), static_cast<int>(chosen.colorSpace),
             hdr_selected ? " (HDR)" : " (SDR)");
     uint32_t mode_count = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr);
+    if (!surface_ok(vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr), "surface present mode count")) return false;
     std::vector<VkPresentModeKHR> modes(mode_count);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data());
+    if (!surface_ok(vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data()), "surface present modes")) return false;
+    // v-sync off is IMMEDIATE (frames shown as they finish: no cap from the display, tearing possible), MAILBOX where the
+    // surface has no IMMEDIATE. MAILBOX had been preferred, and a window then held at the display's refresh rate (259 fps at
+    // 260 Hz with a 2.3 ms GPU frame), which read as v-sync still on.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (!vsync) {
         const bool immediate = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_IMMEDIATE_KHR) != modes.end();
@@ -727,6 +786,17 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = caps.currentTransform;
+#ifdef __ANDROID__
+    // This renderer produces landscape images without pre-rotation. Let Android compose them into the display's
+    // natural orientation; claiming currentTransform here rotated the settings page 90 degrees on portrait-native phones.
+    if (!(caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)) {
+        LogError("android: surface requires render pre-rotation, which this prototype does not support");
+        return false;
+    }
+    info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    LogInfo("android: presentation transform identity, display transform {}, drawable {}x{}",
+            static_cast<uint32_t>(caps.currentTransform), info.imageExtent.width, info.imageExtent.height);
+#endif
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     info.presentMode = present_mode;
     info.clipped = VK_TRUE;
@@ -737,13 +807,13 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
         info.oldSwapchain = VK_NULL_HANDLE;
         const VkResult result =
             swapchain_hooks ? swapchain_hooks->CreateSwapchain(info, handle) : vkCreateSwapchainKHR(device, &info, nullptr, &handle);
-        if (!Check(result, "vkCreateSwapchainKHR")) {
+        if (!surface_ok(result, "vkCreateSwapchainKHR")) {
             swapchain_refused = true;
             return false;
         }
         swapchain_owner_ = swapchain_hooks;
     } else {
-        if (!Check(vkCreateSwapchainKHR(device, &info, nullptr, &handle), "vkCreateSwapchainKHR")) {
+        if (!surface_ok(vkCreateSwapchainKHR(device, &info, nullptr, &handle), "vkCreateSwapchainKHR")) {
             swapchain_refused = true;
             return false;
         }

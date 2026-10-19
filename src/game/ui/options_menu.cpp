@@ -573,6 +573,13 @@ void OptionsMenu::CancelPhotoZoom() {
     zoom_released_ = false;
 }
 
+void OptionsMenu::OpenPcSettings(Game& game) {
+    if (!InputReady() || page_ != Page::Original || !pc_source_) return;
+    quit_confirming_ = quit_focused_ = street_confirming_ = false;
+    Commit(game);
+    SwitchPage(game, Page::Pc);
+}
+
 void OptionsMenu::Close() {
     if (state_ == State::SetIn || state_ == State::Active) {
         if (page_ == Page::Pc && pc_source_) pc_source_->Closed();

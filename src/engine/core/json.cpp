@@ -4,7 +4,7 @@
 #include <charconv>
 #include <cstdint>
 #include <format>
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 #include <locale>
 #include <sstream>
 #endif
@@ -207,7 +207,8 @@ private:
         if (end == at_) return Fail("unknown value");
         out.type = Value::Type::Number;
         const char* first = text_.data() + at_ + (text_[at_] == '+' ? 1 : 0);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
+        // Floating-point from_chars requires macOS 26 and is absent in NDK r28's libc++; use a locale-stable fallback.
         std::istringstream number(std::string(first, text_.data() + end));
         number.imbue(std::locale::classic());
         if (!(number >> out.number)) return Fail("bad number");

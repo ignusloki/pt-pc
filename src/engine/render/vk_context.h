@@ -77,6 +77,10 @@ public:
 
     bool CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr = false);
     void DestroySwapchain();
+#ifdef __ANDROID__
+    bool RecreateAndroidSurface(SDL_Window* window);
+    bool android_surface_lost = false;
+#endif
     VkResult AcquireNextImage(VkSemaphore semaphore, uint32_t* index);
     VkResult QueuePresent(const VkPresentInfoKHR& info);
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
@@ -178,7 +182,11 @@ private:
     };
     std::vector<DeferredSubmit> deferred_;
     VkDeviceSize deferred_bytes_ = 0;
+#ifdef __ANDROID__
+    static constexpr VkDeviceSize kDeferredStagingLimit = 32ull << 20;
+#else
     static constexpr VkDeviceSize kDeferredStagingLimit = 128ull << 20;
+#endif
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 

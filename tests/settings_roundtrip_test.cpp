@@ -25,7 +25,7 @@ bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
     return x.hdr==y.hdr && x.hdr_paper_white==y.hdr_paper_white && x.hdr_peak==y.hdr_peak && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
-           x.letterbox == y.letterbox &&
+           x.letterbox == y.letterbox && Near(x.subtitle_scale, y.subtitle_scale) &&
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
            a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && a.game == b.game && Near(a.audio.volume, b.audio.volume) &&
@@ -110,6 +110,7 @@ int main(int argc, char** argv) {
         {"display.vsync", [](auto& s) { s.display.vsync = false; }},
         {"display.letterbox 1", [](auto& s) { s.display.letterbox = 1; }},
         {"display.letterbox 2", [](auto& s) { s.display.letterbox = 2; }},
+        {"display.subtitle_scale", [](auto& s) { s.display.subtitle_scale = 1.5f; }},
         {"input.mouse_sensitivity", [](auto& s) { s.input.mouse_sensitivity = 0.35f; }},
         {"input.gamepad_sensitivity", [](auto& s) { s.input.gamepad_sensitivity = 1.5f; }},
         {"input.gamepad_dead_zone", [](auto& s) { s.input.gamepad_dead_zone = 0.25f; }},
@@ -188,6 +189,14 @@ int main(int argc, char** argv) {
         "[accessibility]\ngyro = 7\ngyro_sensitivity = nan\ngyro_tightening = nan\nsound_captions = yes\nfield_of_view = 90\n"
         "[gyro_bias]\nfine = 0.125 -0.0625 0.03125\ntoo_big = 9 0 0\nshort = 0.1\nnot_a_number = a b c\n");
     Check("letterbox clamped", odd.display.letterbox == 2);
+    Check("subtitle size lower bound", LoadText(ini, "[display]\nsubtitle_scale = 0\n").display.subtitle_scale == 1.0f);
+    Check("subtitle size upper bound", LoadText(ini, "[display]\nsubtitle_scale = 9\n").display.subtitle_scale == 2.0f);
+    Check("subtitle size non-finite fallback", LoadText(ini, "[display]\nsubtitle_scale = nan\n").display.subtitle_scale == 1.0f);
+    Check("desktop subtitle size unchanged for old settings", LoadText(ini, "[display]\nwidth = 960\n").display.subtitle_scale == 1.0f);
+    pt::AppSettings phone_defaults;
+    phone_defaults.display.subtitle_scale = 1.5f;
+    std::ofstream(ini) << "[display]\nwidth = 960\n";
+    Check("old Android settings keep the larger default", pt::LoadAppSettings(ini, phone_defaults) && phone_defaults.display.subtitle_scale == 1.5f);
     Check("fullscreen clamped", odd.display.fullscreen == 0);
     Check("width clamped", odd.display.width == 16384);
     Check("anisotropy rounded down to a step", odd.graphics.anisotropy == 4);

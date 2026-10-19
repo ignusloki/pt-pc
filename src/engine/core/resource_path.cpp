@@ -11,8 +11,13 @@
 namespace pt {
 
 std::filesystem::path ExecutableDir() {
+#ifdef __ANDROID__
+    // The launcher copies the APK's runtime assets to this private, seekable directory before starting SDL.
+    return std::filesystem::path(SDL_GetAndroidInternalStoragePath()) / "runtime";
+#else
     const char* base = SDL_GetBasePath();
     return base ? std::filesystem::path(reinterpret_cast<const char8_t*>(base)) : std::filesystem::current_path();
+#endif
 }
 
 #ifdef __APPLE__

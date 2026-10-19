@@ -4,7 +4,7 @@
 if(DEFINED ENV{PT_VERSION} AND NOT "$ENV{PT_VERSION}" STREQUAL "")
   set(PT_VERSION "$ENV{PT_VERSION}")
 endif()
-if(NOT PT_VERSION MATCHES "^[0-9]+([.][0-9]+)*(-[0-9A-Za-z.]+)?$")
+if(NOT PT_VERSION MATCHES "^[0-9]+([.][0-9]+)*(-[0-9A-Za-z.-]+)?$")
   message(FATAL_ERROR "PT_VERSION '${PT_VERSION}' is not a version like 0.2.0 or 0.2.0-rc1")
 endif()
 set(text "#pragma once\n#define PT_VERSION \"${PT_VERSION}\"\n#define PT_UPDATE_MANIFEST_URL \"${PT_UPDATE_MANIFEST_URL}\"\n")

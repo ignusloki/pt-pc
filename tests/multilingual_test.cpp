@@ -45,6 +45,10 @@ int main(int argc, char** argv) {
    auto layout=pt::ui::LayoutText("Jack Jack\nJack",subtitle,1024);
    if(subtitle.font_width!=22 || subtitle.text_space!=0 || std::abs(layout.line_pitch-26)>0.01f) {printf("FAIL: localized subtitle metrics %d\n",lang);++failures;}
    for(const auto& e:translated.Entries())for(const auto& l:e.lines){auto t=pt::ui::LayoutText(l.text,subtitle,1024);for(const auto& row:t.lines)if(row.width>1024.01f)++failures;}
+   pt::ui::NormalizeSubtitleStyle(subtitle,1.5f);
+   auto large=pt::ui::LayoutText("Jack Jack\nJack",subtitle,1024);
+   if(subtitle.font_width!=33 || std::abs(large.line_pitch-39)>0.01f){printf("FAIL: enlarged subtitle metrics %d\n",lang);++failures;}
+   for(const auto& e:translated.Entries())for(const auto& l:e.lines){auto t=pt::ui::LayoutText(l.text,subtitle,1024);for(const auto& row:t.lines)if(row.width>1024.01f)++failures;}
   }
   if(lang==9){
    auto joined=font.ShapeLine(pt::ui::DecodeUtf8("لا"),0);bool contextual=false;for(const auto& g:joined)if(g.glyph && g.glyph->code>=0x100000)contextual=true;

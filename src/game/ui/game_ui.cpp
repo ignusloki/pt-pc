@@ -103,16 +103,18 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         if (!ui || !ui->menu_.PcPageForScript().Focus(text)) {
             LogWarn("input script: sui pcfocus {} found no PC settings row", text);
         }
-    } else if (op == "menukey") {
+    } else if (op == "menukey" || op == "menutap") {
         MenuInput input;
         input.subtitle_up = text == "up";
         input.subtitle_down = text == "down";
         input.brightness_down = text == "left";
         input.brightness_up = text == "right";
         input.held_dirs = text == "up" ? kRawUp : text == "down" ? kRawDown : text == "left" ? kRawLeft : text == "right" ? kRawRight : 0u;
+        if (op == "menutap") input.pressed_dirs = std::exchange(input.held_dirs, 0u);
         input.accept = text == "accept";
         input.back = text == "back";
         input.open_pc = text == "pc";
+        input.switch_column = text == "column";
         input.toggle_vertical = text == "vertical";
         input.toggle_horizontal = text == "horizontal";
         input.zoom_pressed = text == "zoom";
@@ -125,6 +127,8 @@ bool GameUi::ScriptCommand(Game& game, std::string_view op, std::string_view tex
         input.music = text == "musicback" ? kMenuMusicBack : text == "musicforward" ? kMenuMusicForward : text == "musicrestart" ? kMenuMusicRestart
                     : text == "musicloop" ? kMenuMusicLoop : 0u;
         if (ui) {
+            if (op == "menutap" && text == "pc") { ui->OpenPcSettings(game); input.open_pc = false; }
+            if (op == "menutap" && text == "resume") ui->CloseMenu();
             ui->QueueMenuInput(input);
         }
     } else if (op == "notice") {
@@ -251,6 +255,7 @@ void GameUi::QueueMenuInput(const MenuInput& input) {
     q.update |= input.update;
     q.street_return |= input.street_return;
     q.held_dirs |= input.held_dirs;
+    q.pressed_dirs |= input.pressed_dirs;
     q.music |= input.music;
     q.click |= input.click;
     q.right_click |= input.right_click;
@@ -556,7 +561,7 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
     }
     text_style.text_space += generator.font_space;
     text_style.line_space += generator.line_space;
-    ui::NormalizeSubtitleStyle(text_style);
+    ui::NormalizeSubtitleStyle(text_style, subtitle_scale_);
     const glm::vec2 anchor = origin + generator.offset;
     const glm::vec2 lo_units = anchor + glm::vec2(box_min.x * size.x, box_min.y * size.y);
     const glm::vec2 hi_units = anchor + glm::vec2(box_max.x * size.x, box_max.y * size.y);
@@ -564,7 +569,8 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
                        UiCanvas::kHeight * 0.5f - std::max(lo_units.y, hi_units.y) * UiCanvas::kUnit);
     const glm::vec2 hi(UiCanvas::kWidth * 0.5f + std::max(lo_units.x, hi_units.x) * UiCanvas::kUnit,
                        UiCanvas::kHeight * 0.5f - std::min(lo_units.y, hi_units.y) * UiCanvas::kUnit);
-    ui::TextLayout layout = ui::LayoutText(view.text, text_style, generator.auto_line_feed ? hi.x - lo.x : 0.0f);
+    // Larger text must reflow even when the original uses only authored line breaks.
+    ui::TextLayout layout = ui::LayoutText(view.text, text_style, generator.auto_line_feed || subtitle_scale_ > 1.0f ? hi.x - lo.x : 0.0f);
     const ui::TextAlign block = generator.b_align == 3 ? Align(generator.h_align) : Align(generator.b_align);
     ui::PlaceText(layout, lo, hi, block, Align(generator.h_align), Align(generator.v_align), true);
     const glm::vec2 full = canvas.extent;

@@ -347,6 +347,17 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     if (mips.empty() || (images_.size() >= kMaxTextures && (free_.empty() || cube))) {
         return kWhite;
     }
+#ifdef __ANDROID__
+    VkImageFormatProperties supported{};
+    const auto physical = static_cast<gpu::vk::Device&>(*device_).Context().physical;
+    const VkResult support = vkGetPhysicalDeviceImageFormatProperties(physical, gpu::vk::Native(format), VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0, &supported);
+    if (support != VK_SUCCESS) {
+        LogError("android: texture {} format {} unsupported ({})", name, static_cast<int>(format), static_cast<int>(support));
+        return kWhite;
+    }
+#endif
     gpu::ImageResource image;
     uint32_t mip_count = static_cast<uint32_t>(mips.size()) / layers;
     uint32_t dropped = 0;
@@ -561,6 +572,14 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
     if (mods::Active()) {
         return;
     }
+#ifdef __ANDROID__
+    // Keep the beta's two in-flight texture batches with the shared upstream job pool.
+    std::erase_if(decode_workers_, [](const auto& worker) { return worker->Done(); });
+    if (decode_workers_.size() >= 2) {
+        decode_workers_.front()->Wait();
+        decode_workers_.erase(decode_workers_.begin());
+    }
+#endif
     std::vector<std::pair<std::string, std::promise<std::shared_ptr<FtexTexture>>>> jobs;
     for (const std::string& path : paths) {
         std::string stem = FtexStem(path);

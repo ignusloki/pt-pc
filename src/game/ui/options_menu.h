@@ -42,6 +42,8 @@ struct MenuInput {
     bool update = false;
     bool street_return = false;
     uint32_t held_dirs = 0;
+    // Discrete touch-menu taps do not need a held/released gamepad cycle.
+    uint32_t pressed_dirs = 0;
     uint32_t music = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
@@ -76,6 +78,8 @@ public:
     State CurrentState() const { return state_; }
     bool IsOpen() const { return state_ != State::Closed; }
     bool FirstBoot() const { return first_boot_; }
+    bool InputReady() const { return state_ == State::Active && switch_frame_ < 0.0f; }
+    void OpenPcSettings(Game& game);
     bool PictureFullScreen() const { return state_ == State::Active && page_ == Page::Pc && pc_.FullScreen(); }
     bool TakeClosed() { return std::exchange(just_closed_, false); }
     bool TakeResume() { return std::exchange(resume_, false); }

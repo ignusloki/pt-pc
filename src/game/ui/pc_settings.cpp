@@ -20,6 +20,9 @@ constexpr Entry kTexts[] = {
     {"pc_note_microphone_trigger", {"Optional input alternative to the microphone. Keyboard and both controller triggers activate it only while the game is listening."}},
     {"pc_note_microphone_test", {"Tests your microphone and recognition result."}},
     {"pc_fps_limit", {"Frame limit"}},
+    {"pc_note_android_hdr", {"HDR output is unavailable in this Android beta."}},
+    {"pc_note_android_display", {"Android manages the fullscreen game surface."}},
+    {"pc_note_android_resolution", {"Render resolution: fixed at 960 pixels wide, matching the phone's aspect ratio."}},
     {"pc_unlimited", {"Unlimited"}},
     {"pc_note_fps_limit", {"DLSS Frame Generation caps displayed frames; other modes cap rendered frames. Menus have a 60 FPS ceiling. V-sync may lower it."}},
     {"pc_hdr", {"HDR"}},
@@ -268,11 +271,17 @@ constexpr Entry kTexts[] = {
     {"pc_frame_generation", {"Frame generation"}},
     {"pc_volume", {"Volume"}},
     {"pc_microphone", {"Microphone"}},
+    {"pc_phone_microphone", {"Phone microphone"}},
     {"pc_microphone_enabled", {"Microphone input"}},
     {"pc_note_microphone_enabled", {"Enable microphone input for the voice puzzle or microphone test. The optional trigger still works when this is Off."}},
     {"pc_mic_disabled", {"Microphone input is Off. Enable it in Sound settings to use the microphone or its test."}},
+#ifdef __ANDROID__
+    {"pc_mic_permission_pending", {"Waiting for microphone permission. Choose an option in Android's permission prompt."}},
+    {"pc_mic_permission_denied", {"Microphone access is blocked. Allow this P.T. app in Android Settings > Apps > Permissions > Microphone."}},
+#else
     {"pc_mic_permission_pending", {"Waiting for microphone permission. Choose Allow or Don't Allow in the macOS prompt."}},
     {"pc_mic_permission_denied", {"Microphone access is blocked. Enable P.T. in System Settings > Privacy & Security > Microphone, or use the optional trigger."}},
+#endif
     {"pc_mic_st_permission", {"Permission required"}},
     {"pc_microphone_test", {"Microphone test"}},
     {"pc_mic_level", {"Input level"}},
