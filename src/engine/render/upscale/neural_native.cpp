@@ -138,8 +138,8 @@ std::optional<Install> Read(const std::filesystem::path& data_dir, int arch) {
     std::ifstream record(in.dir / std::string(kRecord));
     if (!record) return std::nullopt;
     const std::string text((std::istreambuf_iterator<char>(record)), {});
-    json::Value v;
-    if (!json::Reader(text).Parse(v) || !v.object) return std::nullopt;
+    metadata_json::Value v;
+    if (!metadata_json::Reader(text).Parse(v) || !v.object) return std::nullopt;
     const auto sha = v.members.find("runtime_sha256");
     if (sha == v.members.end() || sha->second.text != kRuntimeSha256) return std::nullopt;
     if (SizeOf(in.runtime) != kRuntimeSize) return std::nullopt;

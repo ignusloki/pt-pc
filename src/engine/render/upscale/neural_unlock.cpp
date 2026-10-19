@@ -844,8 +844,8 @@ int RetireRouteFiles(const std::filesystem::path& game_dir, const std::filesyste
     if (!fs::is_regular_file(route, ec) && !fs::is_regular_file(autopilot, ec)) return 0;
     std::vector<std::pair<std::string, std::string>> recorded;
     std::string own_reshade;
-    json::Value root;
-    if (json::Reader(ReadText(route, 1 << 20)).Parse(root) && root.object) {
+    metadata_json::Value root;
+    if (metadata_json::Reader(ReadText(route, 1 << 20)).Parse(root) && root.object) {
         if (const auto o = root.members.find("pt_reshade_sha256"); o != root.members.end()) own_reshade = o->second.text;
         if (const auto f = root.members.find("files"); f != root.members.end())
             for (const auto& e : f->second.items) {

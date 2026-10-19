@@ -30,6 +30,9 @@ retain their platform gates; this sync does not enable them on Mac.
   preserving cached visibility for repeated render passes and the mirror's separate visibility.
 - Keep startup microphone authorization, its saved on/off control, Fast Walk, fullscreen pointer
   mapping, forest icons, Game+ resources, and both native graphical installers.
+- The first compilation found two new neural-runtime metadata readers using upstream's old
+  `pt::json` namespace. Use the fork's `pt::metadata_json` reader, retaining the parser isolation
+  that prevents the earlier asset/update JSON type collision at startup.
 - Adopt linked data-folder resolution for symlinks and Finder aliases on mounted writable drives.
   Existing links and saves are preserved; unresolved or unwritable destinations remain errors.
 - Remove retired texture-tool packaging and test targets. Exclude their stale licenses/tools when
