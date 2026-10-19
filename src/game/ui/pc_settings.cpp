@@ -20,6 +20,7 @@ constexpr Entry kTexts[] = {
     {"pc_note_microphone_trigger", {"Optional input alternative to the microphone. Keyboard and both controller triggers activate it only while the game is listening."}},
     {"pc_note_microphone_test", {"Tests your microphone and recognition result."}},
     {"pc_fps_limit", {"Frame limit"}},
+    {"pc_note_android_hdr", {"HDR output is unavailable in this Android beta."}},
     {"pc_note_android_display", {"Android manages the fullscreen game surface."}},
     {"pc_note_android_resolution", {"Render resolution: fixed at 960 pixels wide, matching the phone's aspect ratio."}},
     {"pc_unlimited", {"Unlimited"}},

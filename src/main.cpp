@@ -2566,9 +2566,16 @@ public:
         if (s.display.fps_limit>0 && cap.value==0) { cap.values.push_back(std::to_string(s.display.fps_limit)); cap.value=9; }
         cap.wrap=false;
         display.rows.push_back(std::move(cap));
+#ifdef __ANDROID__
+        constexpr bool hdr_available = false;
+#else
         const bool hdr_available = app_.display_hdr != 0;
+#endif
         pt::game::PcSettingRow hdr = Row(kHdr, "pc_hdr", OffOn(), s.display.hdr && hdr_available ? 1 : 0,
                                          hdr_available ? "pc_note_hdr_restart" : "pc_note_hdr_windows_off");
+#ifdef __ANDROID__
+        hdr.note = "pc_note_android_hdr";
+#endif
         hdr.enabled = hdr_available;
         display.rows.push_back(std::move(hdr));
         if (s.display.hdr && hdr_available) {
@@ -3059,7 +3066,7 @@ public:
     void Set(int id, int value) override {
 #ifdef __ANDROID__
         // The Android activity owns the fullscreen surface; desktop choices cannot resize it.
-        if (id == kDisplayMode || id == kResolution) return;
+        if (id == kDisplayMode || id == kResolution || id == kHdr || id == kHdrPaperWhite || id == kHdrPeak) return;
 #endif
         pt::AppSettings& s = app_.settings;
         pt::UpscaleSettings& u = app_.scene.upscale;
