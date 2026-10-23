@@ -181,8 +181,8 @@ models to avoid downloading them again. Native output goes to
 For the public beta, commit tracked source changes first, then add:
 
 ```sh
-  --configuration Release --version 1.0.7-android-beta.1 --version-code 3 \
-  --out dist/android/beta-1 \
+  --configuration Release --version 1.0.10-android-beta.5 --version-code 15 \
+  --out dist/android/beta-5 \
   --keystore /private/path/pt-android-beta.p12 \
   --key-alias pt-android-beta \
   --password-file /private/path/keystore-password.txt
@@ -192,7 +192,7 @@ Release uses `org.ignusloki.pt.beta`; Debug uses `org.ignusloki.pt.prototype`.
 The builder rejects dirty tracked source, missing release signing credentials,
 incorrect package identity, a debuggable Release APK, stale native code, bundled
 original game archives, or native/ZIP alignment below 16 KiB. It writes
-`PT-1.0.7-android-beta.1-arm64.apk`, `SHA256SUMS` and public `BUILD.json` metadata.
+`PT-1.0.10-android-beta.5-arm64.apk`, `SHA256SUMS` and public `BUILD.json` metadata.
 The engine still uses the developer target deliberately, to unlock beta loop
 navigation; the launcher is a signed, non-debuggable Release build.
 Managed callbacks use dynamic JNI registration in both configurations, rather

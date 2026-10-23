@@ -4,8 +4,8 @@
     <OutputType>Exe</OutputType>
     <ApplicationId>org.ignusloki.pt.prototype</ApplicationId>
     <ApplicationTitle>P.T. Android Prototype</ApplicationTitle>
-    <ApplicationDisplayVersion>1.0.7-android-beta.1</ApplicationDisplayVersion>
-    <ApplicationVersion>3</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.10-android-beta.5</ApplicationDisplayVersion>
+    <ApplicationVersion>15</ApplicationVersion>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
     <RuntimeIdentifier>android-arm64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>

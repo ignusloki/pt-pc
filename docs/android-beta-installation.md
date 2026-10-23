@@ -1,14 +1,18 @@
-# P.T. Android Beta 4 — installation and testing
+# P.T. Android Beta 5 — installation and testing
 
-Version **1.0.9-android-beta.4**, the experimental Android build in the unified **v1.0.9** release.
-[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.9).
-The file is **PT-1.0.9-android-beta.4-arm64.apk**. Apple silicon, Intel and Android downloads share the same release page;
+Version **1.0.10-android-beta.5**, the experimental Android build in the unified **v1.0.10** release.
+[Download the APK](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.10).
+The file is **PT-1.0.10-android-beta.5-arm64.apk**. Apple silicon, Intel and Android downloads share the same release page;
 Android remains beta software.
 
 Existing beta users: install this signed APK over **P.T. Android Beta** to retain
 imported files, settings and progress. Do not uninstall or clear storage. Version
-code **13** also updates earlier public betas and local test builds through code 12.
+code **15** also updates earlier public betas and local test builds through code 14.
 The older prototype remains a separate app and keeps its own profile.
+
+Beta 5 incorporates upstream 1.0.8 and fixes the Museum's black X-photo preview.
+The preview now comes directly from the installed photograph model and texture;
+the interactive 3D exhibit is unchanged. No game image is bundled in the APK.
 
 The APK includes the port, fonts, shaders and speech-recognition models. **It does
 not include P.T.** You must supply your own compatible game package.
