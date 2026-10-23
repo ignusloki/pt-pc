@@ -2511,12 +2511,12 @@ bool PortableFileList(const std::filesystem::path& file) {
     if (!std::filesystem::is_regular_file(file, ec) || std::filesystem::file_size(file, ec) > 16 * 1024 * 1024) return false;
     std::ifstream in(file, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), {});
-    pt::json::update_json::Value root;
-    if (!pt::json::update_json::Reader(text).Parse(root) || !root.object) return false;
+    pt::metadata_json::Value root;
+    if (!pt::metadata_json::Reader(text).Parse(root) || !root.object) return false;
     const auto files = root.members.find("files");
     if (files == root.members.end()) return false;
     const std::string game = pt::os::PathToUtf8(GameExecutable().filename());
-    return std::any_of(files->second.items.begin(), files->second.items.end(), [&](const pt::json::update_json::Value& item) {
+    return std::any_of(files->second.items.begin(), files->second.items.end(), [&](const pt::metadata_json::Value& item) {
         const auto path = item.members.find("path");
         return path != item.members.end() && path->second.text == game;
     });
@@ -3946,6 +3946,12 @@ public:
             break;
         case M::Demo:
         case M::Model:
+            // This exhibit is a flat photograph. Draw its model's image/UVs directly,
+            // including on Android, which cannot launch the desktop thumbnail worker.
+            if (entry.id == "xmark_photo") {
+                panel.photo = entry.asset;
+                break;
+            }
             panel.thumbnail = pt::os::PathToUtf8((MuseumPreviewDirectory() / std::format("{}.png", entry.id)));
             panel.lift = 1.0f;
             break;

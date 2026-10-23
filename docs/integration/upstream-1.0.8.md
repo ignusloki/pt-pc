@@ -64,3 +64,27 @@ import, bonus content, and Android microphone/touch/foreground recovery.
 Original packages, extracted game files, installed games, profiles, backups and
 the separate Android worktree are preserved. Unrelated private `logs/` remains
 outside the commit. Review evidence is kept in ignored `.deps/upstream-1.0.8-review/`.
+
+## Local candidate follow-up (2026-10-23)
+
+CI investigation is deferred at the user's request; the next validation is local
+Android and Apple silicon packages. Native compilation exposed two remaining
+metadata-parser references in the shared installer header and portable-update
+manifest reader. Both now use `pt::metadata_json`, retaining the parser isolation.
+
+The public Android beta on the Galaxy S22 reproduces the Museum's black X-photo
+preview. Opening the exhibit displays the actual photograph correctly. Android
+cannot spawn the desktop Museum thumbnail generator, so the preview file never
+exists. The X-photo card now uses the existing photo-piece renderer with the
+exhibit's original model, texture and UVs, instead of a generated PNG. Its hallway
+package is mounted when needed, including when entering the Museum from another
+level. This also works on desktop without a thumbnail cache. The interactive 3D
+exhibit, unlock rules and Android texture-memory limit are unchanged; no original
+game images are included in the APK or Mac installer.
+
+Local regression: check the X-photo card and strip thumbnail before opening it,
+open and leave its 3D exhibit, and revisit the card. Check the ordinary photo
+pieces and completed photo too. For the upstream synchronization, also check
+output-device selection, menu input, HDR/MetalFX on the Mac, and Android touch,
+microphone and foreground recovery. Signed Android candidates must update the
+public beta in place, preserving its installed assets and profile.

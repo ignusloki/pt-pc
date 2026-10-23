@@ -88,10 +88,13 @@ const ArchiveView::Photo& ArchiveView::LoadPhoto(UiAssets& assets, const std::st
     Photo& photo = photos_[name];
     if (photo.loaded) return photo;
     photo.loaded = true;
+    // The Museum can open from the start room or ending, with no hallway mounted.
+    const auto package = assets.Files().LoadPackage(kHallwayData);
+    if (!package) return photo;
     if (name != "complete") {
         Piece piece;
         if (LoadPiece(assets, name, glm::mat4(1.0f), piece)) photo.pieces.push_back(std::move(piece));
-    } else if (auto package = assets.Files().LoadPackage(kHallwayData)) {
+    } else {
         std::vector<std::pair<std::string, glm::mat4>> placed;
         for (const auto& entry : package->Entries()) {
             if (!entry.path.ends_with(".fox2")) continue;

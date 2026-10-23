@@ -635,13 +635,13 @@ inline std::set<std::string> FgUnlockFiles(const fs::path& install) {
     if (!fs::is_regular_file(record, error)) return keys;
     keys.insert(PathKey(std::string(fg_unlock::kManifest)));
     keys.insert(PathKey(std::string(fg_unlock::kIni)));
-    json::Value root;
+    metadata_json::Value root;
     std::string text;
     if (fs::file_size(record, error) <= 1024 * 1024 && !error) {
         std::ifstream in(record, std::ios::binary);
         text.assign((std::istreambuf_iterator<char>(in)), {});
     }
-    if (!json::Reader(text).Parse(root) || !root.object) {
+    if (!metadata_json::Reader(text).Parse(root) || !root.object) {
         for (const char* name : fg_unlock::kProxyCandidates) keys.insert(PathKey(name));
         return keys;
     }
