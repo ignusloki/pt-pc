@@ -335,6 +335,10 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             item.extra = glm::vec4(arg(3), arg(5), c.args.size() > 6 ? arg(6) : 1.0f, 0.0f);
             item.up.x = c.args.size() > 7 ? arg(7) : -1.0f;
             waypoints_.push_back(item);
+        } else if (c.op == "sphotogrid") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "photogrid", static_cast<int>(arg(0))});
+        } else if (c.op == "sphototake") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "phototake", 0});
         } else if (c.op == "sphotocam") {
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photocam", 0};
             item.extra = glm::vec4(arg(3), arg(4), arg(5), 0.0f);
@@ -576,6 +580,10 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
                                     static_cast<int>(item.extra.z)};
             if (item.up.x >= 0.0f) values.push_back(static_cast<int>(item.up.x));
             game.RequestPhotoSettings(values);
+        } else if (item.op == "photogrid") {
+            game.RequestPhotoGrid(item.frames);
+        } else if (item.op == "phototake") {
+            game.RequestPhotoTake();
         } else if (item.op == "photocam") {
             game.RequestPhotoCamera(glm::vec4(item.point, item.extra.x));
             game.RequestPhotoTarget(glm::vec2(item.extra.y, item.extra.z));

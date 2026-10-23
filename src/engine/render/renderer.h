@@ -186,12 +186,15 @@ private:
     void CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget& target, bool premultiplied);
     VkPipeline XrPipeline(VkFormat format);
     void DestroyXr();
+    void LogLongWait(const char* what, VkResult result, float ms);
 
     vk::Context ctx_;
     RendererSettings settings_;
     SDL_Window* window_ = nullptr;
     Frame frames_[kFramesInFlight];
     uint32_t frame_index_ = 0;
+    uint64_t frames_begun_ = 0;
+    uint32_t long_waits_logged_ = 0;
     CpuWaits cpu_waits_;
     uint32_t image_index_ = 0;
     uint32_t gen_index_ = 0;

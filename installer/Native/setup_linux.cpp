@@ -561,6 +561,8 @@ int main(int argc, char** argv) {
             failures += SelfTestTitlePictureUpdate(root / "title-picture", HashFile);
             failures += SelfTestJournalRecovery(root / "journal");
             failures += SelfTestFileUpdate(root / "files", HashFile);
+            failures += SelfTestPortableUpdate(root / "portable", HashFile);
+            failures += SelfTestFgUnlockFiles(root / "fg-unlock");
             failures += SelfTestUnicodePaths(root);
             fs::remove_all(root, error);
             if (pt::update::CompareVersions("0.10.0", "0.9.2") <= 0) failures += " version-order";

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
+#include <thread>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -166,7 +168,14 @@ inline void RemoveFolders(const Journal& journal) {
     std::error_code error;
     for (const auto& [dir, prefix] : {std::pair{journal.staging, ".pt-update-"}, std::pair{journal.backup, ".pt-update-old-"},
                                       std::pair{journal.download, ".pt-update-dl-"}})
-        if (OwnFolder(journal.install, dir, prefix) && !fs::is_symlink(dir, error)) fs::remove_all(dir, error);
+        if (OwnFolder(journal.install, dir, prefix) && !fs::is_symlink(dir, error)) {
+            for (int attempt = 0; attempt < 30; ++attempt) {
+                error.clear();
+                fs::remove_all(dir, error);
+                if (!error || !fs::exists(dir, error)) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
 }
 
 inline bool BackupHoldsFiles(const Journal& journal) {

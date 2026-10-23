@@ -583,9 +583,11 @@ void UpscaleHost::CheckDlssFrameGen() {
         if (!module.empty() && std::filesystem::exists(module.parent_path() / L"RTX40MFGCore.dll", ec)) {
             LogWarn("frame generation: RTX40MFGCore.dll next to pt.exe, the DLSS-G GPU check steps aside for the unlock");
             unsupported &= ~4u;
-        } else if (!module.empty() && fg_unlock::ProxyPresent(module.parent_path())) {
+        } else if (!module.empty() && fg_unlock::RecordedProxyPresent(module.parent_path())) {
             LogWarn("frame generation: the community DLSS Frame Generation unlock is installed, the DLSS-G GPU check steps aside");
             unsupported &= ~4u;
+        } else if (!module.empty() && fg_unlock::ProxyPresent(module.parent_path())) {
+            LogInfo("frame generation: a dlssg_for_sm86 proxy is next to pt.exe without the unlock's record; not an installed unlock, the DLSS-G GPU check stays");
         }
     }
 #endif
@@ -659,9 +661,11 @@ void UpscaleHost::CheckDlssFrameGenD3D12(uint32_t vendor_id, uint32_t device_id,
         if (std::filesystem::exists(dir / L"RTX40MFGCore.dll", ec)) {
             LogWarn("frame generation: RTX40MFGCore.dll next to pt.exe, the DLSS-G GPU check steps aside for the unlock (DirectX 12)");
             gpu_ok = true;
-        } else if (fg_unlock::ProxyPresent(dir)) {
+        } else if (fg_unlock::RecordedProxyPresent(dir)) {
             LogWarn("frame generation: the community DLSS Frame Generation unlock is installed, the DLSS-G GPU check steps aside (DirectX 12)");
             gpu_ok = true;
+        } else if (fg_unlock::ProxyPresent(dir)) {
+            LogInfo("frame generation: a dlssg_for_sm86 proxy is next to pt.exe without the unlock's record; not an installed unlock, the DLSS-G GPU check stays (DirectX 12)");
         }
     }
     const int scheduling = HardwareGpuScheduling(luid);

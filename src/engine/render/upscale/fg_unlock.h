@@ -29,6 +29,10 @@ inline constexpr std::string_view kDlss5Proxy = "dxgi.dll";
 inline constexpr std::string_view kManifest = "pt-dlssg-route.json";
 inline constexpr std::string_view kResultFile = "fg-route-result.txt";
 
+inline constexpr std::string_view kPinnedProxySha256 = "7b3f90435be4f94348bf8d128c84871c7f904c704f7690601a263277c327a7b2";
+inline constexpr uint64_t kPinnedProxySize = 853280;
+inline constexpr std::string_view kRetiredDir = "retired-fg-proxy";
+
 struct ToolSource {
     enum class Which { Pinned, Latest } which = Which::Pinned;
     std::string tag;
@@ -46,12 +50,32 @@ struct Install {
     std::string runtime;
     std::string proxy;
     std::vector<std::string> files;
+    std::string proxy_sha256;
 };
 std::string ChooseProxy(const std::filesystem::path& game_dir, std::string_view keep);
 std::optional<Install> ParseInstall(std::string_view json);
 std::optional<Install> ReadInstall(const std::filesystem::path& game_dir);
 bool Usable(const Install& install);
 bool ProxyPresent(const std::filesystem::path& game_dir);
+
+bool RecordedProxyPresent(const std::filesystem::path& game_dir);
+
+struct ProxyFile {
+    std::string name;
+    uint64_t size = 0;
+    std::string sha256;
+    bool marker = false;
+    bool loaded = false;
+};
+std::vector<ProxyFile> UnrecordedProxies(const std::filesystem::path& game_dir);
+std::string DescribeUnrecorded(const std::vector<ProxyFile>& files);
+std::string RetireShippedProxy(const std::filesystem::path& game_dir, const std::filesystem::path& archive_dir);
+struct ProxyRepair {
+    enum class Result { NoRecord, Fine, Restored, NeedsReinstall } result = Result::NoRecord;
+    std::string detail;
+};
+ProxyRepair RepairRecordedProxy(const std::filesystem::path& game_dir, const std::filesystem::path& work_dir,
+                                const std::vector<std::filesystem::path>& sources, const std::filesystem::path& archive_dir);
 
 struct RouteReport {
     enum class State { Unknown, Active, Fallback } state = State::Unknown;

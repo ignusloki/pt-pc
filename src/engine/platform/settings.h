@@ -15,6 +15,7 @@ struct AppSettings {
         int width = 1600;
         int height = 900;
         int fullscreen = 0;
+        float refresh_rate = 0.0f;
         bool vsync = true;
         int fps_limit = 0;
         bool hdr = false;
@@ -26,6 +27,9 @@ struct AppSettings {
         std::string rendering_api = "vulkan";
         bool rendering_api_asked = false;
         int d3d12_crashed = 0;
+        int d3d12_interrupted = 0;
+        bool d3d12_auto_fallback = false;
+        int vulkan_implicit_layers = 1;
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
@@ -46,6 +50,7 @@ struct AppSettings {
         bool spatial = false;
         bool controller_speaker = false;
         float controller_speaker_volume = 0.5f;
+        std::string output_device;
     } audio;
     struct Network {
         bool check_updates = true;
@@ -65,6 +70,7 @@ struct AppSettings {
         std::string dlss_model = "auto";
         std::string frame_generation = "off";
         int dlssg_multiplier = 2;
+        int dlssg_interrupted = 0;
         bool ray_reconstruction = true;
         std::string neural_rendering = "off";
         std::string neural_style = "default";

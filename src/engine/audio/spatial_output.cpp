@@ -8,10 +8,12 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <spatialaudioclient.h>
+#include <propvarutil.h>
 #include <wrl/client.h>
 
 #include <array>
 #include <atomic>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -28,6 +30,27 @@ constexpr std::array<AudioObjectType, 8> kBed = {
     AudioObjectType_BackLeft,  AudioObjectType_BackRight,  AudioObjectType_SideLeft,    AudioObjectType_SideRight,
 };
 
+constexpr PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+
+std::wstring Utf8ToWide(const std::string& text) {
+    if (text.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (count <= 0) return {};
+    std::wstring out(static_cast<size_t>(count), wchar_t{});
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), count);
+    return out;
+}
+
+std::string WideToUtf8(const wchar_t* text) {
+    if (!text || !*text) return {};
+    const int length = static_cast<int>(wcslen(text));
+    const int count = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
+    if (count <= 0) return {};
+    std::string out(static_cast<size_t>(count), char{});
+    WideCharToMultiByte(CP_UTF8, 0, text, length, out.data(), count, nullptr, nullptr);
+    return out;
+}
+
 }
 
 struct SpatialOutput::Impl {
@@ -40,6 +63,8 @@ struct SpatialOutput::Impl {
     bool com_initialized = false;
     RenderFunction render;
     std::vector<float> mix;
+    std::string device_name;
+    std::string device_id;
 
     void Run() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -72,7 +97,7 @@ SpatialOutput::~SpatialOutput() {
     Close();
 }
 
-bool SpatialOutput::Open(uint32_t sample_rate, RenderFunction render) {
+bool SpatialOutput::Open(uint32_t sample_rate, RenderFunction render, const std::string& endpoint_id) {
     Close();
     Impl& s = *impl_;
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -83,13 +108,40 @@ bool SpatialOutput::Open(uint32_t sample_rate, RenderFunction render) {
     s.com_initialized = SUCCEEDED(initialized);
     ComPtr<IMMDeviceEnumerator> enumerator;
     ComPtr<IMMDevice> device;
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))) ||
-        FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device))) {
-        LogWarn("audio: spatial sound: no default playback device");
+    const bool chosen = !endpoint_id.empty();
+    HRESULT found = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(found)) {
+        found = chosen ? enumerator->GetDevice(Utf8ToWide(endpoint_id).c_str(), &device)
+                       : enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+    }
+    if (FAILED(found) || !device) {
+        if (chosen) {
+            LogWarn("audio: spatial sound: the chosen playback endpoint {} is not available ({:#x})", endpoint_id, static_cast<uint32_t>(found));
+        } else {
+            LogWarn("audio: spatial sound: no default playback device");
+        }
         device.Reset();
         enumerator.Reset();
         Close();
         return false;
+    }
+    {
+        LPWSTR wide_id = nullptr;
+        if (SUCCEEDED(device->GetId(&wide_id)) && wide_id) {
+            s.device_id = WideToUtf8(wide_id);
+            CoTaskMemFree(wide_id);
+        } else {
+            s.device_id = endpoint_id;
+        }
+        ComPtr<IPropertyStore> properties;
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)) && properties) {
+            PROPVARIANT name;
+            PropVariantInit(&name);
+            if (SUCCEEDED(properties->GetValue(kFriendlyName, &name)) && name.vt == VT_LPWSTR) {
+                s.device_name = WideToUtf8(name.pwszVal);
+            }
+            PropVariantClear(&name);
+        }
     }
     if (FAILED(device->Activate(__uuidof(ISpatialAudioClient), CLSCTX_INPROC_SERVER, nullptr, reinterpret_cast<void**>(s.client.GetAddressOf())))) {
         LogInfo("audio: spatial sound is not available for this device (turn on Windows Sonic or Dolby Atmos in Windows' sound settings)");
@@ -149,11 +201,26 @@ bool SpatialOutput::Open(uint32_t sample_rate, RenderFunction render) {
         Close();
         return false;
     }
+    UINT32 dynamic = 0;
+    const HRESULT dynamic_query = s.client->GetMaxDynamicObjectCount(&dynamic);
     s.render = std::move(render);
     s.running = true;
     s.thread = std::thread([&s] { s.Run(); });
-    LogInfo("audio: playback through Windows spatial sound at {} Hz, a bed of {} static objects", sample_rate, active);
+    LogInfo("audio: playback through Windows spatial sound at {} Hz, a bed of {} static objects, on '{}' (endpoint {}, {}); {}", sample_rate,
+            active, s.device_name.empty() ? std::string("?") : s.device_name, s.device_id.empty() ? std::string("?") : s.device_id,
+            chosen ? "chosen in the settings" : "the default device",
+            FAILED(dynamic_query) ? std::string("whether a spatial format is on is not known")
+            : dynamic > 0         ? std::format("a spatial format is on ({} dynamic objects)", dynamic)
+                                  : std::string("no spatial format is on for this device, so Windows mixes the bed down to its channels"));
     return true;
+}
+
+const std::string& SpatialOutput::DeviceName() const {
+    return impl_->device_name;
+}
+
+const std::string& SpatialOutput::DeviceId() const {
+    return impl_->device_id;
 }
 
 void SpatialOutput::Close() {
@@ -166,6 +233,8 @@ void SpatialOutput::Close() {
     for (auto& o : s.objects) o.Reset();
     s.stream.Reset();
     s.client.Reset();
+    s.device_name.clear();
+    s.device_id.clear();
     if (s.event) CloseHandle(s.event);
     s.event = nullptr;
     if (s.com_initialized) {
@@ -180,13 +249,21 @@ void SpatialOutput::Close() {
 
 namespace pt::audio {
 
-struct SpatialOutput::Impl {};
+struct SpatialOutput::Impl {
+    std::string none;
+};
 SpatialOutput::SpatialOutput() : impl_(std::make_unique<Impl>()) {}
 SpatialOutput::~SpatialOutput() = default;
-bool SpatialOutput::Open(uint32_t, RenderFunction) {
+bool SpatialOutput::Open(uint32_t, RenderFunction, const std::string&) {
     return false;
 }
 void SpatialOutput::Close() {}
+const std::string& SpatialOutput::DeviceName() const {
+    return impl_->none;
+}
+const std::string& SpatialOutput::DeviceId() const {
+    return impl_->none;
+}
 
 }
 

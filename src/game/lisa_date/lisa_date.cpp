@@ -14,6 +14,7 @@
 
 #include "engine/audio/sound_package.h"
 #include "engine/core/log.h"
+#include "engine/fs/data_pack.h"
 #include "engine/fs/vfs.h"
 #include "engine/render/model_cache.h"
 #include "engine/render/scene_lighting.h"
@@ -81,12 +82,9 @@ size_t CountChars(const std::string& s) {
     return n;
 }
 
-std::string ReadText(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return {};
-    std::stringstream s;
-    s << in.rdbuf();
-    return s.str();
+std::string ReadText(std::string_view name) {
+    const auto bytes = LisaDateFile(name);
+    return bytes ? std::string(bytes->begin(), bytes->end()) : std::string();
 }
 
 struct NamedLook {
@@ -124,10 +122,9 @@ LisaDate::~LisaDate() {
 
 bool LisaDate::Start(const Settings& settings) {
     settings_ = settings;
-    dir_ = LisaDateDataDir();
     std::string error;
-    if (!script_.Parse(ReadText(dir_ / "script.txt"), &error)) {
-        LogError("lisa date: {} ({})", error.empty() ? "no script.txt" : error, pt::os::PathToUtf8(dir_ / "script.txt"));
+    if (!script_.Parse(ReadText("script.txt"), &error)) {
+        LogError("lisa date: {} (data pack {})", error.empty() ? "no script.txt" : error, ExtrasPack().IsOpen() ? "open" : "missing");
         return false;
     }
     LoadText();
@@ -164,12 +161,12 @@ bool LisaDate::Start(const Settings& settings) {
 LisaDate::Picture LisaDate::LoadPicture(const std::string& name) {
     Picture p;
     for (const char* ext : {".png", ".jpg"}) {
-        const std::filesystem::path path = dir_ / (name + ext);
-        std::error_code ec;
-        if (!std::filesystem::exists(path, ec)) continue;
+        const std::string file = name + ext;
+        const auto bytes = LisaDateFile(file);
+        if (!bytes || bytes->size() > 0x7FFFFFFFu) continue;
         int w = 0, h = 0, n = 0;
-        if (stbi_info(pt::os::PathToUtf8(path).c_str(), &w, &h, &n) && h > 0) p.aspect = static_cast<float>(w) / static_cast<float>(h);
-        p.texture = assets_.LocalPreview(pt::os::PathToUtf8(path));
+        if (stbi_info_from_memory(bytes->data(), static_cast<int>(bytes->size()), &w, &h, &n) && h > 0) p.aspect = static_cast<float>(w) / static_cast<float>(h);
+        p.texture = assets_.LocalPreview(LisaDatePicturePath(file));
         if (p.texture) LogInfo("lisa date: picture {}{} {}x{}", name, ext, w, h);
         return p;
     }
@@ -177,16 +174,16 @@ LisaDate::Picture LisaDate::LoadPicture(const std::string& name) {
 }
 
 void LisaDate::LoadText() {
-    text_.SetEnglish(LisaDateScript::ParseText(ReadText(dir_ / "text" / "eng.txt")));
+    text_.SetEnglish(LisaDateScript::ParseText(ReadText("text/eng.txt")));
     const int language = std::clamp(settings_.language, 0, UiAssets::kLanguageCount - 1);
     if (language > 0) {
-        text_.SetLanguage(LisaDateScript::ParseText(ReadText(dir_ / "text" / (std::string(UiAssets::kLanguageCodes[language]) + ".txt"))));
+        text_.SetLanguage(LisaDateScript::ParseText(ReadText("text/" + std::string(UiAssets::kLanguageCodes[language]) + ".txt")));
     }
 }
 
 void LisaDate::LoadMusic() {
     auto pcm = std::make_shared<LisaDatePcm>();
-    if (!LisaDateDecodeMusic(dir_, "music", *pcm)) return;
+    if (!LisaDateDecodeMusic("music", *pcm)) return;
     music_loop_ = LisaMusicLoopFor(*pcm);
     const double rate = static_cast<double>(pcm->rate);
     if (music_loop_.Valid()) {

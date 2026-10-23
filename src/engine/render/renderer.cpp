@@ -604,6 +604,17 @@ bool Renderer::RestoreAndroidSurface() {
 }
 #endif
 
+void Renderer::LogLongWait(const char* what, VkResult result, float ms) {
+    if (ms < 1000.0f && result != VK_ERROR_DEVICE_LOST) {
+        return;
+    }
+    if (result != VK_ERROR_DEVICE_LOST && ++long_waits_logged_ > 20) {
+        return;
+    }
+    LogWarn("renderer: {} returned {} after {:.3f} s (window flags {:#x}, frame {})", what, vk::ResultName(result), ms / 1000.0f,
+            window_ ? static_cast<uint64_t>(SDL_GetWindowFlags(window_)) : uint64_t{0}, frames_begun_);
+}
+
 bool Renderer::BeginFrame(bool present) {
 #ifdef __ANDROID__
     if (window_) {
@@ -624,12 +635,16 @@ bool Renderer::BeginFrame(bool present) {
         return BeginFrameD3D12(present);
     }
     Frame& frame = frames_[frame_index_];
+    ++frames_begun_;
     ctx_.pipeline_saver.Poll();
     using wait_ms = std::chrono::duration<float, std::milli>;
     const auto fence_started = std::chrono::steady_clock::now();
-    ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
+    const VkResult fence_result = vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
+    const float fence_ms = wait_ms(std::chrono::steady_clock::now() - fence_started).count();
+    LogLongWait("frame fence wait", fence_result, fence_ms);
+    ctx_.CheckDeviceLost(fence_result, "frame fence wait");
     cpu_waits_ = CpuWaits{};
-    cpu_waits_.fence_ms = wait_ms(std::chrono::steady_clock::now() - fence_started).count();
+    cpu_waits_.fence_ms = fence_ms;
     ctx_.ReapDeferred(false);
     bool keep_current_swapchain = false;
     if (window_ && present && !swapchain_dirty_ && swapchain_window_w_ > 0) {
@@ -733,7 +748,9 @@ bool Renderer::BeginFrame(bool present) {
         }
         const auto acquire_started = std::chrono::steady_clock::now();
         const VkResult acquire = ctx_.AcquireNextImage(frame.image_available, &image_index_);
-        cpu_waits_.acquire_ms += wait_ms(std::chrono::steady_clock::now() - acquire_started).count();
+        const float acquire_ms = wait_ms(std::chrono::steady_clock::now() - acquire_started).count();
+        cpu_waits_.acquire_ms += acquire_ms;
+        LogLongWait("swapchain acquire", acquire, acquire_ms);
         ctx_.CheckDeviceLost(acquire, "swapchain acquire");
         if (acquire == VK_NOT_READY || acquire == VK_TIMEOUT) {
             return false;

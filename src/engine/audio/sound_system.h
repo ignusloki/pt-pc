@@ -106,6 +106,9 @@ public:
     bool HasEvent(uint32_t event_id) const;
     bool DeviceOpen() const;
     bool OpenDevice(bool surround_output);
+    std::string OutputDeviceName() const;
+    bool ReopenDevice(bool surround_output);
+    void UpdateOutput(bool surround_output, uint64_t now_ns);
     uint64_t RenderedFrames() const;
     MotionLevels Motion() const;
     void SetControllerCaptureEvent(uint32_t event_id);

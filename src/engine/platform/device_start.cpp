@@ -14,7 +14,9 @@
 #include <string_view>
 #include <thread>
 
+#include "engine/core/crash_report.h"
 #include "engine/core/log.h"
+#include "engine/platform/start_watch.h"
 #include "engine/platform/boot_timing.h"
 #include "engine/platform/sdl_diag.h"
 
@@ -174,6 +176,9 @@ bool DirectInputSlow() {
 
 void PadThread() {
     g_pad_thread_id = GetCurrentThreadId();
+    ReserveCrashStack();
+    LogInfo("boot: controller thread running");
+    start_watch::TestFault("pads");
     MSG msg;
     PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
     const auto waited = Clock::now();
@@ -219,6 +224,9 @@ void Start(const StartOptions& options) {
     if (options.audio) {
         g_audio = kRunning;
         std::thread([] {
+            ReserveCrashStack();
+            LogInfo("boot: audio thread running");
+            start_watch::TestFault("audio");
             StartAudioHere("on its own thread, ");
             SetDone(g_audio);
         }).detach();

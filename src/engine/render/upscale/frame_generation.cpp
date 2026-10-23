@@ -136,6 +136,20 @@ VKAPI_ATTR VkResult VKAPI_CALL FfxDeviceWaitIdle(VkDevice device) {
     return g_ffx_device_wait_idle(device);
 }
 
+PFN_vkDestroySwapchainKHR g_ffx_destroy_swapchain = nullptr;
+std::atomic<bool> g_null_destroy_logged{false};
+
+VKAPI_ATTR void VKAPI_CALL FfxDestroySwapchain(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator) {
+    if (swapchain == VK_NULL_HANDLE) {
+        if (!g_null_destroy_logged.exchange(true)) {
+            LogInfo("frame generation: FidelityFX's vkDestroySwapchainKHR of a null handle skipped (Vulkan capture layers such as "
+                    "Bandicam's crash on it)");
+        }
+        return;
+    }
+    g_ffx_destroy_swapchain(device, swapchain, allocator);
+}
+
 template <typename Fn>
 bool PatchImport(HMODULE module, const char* name, Fn hook, Fn& original) {
     auto* base = reinterpret_cast<uint8_t*>(module);
@@ -681,6 +695,10 @@ private:
             !PatchImport(module_, "vkGetSemaphoreCounterValue", &FfxCounterValue, g_ffx_counter_value)) {
             reason = "amd_fidelityfx_vk.dll does not import its present, wait and timeline functions from vulkan-1.dll";
             return false;
+        }
+        if (!PatchImport(module_, "vkDestroySwapchainKHR", &FfxDestroySwapchain, g_ffx_destroy_swapchain)) {
+            LogWarn("frame generation: amd_fidelityfx_vk.dll does not import vkDestroySwapchainKHR from vulkan-1.dll; its null swapchain "
+                    "destroy reaches the Vulkan layers");
         }
         uint64_t count = 0;
         ffxQueryDescGetVersions versions{};

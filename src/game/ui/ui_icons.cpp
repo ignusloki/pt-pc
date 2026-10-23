@@ -11,7 +11,9 @@
 #include <format>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -397,6 +399,11 @@ struct UiAssets::PromptArt {
     bool glow_srgb = false;
     std::map<uint32_t, GlyphField> fields;
     std::map<std::string, PromptGlyph> glyphs;
+    struct KeyFont {
+        ui::FfntFont font;
+        std::map<uint32_t, GlyphField> fields;
+    };
+    std::vector<std::unique_ptr<KeyFont>> key_fonts;
 };
 
 uint32_t UiAssets::UploadImage(const std::string& name, int width, int height, bool srgb, const std::vector<uint8_t>& rgba) {
@@ -500,8 +507,38 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
         };
     } else if (id.starts_with("key:") && font) {
         const std::string_view name = std::string_view(id).substr(4);
-        const bool single = ui::DecodeUtf8(name).size() == 1;
-        text.emplace(font->font, art.fields, name, single ? kKeyCapSingle : kKeyCap, kKeyBold);
+        const std::vector<uint32_t> codes = ui::DecodeUtf8(name);
+        const bool single = codes.size() == 1;
+        const ui::FfntFont* key_font = &font->font;
+        std::map<uint32_t, GlyphField>* key_fields = &art.fields;
+        uint32_t missing = 0;
+        for (const uint32_t code : codes) {
+            if (code != ' ' && !font->font.Find(code)) {
+                missing = code;
+                break;
+            }
+        }
+        if (missing) {
+            const char* family = missing >= 0x0600 && missing < 0x0700 ? "Noto Kufi Arabic"
+                                 : missing >= 0x2E80                   ? "Noto Sans SC"
+                                                                       : "Noto Sans";
+            auto made = std::make_unique<PromptArt::KeyFont>();
+            auto data = vfs_->ReadFile("/Assets/sh/font/font_def_ltn.ffnt");
+            std::string error;
+            if (data && made->font.Parse(*data, &error) && made->font.LoadUnicodeFont(family, "H" + std::string(name), false, &error)) {
+                bool covered = true;
+                for (const uint32_t code : codes) covered = covered && (code == ' ' || made->font.Find(code));
+                LogInfo("ui: keycap '{}': the game's font has no U+{:04X}, written in {}{}", name, missing, family,
+                        covered ? "" : " (it lacks a letter too)");
+                key_font = &made->font;
+                key_fields = &made->fields;
+                art.key_fonts.push_back(std::move(made));
+            } else {
+                LogWarn("ui: keycap '{}': the game's font has no U+{:04X} and {} did not load: {}", name, missing, family,
+                        data ? error : std::string("game font not found"));
+            }
+        }
+        text.emplace(*key_font, *key_fields, name, single ? kKeyCapSingle : kKeyCap, kKeyBold);
         body = glm::vec2(std::max(2.0f * r, text->Width() + 2.0f * kKeyPad), 2.0f * r);
         width = std::ceil(body.x + 2.0f * (kCellCentre.x - r));
         const glm::vec2 centre(width * 0.5f, kCellCentre.y);

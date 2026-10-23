@@ -25,6 +25,7 @@
 #include "engine/render/d3d12/backend/d3d12_native.h"
 #include "engine/render/d3d12/backend/reshade_native.h"
 #include "engine/render/upscale/upscale_platform.h"
+#include "engine/render/upscale/fsr_provider_gate.h"
 
 #if defined(PT_WITH_DLSS)
 #include <nvsdk_ngx.h>
@@ -610,7 +611,6 @@ void FsrMessage(uint32_t type, const wchar_t* message) {
 constexpr uint32_t kAmdVendorId = 0x1002;
 constexpr const wchar_t* kFsrLoader = L"amd_fidelityfx_loader_dx12.dll";
 constexpr const wchar_t* kFsrUpscaler = L"amd_fidelityfx_upscaler_dx12.dll";
-constexpr const char* kFsr4Gpu = "FSR 4 needs an AMD Radeon RX 9000 or RX 7000 series GPU";
 
 uint32_t FfxState(D3D12_RESOURCE_STATES state) {
     if (state & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
@@ -656,10 +656,14 @@ public:
     UpscalerKind Kind() const override { return generation_ == 4 ? UpscalerKind::Fsr4 : UpscalerKind::Fsr; }
 
     bool Supported(std::string& reason) override {
-        if (generation_ == 4 && device_.Info().vendor_id != kAmdVendorId) {
-            reason = kFsr4Gpu;
+        if (generation_ == 4 && device_.Info().vendor_id != kAmdVendorId && !probed_) {
+            reason = kFsr4ReasonNotAmd;
             return false;
         }
+        return FilesPresent(reason);
+    }
+
+    bool FilesPresent(std::string& reason) {
         for (const wchar_t* file : {kFsrLoader, kFsrUpscaler}) {
             if (!std::filesystem::exists(ExecutableDir() / file)) {
                 reason = NarrowText(file) + " is missing next to pt.exe";
@@ -675,7 +679,7 @@ public:
     }
 
     bool Available(std::string& reason) override {
-        if (!Supported(reason)) {
+        if (!FilesPresent(reason)) {
             return false;
         }
         if (!probed_) {
@@ -724,15 +728,27 @@ public:
             LogError("fsr d3d12: ffxCreateContext failed ({}) for FSR {}", result, version_name_);
             context_ = nullptr;
             if (generation_ == 4) {
-                reason_ = kFsr4Gpu;
+                reason_ = kFsr4ReasonDriver;
                 version_id_ = 0;
+                LogWarn("fsr d3d12: FSR 4 not offered: {}", reason_);
             }
             return false;
         }
         ffxQueryGetProviderVersion version{};
         version.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-        if (fn_.Query(&context_, &version.header) == FFX_API_RETURN_OK && version.versionName) {
-            LogInfo("fsr d3d12: upscaler {} created for {}x{} -> {}x{}", version.versionName, create.render.width, create.render.height,
+        const bool named = fn_.Query(&context_, &version.header) == FFX_API_RETURN_OK && version.versionName;
+        const std::string created = named ? version.versionName : "";
+        if (generation_ == 4 && named && !FsrCreatedIsGeneration(created, 4)) {
+            LogWarn("fsr d3d12: the FSR {} context runs upscaler {}, not FSR 4", version_name_, created);
+            fn_.DestroyContext(&context_, nullptr);
+            context_ = nullptr;
+            reason_ = kFsr4ReasonDriver;
+            version_id_ = 0;
+            LogWarn("fsr d3d12: FSR 4 not offered: {}", reason_);
+            return false;
+        }
+        if (named) {
+            LogInfo("fsr d3d12: upscaler {} created for {}x{} -> {}x{}", created, create.render.width, create.render.height,
                     create.display.width, create.display.height);
         }
         return true;
@@ -801,48 +817,42 @@ private:
             reason = NarrowText(kFsrLoader) + " has no FidelityFX API exports";
             return false;
         }
+        FsrGateInput gate;
+        gate.generation = generation_;
+        gate.api = FsrApi::D3D12;
+        gate.vendor_id = device_.Info().vendor_id;
         uint64_t count = 0;
         ffxQueryDescGetVersions versions{};
         versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
         versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         versions.device = NativeDevice(device_);
         versions.outputCount = &count;
-        if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0) {
-            reason = generation_ == 4 ? kFsr4Gpu : "the AMD FSR API lists no upscaler for this GPU";
-            return false;
-        }
-        std::vector<uint64_t> ids(count);
-        std::vector<const char*> names(count);
-        versions.versionIds = ids.data();
-        versions.versionNames = names.data();
-        if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK) {
-            reason = generation_ == 4 ? kFsr4Gpu : "the AMD FSR API lists no upscaler for this GPU";
-            return false;
-        }
-        std::string listed;
-        std::vector<int> best;
-        for (uint64_t i = 0; i < count; ++i) {
-            const std::string name = names[i] ? names[i] : "";
-            listed += std::format("{}{}", listed.empty() ? "" : ", ", name);
-            std::vector<int> parts;
-            for (size_t at = 0; at < name.size();) {
-                size_t end = at;
-                while (end < name.size() && name[end] >= '0' && name[end] <= '9') ++end;
-                if (end == at) break;
-                parts.push_back(std::stoi(name.substr(at, end - at)));
-                at = end < name.size() && name[end] == '.' ? end + 1 : name.size();
+        const bool counted = fn_.Query(nullptr, &versions.header) == FFX_API_RETURN_OK;
+        if (counted && count > 0 && count < 256) {
+            std::vector<uint64_t> ids(count);
+            std::vector<const char*> names(count);
+            versions.versionIds = ids.data();
+            versions.versionNames = names.data();
+            if (fn_.Query(nullptr, &versions.header) == FFX_API_RETURN_OK) {
+                gate.query_ok = true;
+                for (uint64_t i = 0; i < count; ++i) gate.providers.push_back({ids[i], names[i] ? names[i] : ""});
             }
-            if (!parts.empty() && parts[0] == generation_ && parts > best) {
-                best = parts;
-                version_id_ = ids[i];
-                version_name_ = name;
-            }
+        } else if (counted && count == 0) {
+            gate.query_ok = true;
         }
-        LogInfo("fsr d3d12: amd_fidelityfx_upscaler_dx12.dll upscalers for this GPU: {}", listed);
-        if (!version_id_) {
-            reason = generation_ == 4 ? std::string(kFsr4Gpu) : "the AMD FSR API lists no FSR 3 upscaler for this GPU";
+        const FsrGateResult decision = DecideFsrProvider(gate);
+        LogInfo("fsr d3d12: amd_fidelityfx_upscaler_dx12.dll upscalers for this GPU (vendor 0x{:04x}): {}", gate.vendor_id, decision.listed);
+        if (!decision.available) {
+            version_id_ = 0;
+            reason = generation_ == 4 ? decision.reason
+                     : !gate.query_ok || gate.providers.empty() ? "the AMD FSR API lists no upscaler for this GPU"
+                                                                : "the AMD FSR API lists no FSR 3 upscaler for this GPU";
+            if (generation_ == 4) LogInfo("fsr d3d12: FSR 4 not offered: {}", reason);
             return false;
         }
+        version_id_ = decision.id;
+        version_name_ = decision.name;
+        if (generation_ == 4) LogInfo("fsr d3d12: FSR 4 offered with upscaler provider {}", version_name_);
         reason.clear();
         return true;
     }

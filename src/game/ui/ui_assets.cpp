@@ -2,8 +2,14 @@
 #include "game/ui/ui_assets.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <format>
 #include <filesystem>
+#include <new>
+#include <string_view>
+#include <system_error>
+#include <utility>
 #include <stb_image.h>
 
 #include "engine/assets/ftex.h"
@@ -12,11 +18,52 @@
 #include "engine/core/pathcode.h"
 #include "engine/core/strcode.h"
 #include "engine/data/fox2.h"
+#include "engine/fs/data_pack.h"
 #include "engine/fs/vfs.h"
 #include "engine/render/texture_manager.h"
 #include "engine/ui/ui_batch.h"
 
 namespace pt::game {
+namespace {
+
+bool PreviewAllocationFails() {
+    static const bool fails = [] {
+        const char* env = std::getenv("PT_TEST_PREVIEW_FAIL");
+        return env && std::string_view(env) == "alloc";
+    }();
+    return fails;
+}
+
+constexpr std::chrono::seconds kPreviewMemoryRetry{1};
+
+bool PictureExists(const std::string& path) {
+    if (IsPackPath(path)) return ExtrasPack().Contains(PackEntryOf(path));
+    std::error_code ec;
+    return !path.empty() && std::filesystem::exists(pt::os::PathFromUtf8(path), ec);
+}
+
+unsigned char* LoadPicture(const std::string& path, int& width, int& height, std::string& failure) {
+    int channels = 0;
+    unsigned char* pixels = nullptr;
+    if (IsPackPath(path)) {
+        const auto bytes = ExtrasPack().Read(PackEntryOf(path));
+        if (!bytes || bytes->size() > 0x7FFFFFFFu) {
+            failure = "not readable from the data pack";
+            return nullptr;
+        }
+        pixels = stbi_load_from_memory(bytes->data(), static_cast<int>(bytes->size()), &width, &height, &channels, 4);
+    } else {
+        pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
+    }
+    if (!pixels) {
+        const char* reason = stbi_failure_reason();
+        failure = reason ? reason : "unknown";
+    }
+    return pixels;
+}
+
+}
+
 UiAssets::~UiAssets() {
     if (preview_worker_.joinable()) preview_worker_.join();
 }
@@ -25,9 +72,8 @@ void UiAssets::PreloadPreviews(const std::vector<std::string>& paths) {
     UploadDecodedPreviews();
     std::vector<std::string> wanted;
     for (const std::string& path : paths) {
-        std::error_code ec;
         if (path.empty() || texture_cache_.contains(path) || std::find(preview_pending_.begin(), preview_pending_.end(), path) != preview_pending_.end() ||
-            !std::filesystem::exists(path, ec)) {
+            PreviewWaitsForMemory(path) || !PictureExists(path)) {
             continue;
         }
         wanted.push_back(path);
@@ -39,39 +85,94 @@ void UiAssets::PreloadPreviews(const std::vector<std::string>& paths) {
     if (preview_worker_busy_) return;
     if (preview_worker_.joinable()) preview_worker_.join();
     preview_worker_busy_ = true;
-    preview_worker_ = std::thread([this] {
-        for (;;) {
-            std::string path;
-            {
-                std::lock_guard lock(preview_mutex_);
-                if (preview_queue_.empty()) {
-                    preview_worker_busy_ = false;
-                    return;
-                }
-                path = std::move(preview_queue_.front());
-                preview_queue_.erase(preview_queue_.begin());
+    try {
+        preview_worker_ = std::thread([this] { DecodePreviews(); });
+    } catch (const std::system_error& e) {
+        preview_worker_busy_ = false;
+        for (const std::string& path : preview_queue_) std::erase(preview_pending_, path);
+        preview_queue_.clear();
+        LogWarn("ui: preview decoder thread not started ({}); previews are decoded when they show", e.what());
+    }
+}
+
+void UiAssets::DecodePreviews() {
+    for (;;) {
+        std::string path;
+        {
+            std::lock_guard lock(preview_mutex_);
+            if (preview_queue_.empty()) {
+                preview_worker_busy_ = false;
+                return;
             }
+            path = std::move(preview_queue_.front());
+            preview_queue_.erase(preview_queue_.begin());
+        }
+        try {
             DecodedPreview decoded{path};
-            int channels = 0;
-            if (unsigned char* pixels = stbi_load(path.c_str(), &decoded.width, &decoded.height, &channels, 4)) {
-                decoded.rgba.assign(pixels, pixels + static_cast<size_t>(decoded.width) * decoded.height * 4);
-                stbi_image_free(pixels);
+            unsigned char* pixels = nullptr;
+            try {
+                if (PreviewAllocationFails()) throw std::bad_alloc();
+                pixels = LoadPicture(path, decoded.width, decoded.height, decoded.failure);
+                if (pixels) decoded.rgba.assign(pixels, pixels + static_cast<size_t>(decoded.width) * decoded.height * 4);
+            } catch (const std::bad_alloc&) {
+                decoded.rgba = {};
+                decoded.failure = "out of memory";
+                decoded.out_of_memory = true;
             }
+            if (pixels) stbi_image_free(pixels);
             std::lock_guard lock(preview_mutex_);
             preview_done_.push_back(std::move(decoded));
+        } catch (const std::exception&) {
+            std::lock_guard lock(preview_mutex_);
+            ++preview_lost_;
         }
-    });
+    }
+}
+
+bool UiAssets::PreviewWaitsForMemory(const std::string& path) const {
+    const auto it = preview_memory_retry_.find(path);
+    return it != preview_memory_retry_.end() && std::chrono::steady_clock::now() < it->second;
+}
+
+void UiAssets::PreviewFailed(const std::string& path, std::string_view reason, bool out_of_memory) noexcept {
+    try {
+        if (out_of_memory) preview_memory_retry_[path] = std::chrono::steady_clock::now() + kPreviewMemoryRetry;
+        std::string key = path + '\n' + std::string(reason);
+        if (preview_logged_.insert(std::move(key)).second) {
+            LogWarn("ui: preview {} not shown ({}); {}", path, reason, out_of_memory ? "tried again in a second" : "tried again when it shows");
+        }
+    } catch (const std::exception&) {
+    }
 }
 
 void UiAssets::UploadDecodedPreviews() {
     std::vector<DecodedPreview> done;
+    bool idle = false;
+    size_t lost = 0;
     {
         std::lock_guard lock(preview_mutex_);
         done.swap(preview_done_);
+        idle = !preview_worker_busy_ && preview_queue_.empty();
+        lost = std::exchange(preview_lost_, 0);
     }
     for (DecodedPreview& decoded : done) {
         std::erase(preview_pending_, decoded.path);
-        if (!decoded.rgba.empty()) UploadImage(decoded.path, decoded.width, decoded.height, false, decoded.rgba);
+        if (decoded.rgba.empty()) {
+            PreviewFailed(decoded.path, decoded.failure, decoded.out_of_memory);
+            continue;
+        }
+        try {
+            if (PreviewAllocationFails()) throw std::bad_alloc();
+            UploadImage(decoded.path, decoded.width, decoded.height, false, decoded.rgba);
+            preview_memory_retry_.erase(decoded.path);
+        } catch (const std::bad_alloc&) {
+            texture_cache_.erase(decoded.path);
+            PreviewFailed(decoded.path, "out of memory for its texture", true);
+        }
+    }
+    if (idle && !preview_pending_.empty()) {
+        LogWarn("ui: {} previews not handed over by the decoder ({} lost); they are decoded when they show", preview_pending_.size(), lost);
+        preview_pending_.clear();
     }
 }
 
@@ -79,16 +180,31 @@ uint32_t UiAssets::LocalPreview(const std::string& path) {
     UploadDecodedPreviews();
     if (auto it = texture_cache_.find(path); it != texture_cache_.end()) return it->second;
     if (std::find(preview_pending_.begin(), preview_pending_.end(), path) != preview_pending_.end()) return 0;
-    std::error_code ec;
-    if (path.empty() || !std::filesystem::exists(pt::os::PathFromUtf8(path), ec)) return 0;
-    int width = 0, height = 0, channels = 0;
-    unsigned char* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
-    if (!pixels) return 0;
-    std::vector<uint8_t> rgba(pixels, pixels + width * height * 4);
-    stbi_image_free(pixels);
-    const auto texture = UploadImage(path, width, height, false, rgba);
-    texture_cache_[path] = texture;
-    return texture;
+    if (PreviewWaitsForMemory(path)) return 0;
+    if (!PictureExists(path)) return 0;
+    unsigned char* pixels = nullptr;
+    try {
+        if (PreviewAllocationFails()) throw std::bad_alloc();
+        int width = 0, height = 0;
+        std::string failure;
+        pixels = LoadPicture(path, width, height, failure);
+        if (!pixels) {
+            PreviewFailed(path, failure, false);
+            return 0;
+        }
+        std::vector<uint8_t> rgba(pixels, pixels + static_cast<size_t>(width) * height * 4);
+        stbi_image_free(pixels);
+        pixels = nullptr;
+        const auto texture = UploadImage(path, width, height, false, rgba);
+        texture_cache_[path] = texture;
+        preview_memory_retry_.erase(path);
+        return texture;
+    } catch (const std::bad_alloc&) {
+        if (pixels) stbi_image_free(pixels);
+        texture_cache_.erase(path);
+        PreviewFailed(path, "out of memory", true);
+        return 0;
+    }
 }
 
 namespace {

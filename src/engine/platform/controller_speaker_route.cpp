@@ -33,6 +33,28 @@ bool ControllerSpeakerAudioEnabled(SonyPadAudio model, bool speaker_setting) {
     return model == SonyPadAudio::DualShock4 || speaker_setting;
 }
 
+bool DualSenseSpeakerPathWanted(bool speaker_audio_requested, bool main_output_on_pad) {
+    return speaker_audio_requested && !main_output_on_pad;
+}
+
+bool SameAudioEndpoint(std::string_view main_output, std::string_view pad_endpoint) {
+    return !main_output.empty() && main_output == pad_endpoint;
+}
+
+bool ControllerSpeakerPcmAllowed(ControllerPcmRoute route, bool speaker_audio_requested, bool dualsense_speaker_path_selected) {
+    if (route == ControllerPcmRoute::DualSenseQuad) return speaker_audio_requested && dualsense_speaker_path_selected;
+    return speaker_audio_requested;
+}
+
+std::array<uint8_t, 48> BuildDualSenseAudioPathReport(bool speaker) {
+    std::array<uint8_t, 48> report{};
+    report[0] = 0x02;
+    report[1] = speaker ? (0x80 | 0x20) : 0x80;
+    report[6] = speaker ? 0x64 : 0x00;
+    report[8] = speaker ? (3 << 4) : 0x00;
+    return report;
+}
+
 bool ControllerEndpointChannelsFit(SonyPadAudio model, int channels) {
     switch (model) {
         case SonyPadAudio::DualShock4: return channels == 1 || channels == 2;

@@ -3,6 +3,7 @@
 #include <mmdeviceapi.h>
 #include <spatialaudioclient.h>
 #include <cstdio>
+#include <string>
 #include "engine/core/log.h"
 static DWORD main_thread=0; static HRESULT com_result=S_OK; static int initialized=0, uninitialized=0, refs=0, early_uninit=0;
 static bool create_error=false, activate_error=false, format_error=false;
@@ -10,6 +11,9 @@ static bool create_error=false, activate_error=false, format_error=false;
 #define STUB(method, args) HRESULT STDMETHODCALLTYPE method args override {return E_NOTIMPL;}
 static AudioObjectType offered=AudioObjectType_None, failure=AudioObjectType_None;
 static bool mask_error=false; static int starts=0;
+static int default_calls=0, get_device_calls=0; static bool get_device_error=false; static UINT32 dynamic_objects=0;
+static std::wstring current_id, requested_id;
+static LPWSTR CopyWide(const std::wstring& text){auto* out=static_cast<LPWSTR>(CoTaskMemAlloc((text.size()+1)*sizeof(wchar_t)));if(out)wcscpy_s(out,text.size()+1,text.c_str());return out;}
 struct Object:ISpatialAudioObject {
  UNKNOWN_METHODS
  STUB(GetBuffer,(BYTE**,UINT32*)) STUB(SetEndOfStream,(UINT32)) STUB(IsActive,(BOOL*)) STUB(GetAudioObjectType,(AudioObjectType*)) STUB(SetPosition,(float,float,float)) STUB(SetVolume,(float))
@@ -25,21 +29,30 @@ struct Client:ISpatialAudioClient {
  UNKNOWN_METHODS
  STUB(GetStaticObjectPosition,(AudioObjectType,float*,float*,float*))
  HRESULT STDMETHODCALLTYPE GetNativeStaticObjectTypeMask(AudioObjectType* mask) override{*mask=offered;return mask_error?E_FAIL:S_OK;}
- STUB(GetMaxDynamicObjectCount,(UINT32*)) STUB(GetSupportedAudioObjectFormatEnumerator,(IAudioFormatEnumerator**)) STUB(GetMaxFrameCount,(const WAVEFORMATEX*,UINT32*))
+ HRESULT STDMETHODCALLTYPE GetMaxDynamicObjectCount(UINT32* count) override{*count=dynamic_objects;return S_OK;}
+ STUB(GetSupportedAudioObjectFormatEnumerator,(IAudioFormatEnumerator**)) STUB(GetMaxFrameCount,(const WAVEFORMATEX*,UINT32*))
  HRESULT STDMETHODCALLTYPE IsAudioObjectFormatSupported(const WAVEFORMATEX*) override{return format_error?E_FAIL:S_OK;}
  STUB(IsSpatialAudioStreamAvailable,(REFIID,const PROPVARIANT*))
  HRESULT STDMETHODCALLTYPE ActivateSpatialAudioStream(const PROPVARIANT*,REFIID,void** out) override{*out=&stream;++refs;return S_OK;}
 } client;
+struct Properties:IPropertyStore {
+ UNKNOWN_METHODS
+ STUB(GetCount,(DWORD*)) STUB(GetAt,(DWORD,PROPERTYKEY*)) STUB(SetValue,(REFPROPERTYKEY,REFPROPVARIANT)) STUB(Commit,())
+ HRESULT STDMETHODCALLTYPE GetValue(REFPROPERTYKEY,PROPVARIANT* value) override{value->vt=VT_LPWSTR;value->pwszVal=CopyWide(current_id==L"{default}"?L"Speakers (Test default)":L"Headphones (Test chosen)");return S_OK;}
+} properties;
 struct Device:IMMDevice {
  UNKNOWN_METHODS
  HRESULT STDMETHODCALLTYPE Activate(REFIID,DWORD,PROPVARIANT*,void** out) override{if(activate_error)return E_FAIL;*out=&client;++refs;return S_OK;}
- STUB(OpenPropertyStore,(DWORD,IPropertyStore**)) STUB(GetId,(LPWSTR*)) STUB(GetState,(DWORD*))
+ HRESULT STDMETHODCALLTYPE OpenPropertyStore(DWORD,IPropertyStore** out) override{*out=&properties;++refs;return S_OK;}
+ HRESULT STDMETHODCALLTYPE GetId(LPWSTR* out) override{*out=CopyWide(current_id);return S_OK;}
+ STUB(GetState,(DWORD*))
 } device;
 struct Enumerator:IMMDeviceEnumerator {
  UNKNOWN_METHODS
  STUB(EnumAudioEndpoints,(EDataFlow,DWORD,IMMDeviceCollection**))
- HRESULT STDMETHODCALLTYPE GetDefaultAudioEndpoint(EDataFlow,ERole,IMMDevice** out) override{*out=&device;++refs;return S_OK;}
- STUB(GetDevice,(LPCWSTR,IMMDevice**)) STUB(RegisterEndpointNotificationCallback,(IMMNotificationClient*)) STUB(UnregisterEndpointNotificationCallback,(IMMNotificationClient*))
+ HRESULT STDMETHODCALLTYPE GetDefaultAudioEndpoint(EDataFlow,ERole,IMMDevice** out) override{++default_calls;current_id=L"{default}";*out=&device;++refs;return S_OK;}
+ HRESULT STDMETHODCALLTYPE GetDevice(LPCWSTR id,IMMDevice** out) override{++get_device_calls;requested_id=id;if(get_device_error)return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);current_id=id;*out=&device;++refs;return S_OK;}
+ STUB(RegisterEndpointNotificationCallback,(IMMNotificationClient*)) STUB(UnregisterEndpointNotificationCallback,(IMMNotificationClient*))
 } enumerator;
 static HRESULT TestCoCreateInstance(REFCLSID,LPUNKNOWN,DWORD,REFIID,LPVOID* out){if(create_error)return E_FAIL;*out=&enumerator;++refs;return S_OK;}
 static HRESULT TestCoInitializeEx(LPVOID,DWORD){if(GetCurrentThreadId()!=main_thread)return S_OK;if(SUCCEEDED(com_result))++initialized;return com_result;}
@@ -71,5 +84,17 @@ int main(){
  {pt::audio::SpatialOutput output;output.Open(48000,[](float*,uint32_t,uint32_t){});output.Open(48000,[](float*,uint32_t,uint32_t){});output.Close();}
  bool reopened=initialized==2 && uninitialized==2 && refs==0 && early_uninit==0;
  std::printf("%s repeated Open balances both initializations\n",reopened?"PASS":"FAIL");failed+=!reopened;
+ auto endpoint=[&](const std::string& id,bool expected,bool chosen,const char* name,const char* label){
+  default_calls=get_device_calls=starts=initialized=uninitialized=early_uninit=0;requested_id.clear();
+  pt::audio::SpatialOutput output;bool opened=output.Open(48000,[](float*,uint32_t,uint32_t){},id);
+  bool named=!expected || (output.DeviceName()==name && output.DeviceId()==(chosen?id:std::string("{default}")));
+  output.Close();
+  bool path=chosen ? (get_device_calls==1 && default_calls==0 && requested_id==std::wstring(id.begin(),id.end())) : (default_calls==1 && get_device_calls==0);
+  bool ok=opened==expected && named && path && initialized==uninitialized && refs==0 && early_uninit==0 && output.DeviceName().empty();
+  std::printf("%s %s\n",ok?"PASS":"FAIL",label);failed+=!ok;};
+ endpoint("",true,false,"Speakers (Test default)","no chosen id opens the default endpoint and reports its name and id");
+ endpoint("{0.0.0.00000000}.{chosen}",true,true,"Headphones (Test chosen)","a chosen endpoint id opens that endpoint, never the default");
+ dynamic_objects=16;endpoint("{0.0.0.00000000}.{chosen}",true,true,"Headphones (Test chosen)","a spatial format's dynamic objects are logged");dynamic_objects=0;
+ get_device_error=true;endpoint("{0.0.0.00000000}.{gone}",false,true,"","a chosen endpoint that is gone fails cleanly (the ordinary output takes over)");get_device_error=false;
  return failed?1:0;
 }

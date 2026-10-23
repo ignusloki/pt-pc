@@ -183,6 +183,10 @@ public:
     void RequestPhotoView(const glm::vec3& position, const glm::vec3& target) { photo_view_request_ = std::pair(position, target); }
     std::optional<std::pair<glm::vec3, glm::vec3>> TakePhotoViewRequest() { return std::exchange(photo_view_request_, std::nullopt); }
     void RequestPhotoSettings(const std::vector<int>& values) { photo_settings_request_ = values; }
+    void RequestPhotoGrid(int grid) { photo_grid_request_ = grid; }
+    int TakePhotoGridRequest() { const int r = photo_grid_request_; photo_grid_request_ = -1; return r; }
+    void RequestPhotoTake() { photo_take_request_ = true; }
+    bool TakePhotoTakeRequest() { const bool r = photo_take_request_; photo_take_request_ = false; return r; }
     std::vector<int> TakePhotoSettingsRequest() { auto r = std::move(photo_settings_request_); photo_settings_request_.clear(); return r; }
     void SetCameraOverride(const std::optional<Camera>& camera, bool follows_view = false) {
         camera_override_ = camera;
@@ -483,6 +487,8 @@ private:
     std::optional<glm::vec4> photo_camera_request_;
     std::optional<std::pair<glm::vec3, glm::vec3>> photo_view_request_;
     std::vector<int> photo_settings_request_;
+    int photo_grid_request_ = -1;
+    bool photo_take_request_ = false;
     bool traced_body_ = false;
     glm::vec2 photo_target_{0.0f};
 

@@ -257,9 +257,14 @@ inline GameUpdateResult ApplyGameUpdate(const fs::path& install_in, const GameUp
         std::error_code e;
         if (fs::exists(JournalFile(install), e)) RecoverEarlierUpdate(install, platform.process_alive);
     }
-    const ExistingInstall old = InspectInstall(install);
-    if (!old.found || !old.has_manifest)
-        throw std::runtime_error("This folder is not a P.T. PC Port installed by its setup; download the new version from the release page.");
+    std::error_code manifest_error;
+    const bool portable = !fs::exists(install / kManifestName, manifest_error);
+    const ExistingInstall old = portable ? InspectPortable(install, platform.hash_file) : InspectInstall(install);
+    if (!old.found || (!portable && !old.has_manifest))
+        throw std::runtime_error("This folder is neither a P.T. PC Port installed by its setup nor a portable copy; download the new version from the release page.");
+    if (portable)
+        if (const std::string why = UpdateFolderProblem(install, platform.unique_id); !why.empty())
+            throw std::runtime_error(why + " This portable copy cannot update itself there: move its folder to a place you can write to, or download the new version from the release page.");
     const std::string installed = old.version.empty() ? std::string(update::CurrentVersion()) : old.version;
     const auto& hash_package = platform.hash_package ? platform.hash_package : platform.hash_file;
 
@@ -418,6 +423,8 @@ inline GameUpdateResult ApplyGameUpdate(const fs::path& install_in, const GameUp
         steps.extract = [](const fs::path&, const fs::path&) { throw std::runtime_error("The game archives are missing; run the setup with your PKG or dump."); };
         steps.shortcut = [](const fs::path&) {};
         steps.keep_backup = true;
+        steps.portable = portable;
+        steps.installed_version = installed;
         steps.download = download;
         steps.pid = platform.pid;
         steps.fail_at = platform.fail_at;
@@ -430,7 +437,7 @@ inline GameUpdateResult ApplyGameUpdate(const fs::path& install_in, const GameUp
         result.version = steps.version;
         result.outcome = RunInstall({}, install, false, steps);
         if (platform.close_payload) platform.close_payload();
-        LogUpdate(install, "in-game update to " + result.version + ": " + std::to_string(result.needed) + " of " + std::to_string(entries.size()) +
+        LogUpdate(install, "in-game update" + std::string(portable ? " of a portable copy" : "") + " to " + result.version + ": " + std::to_string(result.needed) + " of " + std::to_string(entries.size()) +
                                " files differed; downloaded " + std::to_string(result.downloaded) + " bytes in " + std::to_string(result.requests) +
                                (result.requests == 1 ? " request" : " requests") + (result.ranged ? " (parts of the package)" : " (the whole package)") +
                                " of a " + std::to_string(package.size) + " byte package");

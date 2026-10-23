@@ -6,6 +6,8 @@ remains experimental; read its [installation and phone requirements](docs/androi
 See the [release notes](docs/release-notes-1.0.9.md) and
 [shared-source validation](docs/integration/android-macos-1.0.9.md).
 
+> **Upstream bug reports:** Lorean's GitHub Issues are closed because of ongoing spam attacks. Please join the [Discord server](https://discord.gg/3vKwUf2eTb) to report bugs.
+
 ![Lisa in the hallway](docs/media/lisa.gif)
 
 If the port is worth something to you, you can buy me a coffee: [ko-fi.com/loreanxavier](https://ko-fi.com/loreanxavier). It keeps the testing hardware and the releases coming.
@@ -24,8 +26,9 @@ the street, with the voice part included.
 ## What you need
 
 - Your own copy of P.T. The port is built and tested with the US release, CUSA01127, as a dump folder from your console
-  or a fake PKG made from that dump. The European and Japanese releases install too, with a note, but I have not seen
-  their data myself. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing here
+  or a fake PKG made from that dump. The folder can have any name: the game recognises it by its files. Other releases,
+  such as the European CUSA01114, are accepted the same way, but I have not seen their data myself; the game logs at its
+  start what differs from the US data. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing here
   decrypts it.
 - Windows 10 or 11 (x64), Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
   and SteamOS), or macOS 14 or newer on an Apple silicon or Intel Mac.
@@ -165,7 +168,7 @@ against it. Thanks to its developers.
 
 The port is built on SDL3, Vulkan (volk, VMA), glm, Dear ImGui, stb, Lua 5.1, libogg and libvorbis, whisper.cpp with
 OpenAI's Whisper model and the Silero VAD for the voice part, Google libsbc for the DS4 speaker, AMD
-FidelityFX, NVIDIA DLSS and Intel XeSS for the upscalers, the Khronos OpenXR loader for VR, HarfBuzz on Linux and the
+FidelityFX, NVIDIA DLSS and Intel XeSS for the upscalers, MinHook in the DLSS 5 companion, the Khronos OpenXR loader for VR, HarfBuzz on Linux and the
 Noto fonts for the added languages, and LibOrbisPkg in the installer. Their notices ship in `licenses/` next to the
 executable.
 

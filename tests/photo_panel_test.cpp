@@ -4,6 +4,7 @@
 #include "game/ui/photo_panel.h"
 
 #include <cassert>
+#include <vector>
 
 #include "engine/platform/input.h"
 #include "game/ui/pc_settings.h"
@@ -53,6 +54,26 @@ int main() {
     assert(view.crop.width < 1.0f && view.crop.height == 1.0f);
     tap(pt::kRawDown);
     view = panel.View(0, "");
+    assert(Selected(view) && Selected(view)->label == PcText("pc_photo_grid", 0) && Selected(view)->value == "Off" && view.grid == 0);
+    assert(view.note == PcText("pc_note_photo_grid", 0));
+    const char* grids[] = {"pc_photo_grid_thirds", "pc_photo_grid_golden", "pc_photo_grid_center", "pc_off"};
+    for (const char* key : grids) {
+        tap(pt::kRawRight);
+        assert(Selected(panel.View(0, "")) && Selected(panel.View(0, ""))->value == PcText(key, 0));
+    }
+    tap(pt::kRawLeft);
+    assert(panel.View(0, "").grid == static_cast<int>(PhotoGrid::CenterCross));
+    tap(pt::kRawRight);
+    tap(pt::kRawRight);
+    assert(panel.View(0, "").grid == static_cast<int>(PhotoGrid::Thirds) && panel.Settings().grid == 1);
+    assert((PhotoGridLines(1) == std::vector<float>{1.0f / 3.0f, 2.0f / 3.0f}) && PhotoGridLines(3).size() == 1 && PhotoGridLines(0).empty());
+    for (int language = 0; language < 14; ++language) {
+        for (const char* key : {"pc_photo_grid", "pc_note_photo_grid", "pc_photo_grid_thirds", "pc_photo_grid_golden", "pc_photo_grid_center"}) {
+            assert(!PcText(key, language).empty() && PcText(key, language) != key);
+        }
+    }
+    tap(pt::kRawDown);
+    view = panel.View(0, "");
     assert(Selected(view) && Selected(view)->value == PcText("pc_photo_resolution_native", 0));
     tap(pt::kRawRight);
     assert(Selected(panel.View(0, "")) && Selected(panel.View(0, ""))->value == PcText("pc_photo_resolution_4k", 0));
@@ -76,6 +97,7 @@ int main() {
     assert(panel.Settings().speed == 2 && panel.Settings().focus == 4 && panel.Settings().aperture == 3 && panel.Settings().exposure == 9);
     assert(!panel.Settings().depth_of_field && !panel.Settings().lens && !panel.Settings().grain && !panel.Settings().grading);
     assert(!panel.Settings().body && !panel.Settings().flashlight);
+    assert(panel.Settings().grid == static_cast<int>(PhotoGrid::Thirds) && panel.View(0, "").grid == 1);
     tap(pt::kRawUp);
     for (int language = 0; language < 14; ++language) {
         const auto localized = panel.View(language, "");
@@ -89,6 +111,7 @@ int main() {
     assert(panel.Settings().speed == 1 && panel.Settings().focus == 0 && panel.Settings().aperture == 0);
     assert(panel.Settings().exposure == PhotoSettings::kExposureZero && panel.Settings().depth_of_field);
     assert(panel.Settings().lens && panel.Settings().grain && panel.Settings().grading);
+    assert(panel.Settings().grid == 0 && panel.View(0, "").grid == 0);
     panel.Open(settings);
     assert(!panel.Settings().bloom && panel.Settings().filter == PhotoColorFilter::Off);
 

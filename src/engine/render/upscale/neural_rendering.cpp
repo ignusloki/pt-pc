@@ -54,7 +54,7 @@ std::filesystem::path RuntimeIn(const std::filesystem::path& where, int depth) {
         return {};
     }
     if (std::filesystem::is_regular_file(where, ec)) {
-        return AsciiLowerCopy(where.filename().string()) == kRuntimeName ? where : std::filesystem::path();
+        return AsciiLowerCopy(os::PathToUtf8(where.filename())) == kRuntimeName ? where : std::filesystem::path();
     }
     const std::filesystem::path direct = where / kRuntimeName;
     if (std::filesystem::exists(direct, ec)) {
@@ -74,7 +74,7 @@ std::filesystem::path RuntimeIn(const std::filesystem::path& where, int depth) {
             it.disable_recursion_pending();
             continue;
         }
-        if (it->is_regular_file(ec) && AsciiLowerCopy(it->path().filename().string()) == kRuntimeName) {
+        if (it->is_regular_file(ec) && AsciiLowerCopy(os::PathToUtf8(it->path().filename())) == kRuntimeName) {
             const auto t = std::filesystem::last_write_time(it->path(), ec);
             if (best.empty() || t > best_time) {
                 best = it->path();
@@ -87,7 +87,7 @@ std::filesystem::path RuntimeIn(const std::filesystem::path& where, int depth) {
 
 std::filesystem::path EnvPath(const char* name) {
     const std::string value = os::GetEnv(name);
-    return value.empty() ? std::filesystem::path() : std::filesystem::path(value);
+    return value.empty() ? std::filesystem::path() : os::PathFromUtf8(value);
 }
 
 }
@@ -132,7 +132,7 @@ bool NeuralRenderingVendorSupported(uint32_t vendor_id) {
 
 void ConfigureNativeNeuralRuntime(const std::string& ini_path) {
     native_runtime = FindNeuralRuntime(ini_path);
-    if (native_runtime) LogInfo("native nr: selected {} ({} bytes, sha256 {}, from {})", native_runtime->path.string(), native_runtime->size,
+    if (native_runtime) LogInfo("native nr: selected {} ({} bytes, sha256 {}, from {})", os::PathToUtf8(native_runtime->path), native_runtime->size,
                                 native_runtime->sha256, native_runtime->source);
 }
 const std::optional<NeuralRuntimeInfo>& NativeNeuralRuntime() { return native_runtime; }
@@ -146,7 +146,7 @@ std::optional<NeuralRuntimeInfo> FindNeuralRuntime(const std::string& ini_path) 
     std::vector<Candidate> candidates;
     candidates.push_back({ExecutableDir(), 0, "next to pt.exe"});
     if (!ini_path.empty()) {
-        candidates.push_back({std::filesystem::path(ini_path), 2, "pt.ini upscaling.neural_runtime"});
+        candidates.push_back({os::PathFromUtf8(ini_path), 2, "pt.ini upscaling.neural_runtime"});
     }
     const std::filesystem::path local = EnvPath("LOCALAPPDATA");
     const std::filesystem::path home = EnvPath("USERPROFILE");

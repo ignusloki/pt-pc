@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include "engine/core/log.h"
+#include "engine/platform/os.h"
 #include "engine/render/d3d12/backend/d3d12_native.h"
 #include "engine/render/d3d12/backend/d3d12_neural_codec.h"
 #include "engine/render/d3d12/backend/reshade_native.h"
@@ -31,6 +32,14 @@ NVSDK_NGX_Result EvaluateSafely(EvaluateFn fn, ID3D12GraphicsCommandList* list, 
     __try { return fn(list, feature, params, nullptr); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return NVSDK_NGX_Result_FAIL_PlatformError; }
 }
+unsigned long ReleaseSafely(ReleaseFn fn, NVSDK_NGX_Handle* feature) {
+    __try { fn(feature); return 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+}
+unsigned long ShutdownSafely(decltype(&NVSDK_NGX_D3D12_Shutdown1) fn, ID3D12Device* device) {
+    __try { fn(device); return 0; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+}
 
 class NativeNr final : public PostUpscaleNeural {
 public:
@@ -42,9 +51,14 @@ public:
     const NeuralRenderingSupport& Status() const override { return status_; }
     ~NativeNr() override {
         owner_.WaitIdle();
-        if (feature_) release_(feature_);
+        if (feature_ && release_) {
+            if (const unsigned long fault = ReleaseSafely(release_, feature_)) LogError("native nr d3d12: feature release faulted ({:#x}) at teardown", fault);
+        }
         if (params_) NVSDK_NGX_D3D12_DestroyParameters(params_);
-        if (direct_shutdown_) direct_shutdown_(device_.Get());
+        if (direct_shutdown_) {
+            if (const unsigned long fault = ShutdownSafely(direct_shutdown_, device_.Get())) LogError("native nr d3d12: companion shutdown faulted ({:#x}) at teardown", fault);
+            else LogInfo("native nr d3d12: companion runtime shut down");
+        }
     }
     bool Record(const UpscaleDispatch& d) override {
         if (!d.neural_enabled) {
@@ -262,8 +276,8 @@ private:
         for (const char* key : {"DLSSNR.Height", "DLSSNR.InputHeight", "DLSSNR.OutputHeight", "DLSSNR.Output.Height"}) params_->Set(key, net_height);
         params_->Set("DLSSNR.Upscaling", 0u); params_->Set("DLSSNR.Scale", 1.0f); params_->Set("DLSSNR.ScalingRatio", 1.0f);
         params_->Set("DLSSNR.Hint.Render.Preset", small_model_ ? 0x80000000u : 1u); params_->Set("DLSS.Feature.Create.Flags", 0u);
-        if (static bool compat_tried = false; !compat_tried) {
-            compat_tried = true;
+        if (!compat_armed_) {
+            compat_armed_ = true;
             const std::filesystem::path code = nr_native::CodePath();
             const char* compat = std::getenv("PT_NR_COMPAT");
             const std::filesystem::path path = nr_native::CompanionPath();
@@ -272,11 +286,11 @@ private:
                     const auto set_code = reinterpret_cast<void (*)(const wchar_t*)>(GetProcAddress(module, "NativeNrSetCodeDir"));
                     if (set_code && !code.empty()) set_code(code.c_str());
                     if (!set_code && !code.empty())
-                        LogWarn("native nr d3d12: companion {} has no NativeNrSetCodeDir export; installed GPU code cannot be passed to this companion", path.string());
+                        LogWarn("native nr d3d12: companion {} has no NativeNrSetCodeDir export; installed GPU code cannot be passed to this companion", os::PathToUtf8(path));
                     if (const auto enable = reinterpret_cast<int (*)()>(GetProcAddress(module, "NativeNrEnableCompatibility")))
-                        LogInfo("native nr d3d12: compatibility layer {} (GPU code {})", enable(), code.empty() ? "from PT_NR_CUBIN_DIR" : code.string());
+                        LogInfo("native nr d3d12: compatibility layer {} (GPU code {})", enable(), code.empty() ? std::string("from PT_NR_CUBIN_DIR") : os::PathToUtf8(code));
                 } else {
-                    LogWarn("native nr d3d12: compatibility companion {} not loaded ({})", path.string(), GetLastError());
+                    LogWarn("native nr d3d12: compatibility companion {} not loaded ({})", os::PathToUtf8(path), GetLastError());
                 }
             }
         }
@@ -289,16 +303,20 @@ private:
                 if (!companion_) return Fail("explicit companion load", GetLastError());
                 const auto load = reinterpret_cast<int(*)(const wchar_t*)>(GetProcAddress(companion_, "NativeNrLoad"));
                 const auto init = reinterpret_cast<InitFn>(GetProcAddress(companion_, "NativeNrInit"));
-                create_ = reinterpret_cast<CreateFn>(GetProcAddress(companion_, "NativeNrCreate"));
-                evaluate_ = reinterpret_cast<EvaluateFn>(GetProcAddress(companion_, "NativeNrEvaluate"));
-                release_ = reinterpret_cast<ReleaseFn>(GetProcAddress(companion_, "NativeNrRelease"));
-                direct_shutdown_ = reinterpret_cast<decltype(direct_shutdown_)>(GetProcAddress(companion_, "NativeNrShutdown"));
-                if (!load || !init || !create_ || !evaluate_ || !release_ || !direct_shutdown_) return Fail("companion exports", 0);
-                if (load(runtime->path.c_str()) != 0) return Fail("companion runtime load", 0);
+                const auto create = reinterpret_cast<CreateFn>(GetProcAddress(companion_, "NativeNrCreate"));
+                const auto evaluate = reinterpret_cast<EvaluateFn>(GetProcAddress(companion_, "NativeNrEvaluate"));
+                const auto release = reinterpret_cast<ReleaseFn>(GetProcAddress(companion_, "NativeNrRelease"));
+                const auto shutdown = reinterpret_cast<decltype(direct_shutdown_)>(GetProcAddress(companion_, "NativeNrShutdown"));
+                if (!load || !init || !create || !evaluate || !release || !shutdown) return Fail("companion exports", 0);
+                if (const int loaded = load(runtime->path.c_str()); loaded != 0) return Fail("companion runtime load", static_cast<unsigned>(loaded));
                 const auto data = std::filesystem::temp_directory_path().wstring();
                 result = init(0x1000000, data.c_str(), device_.Get(), NVSDK_NGX_Version_API, params_);
                 if (NVSDK_NGX_FAILED(result)) return Fail("companion initialize", result);
-                LogInfo("native nr d3d12: companion {}, runtime {} sha256 {}", path.string(), runtime->path.string(), runtime->sha256);
+                create_ = create;
+                evaluate_ = evaluate;
+                release_ = release;
+                direct_shutdown_ = shutdown;
+                LogInfo("native nr d3d12: companion {}, runtime {} sha256 {}", os::PathToUtf8(path), os::PathToUtf8(runtime->path), runtime->sha256);
                 unsigned preset = small_model_ ? 0x80000000u : 0x80000001u;
                 if (const char* chosen = std::getenv("PT_NR_PRESET")) preset = static_cast<unsigned>(std::strtoul(chosen, nullptr, 0));
                 params_->Set("DLSSNR.Hint.Render.Preset", preset);
@@ -384,7 +402,7 @@ private:
     ReleaseFn release_ = &NVSDK_NGX_D3D12_ReleaseFeature;
     decltype(&NVSDK_NGX_D3D12_Shutdown1) direct_shutdown_ = nullptr;
     HMODULE companion_ = nullptr;
-    bool failed_ = false, was_enabled_ = false;
+    bool failed_ = false, was_enabled_ = false, compat_armed_ = false;
     NeuralRenderingSupport status_;
 };
 }

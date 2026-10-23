@@ -6,6 +6,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -242,6 +243,7 @@ public:
     std::vector<std::pair<ComPtr<ID3D12Resource>, D3D12MA::Allocation*>> TakeKept() { return std::move(kept_); }
 
 private:
+    bool StageUpload(uint64_t size, ComPtr<ID3D12Resource>& upload, D3D12MA::Allocation*& allocation, void** mapped);
     void FlushGraphics();
     void FlushCompute();
     void Apply(ID3D12PipelineState* state);
@@ -263,6 +265,8 @@ private:
     uint32_t vertex_stride_ = 0;
     bool vertex_dirty_ = false;
     std::vector<std::pair<ComPtr<ID3D12Resource>, D3D12MA::Allocation*>> kept_;
+    bool reclaimed_ = false;
+    uint64_t stage_failed_size_ = UINT64_MAX;
 };
 
 bool FsrFrameGenAvailable(pt::d3d12::Device& device, std::string& reason);
@@ -358,6 +362,10 @@ public:
                          const char* name);
     void Retire(ComPtr<ID3D12Resource> resource, D3D12MA::Allocation* allocation) { Release(std::move(resource), allocation); }
     bool CreateUploadBuffer(uint64_t size, ComPtr<ID3D12Resource>& out, D3D12MA::Allocation*& allocation, void** mapped);
+    bool ReclaimUploadMemory();
+    void UploadRetried(uint64_t size, bool succeeded);
+    void DeviceLost(const char* where);
+    void LostResult(HRESULT hr, const char* where);
 
 private:
     struct Frame {
@@ -408,6 +416,19 @@ private:
     bool CreateOwnerSwapchain(const pt::d3d12::SwapchainDesc& desc, std::string& error);
     D3D12MA::Allocator* allocator_ = nullptr;
     uint64_t test_budget_bytes_ = 0;
+    int test_upload_fail_ = 0;
+    uint64_t test_upload_attempts_ = 0;
+    HRESULT last_upload_hr_ = S_OK;
+    uint64_t upload_failures_ = 0;
+    uint64_t upload_retries_ = 0;
+    std::chrono::steady_clock::time_point upload_failure_logged_{};
+    std::chrono::steady_clock::time_point upload_retry_logged_{};
+    bool rendering_ = false;
+    bool presenting_ = false;
+    bool lost_reported_ = false;
+    bool hung_ = false;
+    uint32_t test_remove_frame_ = 0;
+    uint32_t test_frames_begun_ = 0;
     ComPtr<ID3D12Device2> device2_;
     ComPtr<ID3D12RootSignature> root_;
     DescriptorHeap views_;

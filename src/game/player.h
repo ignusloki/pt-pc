@@ -138,7 +138,7 @@ public:
     void DemoWarp(const glm::vec3& position, float fox_yaw);
     void DemoHeldFrame(const InputState& input);
     glm::vec3 FollowHead(const CollisionWorld& world, const glm::vec3& displacement);
-    void HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value);
+    void HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value, bool anchor_after_move = false);
     void FollowCamera(float yaw_value, float pitch_value);
 
     CharacterController controller;
@@ -205,6 +205,8 @@ private:
     float look_roll_ = 0.0f;
     glm::vec3 handoff_local_{0.0f};
     float handoff_weight_ = 0.0f;
+    glm::vec3 handoff_world_{0.0f};
+    bool handoff_anchor_pending_ = false;
     float body_yaw_ = 0.0f;
     float body_yaw_target_ = 0.0f;
     struct Published {
@@ -248,6 +250,7 @@ private:
     uint32_t frame_pressed_ = 0;
     bool standing_ = true;
     float idle_timer_ = 0.0f;
+    bool carried_walk_logged_ = false;
     float left_lock_timer_ = 0.0f;
     float zoom_target_ = kZoomHeld;
     float zoom_velocity_ = 1.0f;

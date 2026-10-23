@@ -1,6 +1,7 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
+#include "engine/fs/data_pack.h"
 #include "game/lisa_date/lisa_date_audio.h"
 #include "game/lisa_date/lisa_date_hints.h"
 #include "game/lisa_date/lisa_date_script.h"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <fstream>
 #include <sstream>
@@ -154,9 +156,13 @@ void MusicLoopTests() {
     }
 
     pt::game::LisaDatePcm decoded;
-    if (!pt::game::LisaDateDecodeMusic(std::filesystem::path(PT_LISA_DATE_DIR), "music", decoded)) {
-        std::printf("lisa date music: no music.ogg in %s, its seam check skipped\n", PT_LISA_DATE_DIR);
+    if (!pt::game::LisaDateDecodeMusic("music", decoded)) {
+        std::printf("lisa date music: no music.ogg in the data pack, its seam check skipped\n");
         return;
+    }
+    pt::game::LisaDatePcm from_file;
+    if (pt::game::LisaDateDecodeMusic(std::filesystem::path(PT_LISA_DATE_DIR), "music", from_file)) {
+        assert(from_file.samples == decoded.samples && from_file.rate == decoded.rate && from_file.channels == decoded.channels);
     }
     auto music = std::make_shared<const pt::game::LisaDatePcm>(std::move(decoded));
     const LisaMusicLoop points = pt::game::LisaMusicLoopFor(*music);
@@ -199,6 +205,10 @@ void MusicLoopTests() {
 
 std::string Read(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        const auto packed = pt::game::LisaDateFile(std::filesystem::relative(path, PT_LISA_DATE_DIR).generic_string());
+        return packed ? std::string(packed->begin(), packed->end()) : std::string();
+    }
     std::stringstream s;
     s << in.rdbuf();
     return s.str();
@@ -246,6 +256,57 @@ std::string SelfieReaction(const LisaDateScript& script, int lisa, int you) {
     return "loop";
 }
 
+}
+
+std::vector<uint8_t> ReadBytes(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void DataPackTests(const std::filesystem::path& dir) {
+    pt::DataPack pack;
+    std::string error;
+    const bool opened = pack.Open(PT_DATA_PACK_FILE, &error);
+    if (!opened) std::printf("data pack %s: %s\n", PT_DATA_PACK_FILE, error.c_str());
+    assert(opened);
+    size_t files = 0, bytes = 0;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+        assert(pack.Contains("script.txt") && pt::game::LisaDateFile("script.txt"));
+        std::printf("data pack: %zu entries, no source folder to compare with\n", pack.Count());
+        return;
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
+        if (!entry.is_regular_file()) continue;
+        const std::string name = std::filesystem::relative(entry.path(), dir).generic_string();
+        const auto packed = pack.Read(name);
+        const std::vector<uint8_t> original = ReadBytes(entry.path());
+        if (!packed || *packed != original) std::printf("data pack: %s differs from its file\n", name.c_str());
+        assert(packed && *packed == original);
+        const auto game = pt::game::LisaDateFile(name);
+        assert(game && *game == original);
+        ++files;
+        bytes += original.size();
+    }
+    assert(files > 0 && files == pack.Count());
+    assert(!pack.Read("not-there.txt") && !pt::game::LisaDateFile("../script.txt"));
+    assert(pt::IsPackPath(pt::game::LisaDatePicturePath("museum.png")) && pt::PackEntryOf(pt::game::LisaDatePicturePath("museum.png")) == "museum.png");
+    std::vector<uint8_t> masked(37, 0x5A), plain = masked;
+    pt::DataPack::Mask(masked.data(), masked.size(), 99);
+    assert(masked != plain);
+    pt::DataPack::Mask(masked.data(), masked.size(), 99);
+    assert(masked == plain);
+    std::vector<uint8_t> damaged = ReadBytes(PT_DATA_PACK_FILE);
+    damaged[damaged.size() - 10] ^= 0x40;
+    const std::filesystem::path copy = std::filesystem::temp_directory_path() / "pt_data_pack_test.pak";
+    std::ofstream(copy, std::ios::binary).write(reinterpret_cast<const char*>(damaged.data()), static_cast<std::streamsize>(damaged.size()));
+    pt::DataPack bad;
+    assert(bad.Open(copy));
+    size_t refused = 0;
+    for (const std::string& name : bad.Names()) refused += bad.Read(name) ? 0 : 1;
+    assert(refused == 1);
+    std::filesystem::remove(copy);
+    std::printf("data pack: %zu files, %zu bytes, equal to their sources\n", files, bytes);
 }
 
 int main() {
@@ -347,6 +408,7 @@ int main() {
     const pt::game::LisaDatePcm sting = pt::game::LisaDateExcerpt(music, 2.0f, 0.5f, 0.5f);
     assert(sting.samples.size() == 2 * 2000 && sting.samples[2 * 1000] == 5000 && sting.samples.back() < 100);
     MusicLoopTests();
+    DataPackTests(dir);
     std::printf("lisa date script: %zu commands, %zu choices, %zu English keys, ok\n", script.Commands().size(), script.Choices().size(), eng.size());
     return 0;
 }

@@ -2,11 +2,13 @@
 
 #include <chrono>
 #include <cstdio>
+#include <format>
 #include <fstream>
 #include <iterator>
 
 #include "engine/core/log.h"
 #include "engine/fs/io_stats.h"
+#include "engine/fs/pt_release.h"
 #include "engine/platform/os.h"
 #include "engine/fs/mods.h"
 
@@ -16,7 +18,7 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     game_dir_ = game_dir;
     const auto psarc_path = game_dir / "chunk1.psarc";
     if (!std::filesystem::exists(psarc_path)) {
-        LogError("vfs: {} not found, game dir must be the extracted CUSA01127 folder", pt::os::PathToUtf8(psarc_path));
+        LogError("vfs: {} not found, game dir must be the extracted P.T. folder that holds chunk1.psarc and texture.qar", pt::os::PathToUtf8(psarc_path));
         return false;
     }
     if (!archive_.Open(psarc_path)) {
@@ -32,6 +34,8 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
 }
 
 namespace {
+constexpr const char* kSubtitleLanguage[] = {"Eng", "Fre", "Ger", "Ita", "Jpn", "Por", "Spa"};
+constexpr uintmax_t kUsPsarcBytes = 421978112, kUsQarBytes = 892291044;
 constexpr const char* kCoreArchive[] = {
     "as/sh/level/common/resident.fpk",
     "as/sh/level/promotion/pt_2014/start/pt14_start.fpk",
@@ -70,6 +74,27 @@ void Vfs::ReportDataDifferences() const {
         }
     }
 
+    const pt::release::Identity id = pt::release::Identify(game_dir_);
+    if (id.how.empty()) {
+        LogInfo("data: no title id or content id for this folder (no source.txt, no sce_sys/param.sfo, a name that is no title id); "
+                "used because chunk1.psarc and texture.qar are in it");
+    } else {
+        LogInfo("data: game files identified by {}: title_id={} content_id={} region={}", id.how, id.title_id.empty() ? "?" : id.title_id,
+                id.content_id.empty() ? "?" : id.content_id, id.region.empty() ? "unknown" : id.region);
+        if (!id.title_id.empty() && !id.known) {
+            LogWarn("data: title id {} is not a known P.T. release (CUSA01127 US, CUSA01114 Europe); the files pass the content check and are used", id.title_id);
+        } else if (id.known && !id.confirmed) {
+            LogWarn("data: title id {} is in the list of P.T. releases but no copy of it has been seen; the files are used", id.title_id);
+        }
+    }
+    {
+        std::error_code size_error;
+        const auto psarc = std::filesystem::file_size(game_dir_ / "chunk1.psarc", size_error);
+        const auto qar = std::filesystem::file_size(game_dir_ / "texture.qar", size_error);
+        LogInfo("data: chunk1.psarc {} bytes ({}), texture.qar {} bytes ({}) against the US release", psarc, psarc == kUsPsarcBytes ? "same size" : "different size",
+                qar, qar == kUsQarBytes ? "same size" : "different size");
+    }
+
     int missing = 0;
     for (const char* path : kCoreArchive) {
         if (!archive_.Contains(path)) {
@@ -79,6 +104,15 @@ void Vfs::ReportDataDifferences() const {
     }
     if (missing == 0) {
         LogInfo("data: {} core packages present", std::size(kCoreArchive));
+    }
+    std::string languages, lacking;
+    for (const char* language : kSubtitleLanguage) {
+        const std::string package = std::format("as/sh/level/ui/subtitles/EngVoice/{}Text/subtitle.fpk", language);
+        (archive_.Contains(package) ? languages : lacking) += std::string(language) + " ";
+    }
+    LogInfo("data: subtitle languages in this copy: {}", languages.empty() ? "none" : languages.substr(0, languages.size() - 1));
+    if (!lacking.empty()) {
+        LogWarn("data: subtitle languages missing from this copy (English is shown instead): {}", lacking.substr(0, lacking.size() - 1));
     }
 }
 

@@ -256,8 +256,21 @@ elseif(PT_UPSCALERS)
     # DLSS 5's companion (src/engine/render/upscale/neural_native.h): the module NVIDIA's neural rendering runtime is called from,
     # next to pt.exe; on RTX 20, 30 and 40 it also hands the driver that card's GPU code. NGX's headers only, no NVIDIA code.
     if(WIN32)
-      add_library(pt_native_nvngx SHARED "${CMAKE_SOURCE_DIR}/tools/nr_native_companion_probe.cpp")
-      target_include_directories(pt_native_nvngx PRIVATE "${PT_DLSS_DIR}/include")
+      # MinHook 1.3.4 (BSD-2): the companion's NVAPI entry point hooks (tools/nr_native_hooks.h); FETCHCONTENT_SOURCE_DIR_MINHOOK
+      # points at a local copy
+      include(FetchContent)
+      FetchContent_Declare(minhook URL https://github.com/TsudaKageyu/minhook/archive/refs/tags/v1.3.4.zip
+        URL_HASH SHA256=172708123daa0c98d20d3a980b16a50be14af243dc95dee6f79c24193ad010e4)
+      FetchContent_Populate(minhook)
+      add_library(pt_native_nvngx SHARED "${CMAKE_SOURCE_DIR}/tools/nr_native_companion_probe.cpp"
+        "${minhook_SOURCE_DIR}/src/hook.c" "${minhook_SOURCE_DIR}/src/buffer.c" "${minhook_SOURCE_DIR}/src/trampoline.c"
+        "${minhook_SOURCE_DIR}/src/hde/hde64.c")
+      target_include_directories(pt_native_nvngx PRIVATE "${PT_DLSS_DIR}/include" "${minhook_SOURCE_DIR}/include")
+      if(MSVC)
+        set_source_files_properties("${minhook_SOURCE_DIR}/src/hook.c" "${minhook_SOURCE_DIR}/src/buffer.c" "${minhook_SOURCE_DIR}/src/trampoline.c"
+          "${minhook_SOURCE_DIR}/src/hde/hde64.c" PROPERTIES COMPILE_OPTIONS "/w")
+      endif()
+      list(APPEND PT_UPSCALER_NOTICES "${minhook_SOURCE_DIR}/LICENSE.txt|MinHook_LICENSE.txt")
       target_compile_features(pt_native_nvngx PRIVATE cxx_std_20)
       set_target_properties(pt_native_nvngx PROPERTIES OUTPUT_NAME "pt-native-nvngx" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
       add_dependencies(pt_engine pt_native_nvngx)

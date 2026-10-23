@@ -590,21 +590,9 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     }
     const char* name = SDL_GetAudioDeviceName(*id);
     device_name_ = name ? name : "controller audio endpoint";
-    if (model == SonyPadAudio::DualSense && path) {
-        if (SDL_hid_init() == 0) {
-            if (SDL_hid_device* hid = SDL_hid_open_path(path)) {
-                uint8_t report[48] = {};
-                report[0] = 0x02;
-                report[1] = 0x20 | 0x80;
-                report[6] = 0x64;
-                report[8] = 3 << 4;
-                const bool sent = SDL_hid_write(hid, report, sizeof(report)) >= 0;
-                LogInfo("input: DualSense speaker path {}", sent ? "set to the built-in speaker" : std::string("not set: ") + SDL_GetError());
-                SDL_hid_close(hid);
-            }
-            SDL_hid_exit();
-        }
-    }
+    if (model == SonyPadAudio::DualSense && path) pad_path_ = path;
+    speaker_path_selected_ = false;
+    speaker_path_written_ = false;
     route_ = model == SonyPadAudio::DualSense ? ControllerPcmRoute::DualSenseQuad : ControllerPcmRoute::DualShock4Mono;
     ds4_channels_ = model == SonyPadAudio::DualShock4 ? channels : 1;
     SDL_ResumeAudioStreamDevice(stream_);
@@ -614,7 +602,57 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     return true;
 }
 
+void ControllerSpeakerOutput::SelectDualSenseSpeakerPath(bool speaker, std::string_view main_output) {
+    if (route_ != ControllerPcmRoute::DualSenseQuad) return;
+    if (speaker_path_written_ && speaker == speaker_path_wanted_) return;
+    speaker_path_wanted_ = speaker;
+    speaker_path_written_ = true;
+    const std::string where = main_output.empty() ? std::string("no device") : std::format("'{}'", main_output);
+    if (pad_path_.empty()) {
+        speaker_path_selected_ = speaker;
+        LogInfo("input: controller speaker PCM {} on '{}' (no DualSense HID path to switch; the game's main output is {})",
+                speaker ? "plays" : "is silent", device_name_, where);
+        return;
+    }
+    const auto report = BuildDualSenseAudioPathReport(speaker);
+    bool sent = false;
+    if (SDL_hid_init() == 0) {
+        if (SDL_hid_device* hid = SDL_hid_open_path(pad_path_.c_str())) {
+            sent = SDL_hid_write(hid, report.data(), report.size()) >= 0;
+            SDL_hid_close(hid);
+        }
+        SDL_hid_exit();
+    }
+    speaker_path_selected_ = sent && speaker;
+    if (!sent) {
+        LogWarn("input: DualSense audio path not set to {}: {}", speaker ? "the built-in speaker" : "the headphone jack", SDL_GetError());
+    } else if (speaker) {
+        LogInfo("input: DualSense audio path set to the built-in speaker for the controller speaker sounds (the game's main output is {})",
+                where);
+    } else {
+        LogInfo("input: DualSense audio path on its headphone jack, the controller's own default (the game's main output is {}{})", where,
+                main_output == device_name_ ? ", this controller, where the speaker would play the whole game" : "");
+    }
+}
+
 void ControllerSpeakerOutput::Close() {
+    if (route_ == ControllerPcmRoute::DualSenseQuad && speaker_path_selected_ && !pad_path_.empty()) {
+        const auto report = BuildDualSenseAudioPathReport(false);
+        bool sent = false;
+        if (SDL_hid_init() == 0) {
+            if (SDL_hid_device* hid = SDL_hid_open_path(pad_path_.c_str())) {
+                sent = SDL_hid_write(hid, report.data(), report.size()) >= 0;
+                SDL_hid_close(hid);
+            }
+            SDL_hid_exit();
+        }
+        LogInfo("input: DualSense audio path {} as the controller route closes",
+                sent ? "set back to its headphone jack" : "not set back (the pad is gone)");
+    }
+    pad_path_.clear();
+    speaker_path_selected_ = false;
+    speaker_path_written_ = false;
+    speaker_path_wanted_ = false;
     if (stream_) {
         SDL_DestroyAudioStream(stream_);
         stream_ = nullptr;
@@ -724,6 +762,7 @@ bool ControllerSpeakerOutput::WriteCapturedBlock(const audio::ControllerPcmBlock
         return DownmixControllerSpeakerMono(speaker, mono, block.frames) && WriteMono(mono.data(), block.frames);
     }
     if (route_ == ControllerPcmRoute::DualSenseQuad) {
+        if (!speaker_path_selected_) std::fill(speaker_scratch_.begin(), speaker_scratch_.begin() + stereo_samples, 0.0f);
         const float* actuator = nullptr;
         if (dualsense_haptics_enabled) {
             const std::span<float> haptics(actuator_scratch_.data(), stereo_samples);

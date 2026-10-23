@@ -160,7 +160,6 @@ private:
     UiAssets& assets_;
     GameAudio* audio_;
     Settings settings_;
-    std::filesystem::path dir_;
 
     LisaDateScript script_;
     LisaDateText text_;

@@ -38,6 +38,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools" / "ci"))
 BUILD = REPO / "build" / "release"
 # the public release page (docs/updates.md)
 GITHUB_REPO = "https://github.com/LoreanXavier/pt-pc"
@@ -120,7 +121,7 @@ def rezip(root: pathlib.Path) -> pathlib.Path:
     """the portable folder zipped again (as tools/package.py does) after the previews were added"""
     import zipfile
     sys.path.insert(0, str(REPO / "tools"))
-    from package import FILE_LIST, file_list
+    from package import FILE_LIST, file_list, zip_add
     # the package's own file list again, with the files added since (tools/package.py)
     (root / FILE_LIST).write_bytes(file_list({x.relative_to(root).as_posix(): x for x in root.rglob("*") if x.is_file()}))
     archive = root.with_suffix(".zip")
@@ -128,7 +129,7 @@ def rezip(root: pathlib.Path) -> pathlib.Path:
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(root.rglob("*")):
             if path.is_file():
-                z.write(path, pathlib.Path(root.name) / path.relative_to(root))
+                zip_add(z, path, pathlib.Path(root.name) / path.relative_to(root))
     return archive
 
 
@@ -194,6 +195,16 @@ game_target = "pt_release"
 package_dir = dest / "game"
 report["files"] = []
 if not a.linux_only:
+    # tools/package.py refuses a build folder with a community unlock's files or a DLL the build does not make; said here before
+    # the builds, not 15 minutes later
+    sys.path.insert(0, str(REPO / "tools"))
+    from package import check_build_folder
+    problems = check_build_folder(BUILD) if BUILD.is_dir() else []
+    if problems:
+        report["error"] = "; ".join(problems)
+        log.write("build folder refused:\n  " + "\n  ".join(problems) + "\n")
+        print("build folder refused:\n  " + "\n  ".join(problems), file=sys.stderr)
+        finish(1)
     # 1. the developer game (its post build steps bring the DLLs, fonts and shaders) and the release game
     # the release's cache values, set again whatever a test build left in build/release (Game+ on, every upscaler required,
     # the installer payload at its default place)
@@ -240,6 +251,13 @@ if not a.linux_only:
     portable = dest / "P.T.PC.Port-portable-windows.zip"
     shutil.copy2(runtime, portable)
     add_extractor(portable, extractor, REPO / "dump" / "installer-20261002" / "native" / "extractor-source.zip", source / "LICENSE.txt")
+    # a portable copy updates itself from this setup's signed list (docs/updates.md, "Portable copies"): the zip holds exactly the
+    # payload's files, its pt-files.json included
+    from portable_list import check as check_portable, rewrite_file_list
+    rewrite_file_list(portable)
+    if problems := check_portable(portable, dest / "windows-payload-manifest.json"):
+        report["error"] = "the Windows portable zip differs from the setup's payload: " + "; ".join(problems)
+        finish(1)
     report["portable"] = str(portable)
     report["files"] = [report["installer"], report["portable"]]
 else:
@@ -280,6 +298,11 @@ if a.linux_setup:
     run("linux payload", [sys.executable, "tools/prepare_native_installer.py", "--runtime", runtime, "--extractor", extractor, "--source", source,
                           "--out", linux / "payload"])
     add_extractor(linux_portable, extractor, linux / "payload" / "extractor-source.zip", source / "LICENSE.txt")
+    from portable_list import check as check_portable, rewrite_file_list
+    rewrite_file_list(linux_portable)
+    if problems := check_portable(linux_portable, linux / "payload" / "payload-manifest.json"):
+        report["error"] = "the Linux portable zip differs from the setup's payload: " + "; ".join(problems)
+        finish(1)
     linux_setup = dest / a.linux_setup
     linux_setup.unlink(missing_ok=True)
     run("attach linux payload", [sys.executable, "tools/linux/attach_payload.py", "--setup", LINUX_BUILD / "pt_setup_linux", "--payload",

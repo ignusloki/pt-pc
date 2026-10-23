@@ -13,6 +13,7 @@
 #include <format>
 #include <fstream>
 
+#include "engine/core/crash_report.h"
 #include "engine/core/json.h"
 #include "engine/core/log.h"
 #include "engine/core/resource_path.h"
@@ -333,6 +334,14 @@ bool DeviceImpl::Init(std::string& error) {
         test_budget_bytes_ = static_cast<uint64_t>(std::atoi(budget)) * 1024 * 1024;
         LogWarn("d3d12: test video memory budget {} MB (PT_VRAM_BUDGET_MB): default heap allocations limited", std::atoi(budget));
     }
+    if (const char* fail = std::getenv("PT_D3D12_TEST_UPLOAD_FAIL"); fail && *fail) {
+        test_upload_fail_ = std::string_view(fail) == "always" ? 2 : 1;
+        LogWarn("d3d12: test staging upload failures (PT_D3D12_TEST_UPLOAD_FAIL={}): {}", fail,
+                test_upload_fail_ == 2 ? "every staging buffer fails" : "every other staging buffer fails");
+    }
+    if (const char* remove = std::getenv("PT_D3D12_TEST_REMOVE"); remove && std::atoi(remove) > 0) {
+        test_remove_frame_ = static_cast<uint32_t>(std::atoi(remove));
+    }
     if (!views_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, options_.view_descriptors, true, L"pt views") ||
         !samplers_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, options_.sampler_descriptors, true, L"pt samplers") ||
         !rtvs_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 4096, false, L"pt rtv") ||
@@ -573,11 +582,17 @@ void DeviceImpl::WaitValue(uint64_t value) {
     counters_.fence_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_started).count();
     if (waited != WAIT_OBJECT_0 && fence_->GetCompletedValue() < value) {
         std::string reason;
-        if (bridge_.Removed(&reason)) {
-            LogError("d3d12 backend: {}", reason);
-            bridge_.LogDred();
+        if (!bridge_.Removed(&reason)) {
+            LogError("d3d12 backend: the GPU did not reach fence value {} within 10 s (completed {})", value, fence_->GetCompletedValue());
+            for (int i = 0; i < 100 && !bridge_.Removed(&reason) && fence_->GetCompletedValue() < value; ++i) {
+                Sleep(100);
+            }
+        }
+        if (fence_->GetCompletedValue() < value || bridge_.Removed()) {
+            hung_ = !bridge_.Removed();
+            DeviceLost("a frame fence wait");
         } else {
-            LogError("d3d12 backend: the GPU did not reach fence value {} within 10 s", value);
+            LogWarn("d3d12 backend: fence value {} was reached late, the device is not removed", value);
         }
     }
     bridge_.DrainDebugMessages();
@@ -630,6 +645,7 @@ bool DeviceImpl::CreateRawBuffer(uint64_t size, D3D12_RESOURCE_STATES state, boo
     const HRESULT hr = allocator_->CreateResource(&a, &desc, state, nullptr, &allocation, IID_PPV_ARGS(&out));
     if (FAILED(hr)) {
         LogError("d3d12 backend: buffer of {} bytes ({}) failed: {}", size, name ? name : "unnamed", Hr(hr));
+        LostResult(hr, "a buffer creation");
         return false;
     }
     if (name) {
@@ -646,14 +662,81 @@ bool DeviceImpl::CreateTempBuffer(uint64_t size, ComPtr<ID3D12Resource>& out, D3
 }
 
 bool DeviceImpl::CreateUploadBuffer(uint64_t size, ComPtr<ID3D12Resource>& out, D3D12MA::Allocation*& allocation, void** mapped) {
+    if (test_upload_fail_ == 2 || (test_upload_fail_ == 1 && (test_upload_attempts_++ & 1) == 0)) {
+        last_upload_hr_ = E_OUTOFMEMORY;
+        return false;
+    }
     D3D12MA::ALLOCATION_DESC a{};
     a.HeapType = D3D12_HEAP_TYPE_UPLOAD;
     const D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(size);
-    if (FAILED(allocator_->CreateResource(&a, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, &allocation, IID_PPV_ARGS(&out)))) {
+    if (const HRESULT hr = allocator_->CreateResource(&a, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, &allocation, IID_PPV_ARGS(&out)); FAILED(hr)) {
+        last_upload_hr_ = hr;
         return false;
     }
     const D3D12_RANGE none{0, 0};
-    return SUCCEEDED(out->Map(0, &none, mapped));
+    if (const HRESULT hr = out->Map(0, &none, mapped); FAILED(hr)) {
+        last_upload_hr_ = hr;
+        out.Reset();
+        if (allocation) {
+            allocation->Release();
+            allocation = nullptr;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool DeviceImpl::ReclaimUploadMemory() {
+    if (bridge_.Removed()) {
+        DeviceLost("a staging upload");
+        return false;
+    }
+    WaitValue(submitted_);
+    Collect();
+    return true;
+}
+
+void DeviceImpl::UploadRetried(uint64_t size, bool succeeded) {
+    uint64_t& count = succeeded ? upload_retries_ : upload_failures_;
+    std::chrono::steady_clock::time_point& logged = succeeded ? upload_retry_logged_ : upload_failure_logged_;
+    ++count;
+    const auto now = std::chrono::steady_clock::now();
+    if (count > 8 && now - logged < std::chrono::seconds(10)) {
+        return;
+    }
+    logged = now;
+    if (succeeded) {
+        LogWarn("d3d12 backend: staging memory for a {} byte upload was found after waiting for the GPU ({} times so far)", size, count);
+    } else {
+        LogError("d3d12 backend: no staging memory for a {} byte upload even after waiting for the GPU ({}, {} times so far): the buffer keeps "
+                 "its earlier contents until a later upload succeeds",
+                 size, Hr(last_upload_hr_), count);
+    }
+}
+
+void DeviceImpl::LostResult(HRESULT hr, const char* where) {
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_HUNG || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR ||
+        bridge_.Removed()) {
+        DeviceLost(where);
+    }
+}
+
+void DeviceImpl::DeviceLost(const char* where) {
+    std::string reason;
+    if (!bridge_.Removed(&reason)) {
+        reason = hung_ ? "the GPU stopped making progress (fence timeout), the device is not removed" : "the present reported it, no removal reason";
+    }
+    if (!lost_reported_) {
+        lost_reported_ = true;
+        LogError("d3d12 backend: device lost at {}: {}", where, reason);
+        bridge_.LogDred();
+    }
+    if (!rendering_) {
+        return;
+    }
+    FatalError(std::string("the graphics device was lost (") + where +
+                   "). The GPU driver stopped or reset the device: a driver timeout, an unstable overclock or a fault in a pass.",
+               presenting_);
 }
 
 void DeviceImpl::Submit(const std::function<void(CommandList&)>& record) {
@@ -719,6 +802,14 @@ void DeviceImpl::WaitIdle() {
 }
 
 CommandList* DeviceImpl::BeginFrame(uint32_t slot) {
+    rendering_ = true;
+    if (test_remove_frame_ && ++test_frames_begun_ == test_remove_frame_) {
+        ComPtr<ID3D12Device5> device5;
+        if (SUCCEEDED(bridge_.Get()->QueryInterface(IID_PPV_ARGS(&device5)))) {
+            LogWarn("d3d12: test device removal at frame {} (PT_D3D12_TEST_REMOVE)", test_remove_frame_);
+            device5->RemoveDevice();
+        }
+    }
     Frame& f = frames_[slot % frames_.size()];
     WaitValue(f.value);
     Collect();
@@ -780,6 +871,9 @@ bool DeviceImpl::EndFrame(uint32_t slot, RenderTarget* final_image) {
     const uint64_t value = Execute(f);
     ReportCounters();
     if (!present) {
+        if (bridge_.Removed()) {
+            DeviceLost("frame submission");
+        }
         return true;
     }
     in.wait_fence = fence_.Get();
@@ -788,6 +882,12 @@ bool DeviceImpl::EndFrame(uint32_t slot, RenderTarget* final_image) {
     active_->Marker(pt::d3d12::LatencyMarker::RenderSubmitEnd, in.frame_id);
     uint64_t consumed = 0;
     const pt::d3d12::PresentResult r = active_->Present(in, consumed);
+    if (r == pt::d3d12::PresentResult::Lost) {
+        DeviceLost("present");
+    }
+    if (bridge_.Removed()) {
+        DeviceLost("frame submission");
+    }
     return r == pt::d3d12::PresentResult::Ok || r == pt::d3d12::PresentResult::Occluded;
 }
 
@@ -809,6 +909,7 @@ bool DeviceImpl::CreateSwapchain(HWND__* window, uint32_t width, uint32_t height
         if (CreateOwnerSwapchain(d, error)) {
             swapchain_format_ = format;
             swapchain_extent_ = {width, height};
+            presenting_ = true;
             return true;
         }
         LogError("d3d12 backend: frame generation swapchain: {}", error);
@@ -821,6 +922,7 @@ bool DeviceImpl::CreateSwapchain(HWND__* window, uint32_t width, uint32_t height
     }
     swapchain_format_ = format;
     swapchain_extent_ = {width, height};
+    presenting_ = true;
     return true;
 }
 
@@ -902,6 +1004,7 @@ bool DeviceImpl::CreateImage(const ImageDesc& desc, ImageResource& out) {
     if (FAILED(hr)) {
         LogError("d3d12 backend: image {}x{}x{} format {} ({}) failed: {}", desc.extent.width, desc.extent.height, rd.DepthOrArraySize,
                  static_cast<uint32_t>(desc.format), desc.name ? desc.name : "unnamed", Hr(hr));
+        LostResult(hr, "an image creation");
         return false;
     }
     if (desc.name) {
@@ -1049,6 +1152,7 @@ bool DeviceImpl::CreateBuffer(const BufferDesc& desc, BufferResource& out) {
     }
     if (FAILED(hr)) {
         LogError("d3d12 backend: buffer of {} bytes ({}) failed: {}", rec->size, desc.name ? desc.name : "unnamed", Hr(hr));
+        LostResult(hr, "a buffer creation");
         return false;
     }
     rec->state = state;
@@ -1479,6 +1583,7 @@ ID3D12PipelineState* DeviceImpl::Variant(PipelineRecord& p, CullMode cull, Front
     bridge_.DrainDebugMessages();
     if (FAILED(hr)) {
         LogError("d3d12 backend: pipeline {} + {} failed: {}", p.vertex_name, p.fragment_name.empty() ? "(no fragment)" : p.fragment_name, Hr(hr));
+        LostResult(hr, "a pipeline creation");
         return nullptr;
     }
     state->SetName(Wide((p.vertex_name + " " + p.fragment_name).c_str()).c_str());
@@ -1502,6 +1607,7 @@ PipelineHandle DeviceImpl::CreateComputePipeline(const ComputePipelineDesc& desc
     bridge_.DrainDebugMessages();
     if (FAILED(hr)) {
         LogError("d3d12 backend: compute pipeline {} failed: {}", rec->vertex_name, Hr(hr));
+        LostResult(hr, "a pipeline creation");
         return {};
     }
     rec->compute_state->SetName(Wide(rec->vertex_name.c_str()).c_str());

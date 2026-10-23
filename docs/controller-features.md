@@ -26,6 +26,14 @@ BT DS4 behind a virtual pad. Unsupported or failed routes retry at most every 2 
 so unplugging and reconnecting works. `PT_CONTROLLER_SPEAKER_DEVICE=<part of a playback device name>` names a stand-in endpoint
 for software tests; DS4 USB headset endpoints are accepted only through that explicit override.
 
+The DualSense's speaker and its headphone jack share the endpoint's first channel pair; the pad plays it on the jack unless USB
+output report 0x02 selects the speaker. The game selects the speaker only while the speaker setting is on and the game's main
+mix plays on another device, and only the controller speaker events go there. When the main output is the pad itself (a USB
+DualSense often becomes the Windows default device, see Sound > Output device), the pad stays on its jack and the speaker PCM is
+muted; the speaker row's note says so. A speaker path the game selected goes back to the jack when the route closes. 1.0.7
+selected the speaker whenever the route opened and never changed it back: with the pad as the Windows default the speaker
+played the whole game (`docs/dualsense-output-2026-10-20.md`).
+
 These controller features have passed software tests for supported-capability handling, event selection and audio
 routing. The DS4 Bluetooth encoder, packet layout, CRC and physical-device matching have software coverage, but audible playback
 on a physical DS4 has not been verified. DualSense speaker audio still requires USB. Trigger vibration and DualSense actuator

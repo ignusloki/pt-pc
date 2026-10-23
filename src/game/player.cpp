@@ -125,6 +125,7 @@ void Player::Spawn(const glm::mat4& world) {
     handy_light.enable = true;
     spawned = true;
     handoff_weight_ = 0.0f;
+    handoff_anchor_pending_ = false;
     ResetLocomotion();
     UpdateEye(0.0f);
     PublishNow();
@@ -140,6 +141,7 @@ void Player::Warp(const glm::vec3& position, float fox_yaw) {
     look_roll_ = 0.0f;
     look_velocity_ = glm::vec2(0.0f);
     handoff_weight_ = 0.0f;
+    handoff_anchor_pending_ = false;
     ResetLocomotion();
     UpdateEye(0.0f);
     PublishNow();
@@ -204,13 +206,15 @@ void Player::ResetLocomotion() {
     draw_sync_ = true;
 }
 
-void Player::HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value) {
+void Player::HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value, bool anchor_after_move) {
     yaw = target_yaw = yaw_value;
     pitch = target_pitch = ClampPitch(pitch_value);
     look_roll_ = 0.0f;
     look_velocity_ = glm::vec2(0.0f);
     handoff_local_ = WorldToBody(position);
     handoff_weight_ = 1.0f;
+    handoff_world_ = position;
+    handoff_anchor_pending_ = anchor_after_move;
     eye_ = position;
 }
 
@@ -329,7 +333,13 @@ void Player::LocomotionFrame(const PlayerFrameContext& context) {
         if (!stand_node && body_.ClipKind() != PlayerBody::Kind::Stop) {
             body_.Play(PlayerBody::Kind::Stop, body_.Clip());
         }
+    } else if (stand_node && m < 0.1f) {
+        if (!carried_walk_logged_) {
+            carried_walk_logged_ = true;
+            LogInfo("player: walk state carried through a demo, stick neutral: the debounce runs standing, no start step");
+        }
     } else if (stand_node || body_.ClipKind() == PlayerBody::Kind::Stop) {
+        carried_walk_logged_ = false;
         body_.Play(PlayerBody::Kind::Start, direction);
     } else if (body_.ClipKind() == PlayerBody::Kind::Node && body_.Clip() != direction) {
         body_.Play(PlayerBody::Kind::Node, direction);
@@ -655,6 +665,10 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
     UpdateZoom(dt, context);
     if (PlayerLocomotionData().loaded) {
         UpdateBody(dt, world);
+    }
+    if (handoff_anchor_pending_) {
+        handoff_anchor_pending_ = false;
+        handoff_local_ = WorldToBody(handoff_world_);
     }
     UpdateEye(dt);
     if (draw_pose_ && PlayerLocomotionData().loaded) {

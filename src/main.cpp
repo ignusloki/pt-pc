@@ -4,15 +4,19 @@
 #include "engine/core/ascii.h"
 #include "engine/platform/update_check.h"
 #include "engine/platform/update_journal.h"
+#include "engine/platform/json_value.h"
 #include "engine/platform/macos_data_path.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #include <dbghelp.h>
 #include <dxgi.h>
+#include <dxgi1_6.h>
 #include <shobjidl.h>
 #include <shlobj.h>
 #undef small
+#else
+#include <unistd.h>
 #endif
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -48,12 +52,15 @@
 #include "engine/core/crash_upload.h"
 #include "engine/platform/discord_presence.h"
 #include "engine/audio/audio_engine.h"
+#include "engine/audio/output_device.h"
+#include "engine/audio/playback_endpoints.h"
 #include "engine/core/crash_report.h"
 #include "engine/core/memory_status.h"
 #include "build_id.h"
 #include "engine/data/fox2.h"
 #include "engine/fs/file_prefetch.h"
 #include "engine/fs/fox_crypt.h"
+#include "engine/fs/game_folder.h"
 #include "engine/fs/io_stats.h"
 #include "engine/fs/mods.h"
 #include "engine/fs/vfs.h"
@@ -62,6 +69,7 @@
 #include "engine/platform/controller_speaker.h"
 #include "engine/platform/controller_feedback.h"
 #include "engine/platform/livesplit.h"
+#include "engine/render/intel_vulkan_driver.h"
 #include "engine/render/model_cache.h"
 #include "engine/render/gpu/gpu_vk_native.h"
 #include "engine/render/renderer.h"
@@ -75,6 +83,7 @@
 #include "engine/render/upscale/fg_unlock.h"
 #include "engine/render/upscale/route_queue.h"
 #include "engine/render/upscale/streamline.h"
+#include "engine/render/upscale/fsr_provider_gate.h"
 #include "engine/render/vfx_pass.h"
 #include "engine/vfx/vfx_system.h"
 #include "engine/script/lua_vm.h"
@@ -83,13 +92,28 @@
 #include "engine/platform/settings.h"
 #include "engine/platform/display_modes.h"
 #include "engine/render/render_viewport.h"
+#include "engine/platform/display_policy.h"
 #include "engine/platform/os.h"
 #include "engine/platform/rendering_api.h"
+#include "engine/platform/start_watch.h"
+#include "engine/render/vk_layers.h"
+#ifdef _WIN32
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
 namespace {
 std::filesystem::path g_d3d12_marker;
 void ArmD3D12Marker(int stage) {
     if (g_d3d12_marker.empty()) return;
-    std::ofstream(g_d3d12_marker) << stage << "\npt.exe is starting DirectX 12. If this file stays, the next start uses Vulkan.\n";
+#ifdef _WIN32
+    const unsigned long pid = GetCurrentProcessId();
+#else
+    const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+    std::ofstream(g_d3d12_marker) << stage << "\npid " << pid
+                                  << "\npt.exe is starting DirectX 12. If this file stays, the next start looks for a crash of this start.\n";
 }
 void ClearD3D12Marker() {
     if (g_d3d12_marker.empty()) return;
@@ -105,6 +129,66 @@ std::string D3D12CrashReason(int stage) {
     return stage == 2 ? "DirectX 12 stopped the game while its device was starting at an earlier start"
          : stage == 3 ? "DirectX 12 stopped the game in its first frames at an earlier start"
                       : "DirectX 12 stopped the game while the game checked whether it runs here, at an earlier start";
+}
+struct StartEvidence {
+    bool crashed = false;
+    bool exited = false;
+    std::string what;
+};
+StartEvidence EvidenceOfEarlierStart(const std::filesystem::path& marker, const std::filesystem::path& previous_log) {
+    StartEvidence e;
+    std::error_code ec;
+    const auto marker_time = std::filesystem::last_write_time(marker, ec);
+    const bool timed = !ec;
+    unsigned long pid = 0;
+    {
+        std::ifstream in(marker);
+        std::string line;
+        while (std::getline(in, line))
+            if (line.rfind("pid ", 0) == 0) pid = std::strtoul(line.c_str() + 4, nullptr, 10);
+    }
+    if (std::ifstream in(previous_log); in) {
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.find(" crash: ") != std::string::npos || line.find(" fatal: ") != std::string::npos ||
+                line.find(" hang: ") != std::string::npos || line.find("device lost at") != std::string::npos ||
+                line.find("DEVICE_REMOVED") != std::string::npos || line.find("DEVICE_HUNG") != std::string::npos) {
+                if (!e.crashed) e.what = "pt-previous.log: " + line;
+                e.crashed = true;
+            }
+            if (line.find(" exit: ") != std::string::npos) e.exited = true;
+        }
+    }
+    if (!e.crashed && timed) {
+        for (const auto& entry : std::filesystem::directory_iterator(previous_log.parent_path(), ec)) {
+            const std::string name = pt::os::PathToUtf8(entry.path().filename());
+            if (name.rfind("pt-crash-", 0) != 0 || entry.path().extension() != ".dmp") continue;
+            std::error_code tec;
+            const auto t = std::filesystem::last_write_time(entry.path(), tec);
+            if (!tec && t + std::chrono::seconds(2) >= marker_time) {
+                e.crashed = true;
+                e.what = "dump " + name;
+                break;
+            }
+        }
+    }
+#ifdef _WIN32
+    if (!e.crashed && timed && pid) {
+        const double hours =
+            std::chrono::duration<double>(std::filesystem::file_time_type::clock::now() - marker_time).count() / 3600.0 + 0.05;
+        char hex[32];
+        std::snprintf(hex, sizeof(hex), "0x%lx", pid);
+        for (const std::string& report : pt::start_watch::RecentErrorReports(std::clamp(hours, 0.05, 24.0 * 30), 8)) {
+            if (report.find(hex) != std::string::npos || report.find("=" + std::to_string(pid) + ";") != std::string::npos) {
+                e.crashed = true;
+                e.what = "Windows error report " + report;
+                break;
+            }
+        }
+    }
+#endif
+    if (!e.crashed) e.what = e.exited ? "none (that start logged its own exit)" : "none (no dump, no crash, hang or lost device line, no Windows error report)";
+    return e;
 }
 }
 #ifdef PT_D3D12_GAME
@@ -146,6 +230,7 @@ bool ProbeD3D12(std::string& reason) {
 #endif
 #include "engine/voice/voice_recognizer.h"
 #include "game/archive.h"
+#include "game/controller_speaker_events.h"
 #include "game/museum_transcripts.h"
 #include "game/archive_theater.h"
 #include "engine/audio/wem.h"
@@ -255,7 +340,7 @@ struct OptionSpec {
 };
 constexpr OptionSpec kOptionSpecs[] = {
     {"--help", 0, "print this list and exit (also -h)"},
-    {"--game", 1, "<folder> the extracted CUSA01127 folder"},
+    {"--game", 1, "<folder> your extracted P.T. game folder (any name, for example CUSA01127)"},
     {"--settings", 1, "<file> pt.ini to use instead of data/pt.ini next to the executable"},
     {"--save-dir", 1, "<folder> where saves go"},
     {"--no-save", 0, "never write a save"},
@@ -693,6 +778,8 @@ struct App {
     int nr_arch = -1;
     bool nr_native_remove_pending = false;
     bool nr_crash_hold = false;
+    int d3d12_crash_stage = 0;
+    bool dlssg_crash_hold = false;
     int nr_job_request = 0;
     bool nr_reshade_loaded = false;
     bool nr_marker_read = false;
@@ -732,6 +819,7 @@ struct App {
     std::filesystem::path settings_path;
     std::filesystem::path streamline_marker;
     bool d3d12_marker = false;
+    bool start_layers_retry = false;
     SDL_Window* window = nullptr;
     bool microphone_test = false;
     int extras_request = 0;
@@ -740,7 +828,11 @@ struct App {
     bool freecam_active = false;
     bool photo_active = false;
     int display_hdr = -1;
+    pt::display::Environment display_env;
+    std::string steam_deck;
+    bool display_mode_chosen = false;
     bool microphone_monitor = false;
+    std::string audio_output_name;
     float microphone_db = -80.0f;
     std::string microphone_hypothesis;
     std::string microphone_status = "pc_mic_waiting";
@@ -818,29 +910,123 @@ void MountMods(App& app) {
     pt::LogInfo("mods: {} found in {}, {} files replaced", app.mods->mods.size(), pt::os::PathToUtf8(dir), app.mods->index.Size());
 }
 
+int WindowMode(const App& app) {
+    return pt::display::PlanMode(app.display_env, app.settings.display.fullscreen, app.display_mode_chosen).mode;
+}
+
+void LogWindowState(const App& app, std::string_view what) {
+    if (!app.window) return;
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(app.window, &w, &h);
+    SDL_GetWindowSizeInPixels(app.window, &pw, &ph);
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(app.window);
+    pt::LogInfo("display: {}: {} (pt.ini {} {}x{}), window {}x{}, pixels {}x{}, flags {:#x}{}, display {}", what,
+                pt::display::ModeName(WindowMode(app)), pt::display::ModeName(app.settings.display.fullscreen), app.settings.display.width,
+                app.settings.display.height, w, h, pw, ph, static_cast<uint64_t>(flags),
+                (flags & SDL_WINDOW_FULLSCREEN) ? " (fullscreen)" : " (no fullscreen flag)", SDL_GetDisplayForWindow(app.window));
+}
+
+void LogDisplays() {
+    int count = 0;
+    SDL_DisplayID* ids = SDL_GetDisplays(&count);
+    for (int i = 0; ids && i < count; ++i) {
+        const SDL_DisplayID id = ids[i];
+        SDL_Rect bounds{}, usable{};
+        SDL_GetDisplayBounds(id, &bounds);
+        SDL_GetDisplayUsableBounds(id, &usable);
+        const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(id);
+        const SDL_DisplayMode* current = SDL_GetCurrentDisplayMode(id);
+        int mode_count = 0;
+        SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(id, &mode_count);
+        std::string listed;
+        for (int m = 0; modes && m < mode_count && m < 64; ++m) {
+            listed += std::format("{}{}x{}@{:.0f}", listed.empty() ? "" : " ", modes[m]->w, modes[m]->h, modes[m]->refresh_rate);
+        }
+        if (mode_count > 64) listed += std::format(" (and {} more)", mode_count - 64);
+        SDL_free(modes);
+        const char* name = SDL_GetDisplayName(id);
+        pt::LogInfo("display {}{}: '{}', bounds {}x{} at {},{}, usable {}x{} at {},{}, content scale {:.2f}, desktop mode {}x{} @ {:.2f} Hz "
+                    "density {:.2f}, current mode {}x{} @ {:.2f} Hz, {} fullscreen modes: {}",
+                    id, id == SDL_GetPrimaryDisplay() ? " (primary)" : "", name ? name : "", bounds.w, bounds.h, bounds.x, bounds.y, usable.w,
+                    usable.h, usable.x, usable.y, SDL_GetDisplayContentScale(id), desktop ? desktop->w : 0, desktop ? desktop->h : 0,
+                    desktop ? desktop->refresh_rate : 0.0f, desktop ? desktop->pixel_density : 0.0f, current ? current->w : 0,
+                    current ? current->h : 0, current ? current->refresh_rate : 0.0f, mode_count, listed.empty() ? "none" : listed);
+    }
+    SDL_free(ids);
+}
+
+std::string SteamDeckHardware() {
+#ifdef __linux__
+    std::ifstream file("/sys/devices/virtual/dmi/id/product_name");
+    std::string product;
+    if (file && std::getline(file, product)) {
+        if (const char* model = pt::display::SteamDeckModel(product)) return model;
+    }
+#endif
+    return {};
+}
+
+void DetectDisplayEnvironment(App& app) {
+    app.display_env = pt::display::DetectEnvironment([](const char* name) { return pt::os::GetEnv(name); });
+    app.steam_deck = SteamDeckHardware();
+    std::string vars;
+    for (const char* name : {"GAMESCOPE_WAYLAND_DISPLAY", "WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "SteamDeck",
+                             "SteamGamepadUI", "SteamOS"}) {
+        const std::string value = pt::os::GetEnv(name);
+        if (!value.empty()) vars += std::format("{}{}={}", vars.empty() ? "" : ", ", name, value);
+    }
+    const char* driver = SDL_GetCurrentVideoDriver();
+    pt::LogInfo("display: SDL driver {}, gamescope {}{}{}, environment: {}", driver ? driver : "none", app.display_env.gamescope ? "yes (" : "no",
+                app.display_env.evidence, app.display_env.gamescope ? ")" : "", vars.empty() ? "none of the display variables" : vars);
+    if (!app.steam_deck.empty()) pt::LogInfo("display: hardware {} (built-in screen 1280x800)", app.steam_deck);
+}
+
+void LogGamescopeScreen(const App& app) {
+    if (!app.window || !app.display_env.gamescope || app.steam_deck.empty()) return;
+    const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(app.window));
+    if (!desktop || pt::display::SameShape({desktop->w, desktop->h}, pt::display::kSteamDeckScreen)) return;
+    pt::LogWarn("display: gamescope's X screen is {}x{}, another shape than this {}'s 1280x800 screen: gamescope fits it into the screen "
+                "with black bars. Steam picks that size (the game's Properties > General > Game Resolution); Default fills the Deck's "
+                "screen. On an external display of that shape there are no bars.",
+                desktop->w, desktop->h, app.steam_deck);
+}
+
 void ApplyFullscreen(App& app) {
     if (!app.window) {
         return;
     }
-    int mode = std::clamp(app.settings.display.fullscreen, 0, 2);
+    const pt::display::ModePlan plan = pt::display::PlanMode(app.display_env, app.settings.display.fullscreen, app.display_mode_chosen);
+    int mode = plan.mode;
+    if (*plan.reason) {
+        pt::LogInfo("display: {} instead of pt.ini's {} in this session: {}", pt::display::ModeName(mode),
+                    pt::display::ModeName(app.settings.display.fullscreen), plan.reason);
+    }
     if (mode == 2) {
         const SDL_DisplayID display = SDL_GetDisplayForWindow(app.window);
         int count = 0;
         SDL_DisplayMode** listed = SDL_GetFullscreenDisplayModes(display, &count);
         std::vector<glm::ivec2> choices;
+        std::vector<pt::DisplayModeInfo> infos;
         choices.reserve(std::max(count, 0));
-        for (int i = 0; listed && i < count; ++i) choices.emplace_back(listed[i]->w, listed[i]->h);
+        for (int i = 0; listed && i < count; ++i) {
+            choices.emplace_back(listed[i]->w, listed[i]->h);
+            infos.push_back({listed[i]->w, listed[i]->h, static_cast<double>(listed[i]->refresh_rate)});
+        }
         choices = pt::UniqueDisplaySizes(choices);
         const glm::ivec2 selected = pt::ClosestDisplaySize(choices, {app.settings.display.width, app.settings.display.height});
-        const SDL_DisplayMode* chosen = nullptr;
-        for (int i = 0; listed && i < count; ++i) {
-            if (listed[i]->w == selected.x && listed[i]->h == selected.y) {
-                chosen = listed[i];
-                break;
-            }
-        }
+        const double wanted_hz = app.settings.display.refresh_rate;
+        const int picked = pt::PickExclusiveMode(infos, selected, wanted_hz);
+        const SDL_DisplayMode* chosen = picked >= 0 ? listed[picked] : nullptr;
         if (!chosen) chosen = SDL_GetDesktopDisplayMode(display);
         if (chosen) {
+            std::string offered;
+            for (const double r : pt::RefreshRatesFor(infos, {chosen->w, chosen->h})) offered += (offered.empty() ? "" : ", ") + pt::RefreshRateText(r);
+            const bool rate_missing = wanted_hz > 0.0 && !pt::SameRefreshRate(chosen->refresh_rate, wanted_hz);
+            pt::LogInfo("display: exclusive mode {}x{} @ {:.2f} Hz, the closest of {} sizes to pt.ini's {}x{}; refresh rate {}{} (offered at "
+                        "this size: {})",
+                        chosen->w, chosen->h, chosen->refresh_rate, choices.size(), app.settings.display.width, app.settings.display.height,
+                        wanted_hz > 0.0 ? pt::RefreshRateText(wanted_hz) : std::string("Auto, the highest"),
+                        rate_missing ? " is not offered at this size, the highest instead" : "", offered.empty() ? "none" : offered);
             app.settings.display.width = chosen->w;
             app.settings.display.height = chosen->h;
             if (!SDL_SetWindowFullscreenMode(app.window, chosen)) {
@@ -871,6 +1057,40 @@ void ApplyFullscreen(App& app) {
     if (!SDL_SyncWindow(app.window)) pt::LogWarn("display: fullscreen transition timed out: {}", SDL_GetError());
     if (app.renderer.Context().device) app.renderer.Resize(0, 0);
 #endif
+    LogWindowState(app, "window mode requested");
+}
+
+void LogDisplayPacing(App& app) {
+    if (!app.window) return;
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(app.window);
+    const SDL_DisplayMode* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+    const double hz = mode ? static_cast<double>(mode->refresh_rate) : 0.0;
+    const bool vsync = app.settings.display.vsync;
+    const int limit = app.settings.display.fps_limit;
+    const bool generation = app.settings.upscaling.frame_generation != "off";
+    static std::string last;
+    const std::string key = std::format("{} {} {:.3f} {} {} {} {} {}", display, mode ? mode->w : 0, hz, vsync, limit, generation,
+                                        app.settings.display.fullscreen, mode ? mode->h : 0);
+    if (key == last) return;
+    last = key;
+    std::string pacing;
+    if (!vsync) {
+        pacing = "v-sync off: each frame is shown when it is finished";
+    } else if (generation) {
+        pacing = "v-sync on with frame generation: the generator paces the shown frames";
+    } else if (const pt::LimiterPacing p = pt::PacingOfLimit(hz, limit); p.min_refreshes == 0) {
+        pacing = limit > 0 ? "v-sync on, the limit at or above the refresh rate: the display paces the frames"
+                           : "v-sync on, no fps limit: the display paces the frames";
+    } else if (p.min_refreshes == p.max_refreshes) {
+        pacing = std::format("v-sync on, fps limit {}: every frame stays {} refreshes", limit, p.min_refreshes);
+    } else {
+        pacing = std::format("v-sync on, fps limit {}: {:.2f} refreshes a frame, so frames stay {} or {} refreshes on screen (uneven: "
+                             "steady motion judders unless the display runs variable refresh)",
+                             limit, hz / limit, p.min_refreshes, p.max_refreshes);
+    }
+    const char* name = display ? SDL_GetDisplayName(display) : nullptr;
+    pt::LogInfo("display: {} {}x{} at {:.2f} Hz, window mode {}; {}", name ? name : "unknown", mode ? mode->w : 0, mode ? mode->h : 0, hz,
+                app.settings.display.fullscreen, pacing);
 }
 
 std::filesystem::path g_output_dir;
@@ -950,10 +1170,7 @@ std::filesystem::path LegacyUserDataDir() {
 #endif
 }
 
-bool LooksLikeGameDir(const std::filesystem::path& dir) {
-    std::error_code error;
-    return !dir.empty() && std::filesystem::exists(dir / "chunk1.psarc", error) && std::filesystem::exists(dir / "texture.qar", error);
-}
+bool LooksLikeGameDir(const std::filesystem::path& dir) { return pt::game_folder::LooksLikeGameDir(dir); }
 
 std::filesystem::path RememberedGameDirFile() {
     const std::filesystem::path user = UserDataDir();
@@ -963,23 +1180,17 @@ std::filesystem::path RememberedGameDirFile() {
 std::filesystem::path FindGameDir(const Options& options, std::string& source, bool* player_quit = nullptr) {
     if (options.game_dir_given || LooksLikeGameDir(options.game_dir)) {
         source = options.game_dir_given ? "--game" : "the default folder";
-        return options.game_dir;
-    }
-    std::filesystem::path dir = pt::ExecutableDir();
-    if (!dir.empty() && dir.filename().empty()) {
-        dir = dir.parent_path();
-    }
-    for (int depth = 0; depth < 5 && !dir.empty(); ++depth) {
-        for (const std::filesystem::path candidate : {dir / "game" / "CUSA01127", dir / "CUSA01127"}) {
-            if (LooksLikeGameDir(candidate)) {
-                source = depth == 0 ? "next to the program" : std::format("{} folder{} above the program", depth, depth == 1 ? "" : "s");
-                return candidate;
+        if (!LooksLikeGameDir(options.game_dir)) {
+            if (std::filesystem::path inner = pt::game_folder::FindGameFolder(options.game_dir); !inner.empty()) {
+                pt::LogInfo("game files: {} holds no game files itself; using {}", pt::os::PathToUtf8(options.game_dir), pt::os::PathToUtf8(inner));
+                return inner;
             }
         }
-        if (dir == dir.parent_path()) {
-            break;
-        }
-        dir = dir.parent_path();
+        return options.game_dir;
+    }
+    if (const pt::game_folder::Found found_near = pt::game_folder::FindNearProgram(pt::ExecutableDir()); !found_near.folder.empty()) {
+        source = found_near.where;
+        return found_near.folder;
     }
     const std::filesystem::path remembered_file = RememberedGameDirFile();
     if (!remembered_file.empty()) {
@@ -1326,6 +1537,43 @@ bool NvidiaAdapterPresent() {
 }
 #endif
 
+#ifdef _WIN32
+void LogGraphicsAdapters() {
+    HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+    using CreateFactory1 = HRESULT(WINAPI*)(REFIID, void**);
+    auto create = dxgi ? reinterpret_cast<CreateFactory1>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1"))) : nullptr;
+    IDXGIFactory1* factory = nullptr;
+    if (!create || FAILED(create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) {
+        pt::LogWarn("gpu: DXGI could not list the graphics adapters");
+        return;
+    }
+    IDXGIFactory6* factory6 = nullptr;
+    factory->QueryInterface(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(&factory6));
+    for (UINT i = 0;; ++i) {
+        IDXGIAdapter1* adapter = nullptr;
+        const HRESULT hr = factory6 ? factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, __uuidof(IDXGIAdapter1),
+                                                                           reinterpret_cast<void**>(&adapter))
+                                    : factory->EnumAdapters1(i, &adapter);
+        if (FAILED(hr) || !adapter) break;
+        DXGI_ADAPTER_DESC1 d{};
+        adapter->GetDesc1(&d);
+        LARGE_INTEGER umd{};
+        const bool has_version = SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd));
+        std::wstring wide_name(d.Description);
+        pt::LogInfo("gpu: adapter {}{}: {} (vendor {:04x} device {:04x}, {} MB dedicated, LUID {:08x}:{:08x}{}{})", i,
+                    factory6 ? " by high performance order" : "", pt::os::PathToUtf8(std::filesystem::path(wide_name)), d.VendorId, d.DeviceId,
+                    d.DedicatedVideoMemory / (1024 * 1024), static_cast<unsigned>(d.AdapterLuid.HighPart), d.AdapterLuid.LowPart,
+                    has_version ? std::format(", driver {}.{}.{}.{}", HIWORD(umd.HighPart), LOWORD(umd.HighPart), HIWORD(umd.LowPart),
+                                              LOWORD(umd.LowPart))
+                                : std::string(),
+                    (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? ", software" : "");
+        adapter->Release();
+    }
+    if (factory6) factory6->Release();
+    factory->Release();
+}
+#endif
+
 std::filesystem::path StartStreamline(App& app, bool d3d12) {
     const char* force = std::getenv("PT_STREAMLINE");
     const bool forced = force && std::atoi(force) != 0;
@@ -1344,17 +1592,37 @@ std::filesystem::path StartStreamline(App& app, bool d3d12) {
     }
     /* DLSS-G can take the process down inside its first frames with nothing logged; a marker left over from such a start turns it off next time. */
     const std::filesystem::path marker = dir / "streamline-starting.txt";
+    bool retry = false;
     if (!forced && std::filesystem::exists(marker, ec)) {
+        const StartEvidence evidence = EvidenceOfEarlierStart(marker, g_log_path.parent_path() / "pt-previous.log");
+        int& interrupted = app.settings.upscaling.dlssg_interrupted;
+        if (!evidence.crashed && (evidence.exited || interrupted < 1)) {
+            if (!evidence.exited) interrupted = 1;
+            pt::LogWarn("streamline: the last start ended in Streamline's first frames with no sign of a crash, evidence: {}; it loads "
+                        "again{}", evidence.what, evidence.exited ? "" : " (a second such start in a row turns DLSS Frame Generation off, pt.ini dlssg_interrupted = 1)");
+            if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            retry = true;
+        }
+    }
+    if (!forced && !retry && std::filesystem::exists(marker, ec)) {
+        app.settings.upscaling.dlssg_interrupted = 0;
         pt::LogWarn("streamline: last DLSS-G start died in its first frames, DLSS Frame Generation off");
         std::filesystem::remove(marker, ec);
         pt::UpscaleHost::Get().SetDlssFrameGenFailed(true);
+        app.dlssg_crash_hold = true;
         if (app.scene.upscale.frame_generation == pt::FrameGenKind::Dlss) app.scene.upscale.frame_generation = pt::FrameGenKind::Off;
         UpscaleToApp(app.scene.upscale, app.settings);
         if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
         return {};
     }
     if (!forced) {
-        std::ofstream(marker) << "pt.exe is starting NVIDIA Streamline (DLSS Frame Generation). If this file stays, the next start leaves it off.\n";
+#ifdef _WIN32
+        const unsigned long pid = GetCurrentProcessId();
+#else
+        const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+        std::ofstream(marker) << "pid " << pid << "\npt.exe is starting NVIDIA Streamline (DLSS Frame Generation). If this file stays "
+                                 "and the start crashed, the next start leaves it off.\n";
     }
     std::string reason;
     if (!pt::streamline::Start(dir / "streamline", reason, d3d12 ? pt::streamline::Api::D3D12 : pt::streamline::Api::Vulkan)) {
@@ -1893,6 +2161,7 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
     bool changed = false;
     static const char* kModes[] = {"Window", "Borderless fullscreen", "Exclusive fullscreen"};
     if (ImGui::Combo("Display", &s.display.fullscreen, kModes, 3)) {
+        app.display_mode_chosen = true;
         ApplyFullscreen(app);
         changed = true;
     }
@@ -2218,15 +2487,81 @@ std::filesystem::path UpdaterExecutable() {
 #endif
 }
 
-bool InGameUpdate(const pt::update::Release& release) {
-#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+struct UpdateHere {
+    enum class Kind { None, Install, Portable } kind = Kind::None;
+    std::string problem;
+};
+std::string FolderWriteProblem(const std::filesystem::path& dir) {
     std::error_code ec;
-    return release.signed_update && std::filesystem::is_regular_file(pt::ExecutableDir() / "pt-install-manifest.txt", ec) &&
-           std::filesystem::is_regular_file(UpdaterExecutable(), ec);
-#else
-    (void)release;
-    return false;
+    if (!std::filesystem::is_directory(dir, ec)) return pt::os::PathToUtf8(dir) + " is not a folder";
+    const std::filesystem::path probe = dir / std::format(".pt-write-probe-{}", pt::os::ProcessId());
+    if (!std::filesystem::create_directory(probe, ec) || ec) return pt::os::PathToUtf8(dir) + " is not writable" + (ec ? " (" + ec.message() + ")" : std::string());
+    bool written = false;
+    {
+        std::ofstream out(probe / "write-test", std::ios::binary | std::ios::trunc);
+        out.put('x');
+        out.close();
+        written = static_cast<bool>(out);
+    }
+    std::filesystem::remove_all(probe, ec);
+    return written ? std::string() : pt::os::PathToUtf8(dir) + " is not writable";
+}
+bool PortableFileList(const std::filesystem::path& file) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec) || std::filesystem::file_size(file, ec) > 16 * 1024 * 1024) return false;
+    std::ifstream in(file, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), {});
+    pt::json::update_json::Value root;
+    if (!pt::json::update_json::Reader(text).Parse(root) || !root.object) return false;
+    const auto files = root.members.find("files");
+    if (files == root.members.end()) return false;
+    const std::string game = pt::os::PathToUtf8(GameExecutable().filename());
+    return std::any_of(files->second.items.begin(), files->second.items.end(), [&](const pt::json::update_json::Value& item) {
+        const auto path = item.members.find("path");
+        return path != item.members.end() && path->second.text == game;
+    });
+}
+const UpdateHere& InGameUpdateHere() {
+    static const UpdateHere here = [] {
+        UpdateHere result;
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+        std::error_code ec;
+        std::filesystem::path install = pt::ExecutableDir();
+        if (!install.has_filename()) install = install.parent_path();
+        if (!std::filesystem::is_regular_file(UpdaterExecutable(), ec)) {
+            pt::LogInfo("update: no in-game update here ({} is missing); the notice links the release page", pt::os::PathToUtf8(UpdaterExecutable()));
+            return result;
+        }
+        if (std::filesystem::is_regular_file(install / "pt-install-manifest.txt", ec)) {
+            result.kind = UpdateHere::Kind::Install;
+            pt::LogInfo("update: in-game update for this install ({})", pt::os::PathToUtf8(install));
+            return result;
+        }
+        if (!PortableFileList(install / "pt-files.json")) {
+            pt::LogInfo("update: no in-game update here (no pt-install-manifest.txt and no pt-files.json naming the game in {}); the notice links the release page",
+                        pt::os::PathToUtf8(install));
+            return result;
+        }
+        result.kind = UpdateHere::Kind::Portable;
+        result.problem = FolderWriteProblem(install);
+        if (result.problem.empty() && std::filesystem::is_directory(install / "data", ec)) result.problem = FolderWriteProblem(install / "data");
+        if (result.problem.empty() && install.has_parent_path() && install.parent_path() != install) result.problem = FolderWriteProblem(install.parent_path());
+        if (result.problem.empty()) pt::LogInfo("update: in-game update for this portable copy ({})", pt::os::PathToUtf8(install));
+        else pt::LogWarn("update: this portable copy cannot update itself: {}; the Update button says so and the notice links the release page", result.problem);
 #endif
+        return result;
+    }();
+    return here;
+}
+bool InGameUpdate(const pt::update::Release& release) {
+    if (!release.signed_update) return false;
+    const UpdateHere& here = InGameUpdateHere();
+    return here.kind != UpdateHere::Kind::None && here.problem.empty();
+}
+bool InGameUpdateBlocked(const pt::update::Release& release) {
+    if (!release.signed_update) return false;
+    const UpdateHere& here = InGameUpdateHere();
+    return here.kind == UpdateHere::Kind::Portable && !here.problem.empty();
 }
 
 std::string UpdateVersionLabel(const pt::update::Release& release) {
@@ -2240,6 +2575,9 @@ std::string UpdateNoticeKey(const pt::update::Release& release) {
 }
 
 bool g_update_mark_started = false;
+std::filesystem::path g_update_backup;
+bool g_fg_proxy_restored = false;
+bool g_fg_proxy_reinstall = false;
 enum class JournalAtStart { Nothing, Relaunch };
 JournalAtStart UpdateJournalAtStart(const Options& options) {
     namespace uj = pt::update_journal;
@@ -2254,6 +2592,7 @@ JournalAtStart UpdateJournalAtStart(const Options& options) {
     switch (journal->state) {
     case uj::State::Swapped:
         g_update_mark_started = true;
+        g_update_backup = journal->backup;
         pt::LogInfo("update: first start of version {} (from {}); the backup is kept until this start reaches its first frame", journal->new_version,
                     journal->old_version);
         return JournalAtStart::Nothing;
@@ -2582,7 +2921,7 @@ public:
         resolution.enabled = false;
         display.rows.push_back(std::move(resolution));
 #else
-        const int mode = std::clamp(s.display.fullscreen, 0, 2);
+        const int mode = WindowMode(app_);
         display.rows.push_back(Row(kDisplayMode, "pc_display_mode", {"pc_window", "pc_borderless", "pc_fullscreen"}, mode, "pc_note_display_mode"));
         const char* resolution_note = mode == 0 ? "pc_note_resolution" : "pc_note_resolution_fullscreen";
         pt::game::PcSettingRow resolution = Row(kResolution, "pc_resolution", {}, 0, resolution_note);
@@ -2594,16 +2933,34 @@ public:
         resolution.wrap = false;
         resolution.enabled = mode != 1;
         display.rows.push_back(std::move(resolution));
+        {
+            const std::vector<double> rates = RefreshRates();
+            pt::game::PcSettingRow refresh = Row(kRefreshRate, "pc_refresh_rate", {}, 0,
+                                                 mode == pt::display::kExclusive ? "pc_note_refresh_rate" : "pc_note_refresh_rate_desktop");
+            if (mode == pt::display::kExclusive && !rates.empty()) {
+                refresh.values.push_back("pc_refresh_auto");
+                for (size_t i = 0; i < rates.size(); ++i) {
+                    refresh.values.push_back(pt::RefreshRateText(rates[i]));
+                    if (s.display.refresh_rate > 0.0f && pt::SameRefreshRate(rates[i], s.display.refresh_rate)) refresh.value = static_cast<int>(i) + 1;
+                }
+            } else {
+                const SDL_DisplayMode* desktop = app_.window ? SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(app_.window)) : nullptr;
+                refresh.values.push_back(desktop && desktop->refresh_rate > 0.0f ? pt::RefreshRateText(desktop->refresh_rate)
+                                                                                 : std::string("pc_refresh_auto"));
+                refresh.enabled = false;
+            }
+            refresh.wrap = false;
+            display.rows.push_back(std::move(refresh));
+        }
 #endif
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
         const pt::FrameGeneration* native_fg = pt::UpscaleHost::Get().MetalFxFrameGen();
         const bool metalfx_vsync = app_.scene.upscale.frame_generation == pt::FrameGenKind::Metalfx && native_fg && native_fg->Generating();
         display.rows.push_back(Row(kVsync, "pc_vsync", OffOn(), s.display.vsync ? 1 : 0,
-                                   dlssg_vsync     ? "pc_note_vsync_dlssg"
+                                   dlssg_vsync ? "pc_note_vsync_dlssg"
                                    : metalfx_vsync ? "pc_note_vsync_metalfx_fg"
-                                   : s.display.vsync ? "pc_note_vsync"
-                                                     : "pc_note_vsync_off"));
+                                   : s.display.vsync ? "pc_note_vsync_refresh" : "pc_note_vsync_off"));
         pt::game::PcSettingRow cap = Row(kFpsLimit, "pc_fps_limit", {"pc_unlimited","30","60","90","120","144","165","240","360"}, 0, "pc_note_fps_limit");
         constexpr int fps_caps[] = {0,30,60,90,120,144,165,240,360};
         for (int i=0;i<9;++i) if (fps_caps[i]==s.display.fps_limit) cap.value=i;
@@ -2648,7 +3005,9 @@ public:
                                                         std::string(pt::RenderingApiName(pt::RenderingApi::Vulkan))},
                                                        api == pt::RenderingApi::D3D12 ? 0 : 1, "pc_note_rendering_api");
             std::string reason;
-            if (!pt::D3D12Usable(reason)) {
+            if (app_.d3d12_crash_stage) {
+                rendering_api.value_warnings = {"pc_note_d3d12_crashed_retry", std::string()};
+            } else if (!pt::D3D12Usable(reason)) {
                 rendering_api.value_notes = {Sentence(reason), std::string()};
             }
             display.rows.push_back(std::move(rendering_api));
@@ -2707,6 +3066,11 @@ public:
         const pt::DlssFrameGenSupport& dlss_fg = pt::UpscaleHost::Get().DlssFrameGen();
         std::string dlss_note = dlss_fg.hardware && dlss_fg.built ? std::string() : dlss_fg.note;
         if (app_.fg_applicable && !app_.fg_install_usable) dlss_note = "pc_note_fg_unlock_first";
+        std::string dlss_warning;
+        if (app_.dlssg_crash_hold && dlss_note == "pc_note_dlssg_failed") {
+            dlss_note.clear();
+            dlss_warning = "pc_note_dlssg_crashed_retry";
+        }
         if (pt::streamline::Active() && fsr_note.empty()) {
             fsr_note = "pc_note_fsr_fg_restart";
         }
@@ -2741,6 +3105,7 @@ public:
         }
 #endif
         frame_generation.value_notes = {std::string(), fsr_note, dlss_note, metalfx_note, xefg_note};
+        if (!dlss_warning.empty()) frame_generation.value_warnings = {std::string(), std::string(), dlss_warning};
         if (u.frame_generation == pt::FrameGenKind::Dlss) {
             frame_generation.note = pt::streamline::Active() ? "pc_note_frame_generation_dlss" : "pc_note_dlssg_restart";
         } else if (u.frame_generation == pt::FrameGenKind::Metalfx) {
@@ -2769,7 +3134,7 @@ public:
             multiplier.value_notes = {std::string(), max_multiplier < 3 ? "pc_note_dlssg_multiplier_limit" : "",
                 max_multiplier < 4 ? "pc_note_dlssg_multiplier_limit" : ""};
             if (!multiplier.enabled) multiplier.note = off ? "pc_note_needs_upscaler" :
-                !dlss_fg.note.empty() ? dlss_fg.note : "pc_note_dlssg_restart";
+                !dlss_warning.empty() ? dlss_warning : !dlss_fg.note.empty() ? dlss_fg.note : "pc_note_dlssg_restart";
             generation.rows.push_back(std::move(multiplier));
         }
         if (app_.fg_applicable) {
@@ -2867,8 +3232,44 @@ public:
             if (selected == 2) surround.note = "pc_note_surround_spatial";
             sound.rows.push_back(std::move(surround));
         }
-        sound.rows.push_back(Row(kControllerSpeaker, "pc_controller_speaker", OffOn(), s.audio.controller_speaker ? 1 : 0,
-                                 "pc_note_controller_speaker"));
+        {
+            const std::vector<std::string> outputs = OutputDevices();
+            std::string default_name = pt::devices::AudioStarting() ? std::string() : pt::audio::SystemDefaultPlaybackName();
+            std::string playing = app_.audio_output_name.empty() ? default_name : app_.audio_output_name;
+            if (const char* test_default = std::getenv("PT_TEST_OUTPUT_DEFAULT"); test_default && *test_default) {
+                default_name = playing = test_default;
+            }
+            const bool default_controller = pt::audio::ControllerEndpointKind(default_name) != pt::audio::ControllerEndpoint::None;
+            pt::game::PcSettingRow output = Row(kOutputDevice, "pc_output_device",
+                                                {default_controller ? "pc_system_default_controller" : "pc_system_default"}, 0, "");
+            for (size_t i = 0; i < outputs.size(); ++i) {
+                output.values.push_back(ShortDeviceName(outputs[i]));
+                if (outputs[i] == s.audio.output_device) output.value = static_cast<int>(i) + 1;
+            }
+            const bool missing = !s.audio.output_device.empty() && output.value == 0;
+            if (missing) {
+                output.values.push_back(ShortDeviceName(s.audio.output_device));
+                output.value = static_cast<int>(output.values.size()) - 1;
+            }
+            const char arg = pt::game::kPcNoteArgument;
+            if (missing) {
+                output.note = std::format("pc_note_output_device_missing{}{}{}{}", arg, s.audio.output_device, arg, playing);
+            } else if (pt::audio::ControllerEndpointKind(playing) != pt::audio::ControllerEndpoint::None) {
+                output.note = std::format("pc_note_output_device_controller{}{}", arg, playing);
+            } else {
+                output.note = std::format("pc_note_output_device{}{}", arg, default_name.empty() ? std::string("-") : default_name);
+            }
+            sound.rows.push_back(std::move(output));
+        }
+        {
+            pt::game::PcSettingRow speaker = Row(kControllerSpeaker, "pc_controller_speaker", OffOn(), s.audio.controller_speaker ? 1 : 0,
+                                                 "pc_note_controller_speaker");
+            if (s.audio.controller_speaker &&
+                pt::audio::ControllerEndpointKind(app_.audio_output_name) == pt::audio::ControllerEndpoint::DualSense) {
+                speaker.note = std::format("pc_note_output_device_controller{}{}", pt::game::kPcNoteArgument, app_.audio_output_name);
+            }
+            sound.rows.push_back(std::move(speaker));
+        }
         pt::game::PcSettingRow controller_speaker_volume = Row(
             kControllerSpeakerVolume, "pc_controller_speaker_volume", {},
             std::clamp(static_cast<int>(std::lround(s.audio.controller_speaker_volume * 20.0f)), 0, 20),
@@ -2895,7 +3296,7 @@ public:
         microphone.enabled = s.voice.microphone_enabled;
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
-            microphone.values.push_back(devices[i].size() > 24 ? devices[i].substr(0, 22) + "..." : devices[i]);
+            microphone.values.push_back(ShortDeviceName(devices[i]));
             if (devices[i] == s.voice.device) {
                 microphone.value = static_cast<int>(i) + 1;
             }
@@ -2916,8 +3317,8 @@ public:
         sound.rows.push_back(std::move(microphone_test));
         if (page_ == kSoundPage) {
             pt::game::PcSettingSection voice{"pc_microphone", 0, {}};
-            voice.rows.assign(std::make_move_iterator(sound.rows.begin() + 4), std::make_move_iterator(sound.rows.end()));
-            sound.rows.resize(4);
+            voice.rows.assign(std::make_move_iterator(sound.rows.begin() + 5), std::make_move_iterator(sound.rows.end()));
+            sound.rows.resize(5);
             sound.column = 0;
             return {std::move(sound), std::move(voice)};
         }
@@ -2992,6 +3393,13 @@ public:
     }
     std::optional<pt::game::PcSettingRow> FooterAction() override {
         if (TabCount() == 0) return std::nullopt;
+        if (const auto newer = app_.updates.Newer(); newer && InGameUpdateBlocked(*newer)) {
+            pt::game::PcSettingRow update = Row(kUpdateNow, "pc_update_now", {newer->version}, 0,
+                                                std::format("pc_note_update_readonly{}{}", pt::game::kPcNoteArgument, newer->version));
+            update.action = true;
+            update.enabled = false;
+            return update;
+        }
         if (const auto newer = app_.updates.Newer(); newer && InGameUpdate(*newer)) {
             pt::game::PcSettingRow update = Row(kUpdateNow, "pc_update_now", {UpdateVersionLabel(*newer)}, 0,
                                                 std::format("pc_note_update_now{}{}", pt::game::kPcNoteArgument, newer->version));
@@ -3105,10 +3513,11 @@ public:
                                  "pc_note_archive_gate", "pc_note_archive_lock"}) {
             notes.push_back(note);
         }
-        for (const char* note : {"pc_note_fsr_rr", "pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_ray_reconstruction", "pc_note_rr_unavailable", "pc_note_in_path_tracing",
+        for (const char* note : {"pc_note_fsr_rr", "pc_note_fsr4_vulkan", "pc_note_fsr4_amd", "pc_note_fsr4_driver", "pc_note_dlss_model", "pc_note_ray_reconstruction", "pc_note_rr_unavailable", "pc_note_in_path_tracing",
                                  "pc_note_frame_generation_dlss", "pc_note_dlssg_gpu",
                                  "pc_note_dlssg_multiplier", "pc_note_dlssg_multiplier_limit",
                                  "pc_note_dlssg_driver", "pc_note_dlssg_hags", "pc_note_dlssg_missing", "pc_note_dlssg_failed",
+                                 "pc_note_dlssg_crashed_retry", "pc_note_d3d12_crashed_retry",
                                  "pc_note_dlssg_restart", "pc_note_vsync_dlssg", "pc_note_fsr_fg_restart", "pc_note_vsync_off", "pc_note_vsync_metalfx_fg",
                                  "pc_note_frame_generation_xess", "pc_note_xefg_gpu", "pc_note_xefg_windows", "pc_note_xefg_interop",
                                  "pc_note_xefg_failed", "pc_note_xefg_restart", "pc_note_nr_gpu", "pc_note_nr_sdk",
@@ -3137,6 +3546,7 @@ public:
         return notes;
     }
 
+    void TestSetFrameGeneration(int value) { Set(kFrameGeneration, value); }
     void Set(int id, int value) override {
 #ifdef __ANDROID__
         // The Android activity owns the fullscreen surface; desktop choices cannot resize it.
@@ -3174,6 +3584,7 @@ public:
             return;
         case kDisplayMode:
             s.display.fullscreen = std::clamp(value, 0, 2);
+            app_.display_mode_chosen = true;
             ApplyFullscreen(app_);
             break;
         case kResolution: {
@@ -3183,15 +3594,23 @@ public:
             }
             s.display.width = sizes[value].x;
             s.display.height = sizes[value].y;
-            if (app_.window && s.display.fullscreen == 0) {
+            if (app_.window && WindowMode(app_) == pt::display::kWindow) {
                 SDL_SetWindowSize(app_.window, s.display.width, s.display.height);
 #ifdef __APPLE__
                 if (!SDL_SyncWindow(app_.window)) pt::LogWarn("display: window resize timed out: {}", SDL_GetError());
                 app_.renderer.Resize(0, 0);
 #endif
-            } else if (s.display.fullscreen == 2) {
+            } else if (WindowMode(app_) == pt::display::kExclusive) {
                 ApplyFullscreen(app_);
             }
+            break;
+        }
+        case kRefreshRate: {
+            const std::vector<double> rates = RefreshRates();
+            if (WindowMode(app_) != pt::display::kExclusive || value < 0 || value > static_cast<int>(rates.size())) return;
+            s.display.refresh_rate = value == 0 ? 0.0f : static_cast<float>(rates[value - 1]);
+            pt::LogInfo("display: refresh rate {} (PC settings)", value == 0 ? std::string("Auto") : pt::RefreshRateText(rates[value - 1]));
+            ApplyFullscreen(app_);
             break;
         }
         case kVrMode:
@@ -3233,6 +3652,15 @@ public:
         case kControllerSpeaker:
             s.audio.controller_speaker = value == 1;
             break;
+        case kOutputDevice: {
+            const std::vector<std::string> outputs = OutputDevices();
+            if (value == 0) {
+                s.audio.output_device.clear();
+            } else if (value <= static_cast<int>(outputs.size())) {
+                s.audio.output_device = outputs[value - 1];
+            }
+            break;
+        }
         case kControllerSpeakerVolume:
             s.audio.controller_speaker_volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.05f;
             break;
@@ -3259,8 +3687,18 @@ public:
             const pt::RenderingApi api = value == 0 ? pt::RenderingApi::D3D12 : pt::RenderingApi::Vulkan;
             const std::string key(pt::RenderingApiKey(api));
             s.display.rendering_api_asked = true;
-            if (key != s.display.rendering_api) {
+            const bool after_crash = api == pt::RenderingApi::D3D12 && (s.display.d3d12_crashed || s.display.d3d12_interrupted);
+            if (key != s.display.rendering_api || after_crash) {
                 s.display.rendering_api = key;
+                s.display.d3d12_auto_fallback = false;
+                if (api == pt::RenderingApi::D3D12) {
+                    if (after_crash)
+                        pt::LogInfo("rendering api: the player chose DirectX 12 after it stopped an earlier start (d3d12_crashed = {}, "
+                                    "d3d12_interrupted = {}); both cleared, it is tried again at the next start",
+                                    s.display.d3d12_crashed, s.display.d3d12_interrupted);
+                    s.display.d3d12_crashed = 0;
+                    s.display.d3d12_interrupted = 0;
+                }
                 pt::LogInfo("rendering api: {} at the next start (PC settings)", pt::RenderingApiName(api));
                 game_.ShowNoticeDialog("pc_restart_needed");
             }
@@ -3305,6 +3743,12 @@ public:
         case kFrameGeneration:
             u.frame_generation = static_cast<pt::FrameGenKind>(std::clamp(value, 0, static_cast<int>(pt::FrameGenKind::Count) - 1));
             UpscaleToApp(u, s);
+            if (app_.dlssg_crash_hold && u.frame_generation == pt::FrameGenKind::Dlss) {
+                s.upscaling.dlssg_interrupted = 0;
+                pt::LogInfo("streamline: the player chose DLSS Frame Generation after it stopped an earlier start; it is tried again "
+                            "at the next start");
+                game_.ShowNoticeDialog("pc_restart_needed");
+            }
             break;
         case kVolume:
             s.audio.volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.1f;
@@ -3510,7 +3954,7 @@ public:
             if (const pt::game::ArchiveEntry* picture = pt::game::FindArchiveEntry(pt::game::ArchivePictureOf(entry))) return EntryPicture(*picture);
             break;
         case M::Scene:
-            panel.thumbnail = pt::os::PathToUtf8(pt::game::LisaDateDataDir() / "museum.png");
+            panel.thumbnail = pt::game::LisaDatePicturePath("museum.png");
             break;
         case M::Music:
             break;
@@ -3821,7 +4265,7 @@ public:
                 pt::LogInfo("patreon: {} (headless, not opened)", kPatreonUrl);
                 opened = true;
             } else {
-                if (app_.settings.display.fullscreen == 2) SDL_MinimizeWindow(app_.window);
+                if (WindowMode(app_) == pt::display::kExclusive) SDL_MinimizeWindow(app_.window);
                 opened = SDL_OpenURL(kPatreonUrl);
                 if (!opened) pt::LogWarn("patreon: the browser could not be opened: {}", SDL_GetError());
                 else pt::LogInfo("patreon: opened {}", kPatreonUrl);
@@ -3903,6 +4347,7 @@ private:
     enum RowId {
         kDisplayMode,
         kResolution,
+        kRefreshRate,
         kVsync, kFpsLimit, kHdr, kHdrPaperWhite, kHdrPeak, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile, kPromptStyle,
         kUpscaler,
         kQuality,
@@ -3913,6 +4358,7 @@ private:
         kDlssgMultiplier,
         kVolume,
         kMicrophoneEnabled,
+        kOutputDevice,
         kMicrophone,
         kMicrophoneTest, kMicrophoneTrigger, kSoundSettings,
         kMicLevel,
@@ -4380,13 +4826,23 @@ private:
         return row;
     }
 
+    static const char* PresetNote(pt::GraphicsPreset preset) {
+        switch (preset) {
+            case pt::GraphicsPreset::Low: return "pc_note_preset_low";
+            case pt::GraphicsPreset::Original: return "pc_note_preset_original";
+            case pt::GraphicsPreset::High: return "pc_note_preset_high";
+            case pt::GraphicsPreset::Ultra: return "pc_note_preset_ultra";
+            default: return "pc_note_preset_custom";
+        }
+    }
+
     std::vector<pt::game::PcSettingSection> GraphicsSections() const {
         const auto& s=app_.settings;
         std::string reason;
         const bool supported=app_.scene.RayTracingSupported(reason);
         pt::game::PcSettingSection quality{"pc_graphics_quality",0,{}};
         auto preset=Row(kGraphicsPreset,"pc_graphics_preset",{"pc_preset_low","pc_preset_original","pc_preset_high","pc_preset_ultra","pc_preset_custom"},
-                        static_cast<int>(pt::DetectGraphicsPreset(s,supported)),"pc_note_preset");
+                        static_cast<int>(pt::DetectGraphicsPreset(s,supported)),PresetNote(pt::DetectGraphicsPreset(s,supported)));
         preset.wrap=false;quality.rows.push_back(std::move(preset));
         auto lighting = LightingSections();
         auto textures = TextureSections();
@@ -4536,8 +4992,8 @@ private:
             if (!notes) continue;
             if (available) {
                 notes->emplace_back();
-            } else if (kind == pt::UpscalerKind::Fsr4 && reason.starts_with("AMD releases FSR 4 for DirectX 12 only")) {
-                notes->emplace_back("pc_note_fsr4_vulkan");
+            } else if (const char* note = kind == pt::UpscalerKind::Fsr4 ? pt::FsrReasonNote(reason) : nullptr) {
+                notes->emplace_back(note);
             } else if (reason.starts_with(ShortName(kind) + " ")) {
                 notes->push_back(Sentence(reason));
             } else {
@@ -4554,6 +5010,29 @@ private:
                 pt::game::kPcNoteArgument, stats.output.width, stats.output.height);
         }
         return stats.error;
+    }
+
+    static std::string ShortDeviceName(const std::string& name) {
+        size_t points = 0;
+        size_t cut = std::string::npos;
+        for (size_t i = 0; i < name.size(); ++i) {
+            if ((static_cast<unsigned char>(name[i]) & 0xC0) == 0x80) continue;
+            if (points == 22) cut = i;
+            ++points;
+        }
+        return points > 24 ? name.substr(0, cut) + "..." : name;
+    }
+
+    static std::vector<std::string> OutputDevices() {
+        std::vector<std::string> names;
+        if (pt::devices::AudioStarting() || !SDL_WasInit(SDL_INIT_AUDIO)) return names;
+        int count = 0;
+        SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
+        for (int i = 0; devices && i < count; ++i) {
+            if (const char* name = SDL_GetAudioDeviceName(devices[i])) names.emplace_back(name);
+        }
+        SDL_free(devices);
+        return names;
     }
 
     static std::vector<std::string> Microphones() {
@@ -4574,8 +5053,18 @@ private:
         return mode ? glm::ivec2(mode->w, mode->h) : glm::ivec2(1920, 1080);
     }
 
+    std::vector<double> RefreshRates() const {
+        if (!app_.window) return {};
+        int count = 0;
+        SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(SDL_GetDisplayForWindow(app_.window), &count);
+        std::vector<pt::DisplayModeInfo> infos;
+        for (int i = 0; modes && i < count; ++i) infos.push_back({modes[i]->w, modes[i]->h, static_cast<double>(modes[i]->refresh_rate)});
+        SDL_free(modes);
+        return pt::RefreshRatesFor(infos, {app_.settings.display.width, app_.settings.display.height});
+    }
+
     std::vector<glm::ivec2> WindowSizes() const {
-        if (app_.settings.display.fullscreen == 2 && app_.window) {
+        if (WindowMode(app_) == pt::display::kExclusive && app_.window) {
             int count = 0;
             SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(SDL_GetDisplayForWindow(app_.window), &count);
             std::vector<glm::ivec2> listed;
@@ -4695,7 +5184,8 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             }
             running = false;
         } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_RETURN && (event.key.mod & SDL_KMOD_ALT)) {
-            app.settings.display.fullscreen = app.settings.display.fullscreen ? 0 : 1;
+            app.settings.display.fullscreen = WindowMode(app) ? 0 : 1;
+            app.display_mode_chosen = true;
             ApplyFullscreen(app);
             if (!app.settings_path.empty()) {
                 pt::SaveAppSettings(app.settings_path, app.settings);
@@ -4952,6 +5442,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     pt::game::GameSound sound(game);
     std::vector<float> captured;
     pt::audio::AudioOutput::SetPreferSpatial(app.settings.audio.spatial);
+    pt::audio::AudioOutput::SetPreferredDevice(app.settings.audio.output_device);
     const bool audio_device_now = app.window && pt::devices::WaitAudio(0.25);
     bool audio_device_pending = app.window && !audio_device_now;
     if (audio_device_pending) pt::LogWarn("audio: the audio devices are still starting; the sound opens its device when they are ready");
@@ -5433,15 +5924,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
     const uint64_t shader_screen_start = boot_wait_start;
     double boot_splash_gone = -1.0;
     float applied_volume = -1.0f;
+    std::string applied_output_device = app.settings.audio.output_device;
     pt::ControllerSpeakerOutput controller_speaker;
     SDL_JoystickID speaker_gamepad_id = 0;
     uint64_t next_speaker_retry_ns = 0;
     std::string last_speaker_error;
     bool speaker_route_requested = false;
-    constexpr std::array<uint32_t, 9> kLisaCryEvents{0xAD52F3C2u, 0x0CB2A9B7u, 0x9983E7F9u, 0xC910062Eu, 0x958C5411u,
-                                                      0x7B136101u, 0xB8D5B537u, 0xF9E2D015u, 0x52B9C804u};
-    constexpr std::array<uint32_t, 7> kPlayerStepEvents{0x28E58AD8u, 0xF688B813u, 0xF688B80Du, 0x07F2CC27u,
-                                                        0xC180CD50u, 0x07F2CC39u, 0x6A89341Eu};
+    const auto& kLisaCryEvents = pt::game::kControllerSpeakerEvents;
+    const auto& kPlayerStepEvents = pt::game::kControllerHapticOnlyEvents;
     std::atomic<int> display_hdr{-1};
     struct JoinedThread {
         std::thread thread;
@@ -5594,6 +6084,21 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 applied_volume = volume;
             }
         }
+        if (sound.Ready() && !audio_device_pending) {
+            const bool surround = app.settings.audio.surround || app.settings.audio.spatial;
+            if (app.settings.audio.output_device != applied_output_device) {
+                applied_output_device = app.settings.audio.output_device;
+                pt::audio::AudioOutput::SetPreferredDevice(applied_output_device);
+                pt::LogInfo("audio: output device set to {} in the settings", applied_output_device.empty()
+                                                                                   ? std::string("the system default")
+                                                                                   : std::format("'{}'", applied_output_device));
+                const bool opened = sound.System().ReopenDevice(surround);
+                pt::LogInfo("audio: playback device opened again: {}", opened ? sound.System().OutputDeviceName() : std::string("none"));
+            } else {
+                sound.System().UpdateOutput(surround, SDL_GetTicksNS());
+            }
+            app.audio_output_name = sound.System().OutputDeviceName();
+        }
         SDL_Gamepad* selected_gamepad = (app.window || options.virtual_pads) ? input.LastUsedGamepad() : nullptr;
         const pt::SonyPadAudio selected_model = selected_gamepad ?
             pt::SonyPadAudioModel(SDL_GetGamepadVendor(selected_gamepad), SDL_GetGamepadProduct(selected_gamepad)) : pt::SonyPadAudio::None;
@@ -5639,7 +6144,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
         const bool dualsense_route = controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseQuad ||
                                      controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseBluetoothHaptics;
         const bool controller_haptics = feedback.dualsense_haptics && dualsense_route;
-        const bool route_has_output = controller_speaker.IsOpen() && (speaker_audio_requested || controller_haptics);
+        if (controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseQuad) {
+            const bool main_output_on_pad = pt::SameAudioEndpoint(app.audio_output_name, controller_speaker.DeviceName());
+            controller_speaker.SelectDualSenseSpeakerPath(pt::DualSenseSpeakerPathWanted(speaker_audio_requested, main_output_on_pad),
+                                                          app.audio_output_name);
+        }
+        const bool speaker_audio = pt::ControllerSpeakerPcmAllowed(controller_speaker.Route(), speaker_audio_requested,
+                                                                   controller_speaker.DualSenseSpeakerPathSelected());
+        const bool route_has_output = controller_speaker.IsOpen() && (speaker_audio || controller_haptics);
         if (capture_allowed && route_has_output) {
             sound.System().SetControllerCaptureEvents(kLisaCryEvents);
             sound.System().SetControllerHapticEvents(controller_haptics ? std::span<const uint32_t>(kPlayerStepEvents) : std::span<const uint32_t>{});
@@ -5651,7 +6163,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pt::audio::ControllerPcmBlock controller_block;
         while (sound.Ready() && sound.System().TryReadControllerPcm(controller_block)) {
             if (capture_allowed && route_has_output) {
-                if (!controller_speaker.WriteCapturedBlock(controller_block, speaker_audio_requested,
+                if (!controller_speaker.WriteCapturedBlock(controller_block, speaker_audio,
                                                            controller_haptics && app.settings.input.rumble,
                                                            controller_volume * app.settings.audio.controller_speaker_volume, controller_volume)) {
                     pt::LogWarn("input: controller PCM write failed for '{}': {}", controller_speaker.DeviceName(), SDL_GetError());
@@ -5837,6 +6349,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             photo.body = set[6] != 0;
             if(set.size()==8) photo.resolution = set[7] == 1 ? pt::game::PhotoResolution::FourK : pt::game::PhotoResolution::Native;
         }
+        if (const int grid = game.TakePhotoGridRequest(); grid >= 0 && photo_mode) {
+            photo_panel.Settings().grid = std::clamp(grid, 0, static_cast<int>(pt::game::PhotoGrid::Count) - 1);
+            pt::LogInfo("extras: photo grid {}", photo_panel.Settings().grid);
+        }
+        if (game.TakePhotoTakeRequest() && photo_mode) photo_shot = true;
         if (const auto shot = game.TakePhotoCameraRequest(); shot && photo_mode) {
             const pt::game::Player& player = game.GetPlayer();
             glm::vec3 facing = player.CameraForward();
@@ -6135,6 +6652,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (const auto newer = app.updates.Newer()) {
                 pt::LogInfo("update: version {} available at {}{}{}", newer->version, newer->url, newer->notes.empty() ? "" : ": ", newer->notes);
                 if (newer->download_bytes) pt::LogInfo("update: the in-game update downloads about {} bytes", newer->download_bytes);
+                if (newer->signed_update) InGameUpdateHere();
                 if (ui_ready && InGameUpdate(*newer) && !options.update_now) {
                     app.update_question = true;
                     ui.AskUpdate();
@@ -6218,6 +6736,34 @@ int RunGame(App& app, pt::Vfs& vfs) {
         if (ui_ready && !app.pending_notices.empty()) {
             for (const std::string& notice : app.pending_notices) ui.ShowNotice(notice);
             app.pending_notices.clear();
+        }
+        {
+            static long fg_set_frame = -1;
+            static int fg_set_value = 0;
+            static bool fg_set_menu = false;
+            static bool fg_set_read = false;
+            if (!fg_set_read) {
+                fg_set_read = true;
+                if (const char* v = std::getenv("PT_TEST_SET_FG"); v && std::strchr(v, ':')) {
+                    fg_set_frame = std::atol(v);
+                    fg_set_value = std::atoi(std::strchr(v, ':') + 1);
+                    fg_set_menu = std::strstr(v, ":menu") != nullptr;
+                }
+            }
+            if (fg_set_frame >= 0 && static_cast<long>(frame) >= fg_set_frame && (!fg_set_menu || (ui_ready && ui.MenuOpen()))) {
+                pt::LogInfo("frame generation: set to {} by PT_TEST_SET_FG at frame {}{}", fg_set_value, frame, fg_set_menu ? " (menu open)" : "");
+                pc_settings.TestSetFrameGeneration(fg_set_value);
+                fg_set_frame = -1;
+            }
+        }
+        static const long fg_test_frame = [] { const char* v = std::getenv("PT_TEST_FG_LIVE_UNLOCK"); return v ? std::atol(v) : -1L; }();
+        if (fg_test_frame >= 0 && static_cast<long>(frame) == fg_test_frame && app.FgPending() == 0 && !app.fg_job.Busy() && !app.fg_install_usable) {
+            const std::filesystem::path work = (app.settings_path.empty() ? UserDataDir() : app.settings_path.parent_path()) / "dlssg-unlock";
+            if (app.fg_job.Start(pt::fg_unlock::Job::Kind::Install, work, pt::streamline::ActiveD3D12() ? pt::ExecutableDir() : std::filesystem::path())) {
+                app.fg_job_serial = app.fg_job.Get().serial;
+                app.fg_job_request = 1;
+                pt::LogInfo("frame generation: community unlock started by PT_TEST_FG_LIVE_UNLOCK at frame {}", frame);
+            }
         }
         if (app.FgPending() == 0 && app.fg_job_request != 0) {
             const pt::fg_unlock::Job::Status job = app.fg_job.Get();
@@ -6626,7 +7172,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         const pt::game::TickBlend* light_blend = paced && !theater && !date_scene ? &tick_state.lights : nullptr;
         if (paced && !theater && !date_scene && !freecam && !pt::game::EndingOutroInputBlocked(game.Controller().Step()) &&
             polled.prompts.device == pt::PromptDevice::Keyboard && !scripted_camera &&
-            !game.Demos().ControlsPlayer() && !game.Paused() && !(game.GetPlayer().locks.Mask('B') & 2)) {
+            !game.Demos().ControlsPlayer() && !game.Demos().HasActiveCamera() && !game.Paused() && !(game.GetPlayer().locks.Mask('B') & 2)) {
             const pt::Camera unturned = camera;
             camera = pt::game::RenderMouseLook(camera, game.ViewCamera(), pending_input.mouse_look,
                                               game.Options().invert_x, game.Options().invert_y);
@@ -6662,13 +7208,25 @@ int RunGame(App& app, pt::Vfs& vfs) {
             ImGui::Render();
         }
         VkExtent2D base_render_extent{};
-        if (!vr && app.window && app.settings.display.fullscreen != 2) {
+        if (!vr && app.window) {
             int width = 0;
             int height = 0;
             SDL_GetWindowSizeInPixels(app.window, &width, &height);
-            if (width > 0 && height > 0) base_render_extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-        } else if (!vr && app.window) {
-            base_render_extent = {static_cast<uint32_t>(app.settings.display.width), static_cast<uint32_t>(app.settings.display.height)};
+            const int mode = WindowMode(app);
+            const glm::ivec2 setting(app.settings.display.width, app.settings.display.height);
+            const bool minimized = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) != 0;
+            const glm::ivec2 size = pt::display::RenderSize(mode, {width, height}, setting, minimized);
+            if (size.x > 0 && size.y > 0) base_render_extent = {static_cast<uint32_t>(size.x), static_cast<uint32_t>(size.y)};
+            static glm::ivec4 mismatch_logged(0);
+            const glm::ivec4 mismatch = mode == pt::display::kExclusive && !minimized && size != setting ? glm::ivec4(size, setting) : glm::ivec4(0);
+            if (mismatch != mismatch_logged) {
+                mismatch_logged = mismatch;
+                if (mismatch != glm::ivec4(0)) {
+                    pt::LogInfo("display: the window did not get the exclusive mode {}x{} ({}x{} pixels{}): frames render at the window's size",
+                                setting.x, setting.y, size.x, size.y,
+                                (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) ? "" : ", no fullscreen flag");
+                }
+            }
         } else if (!vr && options.headless) {
             base_render_extent = {options.width, options.height};
         }
@@ -6680,6 +7238,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const VkExtent2D preview = base_render_extent.width ? base_render_extent : pt::gpu::vk::Native(app.renderer.RenderExtent());
             photo_view = photo_panel.View(language, photo_status, static_cast<float>(preview.width) / std::max(1u, preview.height));
             photo_view.panel = photo_overlay && !photo_shot;
+            if (photo_shot) photo_view.grid = 0;
             if (photo_shot) {
                 const std::filesystem::path path = PhotoPath();
                 game.RequestScreenshot(pt::os::PathToUtf8(path));
@@ -6948,6 +7507,16 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                                : ui_ready && ui.BootSplashShown()     ? "the title picture"
                                                                                       : "the loading screen");
             }
+#ifdef _WIN32
+            static bool present_filter_logged = false;
+            if (!present_filter_logged && app.window && (frame % 600 == 0 || frame < 2) && GetModuleHandleW(L"NvPresent64.dll")) {
+                present_filter_logged = true;
+                pt::LogInfo("nvidia: NvPresent64.dll is in the process (frame {}): a driver present filter is on (RTX HDR, RTX Dynamic "
+                            "Vibrance or Smooth Motion); with RTX HDR the driver tone maps the game's SDR picture again. The game's own "
+                            "HDR output is Display > HDR",
+                            frame);
+            }
+#endif
             {
                 const pt::Renderer::CpuWaits& waits = app.renderer.LastCpuWaits();
                 auto& c = frame_phases.current;
@@ -6980,7 +7549,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     photo_status_time=4.0f;
                 }
                 if (dump_targets) {
-                    const std::filesystem::path path(shot);
+                    const std::filesystem::path path = pt::os::PathFromUtf8(shot);
                     app.scene.DumpTargets(pt::os::PathToUtf8((path.parent_path() / path.stem())));
                 }
                 const pt::RenderStats& stats = app.scene.Stats();
@@ -7103,6 +7672,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             const auto status_now = std::chrono::steady_clock::now();
             const double status_seconds = std::chrono::duration<double>(status_now - status_start).count();
+            if (status_frames == 1 || status_seconds >= 10.0) {
+                LogDisplayPacing(app);
+            }
             if (status_seconds >= 10.0) {
                 double used = 0.0;
                 double budget = 0.0;
@@ -7167,6 +7739,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     std::error_code ec;
                     std::filesystem::remove(app.streamline_marker, ec);
                     pt::LogInfo("streamline: 600 frames rendered, start marker removed");
+                    if (app.settings.upscaling.dlssg_interrupted && !app.settings_path.empty()) {
+                        app.settings.upscaling.dlssg_interrupted = 0;
+                        pt::SaveAppSettings(app.settings_path, app.settings);
+                        pt::LogInfo("streamline: ran after the interrupted start (pt.ini dlssg_interrupted = 0)");
+                    }
                 }
             }
             if (reflex_paced) {
@@ -7225,10 +7802,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
             app.d3d12_marker = false;
             ClearD3D12Marker();
             pt::LogInfo("rendering api: DirectX 12 drew 120 frames, start marker removed");
-            if (app.settings.display.d3d12_crashed && !app.settings_path.empty()) {
-                app.settings.display.d3d12_crashed = 0;
+            auto& display = app.settings.display;
+            if ((display.d3d12_crashed || display.d3d12_interrupted || display.d3d12_auto_fallback) && !app.settings_path.empty()) {
+                if (display.d3d12_crashed)
+                    pt::LogInfo("rendering api: DirectX 12 ran, the earlier crash no longer keeps it off (pt.ini d3d12_crashed = 0)");
+                if (display.d3d12_interrupted)
+                    pt::LogInfo("rendering api: DirectX 12 ran after the interrupted start (pt.ini d3d12_interrupted = 0)");
+                if (display.d3d12_auto_fallback) {
+                    display.rendering_api = std::string(pt::RenderingApiKey(pt::RenderingApi::D3D12));
+                    pt::LogInfo("rendering api: the automatic switch to Vulkan is undone, pt.ini rendering_api = d3d12 again");
+                }
+                display.d3d12_crashed = 0;
+                display.d3d12_interrupted = 0;
+                display.d3d12_auto_fallback = false;
                 pt::SaveAppSettings(app.settings_path, app.settings);
-                pt::LogInfo("rendering api: DirectX 12 ran, the earlier crash no longer keeps it off (pt.ini d3d12_crashed = 0)");
             }
         }
         if ((options.headless && frame >= static_cast<uint64_t>(options.frames)) || game.QuitRequested()) {
@@ -7243,6 +7830,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     microphone.Close();
     app.fg_job.Cancel();
+    controller_speaker.Close();
     input.Shutdown();
     if (script.Expectations() > 0) {
         pt::LogInfo("input script: {} expectations, {} failed", script.Expectations(), script.Failures());
@@ -7269,6 +7857,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
 
 }
 
+bool NoStartMessages() {
+    const char* e = std::getenv("PT_NO_START_MESSAGES");
+    return e && e[0] == '1';
+}
 bool HeadlessOnly() {
     const char* value = std::getenv("PT_HEADLESS_ONLY");
     return value && *value && std::string_view(value) != "0";
@@ -7344,6 +7936,31 @@ int main(int argc, char** argv) {
         char stamp[32];
         std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
         pt::nr_unlock::RetireRouteFiles(game_root, game_root / "data" / "retired-dlss5-route" / stamp);
+    }
+    {
+        const std::filesystem::path game_root = pt::ExecutableDir();
+        const std::filesystem::path archive = game_root / "data" / std::string(pt::fg_unlock::kRetiredDir);
+        std::vector<std::filesystem::path> sources;
+        if (!g_update_backup.empty())
+            for (const char* name : pt::fg_unlock::kProxyCandidates) sources.push_back(g_update_backup / name);
+        const pt::fg_unlock::ProxyRepair repair = pt::fg_unlock::RepairRecordedProxy(game_root, NrDataDir(options.settings_path) / "dlssg-unlock", sources, archive);
+        using R = pt::fg_unlock::ProxyRepair::Result;
+        if (repair.result == R::Restored) {
+            g_fg_proxy_restored = true;
+            pt::LogWarn("frame generation: the unlock's proxy {}", repair.detail);
+        } else if (repair.result == R::NeedsReinstall) {
+            g_fg_proxy_reinstall = true;
+            pt::LogWarn("frame generation: the unlock's proxy {}; the unlock is reinstalled", repair.detail);
+        } else if (repair.result == R::Fine) {
+            pt::LogInfo("frame generation: the unlock's record is there, {}", repair.detail);
+        }
+        const std::string unrecorded = pt::fg_unlock::DescribeUnrecorded(pt::fg_unlock::UnrecordedProxies(game_root));
+        if (!unrecorded.empty()) {
+            pt::LogWarn("frame generation: {}", unrecorded);
+            pt::SetCrashNote(unrecorded);
+        }
+        if (const std::string retired = pt::fg_unlock::RetireShippedProxy(game_root, archive); !retired.empty())
+            pt::LogWarn("frame generation: {}", retired);
     }
     if (!tool) {
         const std::filesystem::path game_root = pt::ExecutableDir();
@@ -7550,6 +8167,8 @@ int main(int argc, char** argv) {
         pt::LogInfo("crash test: {}", kind);
         if (kind == "access") {
             *static_cast<volatile int*>(nullptr) = 1;
+        } else if (kind == "throw") {
+            throw std::system_error(std::error_code(1113, std::system_category()), "crash test");
         } else if (kind == "terminate") {
             std::terminate();
         } else if (kind == "abort") {
@@ -7604,28 +8223,28 @@ int main(int argc, char** argv) {
     const bool mounted = vfs.Mount(game_dir);
     pt::boot::Phase("game archives");
     if (const int missing = mounted ? vfs.MissingCorePackages() : 0; missing > 0 && !options.headless) {
-        startup_failure(std::format("The game files in\n{}\nare not a complete P.T. (CUSA01127): {} of the 12 packages every loop needs "
-                                    "are missing from chunk1.psarc.",
-                                    pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), missing),
-                        "Run the setup again and pick your own P.T. package (the .pkg) or a full CUSA01127 dump. Files from another "
-                        "game, another release's partial download or a re-packed archive do not work.");
+        pt::LogError("startup failed: the game files in {} are not a complete P.T.: {} of the 12 core packages are missing from chunk1.psarc",
+                     pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), missing);
+        const std::string text = pt::first_run::Text("pc_game_incomplete", pt::first_run::PlayerLanguage(UserDataDir()),
+                                                     {pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), std::to_string(missing),
+                                                      pt::os::PathToUtf8(std::filesystem::absolute(g_log_path))});
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         return 1;
     }
     if (!mounted) {
         if (!options.headless && !first_run_quit) {
 #ifdef __APPLE__
-            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
-                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to P.T. PC Port.app, or start pt with --game <folder>.";
+            const char* beside = "P.T. PC Port.app";
+            const char* program = "pt";
 #elif defined(_WIN32)
-            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
-                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to pt.exe, or start pt.exe with --game <folder>.";
+            const char* beside = "pt.exe";
+            const char* program = "pt.exe";
 #else
-            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
-                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to pt, or start pt with --game <folder>.";
+            const char* beside = "pt";
+            const char* program = "pt";
 #endif
+            const std::string text = pt::first_run::Text("pc_game_not_found", pt::first_run::PlayerLanguage(UserDataDir()),
+                                                         {pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), beside, program});
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
         return 1;
@@ -7690,19 +8309,43 @@ int main(int argc, char** argv) {
     g_d3d12_marker = app.settings_path.empty() ? std::filesystem::path() : app.settings_path.parent_path() / "d3d12-starting.txt";
     if (std::error_code ec; !g_d3d12_marker.empty() && std::filesystem::exists(g_d3d12_marker, ec)) {
         const int stage = ReadD3D12Marker();
+        const StartEvidence evidence = EvidenceOfEarlierStart(g_d3d12_marker, log_path.parent_path() / "pt-previous.log");
         ClearD3D12Marker();
-        app.settings.display.d3d12_crashed = stage;
-        app.settings.display.rendering_api = std::string(pt::RenderingApiKey(pt::RenderingApi::Vulkan));
-        app.settings.display.rendering_api_asked = true;
+        auto& display = app.settings.display;
+        if (!evidence.crashed && evidence.exited) {
+            display.d3d12_interrupted = 0;
+            pt::LogInfo("rendering api: the DirectX 12 start marker (stage {}) was left by a start that ended with its own exit; "
+                        "not a crash, DirectX 12 stays as pt.ini has it", stage);
+        } else if (!evidence.crashed && display.d3d12_interrupted < 1) {
+            display.d3d12_interrupted = 1;
+            pt::LogWarn("rendering api: the last start ended while DirectX 12 started (stage {}) with no sign of a crash, evidence: {}; "
+                        "it was closed or ended from outside: this start tries DirectX 12 again, a second such start in a row "
+                        "switches to Vulkan (pt.ini d3d12_interrupted = 1)", stage, evidence.what);
+        } else {
+            const bool was_d3d12 = display.rendering_api == pt::RenderingApiKey(pt::RenderingApi::D3D12);
+            if (evidence.crashed) {
+                pt::LogWarn("rendering api: the last start ended while DirectX 12 started (stage {}), evidence of a crash: {}", stage, evidence.what);
+            } else {
+                pt::LogWarn("rendering api: the second start in a row ended while DirectX 12 started (stage {}) with no sign of a crash, "
+                            "evidence: {}; treated as a crash", stage, evidence.what);
+            }
+            display.d3d12_interrupted = 0;
+            display.d3d12_crashed = stage;
+            display.rendering_api = std::string(pt::RenderingApiKey(pt::RenderingApi::Vulkan));
+            display.rendering_api_asked = true;
+            if (was_d3d12) display.d3d12_auto_fallback = true;
+            pt::LogWarn("rendering api: {}: pt.ini is set to Vulkan{}, and DirectX 12 stays off until the player chooses it in the settings or --backend d3d12 runs", D3D12CrashReason(stage),
+                        was_d3d12 ? " (d3d12_auto_fallback = 1: back to DirectX 12 once it runs again)" : "");
+            app.pending_notices.push_back("pc_notice_d3d12_crashed");
+        }
         pt::SaveAppSettings(app.settings_path, app.settings);
-        pt::LogWarn("rendering api: {}: pt.ini is set to Vulkan, and DirectX 12 stays off until --backend d3d12 runs", D3D12CrashReason(stage));
-        app.pending_notices.push_back("pc_notice_d3d12_crashed");
     }
     {
         pt::RenderingApi cli_api = pt::RenderingApi::Vulkan;
         const bool cli_d3d12 = pt::ParseRenderingApi(options.backend, cli_api) && cli_api == pt::RenderingApi::D3D12;
         if (app.settings.display.d3d12_crashed && !cli_d3d12) {
             pt::BlockD3D12(D3D12CrashReason(app.settings.display.d3d12_crashed));
+            app.d3d12_crash_stage = app.settings.display.d3d12_crashed;
             pt::LogInfo("rendering api: DirectX 12 off, pt.ini [display] d3d12_crashed = {}", app.settings.display.d3d12_crashed);
         }
     }
@@ -7739,7 +8382,20 @@ int main(int argc, char** argv) {
         pt::LogInfo("rendering api: {}", pt::RenderingApiName(app.rendering_api));
     }
     if (!options.headless) {
+        DetectDisplayEnvironment(app);
         if (!settings_loaded) {
+            SDL_Rect usable{};
+            SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+#ifdef __linux__
+            const bool fits = pt::display::WindowFits({app.settings.display.width, app.settings.display.height}, {usable.w, usable.h});
+#else
+            const bool fits = true;
+#endif
+            if (!options.size_set && (app.display_env.gamescope || !fits)) {
+                app.settings.display.fullscreen = pt::display::kBorderless;
+                pt::LogInfo("display: first start borderless ({}; usable area {}x{})",
+                            app.display_env.gamescope ? "gamescope" : "the default window does not fit the display", usable.w, usable.h);
+            }
             pt::SaveAppSettings(app.settings_path, app.settings);
         }
         if (app.settings.network.check_updates && !options.no_update_check) {
@@ -7765,15 +8421,89 @@ int main(int argc, char** argv) {
             SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, vulkan.c_str());
         }
         pt::boot::Phase("settings");
+        const bool vulkan_start = app.rendering_api != pt::RenderingApi::D3D12;
+        const std::filesystem::path start_marker =
+            app.settings_path.empty() ? std::filesystem::path() : app.settings_path.parent_path() / "graphics-starting.txt";
+        const pt::start_watch::Previous previous = pt::start_watch::TakePrevious(start_marker);
+        bool layers_off = app.settings.display.vulkan_implicit_layers == 0;
+        bool layers_retry = false;
+        if (previous.found) {
+            pt::LogWarn("start: the last start (pid {}, {}, {}{}) ended inside '{}' before its graphics device was ready, without the "
+                        "game's own exit; its log is pt-previous.log",
+                        previous.pid, previous.time, previous.api, previous.layers_off ? ", implicit Vulkan layers off" : "", previous.step);
+            for (const std::string& line : pt::start_watch::RecentErrorReports(48.0, 4)) pt::LogWarn("start: Windows error report {}", line);
+            if (previous.api == "vulkan" && pt::start_watch::LoaderStep(previous.step)) {
+                if (!previous.layers_off && !layers_off) {
+                    layers_off = layers_retry = true;
+                    pt::LogWarn("start: the Vulkan loader loads the drivers and the implicit layers in '{}': this start runs without the "
+                                "implicit layers; pt.ini keeps them off if it gets its graphics device", previous.step);
+                } else if (previous.layers_off) {
+                    pt::LogWarn("start: it ended there without the implicit layers too: they are not the cause; the graphics driver is "
+                                "the next suspect");
+                    if (app.settings.display.vulkan_implicit_layers == 0) {
+                        app.settings.display.vulkan_implicit_layers = 1;
+                        layers_off = false;
+                        pt::SaveAppSettings(app.settings_path, app.settings);
+                        pt::LogInfo("start: pt.ini vulkan_implicit_layers = 1 again");
+                    }
+                }
+            }
+            if (previous.api == "vulkan" && !NoStartMessages()) {
+                const int language = pt::first_run::PlayerLanguage(UserDataDir());
+                std::string text = pt::first_run::Text("pc_start_died", language,
+                                                       {previous.step, pt::os::PathToUtf8(std::filesystem::absolute(log_path.parent_path() / "pt-previous.log"))});
+                if (layers_retry) text += "\n\n" + pt::first_run::Text("pc_start_retry_layers", language);
+                pt::LogInfo("start: message about the last start shown");
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, pt::first_run::Text("pc_start_died_title", language).c_str(), text.c_str(), nullptr);
+            }
+        }
+#ifdef _WIN32
+        LogGraphicsAdapters();
+#endif
+        if (vulkan_start) {
+            if (layers_off) {
+                std::string filter = pt::os::GetEnv("VK_LOADER_LAYERS_DISABLE");
+                filter += std::string(filter.empty() ? "" : ",") + "~implicit~";
+#ifdef _WIN32
+                _putenv_s("VK_LOADER_LAYERS_DISABLE", filter.c_str());
+#else
+                setenv("VK_LOADER_LAYERS_DISABLE", filter.c_str(), 1);
+#endif
+                pt::LogInfo("vulkan: VK_LOADER_LAYERS_DISABLE={} for this process ({})", filter,
+                            layers_retry ? "the last start ended inside the Vulkan loader" : "pt.ini vulkan_implicit_layers = 0");
+            }
+            pt::vk::LogImplicitLayers(pt::vk::PrepareImplicitLayers());
+        }
+        app.start_layers_retry = layers_retry;
+        pt::start_watch::Arm({.marker = start_marker,
+                              .api = vulkan_start ? "vulkan" : "d3d12",
+                              .layers_off = layers_off,
+                              .log_path = log_path,
+                              .hang_title = NoStartMessages() ? std::function<std::string()>() : [] { return pt::first_run::Text("pc_start_died_title", pt::first_run::PlayerLanguage(UserDataDir())); },
+                              .hang_text = [log_path](int seconds, const std::string& step) {
+                                  return pt::first_run::Text("pc_start_hang", pt::first_run::PlayerLanguage(UserDataDir()),
+                                                             {std::to_string(seconds), step, pt::os::PathToUtf8(std::filesystem::absolute(log_path))});
+                              }});
+        pt::start_watch::Step("window", vulkan_start ? "SDL_CreateWindow; with Vulkan, SDL loads the Vulkan loader here and asks it for "
+                                                       "the instance extensions: the loader loads every driver and the pre-instance layers"
+                                                     : "SDL_CreateWindow");
         const SDL_WindowFlags api_flag = app.rendering_api == pt::RenderingApi::D3D12 ? SDL_WindowFlags(0) : SDL_WINDOW_VULKAN;
+        const SDL_WindowFlags start_fullscreen = WindowMode(app) != pt::display::kWindow ? SDL_WINDOW_FULLSCREEN : SDL_WindowFlags(0);
         app.window = SDL_CreateWindow("P.T.", app.settings.display.width, app.settings.display.height,
-                                      api_flag | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                                      api_flag | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN | start_fullscreen);
+        pt::start_watch::Done(app.window ? "created" : "failed");
         if (!app.window) {
+            pt::start_watch::Finish();
             pt::LogError("SDL_CreateWindow: {}", SDL_GetError());
             startup_failure(std::string("The game window could not be created: ") + SDL_GetError() + ".", driver_advice);
             return 1;
         }
         ApplyFullscreen(app);
+        SDL_ShowWindow(app.window);
+        pt::os::ClearWindow(WindowHandle(app.window));
+        LogWindowState(app, "window shown");
+        LogDisplays();
+        LogGamescopeScreen(app);
         if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(app.window);
         SDL_RaiseWindow(app.window);
         const bool in_front = pt::os::ActivateWindow(WindowHandle(app.window));
@@ -7847,8 +8577,26 @@ int main(int argc, char** argv) {
     if (d3d12) {
         ArmD3D12Marker(2);
         app.d3d12_marker = true;
+        if (const char* end = std::getenv("PT_TEST_START_END")) {
+            pt::LogInfo("start test: {} while DirectX 12 starts", end);
+#ifdef _WIN32
+            if (std::string_view(end) == "kill") TerminateProcess(GetCurrentProcess(), 1);
+#endif
+            if (std::string_view(end) == "close") {
+                SDL_Event close{};
+                close.type = SDL_EVENT_QUIT;
+                SDL_PushEvent(&close);
+            }
+        }
     }
     const bool renderer_ready = app.renderer.Init(app.window, settings);
+    pt::start_watch::Finish();
+    if (renderer_ready && app.start_layers_retry && !app.settings_path.empty()) {
+        app.settings.display.vulkan_implicit_layers = 0;
+        pt::SaveAppSettings(app.settings_path, app.settings);
+        pt::LogWarn("start: the graphics device started without the implicit Vulkan layers after the last start ended inside the "
+                    "loader; pt.ini vulkan_implicit_layers = 0 keeps them off (1 loads them again)");
+    }
     if (d3d12 && renderer_ready) {
         if (const char* test = std::getenv("PT_TEST_CRASH"); test && std::string_view(test) == "d3d12device") {
             pt::LogInfo("crash test: d3d12device");
@@ -7865,12 +8613,44 @@ int main(int argc, char** argv) {
             pt::SaveAppSettings(app.settings_path, app.settings);
             pt::LogWarn("rendering api: DirectX 12 did not start; pt.ini is set to Vulkan for the next start");
         }
-        startup_failure(d3d12 ? (back_to_vulkan ? "The graphics device could not be set up (DirectX 12). The next start uses Vulkan."
-                                                : "The graphics device could not be set up (DirectX 12).")
-                              : "The graphics device could not be set up (Vulkan).",
-                        driver_advice);
+        if (!d3d12 && app.settings.display.d3d12_crashed && !options.headless) {
+            pt::LogError("startup failed: no graphics API starts here: Vulkan could not set up its device and DirectX 12 is off "
+                         "(pt.ini d3d12_crashed = {})", app.settings.display.d3d12_crashed);
+            if (!NoStartMessages()) {
+                const int language = pt::first_run::PlayerLanguage(UserDataDir());
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, pt::first_run::Text("pc_start_died_title", language).c_str(),
+                                         pt::first_run::Text("pc_start_no_api", language, {pt::os::PathToUtf8(std::filesystem::absolute(log_path))}).c_str(),
+                                         nullptr);
+            }
+        } else {
+            startup_failure(d3d12 ? (back_to_vulkan ? "The graphics device could not be set up (DirectX 12). The next start uses Vulkan."
+                                                    : "The graphics device could not be set up (DirectX 12).")
+                                  : "The graphics device could not be set up (Vulkan).",
+                            driver_advice);
+        }
     }
     pt::boot::Phase("graphics device");
+#ifdef _WIN32
+    if (renderer_ready && !d3d12 && !options.headless && app.renderer.Context().intel_first_frame_driver) {
+        const std::string driver = pt::vk::IntelWindowsDriverName(app.renderer.Context().properties.driverVersion);
+        const std::filesystem::path marker =
+            app.settings_path.empty() ? std::filesystem::path() : app.settings_path.parent_path() / "intel-driver-notice.txt";
+        std::string shown;
+        if (!marker.empty()) std::ifstream(marker) >> shown;
+        if (shown == driver) {
+            pt::LogInfo("vulkan: the Intel driver notice was shown for {} at an earlier start", driver);
+        } else {
+            const int language = std::clamp(pt::game::DefaultOptionsForLocale(pt::game::SystemLanguageTag()).subtitle_language, 0,
+                                            pt::game::UiAssets::kLanguageCount - 1);
+            std::string text(pt::game::PcText("pc_intel_driver_prompt", language));
+            if (const size_t at = text.find("{1}"); at != std::string::npos) text.replace(at, 3, driver);
+            const std::string title(pt::game::PcText("pc_intel_driver_title", language));
+            const bool box = SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, title.c_str(), text.c_str(), app.window);
+            if (box && !marker.empty()) std::ofstream(marker) << driver << std::endl;
+            pt::LogInfo("vulkan: Intel driver notice for {} {}", driver, box ? "shown" : std::string("not shown: ") + SDL_GetError());
+        }
+    }
+#endif
     if (renderer_ready) try {
         pt::LogInfo("startup: DLSS 5 and frame generation routes");
         const pt::gpu::DeviceInfo& info = app.renderer.Gpu().Info();
@@ -8026,10 +8806,19 @@ int main(int argc, char** argv) {
             }
             pt::LogInfo("route state test: frame generation {}, neural rendering {}", fg.empty() ? "as is" : fg, nr.empty() ? "as is" : nr);
         }
+        if (g_fg_proxy_reinstall && app.fg_install && !options.headless && !app.route_state_test && !app.fg_job.Busy()) {
+            const std::filesystem::path work = (app.settings_path.empty() ? UserDataDir() : app.settings_path.parent_path()) / "dlssg-unlock";
+            if (app.fg_job.Start(pt::fg_unlock::Job::Kind::Reinstall, work)) {
+                app.fg_job_serial = app.fg_job.Get().serial;
+                app.fg_job_request = 3;
+                pt::LogInfo("frame generation: community reinstall started for the missing or wrong proxy (downloading {} {})", pt::fg_unlock::kToolName,
+                            pt::fg_unlock::kToolVersion);
+            }
+        }
         const bool fg_proxy = pt::fg_unlock::ProxyPresent(pt::ExecutableDir());
         if (app.fg_install || fg_proxy) {
             pt::LogInfo("frame generation: community unlock {} (proxy {}, DLSS-G {}){}",
-                        app.fg_install_usable ? "installed" : app.fg_install ? "recorded but incomplete" : "proxy present without our record",
+                        app.fg_install_usable ? "installed" : app.fg_install ? "recorded but incomplete" : "proxy present without our record, not treated as installed",
                         app.fg_install ? app.fg_install->proxy : std::string("?"),
                         fg.hardware ? "enabled" : std::format("still greyed: {}", fg.reason),
                         app.fg_install ? std::format(", runtime {}", app.fg_install->runtime) : std::string());
@@ -8041,6 +8830,9 @@ int main(int argc, char** argv) {
             app.scene.upscale.frame_generation = pt::FrameGenKind::Off;
         } else if (app.settings.upscaling.dlssg_route_armed) {
             ArmFgRoute(app, false);
+        } else if (app.fg_install_usable && fg_kind == pt::FrameGenKind::Dlss && !fg.hardware && g_fg_proxy_restored) {
+            pt::LogInfo("frame generation: off for this session, the unlock's proxy that was put back loads at the next start");
+            app.scene.upscale.frame_generation = pt::FrameGenKind::Off;
         } else if (app.fg_install_usable && fg_kind == pt::FrameGenKind::Dlss && !fg.hardware) {
             DisableFgRoute(app, "pc_note_fg_proxy", std::format("the unlock is installed but DLSS-G is still unavailable ({})", fg.reason));
             app.scene.upscale.frame_generation = pt::FrameGenKind::Off;

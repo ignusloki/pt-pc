@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -107,6 +108,7 @@ private:
     std::string ending_;
 };
 
-std::filesystem::path LisaDateDataDir();
+std::optional<std::vector<uint8_t>> LisaDateFile(std::string_view name);
+std::string LisaDatePicturePath(std::string_view name);
 
 }

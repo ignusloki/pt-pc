@@ -73,6 +73,49 @@ constexpr KeyBinding kKeyBindings[] = {
 
 KeyLayoutFunction g_key_layout = nullptr;
 
+uint32_t EnvLayoutKey(const char32_t* letters, uint16_t scancode) {
+    if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z) return static_cast<uint32_t>(letters[scancode - SDL_SCANCODE_A]);
+    return SDLK_UNKNOWN;
+}
+uint32_t EnvRussian(uint16_t s) { return EnvLayoutKey(U"фисвуапршолдьтщзйкыегмцчня", s); }
+uint32_t EnvUkrainian(uint16_t s) { return EnvLayoutKey(U"фисвуапршолдьтщзйкіегмцчня", s); }
+uint32_t EnvGreek(uint16_t s) { return EnvLayoutKey(U"αβψδεφγηιξκλμνοπ;ρστθωςχυζ", s); }
+uint32_t EnvArabic(uint16_t s) { return EnvLayoutKey(U"شلؤيثبلاهتنمةىخحضقسفعرصءغئ", s); }
+uint32_t EnvHebrew(uint16_t s) { return EnvLayoutKey(U"שנבגקכעיןחלךצמםפ/רדאוה'סטז", s); }
+uint32_t EnvGlyph(uint16_t s) { return s == SDL_SCANCODE_Q ? 0x016F : EnvLayoutKey(U"abcdefghijklmnopqrstuvwxyz", s); }
+
+KeyLayoutFunction EnvKeyLayout() {
+    static const KeyLayoutFunction layout = [] {
+        const char* v = SDL_getenv("PT_TEST_KEY_LAYOUT");
+        if (!v || !*v) return KeyLayoutFunction{};
+        const std::string_view name(v);
+        const KeyLayoutFunction f = name == "ru" ? EnvRussian : name == "uk" ? EnvUkrainian : name == "el" ? EnvGreek : name == "ar" ? EnvArabic
+                                  : name == "he" ? EnvHebrew : name == "glyph" ? EnvGlyph : nullptr;
+        LogInfo("input: keycaps read keyboard layout '{}' (PT_TEST_KEY_LAYOUT){}", name, f ? "" : ": unknown, the system's is used");
+        return f;
+    }();
+    return layout;
+}
+
+bool LatinCode(uint32_t c) {
+    return c < 0x250 || (c >= 0x1E00 && c < 0x1F00);
+}
+
+bool LatinText(std::string_view text) {
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        uint32_t code = c;
+        size_t n = 1;
+        if (c >= 0xF0) { code = c & 0x07; n = 4; }
+        else if (c >= 0xE0) { code = c & 0x0F; n = 3; }
+        else if (c >= 0xC0) { code = c & 0x1F; n = 2; }
+        for (size_t k = 1; k < n && i + k < text.size(); ++k) code = (code << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3F);
+        i += n;
+        if (!LatinCode(code)) return false;
+    }
+    return true;
+}
+
 PromptStyle StyleOf(SDL_Gamepad* pad) {
     PromptStyle style;
     if (IsSteamGamepadId(SDL_GetGamepadVendor(pad), SDL_GetGamepadProduct(pad))) {
@@ -268,9 +311,28 @@ std::string KeyBindingName(const KeyBinding& binding) {
         case SDL_SCANCODE_PAGEDOWN: return "PgDn";
         default: break;
     }
-    const SDL_Keycode key = g_key_layout ? static_cast<SDL_Keycode>(g_key_layout(binding.scancode))
-                                         : SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(binding.scancode), SDL_KMOD_NONE, false);
-    const char* name = key != SDLK_UNKNOWN ? SDL_GetKeyName(key) : SDL_GetScancodeName(static_cast<SDL_Scancode>(binding.scancode));
+    const SDL_Scancode scancode = static_cast<SDL_Scancode>(binding.scancode);
+    const KeyLayoutFunction layout = g_key_layout ? g_key_layout : EnvKeyLayout();
+    auto key_of = [&](SDL_Scancode code) {
+        return layout ? static_cast<SDL_Keycode>(layout(static_cast<uint16_t>(code))) : SDL_GetKeyFromScancode(code, SDL_KMOD_NONE, false);
+    };
+    bool latin = true;
+    for (const SDL_Scancode home : {SDL_SCANCODE_A, SDL_SCANCODE_S, SDL_SCANCODE_D, SDL_SCANCODE_F, SDL_SCANCODE_J, SDL_SCANCODE_K}) {
+        const SDL_Keycode k = key_of(home);
+        const char* n = k != SDLK_UNKNOWN ? SDL_GetKeyName(k) : nullptr;
+        latin = latin && (!n || LatinText(n));
+    }
+    const SDL_Keycode key = key_of(scancode);
+    const char* us = SDL_GetScancodeName(scancode);
+    const char* name = key != SDLK_UNKNOWN ? SDL_GetKeyName(key) : us;
+    if ((!latin || (name && !LatinText(name))) && us && *us) {
+        static bool logged[SDL_SCANCODE_COUNT] = {};
+        if (binding.scancode < SDL_SCANCODE_COUNT && !logged[binding.scancode] && name && std::string_view(name) != us) {
+            logged[binding.scancode] = true;
+            LogInfo("input: key {} writes '{}' in a keyboard layout of another script: its keycap names the physical key {}", us, name, us);
+        }
+        name = us;
+    }
     return name && *name ? std::string(name) : std::format("Key {}", binding.scancode);
 }
 

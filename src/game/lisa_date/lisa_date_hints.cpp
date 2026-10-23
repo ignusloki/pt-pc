@@ -98,7 +98,7 @@ void Game::LoadLisaHintSounds() {
     lisa_hint_sounds_loaded_ = true;
     LisaDatePcm music;
     lisa_sting_wav_.assign(kRushesNeeded, {});
-    if (LisaDateDecodeMusic(LisaDateDataDir(), "music", music, LisaHintStingSeconds(kRushesNeeded))) {
+    if (LisaDateDecodeMusic("music", music, LisaHintStingSeconds(kRushesNeeded))) {
         for (int n = 1; n <= kRushesNeeded; ++n) {
             lisa_sting_wav_[n - 1] = LisaDateWav(LisaDateExcerpt(music, LisaHintStingSeconds(n), LisaHintStingGain(n), 0.45f));
         }

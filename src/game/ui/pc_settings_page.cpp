@@ -435,7 +435,8 @@ void PcSettingsPage::LayoutAt(float gap, float between) {
 
 std::string_view PcSettingsPage::ShownNote(const PcSettingRow& row) const {
     const int shown = ShownValue(row);
-    return row.ValueDisabled(shown) ? std::string_view(row.value_notes[shown]) : std::string_view(row.note);
+    if (row.ValueDisabled(shown)) return row.value_notes[shown];
+    return !row.ValueWarning(shown).empty() ? row.ValueWarning(shown) : std::string_view(row.note);
 }
 
 const PcSettingRow* PcSettingsPage::CurrentRow() const {

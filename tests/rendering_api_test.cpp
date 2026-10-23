@@ -80,6 +80,17 @@ int main() {
                crashed_loaded.display.d3d12_crashed == 3,
            "pt.ini keeps d3d12_crashed, default 0");
     std::filesystem::remove(ini_path);
+    pt::AppSettings interrupted;
+    interrupted.display.d3d12_interrupted = 1;
+    interrupted.display.d3d12_auto_fallback = true;
+    interrupted.upscaling.dlssg_interrupted = 1;
+    pt::AppSettings interrupted_loaded;
+    Expect(defaults.display.d3d12_interrupted == 0 && !defaults.display.d3d12_auto_fallback && defaults.upscaling.dlssg_interrupted == 0 &&
+               pt::SaveAppSettings(ini_path, interrupted) && pt::LoadAppSettings(ini_path, interrupted_loaded) &&
+               interrupted_loaded.display.d3d12_interrupted == 1 && interrupted_loaded.display.d3d12_auto_fallback &&
+               interrupted_loaded.upscaling.dlssg_interrupted == 1,
+           "pt.ini keeps d3d12_interrupted, d3d12_auto_fallback and dlssg_interrupted, defaults 0");
+    std::filesystem::remove(ini_path);
 #ifdef _WIN32
     {
         static int probes = 0;

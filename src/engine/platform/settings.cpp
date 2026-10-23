@@ -97,6 +97,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.width", out.display.width);
     Read(v, "display.height", out.display.height);
     Read(v, "display.fullscreen", out.display.fullscreen);
+    Read(v, "display.refresh_rate", out.display.refresh_rate);
     Read(v, "display.vsync", out.display.vsync);
     Read(v, "display.fps_limit", out.display.fps_limit);
     Read(v, "display.hdr", out.display.hdr);
@@ -107,6 +108,9 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.rendering_api", out.display.rendering_api);
     Read(v, "display.rendering_api_asked", out.display.rendering_api_asked);
     Read(v, "display.d3d12_crashed", out.display.d3d12_crashed);
+    Read(v, "display.d3d12_interrupted", out.display.d3d12_interrupted);
+    Read(v, "display.d3d12_auto_fallback", out.display.d3d12_auto_fallback);
+    Read(v, "display.vulkan_implicit_layers", out.display.vulkan_implicit_layers);
     Read(v, "input.mouse_sensitivity", out.input.mouse_sensitivity);
     Read(v, "input.gamepad_sensitivity", out.input.gamepad_sensitivity);
     Read(v, "input.gamepad_dead_zone", out.input.gamepad_dead_zone);
@@ -123,6 +127,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "audio.spatial", out.audio.spatial);
     Read(v, "audio.controller_speaker", out.audio.controller_speaker);
     Read(v, "audio.controller_speaker_volume", out.audio.controller_speaker_volume);
+    Read(v, "audio.output_device", out.audio.output_device);
     Read(v, "voice.microphone_enabled", out.voice.microphone_enabled);
     Read(v, "voice.device", out.voice.device);
     Read(v, "voice.key", out.voice.key);
@@ -133,6 +138,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "upscaling.dlss_model", out.upscaling.dlss_model);
     Read(v, "upscaling.frame_generation", out.upscaling.frame_generation);
     Read(v, "upscaling.dlssg_multiplier", out.upscaling.dlssg_multiplier);
+    Read(v, "upscaling.dlssg_interrupted", out.upscaling.dlssg_interrupted);
     out.upscaling.dlssg_multiplier = std::clamp(out.upscaling.dlssg_multiplier, 2, 4);
     Read(v, "upscaling.ray_reconstruction", out.upscaling.ray_reconstruction);
     Read(v, "upscaling.neural_rendering", out.upscaling.neural_rendering);
@@ -259,6 +265,8 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.width = std::clamp(out.display.width, 320, 16384);
     out.display.height = std::clamp(out.display.height, 240, 16384);
     out.display.fullscreen = std::clamp(out.display.fullscreen, 0, 2);
+    out.display.refresh_rate = std::isfinite(out.display.refresh_rate) && out.display.refresh_rate > 0.0f
+                                   ? std::clamp(out.display.refresh_rate, 20.0f, 1000.0f) : 0.0f;
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
     out.display.subtitle_scale = std::isfinite(out.display.subtitle_scale) ? std::clamp(out.display.subtitle_scale, 1.0f, 2.0f) : 1.0f;
@@ -294,8 +302,11 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "[display]\n"
          << "width = " << s.display.width << "\n"
          << "height = " << s.display.height << "\n"
-         << "; 0 window, 1 borderless fullscreen, 2 exclusive fullscreen at the desktop mode (Alt+Enter toggles)\n"
+         << "; 0 window, 1 borderless fullscreen, 2 exclusive fullscreen at a mode of the display (Alt+Enter toggles)\n"
          << "fullscreen = " << s.display.fullscreen << "\n"
+         << "; the exclusive fullscreen mode's refresh rate in Hz, 0 for the highest the resolution offers (window and borderless\n"
+         << "; follow the desktop's)\n"
+         << "refresh_rate = " << s.display.refresh_rate << "\n"
          << "vsync = " << (s.display.vsync ? 1 : 0) << "\n"
          << "; frames per second at most, 0 for no limit (menus and the paused game stay at 60 or less either way)\n"
          << "fps_limit = " << s.display.fps_limit << "\n"
@@ -312,8 +323,15 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "rendering_api = " << s.display.rendering_api << "\n"
          << "rendering_api_asked = " << (s.display.rendering_api_asked ? 1 : 0) << "\n"
          << "; an earlier start died while DirectX 12 was starting (1 its check, 2 its device, 3 its first frames): DirectX 12 stays\n"
-         << "; off until a start with --backend d3d12 draws its first frames; 0 never\n"
-         << "d3d12_crashed = " << s.display.d3d12_crashed << "\n\n"
+         << "; off until the player chooses DirectX 12 in the settings or a start with --backend d3d12 draws its first frames; 0 never\n"
+         << "d3d12_crashed = " << s.display.d3d12_crashed << "\n"
+         << "; starts that ended while DirectX 12 started with no sign of a crash (closed or ended from outside): one is retried\n"
+         << "d3d12_interrupted = " << s.display.d3d12_interrupted << "\n"
+         << "; 1: the game moved rendering_api to vulkan after a DirectX 12 crash; it returns to d3d12 once DirectX 12 runs again\n"
+         << "d3d12_auto_fallback = " << (s.display.d3d12_auto_fallback ? 1 : 0) << "\n"
+         << "; 0 keeps the implicit Vulkan layers of other programs (overlays, recorders) out of the game; the game sets 0 when a start\n"
+         << "; died inside the Vulkan loader and the next one worked without them; 1 loads them\n"
+         << "vulkan_implicit_layers = " << s.display.vulkan_implicit_layers << "\n\n"
          << "[input]\n"
          << "mouse_sensitivity = " << s.input.mouse_sensitivity << "\n"
          << "; gamepad turn speed after the original stick response, 1 keeps the original\n"
@@ -344,7 +362,9 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; DualSense speaker toggle; DualShock 4 Bluetooth speaker starts automatically\n"
          << "controller_speaker = " << (s.audio.controller_speaker ? 1 : 0) << "\n"
          << "; separate controller-speaker level, 0 to 1; does not change game volume or DualSense haptics\n"
-         << "controller_speaker_volume = " << s.audio.controller_speaker_volume << "\n\n"
+         << "controller_speaker_volume = " << s.audio.controller_speaker_volume << "\n"
+         << "; the playback device of the game's sound by its name as the game lists it, empty for the system default\n"
+         << "output_device = \"" << s.audio.output_device << "\"\n\n"
          << "[network]\n"
          << "; at start, ask the release page whether a newer version exists (a small note in the PC settings); 0 sends nothing\n"
          << "check_updates = " << (s.network.check_updates ? 1 : 0) << "\n"
@@ -377,6 +397,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "frame_generation = " << s.upscaling.frame_generation << "\n"
          << "; DLSS frame multiplier: 2, 3 or 4; limited to the current runtime capability\n"
          << "dlssg_multiplier = " << std::clamp(s.upscaling.dlssg_multiplier, 2, 4) << "\n"
+         << "; starts that ended in DLSS Frame Generation's first frames with no sign of a crash: one is retried\n"
+         << "dlssg_interrupted = " << s.upscaling.dlssg_interrupted << "\n"
          << "; NVIDIA DLSS Ray Reconstruction with the Path traced ray quality and dlss (RTX GPUs): 1 it denoises and upscales the path\n"
          << "; traced light, 0 the port's denoiser and DLSS Super Resolution\n"
          << "ray_reconstruction = " << (s.upscaling.ray_reconstruction ? 1 : 0) << "\n"

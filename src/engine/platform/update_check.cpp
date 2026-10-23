@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <thread>
 #include <vector>
@@ -360,10 +361,24 @@ uint64_t EstimateDownload(const UpdateManifest& manifest, std::string_view platf
     if (package == manifest.packages.end()) return 0;
     if (files == manifest.files.end() || files->second.empty()) return package->second.size;
     std::map<std::string, std::string> recorded;
-    std::ifstream in(install / "pt-install-manifest.txt", std::ios::binary);
-    for (std::string line; std::getline(in, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.starts_with("file=") && line.size() > 5 + 65) recorded[line.substr(5 + 65)] = line.substr(5, 64);
+    std::error_code manifest_error;
+    if (std::filesystem::exists(install / "pt-install-manifest.txt", manifest_error)) {
+        std::ifstream in(install / "pt-install-manifest.txt", std::ios::binary);
+        for (std::string line; std::getline(in, line);) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.starts_with("file=") && line.size() > 5 + 65) recorded[line.substr(5 + 65)] = line.substr(5, 64);
+        }
+    } else {
+        std::ifstream in(install / "pt-files.json", std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), {});
+        Value root;
+        if (text.size() <= 16 * 1024 * 1024 && Reader(text).Parse(root) && root.object)
+            if (const auto list = root.members.find("files"); list != root.members.end())
+                for (const Value& item : list->second.items) {
+                    const auto path = item.members.find("path"), sha = item.members.find("sha256");
+                    if (path != item.members.end() && sha != item.members.end() && path->second.is_string && sha->second.text.size() == 64)
+                        recorded[path->second.text] = sha->second.text;
+                }
     }
     uint64_t needed = 0;
     for (const FileEntry& file : files->second) {

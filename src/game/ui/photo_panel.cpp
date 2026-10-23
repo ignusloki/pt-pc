@@ -44,6 +44,7 @@ constexpr RowText kRows[] = {
     {"pc_film_grain", "pc_note_photo_grain", nullptr},
     {"pc_photo_grading", "pc_note_photo_grading", nullptr},
     {"pc_photo_aspect", "pc_note_photo_aspect", nullptr},
+    {"pc_photo_grid", "pc_note_photo_grid", nullptr},
     {"pc_photo_resolution", "pc_note_photo_resolution", nullptr},
     {"pc_photo_filter", "pc_note_photo_filter", nullptr},
     {"pc_photo_body", "pc_note_photo_body", nullptr},
@@ -63,6 +64,15 @@ std::string Replace(std::string text, std::string_view token, std::string_view v
     return text;
 }
 
+}
+
+std::vector<float> PhotoGridLines(int grid) {
+    switch (static_cast<PhotoGrid>(grid)) {
+        case PhotoGrid::Thirds: return {1.0f / 3.0f, 2.0f / 3.0f};
+        case PhotoGrid::Golden: return {0.381966f, 0.618034f};
+        case PhotoGrid::CenterCross: return {0.5f};
+        default: return {};
+    }
 }
 
 float PhotoSettings::FocusDistance() const {
@@ -90,6 +100,7 @@ void PhotoPanel::Open(const PhotoSettings& defaults) {
         s.focal_length_mm = PhotoFocalLengthForStep(PhotoFocalLengthStep(s.focal_length_mm));
         s.roll = std::clamp(s.roll, -kRollMax, kRollMax);
         s.aspect = std::clamp(s.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
+        s.grid = std::clamp(s.grid, 0, static_cast<int>(PhotoGrid::Count) - 1);
         s.resolution = static_cast<PhotoResolution>(std::clamp(static_cast<int>(s.resolution), 0,
                                                                static_cast<int>(PhotoResolution::Count) - 1));
         s.filter = static_cast<PhotoColorFilter>(std::clamp(static_cast<int>(s.filter), 0,
@@ -117,6 +128,7 @@ int PhotoPanel::Steps(int row) const {
         case kAperture: return static_cast<int>(std::size(kApertures)) + 1;
         case kExposure: return kExposureSteps;
         case kAspect: return static_cast<int>(PhotoAspectPreset::Count);
+        case kGrid: return static_cast<int>(PhotoGrid::Count);
         case kResolution: return static_cast<int>(PhotoResolution::Count);
         case kFilter: return static_cast<int>(PhotoColorFilter::Count);
         case kTakePhoto:
@@ -141,6 +153,7 @@ int PhotoPanel::Value(int row) const {
         case kGrain: return s.grain ? 1 : 0;
         case kGrading: return s.grading ? 1 : 0;
         case kAspect: return std::clamp(s.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
+        case kGrid: return std::clamp(s.grid, 0, static_cast<int>(PhotoGrid::Count) - 1);
         case kResolution: return static_cast<int>(s.resolution);
         case kFilter: return static_cast<int>(s.filter);
         case kBody: return s.body ? 1 : 0;
@@ -181,6 +194,14 @@ std::string PhotoPanel::ValueText(int row, int language) const {
                 default: return text("pc_off");
             }
         }
+        case kGrid: {
+            switch (static_cast<PhotoGrid>(Value(row))) {
+                case PhotoGrid::Thirds: return text("pc_photo_grid_thirds");
+                case PhotoGrid::Golden: return text("pc_photo_grid_golden");
+                case PhotoGrid::CenterCross: return text("pc_photo_grid_center");
+                default: return text("pc_off");
+            }
+        }
         case kResolution: return text(s.resolution == PhotoResolution::FourK ? "pc_photo_resolution_4k" : "pc_photo_resolution_native");
         case kFilter: {
             switch (s.filter) {
@@ -202,7 +223,7 @@ void PhotoPanel::Change(GameAudio* audio, int delta) {
     if (n <= 1) {
         return;
     }
-    const bool wrap = n == 2 || cursor_ == kSpeed || cursor_ == kAspect || cursor_ == kResolution || cursor_ == kFilter;
+    const bool wrap = n == 2 || cursor_ == kSpeed || cursor_ == kAspect || cursor_ == kGrid || cursor_ == kResolution || cursor_ == kFilter;
     int value = Value(cursor_) + delta;
     value = wrap ? (value % n + n) % n : std::clamp(value, 0, n - 1);
     if (value == Value(cursor_)) {
@@ -222,6 +243,7 @@ void PhotoPanel::Change(GameAudio* audio, int delta) {
         case kGrain: s.grain = value == 1; break;
         case kGrading: s.grading = value == 1; break;
         case kAspect: s.aspect = value; break;
+        case kGrid: s.grid = value; break;
         case kResolution: s.resolution = static_cast<PhotoResolution>(value); break;
         case kFilter: s.filter = static_cast<PhotoColorFilter>(value); break;
         case kBody: s.body = value == 1; break;
@@ -281,6 +303,7 @@ PhotoPanelView PhotoPanel::View(int language, const std::string& status, float s
     view.language = language;
     view.flash_frame = flash_frame_;
     view.crop = PhotoCropForAspect(source_aspect, settings_.AspectRatio(source_aspect));
+    view.grid = Value(kGrid);
     for (int row = 0; row < kRowCount; ++row) {
         if (kRows[row].section) {
             PhotoPanelRow header;
@@ -293,7 +316,7 @@ PhotoPanelView PhotoPanel::View(int language, const std::string& status, float s
         line.value = ValueText(row, language);
         const int n = Steps(row);
         const int value = Value(row);
-        const bool wrap = n == 2 || row == kSpeed || row == kAspect || row == kResolution || row == kFilter;
+        const bool wrap = n == 2 || row == kSpeed || row == kAspect || row == kGrid || row == kResolution || row == kFilter;
         line.adjustable = n > 1;
         line.can_decrease = wrap || value > 0;
         line.can_increase = wrap || value + 1 < n;

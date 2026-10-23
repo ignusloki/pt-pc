@@ -21,6 +21,7 @@ struct LisaDatePcm {
 };
 
 bool LisaDateDecodeOgg(std::span<const uint8_t> ogg, LisaDatePcm& pcm);
+bool LisaDateDecodeMusic(const std::string& name, LisaDatePcm& pcm, float max_seconds = 0.0f);
 bool LisaDateDecodeMusic(const std::filesystem::path& dir, const std::string& name, LisaDatePcm& pcm, float max_seconds = 0.0f);
 LisaDatePcm LisaDateSlowed(const LisaDatePcm& pcm, float speed);
 std::vector<uint8_t> LisaDateWav(const LisaDatePcm& pcm);

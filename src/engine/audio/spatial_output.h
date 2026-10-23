@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace pt::audio {
 
@@ -15,8 +16,10 @@ public:
     SpatialOutput(const SpatialOutput&) = delete;
     SpatialOutput& operator=(const SpatialOutput&) = delete;
 
-    bool Open(uint32_t sample_rate, RenderFunction render);
+    bool Open(uint32_t sample_rate, RenderFunction render, const std::string& endpoint_id = {});
     void Close();
+    const std::string& DeviceName() const;
+    const std::string& DeviceId() const;
 
 private:
     struct Impl;

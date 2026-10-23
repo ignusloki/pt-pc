@@ -16,6 +16,8 @@ public static class Extraction {
     // P.T. releases by title ID; every one is accepted, an unknown ID too when the content is P.T.
     public static readonly Dictionary<string,string> Releases=new(){{"CUSA01127","US"},{"CUSA01114","Europe"},{"CUSA01098","Japan"}};
     public static string TitleOf(string contentId)=>contentId.Length>=16?contentId.Substring(7,9):"";
+    public static string? RegionOfContentId(string contentId)=>contentId.Length>=7 && contentId[1]=='P' && contentId[6]=='-' ?
+        contentId[0] switch{'U'=>"US",'E'=>"Europe",'J'=>"Japan",'H'=>"Asia",'K'=>"Korea",_=>null} : null;
     static byte[] Head(PfsReader.File file,long offset,int count) {
         if(file.size<count)return Array.Empty<byte>();
         var bytes=new byte[count];
@@ -63,9 +65,10 @@ public static class Extraction {
         if(psarc==null || qar==null)throw new IOException(NotPtMessage);
         byte[] pathidBytes=pathid!=null && pathid.size<64*1024*1024?Head(pathid,0,(int)pathid.size):Array.Empty<byte>();
         if(!LooksLikePt(pathidBytes,title))throw new IOException(NotPtMessage);
-        Releases.TryGetValue(title,out var region);
-        if(region==null)warnings.Add($"content ID {contentId} is not a known P.T. release; installed because its archives are P.T.'s");
-        else if(title!="CUSA01127")warnings.Add($"{title} is the {region} release; the port is tested with the US release CUSA01127 (other releases are expected to hold the same data, not yet verified)");
+        Releases.TryGetValue(title,out var known);
+        var region=RegionOfContentId(contentId)??known;
+        if(known==null)warnings.Add($"content ID {contentId} is not a known P.T. release; installed because its archives are P.T.'s");
+        else if(title!="CUSA01127")warnings.Add($"{title} is the {region} release; the port is tested with the US release CUSA01127 (other releases are expected to hold the same data; the game logs at its start what differs)");
         if(pathid==null)warnings.Add("pathid_list_ps4.bin is missing: enhanced textures cannot be generated; the game runs without it");
         Directory.CreateDirectory(destination);
         foreach(var (name,file) in new[]{("chunk1.psarc",psarc),("texture.qar",qar),("pathid_list_ps4.bin",pathid)}) {

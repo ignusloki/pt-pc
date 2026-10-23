@@ -196,9 +196,10 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     if(message==WM_COMMAND){
         switch(LOWORD(wp)){
         case 10:{wchar_t path[32768]{};OPENFILENAMEW dialog{sizeof(dialog)};dialog.hwndOwner=hwnd;dialog.lpstrFilter=L"PS4 package (*.pkg)\0*.pkg\0\0";dialog.lpstrFile=path;dialog.nMaxFile=32768;dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;if(GetOpenFileNameW(&dialog))SetWindowTextW(pkg_edit,path);break;}
-        case 17:{BROWSEINFOW browse{};browse.hwndOwner=hwnd;browse.lpszTitle=L"Select the CUSA01127 game folder from your console dump (it holds chunk1.psarc).";browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;auto item=SHBrowseForFolderW(&browse);wchar_t path[MAX_PATH];if(item && SHGetPathFromIDListW(item,path)){
+        case 17:{BROWSEINFOW browse{};browse.hwndOwner=hwnd;browse.lpszTitle=L"Select your P.T. game folder from your console dump (for example CUSA01127; it holds chunk1.psarc).";browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;auto item=SHBrowseForFolderW(&browse);wchar_t path[MAX_PATH];if(item && SHGetPathFromIDListW(item,path)){
             fs::path chosen(path);bool existing=false;try{existing=InspectInstall(chosen).found;}catch(...){}
-            std::error_code error;const fs::path inner=chosen/L"CUSA01127";
+            std::error_code error;const std::string installed_game=existing?InstalledGameFolder(chosen):std::string();
+            const fs::path inner=chosen/Utf8Path(installed_game.empty()?std::string(kGameFolder):installed_game);
             if(existing && fs::is_directory(inner,error)){SetWindowTextW(pkg_edit,inner.c_str());SetWindowTextW(dest_edit,chosen.c_str());}
             else SetWindowTextW(pkg_edit,path);}
             CoTaskMemFree(item);break;}
@@ -281,6 +282,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 failures+=SelfTestTitlePictureUpdate(root/L"title-picture",Hash);
                 failures+=SelfTestJournalRecovery(root/L"journal");
                 failures+=SelfTestFileUpdate(root/L"files",Hash);
+                failures+=SelfTestPortableUpdate(root/L"portable",Hash);
+                failures+=SelfTestFgUnlockFiles(root/L"fg-unlock");
                 failures+=SelfTestUnicodePaths(root);
                 fs::remove_all(root);
                 if(!failures.empty())throw std::runtime_error("Self test failed:"+failures);

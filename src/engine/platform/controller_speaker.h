@@ -70,6 +70,11 @@ void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t co
 
 enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad, DualSenseBluetoothHaptics, DualShock4BluetoothSpeaker };
 
+bool DualSenseSpeakerPathWanted(bool speaker_audio_requested, bool main_output_on_pad);
+bool SameAudioEndpoint(std::string_view main_output, std::string_view pad_endpoint);
+bool ControllerSpeakerPcmAllowed(ControllerPcmRoute route, bool speaker_audio_requested, bool dualsense_speaker_path_selected);
+std::array<uint8_t, 48> BuildDualSenseAudioPathReport(bool speaker);
+
 class ControllerSpeakerOutput {
 public:
     ControllerSpeakerOutput();
@@ -90,6 +95,9 @@ public:
     bool WriteCapturedBlock(const audio::ControllerPcmBlock& block, bool speaker_enabled, bool dualsense_haptics_enabled,
                             float speaker_gain = 1.0f, float haptics_gain = 1.0f);
 
+    void SelectDualSenseSpeakerPath(bool speaker, std::string_view main_output);
+    bool DualSenseSpeakerPathSelected() const { return speaker_path_selected_; }
+
 private:
     bool WriteBluetoothHaptics(const float* actuator_stereo, uint32_t frames);
 
@@ -108,6 +116,10 @@ private:
     ControllerPcmRoute route_ = ControllerPcmRoute::None;
     int ds4_channels_ = 1;
     std::string device_name_;
+    std::string pad_path_;
+    bool speaker_path_selected_ = false;
+    bool speaker_path_written_ = false;
+    bool speaker_path_wanted_ = false;
     bool owns_audio_subsystem_ = false;
     audio::ControllerHapticFilter haptic_filter_;
     std::array<float, audio::ControllerPcmBlock::kMaxFrames> mono_scratch_{};

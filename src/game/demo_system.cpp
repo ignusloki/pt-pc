@@ -1962,9 +1962,11 @@ void DemoSystem::HandCameraBack(PlayingDemo& demo) {
     float yaw = 0.0f;
     float pitch = 0.0f;
     YawPitch(demo.camera_rotation, yaw, pitch);
-    game_.GetPlayer().HandCameraBack(demo.camera_position, yaw, pitch);
-    LogInfo("demo: {} hands the camera back at ({:.4f} {:.4f} {:.4f}): yaw {:.1f} pitch {:.1f}", demo.demo_id, demo.camera_position.x,
-            demo.camera_position.y, demo.camera_position.z, glm::degrees(yaw), glm::degrees(pitch));
+    const bool lingers = demo.camera_linger > 0.0;
+    game_.GetPlayer().HandCameraBack(demo.camera_position, yaw, pitch, lingers);
+    LogInfo("demo: {} hands the camera back at ({:.4f} {:.4f} {:.4f}): yaw {:.1f} pitch {:.1f}{}", demo.demo_id, demo.camera_position.x,
+            demo.camera_position.y, demo.camera_position.z, glm::degrees(yaw), glm::degrees(pitch),
+            lingers ? ", its camera drawn to the end of the game frame, the eye anchored after this tick's step" : "");
 }
 
 void DemoSystem::Finish(PlayingDemo& demo, bool skipped) {

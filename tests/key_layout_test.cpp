@@ -52,6 +52,47 @@ uint32_t TurkishF(uint16_t scancode) {
     }
 }
 
+uint32_t Russian(uint16_t scancode) {
+    switch (scancode) {
+        case SDL_SCANCODE_Q: return 0x0439;
+        case SDL_SCANCODE_E: return 0x0443;
+        case SDL_SCANCODE_P: return 0x0437;
+        case SDL_SCANCODE_W: return 0x0446;
+        case SDL_SCANCODE_S: return 0x044B;
+        default: return SDLK_UNKNOWN;
+    }
+}
+uint32_t Ukrainian(uint16_t scancode) { return scancode == SDL_SCANCODE_S ? 0x0456 : Russian(scancode); }
+uint32_t Greek(uint16_t scancode) {
+    switch (scancode) {
+        case SDL_SCANCODE_Q: return ';';
+        case SDL_SCANCODE_E: return 0x03B5;
+        case SDL_SCANCODE_P: return 0x03C0;
+        case SDL_SCANCODE_W: return 0x03C2;
+        case SDL_SCANCODE_S: return 0x03C3;
+        default: return SDLK_UNKNOWN;
+    }
+}
+uint32_t Arabic(uint16_t scancode) {
+    switch (scancode) {
+        case SDL_SCANCODE_Q: return 0x0636;
+        case SDL_SCANCODE_E: return 0x062B;
+        case SDL_SCANCODE_P: return 0x062D;
+        case SDL_SCANCODE_A: return 0x0634;
+        default: return SDLK_UNKNOWN;
+    }
+}
+uint32_t Hebrew(uint16_t scancode) {
+    switch (scancode) {
+        case SDL_SCANCODE_Q: return '/';
+        case SDL_SCANCODE_W: return '\'';
+        case SDL_SCANCODE_E: return 0x05E7;
+        case SDL_SCANCODE_P: return 0x05E4;
+        case SDL_SCANCODE_A: return 0x05E9;
+        default: return SDLK_UNKNOWN;
+    }
+}
+
 std::string Name(KeyAction action) {
     const pt::KeyBinding* binding = FirstBinding(action, true);
     assert(binding);

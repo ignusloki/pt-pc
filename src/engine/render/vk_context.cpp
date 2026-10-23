@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <format>
 #include <string>
 
@@ -27,9 +29,13 @@
 #include "engine/core/crash_report.h"
 #include "engine/core/log.h"
 #include "engine/platform/os.h"
+#include "engine/platform/start_watch.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/android_vulkan_diagnostics.h"
+#include "engine/render/intel_vulkan_driver.h"
 #include "engine/render/pipeline_cache_store.h"
+#include "engine/render/vk_address_log.h"
+#include "engine/render/vk_layers.h"
 #include "engine/render/upscale/streamline.h"
 
 namespace pt {
@@ -50,6 +56,30 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
         LogError("vulkan: {}{}{}", data->pMessage, *label ? " [pass " : "", *label ? std::string(label) + "]" : std::string());
     } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         LogWarn("vulkan: {}{}{}", data->pMessage, *label ? " [pass " : "", *label ? std::string(label) + "]" : std::string());
+    }
+    return VK_FALSE;
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL AddressBindingCallback(VkDebugUtilsMessageSeverityFlagBitsEXT, VkDebugUtilsMessageTypeFlagsEXT types,
+                                                      const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
+    if (!(types & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT) || !data) {
+        return VK_FALSE;
+    }
+    for (auto* p = static_cast<const VkBaseInStructure*>(data->pNext); p; p = p->pNext) {
+        if (p->sType != VK_STRUCTURE_TYPE_DEVICE_ADDRESS_BINDING_CALLBACK_DATA_EXT) {
+            continue;
+        }
+        const auto* b = reinterpret_cast<const VkDeviceAddressBindingCallbackDataEXT*>(p);
+        address_log::Binding r;
+        r.base = b->baseAddress;
+        r.size = b->size;
+        r.bind = b->bindingType == VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT;
+        r.internal = (b->flags & VK_DEVICE_ADDRESS_BINDING_INTERNAL_OBJECT_BIT_EXT) != 0;
+        if (data->objectCount > 0 && data->pObjects) {
+            r.handle = data->pObjects[0].objectHandle;
+            r.type = static_cast<int32_t>(data->pObjects[0].objectType);
+        }
+        address_log::Record(r);
     }
     return VK_FALSE;
 }
@@ -117,21 +147,6 @@ bool HasInstanceExtension(const char* name) {
     return std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& e) { return std::strcmp(e.extensionName, name) == 0; });
 }
 
-#ifdef _WIN32
-void DisableCrashingImplicitLayers() {
-    if (const char* allow = std::getenv("PT_ALLOW_RTSS"); allow && *allow && *allow != '0') {
-        return;
-    }
-    const char* current = std::getenv("VK_LOADER_LAYERS_DISABLE");
-    std::string list = current ? current : "";
-    if (list.find("RTSS") == std::string::npos) {
-        list += list.empty() ? "*RTSS*" : ",*RTSS*";
-        _putenv_s("VK_LOADER_LAYERS_DISABLE", list.c_str());
-    }
-    _putenv_s("DISABLE_RTSS_LAYER", "1");
-}
-#endif
-
 }
 
 std::string VulkanLibraryPath() {
@@ -168,6 +183,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         if (loader) LogInfo("vulkan: {}", VulkanLibraryPath());
     }
 #endif
+    const std::vector<ImplicitLayer> implicit_layers = PrepareImplicitLayers();
     if (loader) {
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
         volkInitializeCustom(loader);
@@ -190,10 +206,16 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     } else {
         validation = false;
     }
+    static const bool address_report_wanted = [] {
+        const char* e = std::getenv("PT_VK_ADDRESS_REPORT");
+        return !e || std::atoi(e) != 0;
+    }();
+    debug_utils = validation;
+    if (!validation && address_report_wanted && HasInstanceExtension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        debug_utils = true;
+    }
 
-#ifdef _WIN32
-    DisableCrashingImplicitLayers();
-#endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "pt-port";
     app.pEngineName = "pt-port";
@@ -224,11 +246,31 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     export_device_info.pNext = instance_info.pNext;
     instance_info.pNext = &export_device_info;
 #endif
+    {
+        std::string names;
+        for (const char* e : extensions) names += std::string(names.empty() ? "" : ", ") + e;
+        for (const char* l : layers) names += std::string(", layer ") + l;
+        start_watch::Step("instance", std::format("vkCreateInstance{}: {}", creator ? " through the VR runtime" : "", names));
+    }
     const VkResult instance_result = creator ? creator->CreateInstance(instance_info, instance) : vkCreateInstance(&instance_info, nullptr, &instance);
+    start_watch::Done(instance_result == VK_SUCCESS ? "created" : "failed");
     if (!Check(instance_result, "vkCreateInstance")) {
+        LogImplicitLayers(implicit_layers);
         return false;
     }
     volkLoadInstance(instance);
+    LogImplicitLayers(implicit_layers);
+    {
+        uint32_t count = 0;
+        vkEnumerateInstanceLayerProperties(&count, nullptr);
+        std::vector<VkLayerProperties> known(count);
+        vkEnumerateInstanceLayerProperties(&count, known.data());
+        std::string names;
+        for (uint32_t i = 0; i < count; ++i) {
+            names += std::string(names.empty() ? "" : ", ") + known[i].layerName;
+        }
+        LogInfo("vulkan: layers the loader lists: {}", names.empty() ? "none" : names);
+    }
 
     if (validation) {
         VkDebugUtilsMessengerCreateInfoEXT messenger_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
@@ -237,6 +279,16 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
                                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         messenger_info.pfnUserCallback = DebugCallback;
         vkCreateDebugUtilsMessengerEXT(instance, &messenger_info, nullptr, &messenger);
+    }
+    if (debug_utils && address_report_wanted && vkCreateDebugUtilsMessengerEXT) {
+        VkDebugUtilsMessengerCreateInfoEXT info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+        info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT;
+        info.pfnUserCallback = AddressBindingCallback;
+        if (vkCreateDebugUtilsMessengerEXT(instance, &info, nullptr, &address_messenger) != VK_SUCCESS) {
+            address_messenger = VK_NULL_HANDLE;
+        }
     }
 
     if (window) {
@@ -270,9 +322,25 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
 
     uint32_t device_count = 0;
-    vkEnumeratePhysicalDevices(instance, &device_count, nullptr);
+    start_watch::Step("devices", "vkEnumeratePhysicalDevices");
+    const VkResult enumerated = vkEnumeratePhysicalDevices(instance, &device_count, nullptr);
     std::vector<VkPhysicalDevice> devices(device_count);
     vkEnumeratePhysicalDevices(instance, &device_count, devices.data());
+    devices.resize(device_count);
+    start_watch::Done(std::format("{} device{}{}", device_count, device_count == 1 ? "" : "s",
+                                  enumerated == VK_SUCCESS ? "" : std::format(", VkResult {}", static_cast<int>(enumerated))));
+    for (uint32_t i = 0; i < device_count; ++i) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(devices[i], &props);
+        const char* type = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? "discrete"
+                           : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "integrated"
+                           : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU    ? "virtual"
+                           : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU            ? "CPU"
+                                                                                        : "other";
+        LogInfo("vulkan: device {}: {} ({}, vendor {:04x} device {:04x}, Vulkan {}.{}.{}, driver {:X})", i, props.deviceName, type,
+                props.vendorID, props.deviceID, VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
+                VK_API_VERSION_PATCH(props.apiVersion), props.driverVersion);
+    }
     if (creator) {
         if (const VkPhysicalDevice required = creator->PhysicalDevice(instance)) {
             devices.assign(1, required);
@@ -325,6 +393,14 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         return false;
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
+#ifdef _WIN32
+    intel_first_frame_driver = IntelDriverCrashesFirstFrame(properties.vendorID, properties.driverVersion, true);
+    if (intel_first_frame_driver) {
+        LogWarn("vulkan: Intel driver {} is older than {}: Intel's drivers up to 31.0.101.2135 crash in vkCmdBeginRendering on the "
+                "first frame (Sentry NATIVE-28 and NATIVE-X); the player is asked to update the driver",
+                IntelWindowsDriverName(properties.driverVersion), IntelWindowsDriverName(kIntelFirstGoodDriver));
+    }
+#endif
 
 #ifdef __APPLE__
     {
@@ -416,6 +492,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
     ray_query_supported = RayQuerySupport(physical, ray_query_missing);
     VkPhysicalDeviceFaultFeaturesEXT fault_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+    VkPhysicalDeviceAddressBindingReportFeaturesEXT address_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT};
 #ifdef __APPLE__
     VkPhysicalDevicePortabilitySubsetFeaturesKHR portability{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR};
 #endif
@@ -476,7 +553,22 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
                 device_fault = true;
             }
         }
-        LogInfo("vulkan: diagnostics: memory budget {}, device fault {}, checkpoints {}", memory_budget, device_fault, checkpoints);
+        if (address_messenger && has(VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)) {
+            VkPhysicalDeviceAddressBindingReportFeaturesEXT query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT};
+            VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features2.pNext = &query;
+            vkGetPhysicalDeviceFeatures2(physical, &features2);
+            if (query.reportAddressBinding) {
+                add(VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME);
+                address_features.reportAddressBinding = VK_TRUE;
+                address_features.pNext = features.pNext;
+                features.pNext = &address_features;
+                address_report = true;
+                address_log::SetEnabled(true);
+            }
+        }
+        LogInfo("vulkan: diagnostics: memory budget {}, device fault {}, checkpoints {}, address binding report {}", memory_budget, device_fault,
+                checkpoints, address_report);
     }
     VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
     VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
@@ -509,7 +601,13 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     device_info.pQueueCreateInfos = queue_infos.data();
     device_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
     device_info.ppEnabledExtensionNames = device_extensions.data();
+    if (!start_watch::Step("device", std::format("vkCreateDevice on {}, {} extensions", properties.deviceName, device_info.enabledExtensionCount))) {
+        start_watch::Done("failed (test)");
+        LogError("vulkan: vkCreateDevice not called (PT_TEST_START_FAULT)");
+        return false;
+    }
     const VkResult device_result = creator ? creator->CreateDevice(physical, device_info, device) : vkCreateDevice(physical, &device_info, nullptr, &device);
+    start_watch::Done(device_result == VK_SUCCESS ? "created" : "failed");
     if (!Check(device_result, "vkCreateDevice")) {
         return false;
     }
@@ -587,6 +685,22 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             LogWarn("vulkan: PT_ALLOC_FAIL={} not understood (<n>, <n>+ or a probability)", fail);
         }
     }
+    if (const char* e = std::getenv("PT_VK_ADDRESS_SELFTEST"); e && std::atoi(e) != 0 && address_report && ray_query) {
+        Buffer probe;
+        const AllocTag tag("address self-test");
+        if (CreateBuffer(probe, 1 << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false)) {
+            VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+            info.buffer = probe.buffer;
+            const VkDeviceAddress address = vkGetBufferDeviceAddress(device, &info) + 0x1234;
+            for (const std::string& line : address_log::Explain(address, 0x1000)) {
+                LogInfo("vulkan: address self-test live {:#x} {}", address, line);
+            }
+            DestroyBuffer(probe);
+            for (const std::string& line : address_log::Explain(address, 0x1000)) {
+                LogInfo("vulkan: address self-test destroyed {:#x} {}", address, line);
+            }
+        }
+    }
 
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -659,6 +773,13 @@ void Context::Shutdown() {
     }
     if (messenger) {
         vkDestroyDebugUtilsMessengerEXT(instance, messenger, nullptr);
+    }
+    if (address_messenger) {
+        const address_log::Counts c = address_log::Count();
+        LogInfo("vulkan: address binding report: {} binds, {} unbinds in this run", c.binds, c.unbinds);
+        address_log::SetEnabled(false);
+        vkDestroyDebugUtilsMessengerEXT(instance, address_messenger, nullptr);
+        address_messenger = VK_NULL_HANDLE;
     }
     if (instance) {
         vkDestroyInstance(instance, nullptr);
@@ -933,19 +1054,57 @@ void Context::CheckDeviceLost(VkResult result, const char* where) {
         if (vkGetDeviceFaultInfoEXT(device, &counts, nullptr) == VK_SUCCESS) {
             std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
             std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
+            const VkDeviceSize binary_size = std::min<VkDeviceSize>(counts.vendorBinarySize, VkDeviceSize{64} << 20);
+            std::vector<uint8_t> binary(static_cast<size_t>(binary_size));
             VkDeviceFaultInfoEXT info{VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
             info.pAddressInfos = addresses.empty() ? nullptr : addresses.data();
             info.pVendorInfos = vendors.empty() ? nullptr : vendors.data();
-            counts.vendorBinarySize = 0;
-            vkGetDeviceFaultInfoEXT(device, &counts, &info);
+            info.pVendorBinaryData = binary.empty() ? nullptr : binary.data();
+            counts.vendorBinarySize = binary_size;
+            const VkResult fault_result = vkGetDeviceFaultInfoEXT(device, &counts, &info);
             {
                 LogError("vulkan: device fault: {}", info.description);
+                static const char* const kKinds[] = {"none", "read of an invalid address", "write to an invalid address",
+                                                     "execution of an invalid address", "instruction pointer (unknown)",
+                                                     "instruction pointer (invalid)", "instruction pointer at the fault"};
                 for (const VkDeviceFaultAddressInfoEXT& a : addresses) {
-                    LogError("vulkan: device fault address type {} at {:#x} (precision {:#x})", static_cast<int>(a.addressType),
-                             a.reportedAddress, a.addressPrecision);
+                    const int type = static_cast<int>(a.addressType);
+                    LogError("vulkan: device fault address type {} at {:#x} (precision {:#x}): {}", type, a.reportedAddress, a.addressPrecision,
+                             type >= 0 && type < 7 ? kKinds[type] : "unknown kind");
+                    for (const std::string& line : address_log::Explain(a.reportedAddress, a.addressPrecision)) {
+                        LogError("vulkan: fault address {:#x} {}", a.reportedAddress, line);
+                    }
                 }
                 for (const VkDeviceFaultVendorInfoEXT& v : vendors) {
                     LogError("vulkan: device fault vendor {:#x} data {:#x}: {}", v.vendorFaultCode, v.vendorFaultData, v.description);
+                }
+                if (address_report) {
+                    const address_log::Counts c = address_log::Count();
+                    LogError("vulkan: address binding report: {} ranges live, {} unbound kept ({} binds, {} unbinds in this run)", c.live, c.freed,
+                             c.binds, c.unbinds);
+                }
+                if (!binary.empty() && (fault_result == VK_SUCCESS || fault_result == VK_INCOMPLETE) && counts.vendorBinarySize > 0) {
+                    binary.resize(static_cast<size_t>(std::min<VkDeviceSize>(counts.vendorBinarySize, binary.size())));
+                    const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                    std::tm local{};
+#ifdef _WIN32
+                    localtime_s(&local, &now);
+#else
+                    localtime_r(&now, &local);
+#endif
+                    char name[96];
+                    std::snprintf(name, sizeof(name), "pt-gpu-fault-%s-%04d%02d%02d-%02d%02d%02d.bin", CrashBuildName().c_str(), local.tm_year + 1900,
+                                  local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
+                    const std::filesystem::path path = CrashDumpDir() / name;
+                    bool written = false;
+                    if (std::FILE* f = os::OpenFile(path, "wb")) {
+                        written = std::fwrite(binary.data(), 1, binary.size(), f) == binary.size();
+                        std::fclose(f);
+                    }
+                    LogError("vulkan: device fault vendor data {} bytes{}{}", binary.size(), written ? ", written to " : ", could not be written to ",
+                             os::PathToUtf8(path));
+                } else if (counts.vendorBinarySize > 0) {
+                    LogError("vulkan: device fault vendor data {} bytes not read ({})", counts.vendorBinarySize, vk::ResultName(fault_result));
                 }
             }
         }
@@ -1012,6 +1171,10 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
         return false;
     }
     TrackAllocation(out.allocation);
+    if (address_report) {
+        address_log::Describe(reinterpret_cast<uint64_t>(out.image), std::format("{} image {}x{}x{} format {} mips {} layers {} usage {:#x}", g_alloc_tag, extent.width,
+                                                                            extent.height, extent.depth, static_cast<int>(format), mip_levels, layers, usage));
+    }
     VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view_info.image = out.image;
     view_info.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE
@@ -1079,6 +1242,10 @@ bool Context::CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags us
         return false;
     }
     TrackAllocation(out.allocation);
+    if (address_report) {
+        address_log::Describe(reinterpret_cast<uint64_t>(out.buffer), std::format("{} buffer {} bytes usage {:#x}{}", g_alloc_tag, size, usage,
+                                                                             host_visible ? " host visible" : ""));
+    }
     out.mapped = result.pMappedData;
     out.size = size;
     if (host_visible && !out.mapped) {

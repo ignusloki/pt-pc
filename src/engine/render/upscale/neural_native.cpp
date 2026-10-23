@@ -445,7 +445,7 @@ bool Job::Start(Kind kind, const std::filesystem::path& data_dir, int arch) {
             const std::filesystem::path dir = VersionDir(data_dir);
             std::filesystem::remove(dir / std::string(kRecord), ec);
             for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
-                if (entry.is_directory(ec) && entry.path().filename().string().rfind("sm_", 0) == 0) std::filesystem::remove_all(entry.path(), ec);
+                if (entry.is_directory(ec) && os::PathToUtf8(entry.path().filename()).rfind("sm_", 0) == 0) std::filesystem::remove_all(entry.path(), ec);
         }
         if (kind != Kind::Remove) {
             ok = InstallTo(data_dir, arch, [&](int p) { std::lock_guard lock(state->mutex); state->status.percent = std::clamp(p, 0, 100); },

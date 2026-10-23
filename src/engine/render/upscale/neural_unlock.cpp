@@ -184,7 +184,8 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
         if (percent) percent(100);
         return FileSha256Impl(dest, nullptr);
     }
-    const std::filesystem::path part = dest.string() + ".part";
+    std::filesystem::path part = dest;
+    part += ".part";
     {
         std::ofstream out(part, std::ios::binary | std::ios::trunc);
         if (!out) {

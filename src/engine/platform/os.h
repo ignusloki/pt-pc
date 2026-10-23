@@ -52,6 +52,7 @@ ForegroundWindow GetForegroundWindowInfo(bool details = true);
 bool IsForegroundWindow(void* window);
 bool ForegroundIsOwnProcess();
 bool ActivateWindow(void* window);
+void ClearWindow(void* window);
 void AllowForeground(uint32_t pid);
 
 class ChildProcess {

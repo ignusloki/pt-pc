@@ -247,7 +247,10 @@ inline Outcome Work(State& s) {
         } catch (const std::exception&) {
             writable = false;
         }
-        if (!writable && !s.args.elevated) {
+        std::error_code manifest_error;
+        const bool portable = !fs::exists(s.args.install / kManifestName, manifest_error);
+        if (!writable && portable) Note(s, "the portable copy's folder is not writable; no elevation for a portable copy");
+        if (!writable && !s.args.elevated && !portable) {
             if (const char* refuse = std::getenv("PT_UPDATE_TEST_NO_ELEVATE"); refuse && update::TestOverrides()) {
                 throw std::runtime_error("the game folder is not writable; elevation would be asked for (test)");
             }
@@ -308,6 +311,7 @@ inline Outcome Work(State& s) {
                     std::to_string(result.downloaded) + " bytes in " + std::to_string(result.requests) + " requests (" +
                     (result.ranged ? "parts of the package" : "the whole package") + ")" +
                     (result.outcome.title_picture_missing ? ", title picture still missing" : ""));
+        for (const auto& line : result.outcome.swap.notes) Note(s, "frame generation unlock: " + line);
         post_phase(UpdatePhase::Starting);
         const fs::path journal = result.outcome.journal;
         const Started game = StartGame(s.args, ProcessElevated());

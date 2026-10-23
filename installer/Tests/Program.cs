@@ -49,6 +49,8 @@ Exact(moved);if(mw.Count(x=>x.Contains("not at the package root"))!=3)throw new 
 if(dump==null){
     var uw=Extraction.Run(Build("unknown.pkg","UP9999-CUSA99999_00-0000000000000000",n=>n),Path.Combine(root,"unknown"),_=>{});
     if(!uw.Any(x=>x.Contains("not a known P.T. release")))throw new Exception("Unknown ID not warned");Console.WriteLine("PASS unknown title with P.T. content installs");
+    string asia=Path.Combine(root,"asia");Extraction.Run(Build("asia.pkg","HP0101-CUSA99997_00-0000000000000000",n=>n),asia,_=>{});
+    if(!File.ReadAllText(Path.Combine(asia,"source.txt")).Contains("region=Asia"))throw new Exception("Asia prefix not recorded");Console.WriteLine("PASS content ID prefix names the region");
     if(Refusal(Build("other.pkg","UP9999-CUSA99998_00-0000000000000000",n=>n,pt:false),Path.Combine(root,"other"))!=Extraction.NotPtMessage)throw new Exception("Other game accepted");
     Console.WriteLine("PASS other game refused as not P.T.");
 }

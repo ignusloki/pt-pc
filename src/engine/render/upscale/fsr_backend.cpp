@@ -26,6 +26,7 @@
 
 #include "engine/core/log.h"
 #include "engine/render/upscale/upscale_platform.h"
+#include "engine/render/upscale/fsr_provider_gate.h"
 
 namespace pt {
 namespace {
@@ -33,10 +34,12 @@ namespace {
 #ifdef _WIN32
 using FfxModule = HMODULE;
 constexpr const char* kFfxLibrary = "amd_fidelityfx_vk.dll";
+constexpr const char* kFfx2VulkanLoader = "amd_fidelityfx_loader_vk.dll";
 constexpr const char* kExecutable = "pt.exe";
 #else
 using FfxModule = void*;
 constexpr const char* kFfxLibrary = "libamd_fidelityfx_vk.so";
+constexpr const char* kFfx2VulkanLoader = kFfxLibrary;
 constexpr const char* kExecutable = "pt";
 
 struct ffxFunctions {
@@ -84,7 +87,6 @@ FfxApiResource Resource(const UpscaleImage& image, uint32_t state, bool depth, b
     return resource;
 }
 
-/* FSR 3 and FSR 4 are two providers of one FidelityFX API, but AMD ships FSR 4 only in its DX12 DLLs; on Vulkan the FSR 4 path can only say why it is missing. */
 class FsrBackend final : public UpscaleBackend {
 public:
     FsrBackend(vk::Context& ctx, int generation) : ctx_(ctx), generation_(generation) {}
@@ -132,8 +134,22 @@ public:
     }
 
     bool Probe(std::string& reason) {
-        const std::filesystem::path path = ExecutableDir() / kFfxLibrary;
+        std::filesystem::path path = ExecutableDir() / kFfxLibrary;
 #ifdef _WIN32
+        if (generation_ == 4 && !module_) {
+            const std::filesystem::path loader = ExecutableDir() / kFfx2VulkanLoader;
+            if (std::error_code ec; std::filesystem::exists(loader, ec)) {
+                module_ = LoadLibraryExW(loader.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                if (module_) {
+                    sdk2_ = true;
+                    path = loader;
+                    LogInfo("fsr: FSR 4 uses {}", kFfx2VulkanLoader);
+                } else {
+                    LogWarn("fsr: {} is present but cannot be loaded (error {}); FSR 4 uses {}", kFfx2VulkanLoader, GetLastError(),
+                            kFfxLibrary);
+                }
+            }
+        }
         module_ = module_ ? module_ : LoadLibraryW(path.c_str());
 #else
         if (!module_) {
@@ -157,48 +173,43 @@ public:
             reason = std::format("{} has no FidelityFX API exports", kFfxLibrary);
             return false;
         }
+        const char* library = sdk2_ ? kFfx2VulkanLoader : kFfxLibrary;
+        FsrGateInput gate;
+        gate.generation = generation_;
+        gate.api = FsrApi::Vulkan;
+        gate.vendor_id = ctx_.properties.vendorID;
+        gate.vulkan_sdk2 = sdk2_;
         uint64_t count = 0;
         ffxQueryDescGetVersions versions{};
         versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
         versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         versions.outputCount = &count;
-        if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK || count == 0) {
-            reason = std::format("no FSR upscaler in {}", kFfxLibrary);
-            return false;
-        }
-        std::vector<uint64_t> ids(count);
-        std::vector<const char*> names(count);
-        versions.versionIds = ids.data();
-        versions.versionNames = names.data();
-        if (fn_.Query(nullptr, &versions.header) != FFX_API_RETURN_OK) {
-            reason = std::format("no FSR upscaler in {}", kFfxLibrary);
-            return false;
-        }
-        std::string listed;
-        std::vector<int> best;
-        for (uint64_t i = 0; i < count; ++i) {
-            const std::string name = names[i] ? names[i] : "";
-            listed += std::format("{}{}", listed.empty() ? "" : ", ", name);
-            std::vector<int> parts;
-            for (size_t at = 0; at < name.size();) {
-                size_t end = at;
-                while (end < name.size() && name[end] >= '0' && name[end] <= '9') ++end;
-                if (end == at) break;
-                parts.push_back(std::stoi(name.substr(at, end - at)));
-                at = end < name.size() && name[end] == '.' ? end + 1 : name.size();
+        const bool counted = fn_.Query(nullptr, &versions.header) == FFX_API_RETURN_OK;
+        if (counted && count > 0 && count < 256) {
+            std::vector<uint64_t> ids(count);
+            std::vector<const char*> names(count);
+            versions.versionIds = ids.data();
+            versions.versionNames = names.data();
+            if (fn_.Query(nullptr, &versions.header) == FFX_API_RETURN_OK) {
+                gate.query_ok = true;
+                for (uint64_t i = 0; i < count; ++i) gate.providers.push_back({ids[i], names[i] ? names[i] : ""});
             }
-            if (!parts.empty() && parts[0] == generation_ && parts > best) {
-                best = parts;
-                version_id_ = ids[i];
-                version_name_ = name;
-            }
+        } else if (counted && count == 0) {
+            gate.query_ok = true;
         }
-        LogInfo("fsr: {} upscalers: {}", kFfxLibrary, listed);
-        if (!version_id_) {
-            reason = generation_ == 4 ? "AMD releases FSR 4 for DirectX 12 only, and this game renders with Vulkan"
-                                      : std::format("no FSR {} upscaler in {}", generation_, kFfxLibrary);
+        const FsrGateResult decision = DecideFsrProvider(gate);
+        LogInfo("fsr: {} upscalers: {}", library, decision.listed);
+        if (!decision.available) {
+            version_id_ = 0;
+            reason = generation_ == 4 ? decision.reason
+                     : !gate.query_ok || gate.providers.empty() ? std::format("no FSR upscaler in {}", library)
+                                                                : std::format("no FSR {} upscaler in {}", generation_, library);
+            if (generation_ == 4) LogInfo("fsr: FSR 4 not offered: {}", reason);
             return false;
         }
+        version_id_ = decision.id;
+        version_name_ = decision.name;
+        if (generation_ == 4) LogInfo("fsr: FSR 4 offered with upscaler provider {}", version_name_);
         return true;
     }
 
@@ -219,6 +230,15 @@ public:
         desc.maxRenderSize = {create.render.width, create.render.height};
         desc.maxUpscaleSize = {create.display.width, create.display.height};
         desc.fpMessage = Message;
+#if defined(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION)
+        ffxCreateContextDescUpscaleVersion api_version{};
+        if (sdk2_) {
+            api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
+            api_version.version = FFX_UPSCALER_VERSION;
+            api_version.header.pNext = desc.header.pNext;
+            desc.header.pNext = &api_version.header;
+        }
+#endif
         ffxOverrideVersion version_override{};
         version_override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
         version_override.versionId = version_id_;
@@ -227,12 +247,28 @@ public:
         if (result != FFX_API_RETURN_OK) {
             LogError("fsr: ffxCreateContext failed ({}) for FSR {}", result, version_name_);
             context_ = nullptr;
+            if (generation_ == 4) {
+                version_id_ = 0;
+                reason_ = std::string(kFsr4ReasonDriver);
+                LogWarn("fsr: FSR 4 not offered: {}", reason_);
+            }
             return false;
         }
         ffxQueryGetProviderVersion version{};
         version.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-        if (fn_.Query(&context_, &version.header) == FFX_API_RETURN_OK && version.versionName) {
-            LogInfo("fsr: upscaler {} created for {}x{} -> {}x{}", version.versionName, create.render.width, create.render.height,
+        const bool named = fn_.Query(&context_, &version.header) == FFX_API_RETURN_OK && version.versionName;
+        const std::string created = named ? version.versionName : "";
+        if (generation_ == 4 && named && !FsrCreatedIsGeneration(created, 4)) {
+            LogWarn("fsr: the FSR {} context runs upscaler {}, not FSR 4", version_name_, created);
+            fn_.DestroyContext(&context_, nullptr);
+            context_ = nullptr;
+            version_id_ = 0;
+            reason_ = std::string(kFsr4ReasonDriver);
+            LogWarn("fsr: FSR 4 not offered: {}", reason_);
+            return false;
+        }
+        if (named) {
+            LogInfo("fsr: upscaler {} created for {}x{} -> {}x{}", created, create.render.width, create.render.height,
                     create.display.width, create.display.height);
         }
         debug_view_ = std::getenv("PT_UPSCALE_DEBUG") != nullptr;
@@ -297,6 +333,7 @@ private:
     ffxFunctions fn_{};
     ffxContext context_ = nullptr;
     bool debug_view_ = false;
+    bool sdk2_ = false;
     bool dispatch_error_logged_ = false;
 };
 

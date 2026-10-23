@@ -73,7 +73,8 @@ void RatioSpatial(ivec2 pixel, ivec2 size) {
         ratio[i] = lit_rgb[i] > 1.0e-6 ? clamp(shadowed_rgb[i] / lit_rgb[i], 0.0, 1.0) : 1.0;
     }
     float lit_luma = Luma709(lit.rgb) + lit.a;
-    float specular = lit_luma > 1.0e-6 ? clamp((Luma709(shadowed.rgb) + shadowed.a) / lit_luma, 0.0, 1.0) : 1.0;
+    float specular = lit.a > 1.0e-6 ? clamp(shadowed.a / lit.a, 0.0, 1.0)
+                   : lit_luma > 1.0e-6 ? clamp((Luma709(shadowed.rgb) + shadowed.a) / lit_luma, 0.0, 1.0) : 1.0;
     imageStore(rt_ratio_spatial, pixel, vec4(ratio, specular));
 }
 

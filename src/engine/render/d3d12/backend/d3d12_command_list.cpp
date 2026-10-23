@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <stdexcept>
 
 #include "engine/core/log.h"
 
@@ -61,6 +60,30 @@ void CommandListImpl::Begin() {
     vertex_buffer_ = nullptr;
     vertex_dirty_ = false;
     vertex_stride_ = 0;
+    reclaimed_ = false;
+    stage_failed_size_ = UINT64_MAX;
+}
+
+bool CommandListImpl::StageUpload(uint64_t size, ComPtr<ID3D12Resource>& upload, D3D12MA::Allocation*& allocation, void** mapped) {
+    if (size >= stage_failed_size_) {
+        device_.UploadRetried(size, false);
+        return false;
+    }
+    if (device_.CreateUploadBuffer(size, upload, allocation, mapped)) {
+        return true;
+    }
+    if (!reclaimed_) {
+        reclaimed_ = true;
+        if (!device_.ReclaimUploadMemory()) {
+            return false;
+        }
+    }
+    const bool made = device_.CreateUploadBuffer(size, upload, allocation, mapped);
+    device_.UploadRetried(size, made);
+    if (!made) {
+        stage_failed_size_ = std::min(stage_failed_size_, size);
+    }
+    return made;
 }
 
 void CommandListImpl::ResumeAfterNative() {
@@ -94,15 +117,14 @@ void CommandListImpl::Transition(BufferRecord& buffer, D3D12_RESOURCE_STATES sta
         ComPtr<ID3D12Resource> upload;
         D3D12MA::Allocation* allocation = nullptr;
         void* mapped = nullptr;
-        if (!device_.CreateUploadBuffer(size, upload, allocation, &mapped)) {
-            throw std::runtime_error("D3D12 mapped shader input upload failed");
+        if (StageUpload(size, upload, allocation, &mapped)) {
+            std::memcpy(mapped, buffer.host_data.data() + begin, size);
+            upload->Unmap(0, nullptr);
+            buffer.dirty_begin = buffer.dirty_end = 0;
+            Transition(buffer, D3D12_RESOURCE_STATE_COPY_DEST);
+            list_->CopyBufferRegion(buffer.resource.Get(), begin, upload.Get(), 0, size);
+            Keep(std::move(upload), allocation);
         }
-        std::memcpy(mapped, buffer.host_data.data() + begin, size);
-        upload->Unmap(0, nullptr);
-        buffer.dirty_begin = buffer.dirty_end = 0;
-        Transition(buffer, D3D12_RESOURCE_STATE_COPY_DEST);
-        list_->CopyBufferRegion(buffer.resource.Get(), begin, upload.Get(), 0, size);
-        Keep(std::move(upload), allocation);
     }
     if (buffer.heap == HeapKind::Upload || buffer.heap == HeapKind::Readback) {
         return;
@@ -540,7 +562,7 @@ void CommandListImpl::FillBuffer(const BufferResource& buffer, uint64_t offset, 
     ComPtr<ID3D12Resource> upload;
     D3D12MA::Allocation* allocation = nullptr;
     void* mapped = nullptr;
-    if (size == 0 || !device_.CreateUploadBuffer(size, upload, allocation, &mapped)) {
+    if (size == 0 || !StageUpload(size, upload, allocation, &mapped)) {
         LogError("d3d12 backend: FillBuffer: no upload buffer");
         return;
     }

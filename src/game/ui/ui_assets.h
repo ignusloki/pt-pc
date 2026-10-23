@@ -12,6 +12,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "engine/ui/ffnt.h"
@@ -113,14 +114,22 @@ private:
         int width = 0;
         int height = 0;
         std::vector<uint8_t> rgba;
+        std::string failure;
+        bool out_of_memory = false;
     };
+    void DecodePreviews();
     void UploadDecodedPreviews();
+    void PreviewFailed(const std::string& path, std::string_view reason, bool out_of_memory) noexcept;
+    bool PreviewWaitsForMemory(const std::string& path) const;
     std::mutex preview_mutex_;
     std::vector<std::string> preview_queue_;
     std::vector<DecodedPreview> preview_done_;
     std::vector<std::string> preview_pending_;
     std::thread preview_worker_;
     bool preview_worker_busy_ = false;
+    size_t preview_lost_ = 0;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> preview_memory_retry_;
+    std::unordered_set<std::string> preview_logged_;
 };
 
 }

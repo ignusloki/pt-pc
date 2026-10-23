@@ -733,6 +733,23 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
+    # the PC page's two picture loaders (UiAssets::PreloadPreviews, Sentry NATIVE-2F): the Museum's halls and the loop browser open
+    # with every entry unlocked and close again; tools/unicode_e2e_check.py (previews) runs the route under other code pages
+    "pc_previews": {
+        "start_floor": "f005",
+        "frames": 6000,
+        "work_files": {"pt.ini": b"[progress]\ngame_finished = 1\narchive_backfill = 1\n"},
+        # every frame drawn: the loaders run in the menu's drawing, which headless otherwise does for the shot frames only
+        "args": ["--render-all"],
+        "route": ["start", "pc_previews"],
+        "expect": [
+            r"expect ok .*: PC settings cursor on pc_loop_browser",
+            r"expect ok .*: PC settings cursor on pc_archive",
+            r"museum: \d+ / \d+ found",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+        "forbid": [(r"museum: \d+ / \d+ found", r"input script:", r"error crash:|ui: preview .* not shown")],
+    },
     # the Museum with a pad only: Circle leaves the model viewer and a cutscene, Cross leaves a cutscene but not the model viewer
     # the Museum's music hall (gameplay.md 14.7, museum_music.h): tracks played from the player's sound banks and the ending's demo
     # stream, unlocked by what play reached (pt.ini), the unused ones by the finish; play, seek, next, pause, the loop, the end

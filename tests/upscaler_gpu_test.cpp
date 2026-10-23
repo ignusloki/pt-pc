@@ -188,6 +188,63 @@ int main() {
         Expect(pt::fg_unlock::ProxyPresent(dir), "a marked proxy is seen as present");
         fs::remove_all(dir, ec);
     }
+    Expect(fg && fg->proxy_sha256 == "a", "the record's SHA-256 for its proxy is read");
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / "pt-fg-shipped-test";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "game", ec);
+        const fs::path game = dir / "game";
+        auto write = [&](const fs::path& file, const std::string& data) {
+            fs::create_directories(file.parent_path(), ec);
+            std::ofstream(file, std::ios::binary | std::ios::trunc) << data;
+        };
+        auto read = [](const fs::path& file) {
+            std::ifstream in(file, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)), {});
+        };
+        const std::string proxy = "MZ a dlssg_sm86 proxy";
+        write(game / "version.dll", proxy);
+        Expect(pt::fg_unlock::ProxyPresent(game) && !pt::fg_unlock::RecordedProxyPresent(game), "a proxy without our record is no installed unlock");
+        const auto stray = pt::fg_unlock::UnrecordedProxies(game);
+        Expect(stray.size() == 1 && stray[0].name == "version.dll" && stray[0].size == proxy.size() && stray[0].marker && !stray[0].loaded &&
+                   stray[0].sha256 == pt::fg_unlock::FileSha256(game / "version.dll"),
+               "the unrecorded proxy is listed with its size, SHA-256 and marker");
+        const std::string line = pt::fg_unlock::DescribeUnrecorded(stray);
+        Expect(line.starts_with("unrecorded proxy present: version.dll (") && line.find("a dlssg_for_sm86 proxy") != std::string::npos &&
+                   line.find(stray[0].sha256) != std::string::npos,
+               "the unrecorded proxy line names it, its size and SHA-256");
+        Expect(pt::fg_unlock::RetireShippedProxy(game, dir / "retired").empty() && fs::exists(game / "version.dll"),
+               "only the exact file 1.0.6 and 1.0.7 shipped is moved out");
+        Expect(pt::fg_unlock::RepairRecordedProxy(game, dir / "work", {}, dir / "retired").result == pt::fg_unlock::ProxyRepair::Result::NoRecord,
+               "no record: nothing to repair");
+        const std::string sha = pt::fg_unlock::FileSha256(game / "version.dll");
+        write(game / "pt-dlssg-route.json", R"({"complete":true,"proxy":"version.dll","files":[{"name":"version.dll","sha256":")" + sha +
+                                                R"("},{"name":"dlssg_sm86/runtime/nvngx_dlssg.dll","sha256":"b"}]})");
+        Expect(pt::fg_unlock::RecordedProxyPresent(game) && pt::fg_unlock::UnrecordedProxies(game).empty(), "a recorded proxy is the installed unlock");
+        Expect(pt::fg_unlock::RepairRecordedProxy(game, dir / "work", {}, dir / "retired").result == pt::fg_unlock::ProxyRepair::Result::Fine,
+               "the recorded proxy matches its record");
+        write(dir / "backup" / "version.dll", proxy);
+        fs::remove(game / "version.dll", ec);
+        auto repair = pt::fg_unlock::RepairRecordedProxy(game, dir / "work", {dir / "backup" / "version.dll"}, dir / "retired");
+        Expect(repair.result == pt::fg_unlock::ProxyRepair::Result::Restored && read(game / "version.dll") == proxy && !fs::exists(dir / "backup" / "version.dll"),
+               "a recorded proxy an update removed comes back from the update's backup");
+        write(game / "version.dll", "MZ another program's version.dll");
+        write(dir / "backup" / "version.dll", proxy);
+        repair = pt::fg_unlock::RepairRecordedProxy(game, dir / "work", {dir / "backup" / "version.dll"}, dir / "retired");
+        bool moved = false;
+        for (fs::recursive_directory_iterator it(dir / "retired", ec), end; !ec && it != end; it.increment(ec))
+            if (it->is_regular_file() && read(it->path()) == "MZ another program's version.dll") moved = true;
+        Expect(repair.result == pt::fg_unlock::ProxyRepair::Result::Restored && read(game / "version.dll") == proxy && moved,
+               "a different file under the recorded proxy's name is moved out and the right one put back");
+        fs::remove(game / "version.dll", ec);
+        write(dir / "backup" / "version.dll", "MZ wrong bytes");
+        repair = pt::fg_unlock::RepairRecordedProxy(game, dir / "work", {dir / "backup" / "version.dll"}, dir / "retired");
+        Expect(repair.result == pt::fg_unlock::ProxyRepair::Result::NeedsReinstall && !fs::exists(game / "version.dll"),
+               "without the right file the unlock is reinstalled, nothing wrong is put down");
+        fs::remove_all(dir, ec);
+    }
     std::printf("upscaler gpu: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

@@ -37,10 +37,14 @@ void LogSetFile(const std::filesystem::path& path) {
     g_log_file = os::OpenFile(path, "w");
 }
 
-void LogWrite(LogLevel level, std::string_view text) {
+double LogClock() {
     using namespace std::chrono;
     static const auto start = steady_clock::now();
-    const double seconds = duration<double>(steady_clock::now() - start).count();
+    return duration<double>(steady_clock::now() - start).count();
+}
+
+void LogWrite(LogLevel level, std::string_view text) {
+    const double seconds = LogClock();
     std::lock_guard lock(g_log_mutex);
     char tick[32] = "";
     if (g_log_ticks) {
@@ -51,6 +55,17 @@ void LogWrite(LogLevel level, std::string_view text) {
         std::fprintf(g_log_file, "[%9.3f] %-5s %s%.*s\n", seconds, LevelTag(level), tick, static_cast<int>(text.size()), text.data());
         std::fflush(g_log_file);
     }
+}
+
+bool LogTryWrite(LogLevel level, std::string_view text) {
+    const double seconds = LogClock();
+    std::unique_lock lock(g_log_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    if (g_log_file) {
+        std::fprintf(g_log_file, "[%9.3f] %-5s %.*s\n", seconds, LevelTag(level), static_cast<int>(text.size()), text.data());
+        std::fflush(g_log_file);
+    }
+    return true;
 }
 
 void LogSetTick(uint64_t tick) {

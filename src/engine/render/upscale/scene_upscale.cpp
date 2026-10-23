@@ -841,7 +841,9 @@ bool SceneRenderer::RecordUpscaleDispatch() {
             cmd.UseTargets({{&input, gpu::Layout::ShaderReadOnly}});
         }
 #endif
+        if (up_dispatch_.list) up_dispatch_.list->BeginLabel("upscaler evaluate");
         upscaled = up_.backend->Dispatch(up_dispatch_);
+        if (up_dispatch_.list) up_dispatch_.list->EndLabel();
     }
     if (gpu_->Info().backend == gpu::Backend::D3D12) {
 #ifdef _WIN32
@@ -859,11 +861,15 @@ bool SceneRenderer::RecordUpscaleDispatch() {
         BindSets(*up_dispatch_.list, gpu::BindPoint::Graphics);
         BindSets(*up_dispatch_.list, gpu::BindPoint::Compute);
 #ifdef _WIN32
+        if (up_dispatch_.list) up_dispatch_.list->BeginLabel("frame generation inputs");
         PrepareFrameGenerationD3D12(upscaled);
+        if (up_dispatch_.list) up_dispatch_.list->EndLabel();
 #endif
         return upscaled;
     }
+    if (up_dispatch_.list) up_dispatch_.list->BeginLabel("frame generation inputs");
     PrepareFrameGeneration(up_dispatch_, upscaled);
+    if (up_dispatch_.list) up_dispatch_.list->EndLabel();
     return upscaled;
 }
 
@@ -1046,7 +1052,9 @@ void SceneRenderer::RecordUpscaleResolve(gpu::CommandList& cmd, bool upscaled) {
 void SceneRenderer::RecordUpscale(gpu::CommandList& cmd, float dt) {
     RecordUpscalePrepare(dt);
     const bool upscaled = RecordUpscaleDispatch();
+    cmd.BeginLabel("upscale resolve");
     RecordUpscaleResolve(cmd, upscaled);
+    cmd.EndLabel();
 }
 
 void SceneRenderer::ReadUpscaleTimestamps(FrameSlot& slot) {

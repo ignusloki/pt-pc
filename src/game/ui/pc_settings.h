@@ -23,6 +23,10 @@ struct PcSettingRow {
     bool confirm_default_yes = false;
     std::vector<std::string> value_notes;
     bool ValueDisabled(int v) const { return v >= 0 && v < static_cast<int>(value_notes.size()) && !value_notes[v].empty(); }
+    std::vector<std::string> value_warnings;
+    std::string_view ValueWarning(int v) const {
+        return v >= 0 && v < static_cast<int>(value_warnings.size()) ? std::string_view(value_warnings[v]) : std::string_view();
+    }
 };
 
 struct PcSettingSection {

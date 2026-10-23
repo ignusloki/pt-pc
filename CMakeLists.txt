@@ -301,6 +301,8 @@ target_link_libraries(pt_vfx_test PRIVATE pt_engine)
 add_executable(pt_collision_test tests/collision_test.cpp)
 add_executable(pt_parallel_for_test tests/parallel_for_test.cpp)
 target_link_libraries(pt_parallel_for_test PRIVATE pt_engine)
+add_executable(pt_vk_address_log_test tests/vk_address_log_test.cpp)
+target_link_libraries(pt_vk_address_log_test PRIVATE pt_engine)
 add_executable(pt_localization_test tests/localization_test.cpp)
 target_link_libraries(pt_localization_test PRIVATE pt_engine)
 if(MSVC)
@@ -381,6 +383,15 @@ target_link_libraries(pt_photo_panel_test PRIVATE pt_engine)
 
 add_executable(pt_controller_speaker_route_test tests/controller_speaker_route_test.cpp)
 target_link_libraries(pt_controller_speaker_route_test PRIVATE pt_engine)
+# the main mix's playback device and the DualSense speaker path with fake endpoints (output_device.h)
+add_executable(pt_output_device_test tests/output_device_test.cpp)
+target_link_libraries(pt_output_device_test PRIVATE pt_engine)
+# every event of the banks rendered offline: only the controller speaker events reach the controller stream (needs the game folder)
+add_executable(pt_controller_bus_routing_test tests/controller_bus_routing_test.cpp)
+target_link_libraries(pt_controller_bus_routing_test PRIVATE pt_engine)
+if(MSVC)
+  target_compile_options(pt_output_device_test PRIVATE /utf-8)
+endif()
 add_executable(pt_dualshock_audio_test tests/dualshock_audio_test.cpp)
 target_link_libraries(pt_dualshock_audio_test PRIVATE pt_engine)
 
@@ -400,12 +411,39 @@ endif()
 add_executable(pt_graphics_preset_test tests/graphics_preset_test.cpp)
 target_link_libraries(pt_graphics_preset_test PRIVATE pt_engine)
 
+# implicit Vulkan layer manifests and the environment that keeps a crashing layer out (src/engine/render/vk_layers.h)
+add_executable(pt_vk_layers_test tests/vk_layers_test.cpp)
+target_link_libraries(pt_vk_layers_test PRIVATE pt_engine)
+# the Intel Windows drivers that crash on the first frame and the notice's texts (src/engine/render/intel_vulkan_driver.h)
+add_executable(pt_intel_vulkan_driver_test tests/intel_vulkan_driver_test.cpp)
+target_link_libraries(pt_intel_vulkan_driver_test PRIVATE pt_engine)
+if(MSVC)
+  target_compile_options(pt_intel_vulkan_driver_test PRIVATE /utf-8)
+endif()
+if(WIN32)
+  # a test implicit layer that faults on vkDestroySwapchainKHR(VK_NULL_HANDLE) like Bandicam's and Mirillis Action's
+  # (tools/vk_null_swapchain_layer): its own folder, never packaged; a run selects it with
+  # VK_ADD_IMPLICIT_LAYER_PATH=<build>/vk_null_swapchain_layer and ENABLE_PT_NULL_SWAPCHAIN_LAYER=1
+  add_library(pt_null_swapchain_layer SHARED EXCLUDE_FROM_ALL tools/vk_null_swapchain_layer/vk_null_swapchain_layer.cpp)
+  target_link_libraries(pt_null_swapchain_layer PRIVATE Vulkan::Headers)
+  set_target_properties(pt_null_swapchain_layer PROPERTIES OUTPUT_NAME "pt_null_swapchain_layer"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vk_null_swapchain_layer" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vk_null_swapchain_layer")
+  file(WRITE "${CMAKE_BINARY_DIR}/vk_null_swapchain_layer/pt_null_swapchain_layer.json"
+    "{\n  \"file_format_version\": \"1.1.2\",\n  \"layer\": {\n    \"name\": \"VK_LAYER_PT_null_swapchain_test\",\n    \"type\": \"GLOBAL\",\n    \"library_path\": \".\\\\pt_null_swapchain_layer.dll\",\n    \"api_version\": \"1.3.0\",\n    \"implementation_version\": \"1\",\n    \"description\": \"pt-port test: faults on vkDestroySwapchainKHR(VK_NULL_HANDLE)\",\n    \"functions\": { \"vkNegotiateLoaderLayerInterfaceVersion\": \"PtNullSwapchainNegotiate\" },\n    \"disable_environment\": { \"DISABLE_PT_NULL_SWAPCHAIN_LAYER\": \"1\" },\n    \"enable_environment\": { \"ENABLE_PT_NULL_SWAPCHAIN_LAYER\": \"1\" }\n  }\n}\n")
+endif()
+
 # the full screen blur's pulse start per game frame (0x9231D0), src/game/blur_sway.h
 add_executable(pt_blur_sway_test tests/blur_sway_test.cpp)
 target_link_libraries(pt_blur_sway_test PRIVATE pt_engine)
 
+# P.T. game files of every release are found by their content, not their folder's name (src/engine/fs/game_folder.h)
+add_executable(pt_game_folder_test tests/game_folder_test.cpp)
+target_include_directories(pt_game_folder_test PRIVATE src)
 add_executable(pt_unicode_paths_test tests/unicode_paths_test.cpp)
 target_link_libraries(pt_unicode_paths_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_unicode_paths_test PRIVATE pt_gpu_d3d12)
+endif()
 # the installer's ASCII file name rules (setup_core.h) are checked under a Turkish locale too
 target_include_directories(pt_unicode_paths_test PRIVATE installer/Native)
 if(WIN32)
@@ -431,6 +469,9 @@ target_link_libraries(pt_crash_upload_test PRIVATE pt_engine)
 
 add_executable(pt_settings_roundtrip_test tests/settings_roundtrip_test.cpp)
 target_link_libraries(pt_settings_roundtrip_test PRIVATE pt_engine)
+if(MSVC)
+  target_compile_options(pt_settings_roundtrip_test PRIVATE /utf-8)
+endif()
 
 # the Rendering API choice: parsing, the Vulkan fallback, pt.ini keys, the texts in 14 languages (engine/platform/rendering_api.h)
 add_executable(pt_rendering_api_test tests/rendering_api_test.cpp)
@@ -462,6 +503,9 @@ if(WIN32)
   add_executable(pt_d3d12_ngx_identity_test tests/d3d12_ngx_identity_test.cpp)
   target_include_directories(pt_d3d12_ngx_identity_test PRIVATE src)
 endif()
+
+add_executable(pt_fsr_provider_gate_test tests/fsr_provider_gate_test.cpp src/engine/render/upscale/fsr_provider_gate.cpp)
+target_include_directories(pt_fsr_provider_gate_test PRIVATE src)
 
 add_executable(pt_nr_toggle_policy_test tests/nr_toggle_policy_test.cpp)
 target_include_directories(pt_nr_toggle_policy_test PRIVATE src)
@@ -537,12 +581,28 @@ endif()
 
 target_compile_definitions(pt_engine PUBLIC PT_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 add_custom_command(TARGET pt POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:pt>/fonts")
-# Coffee with Lisa (src/game/lisa_date): its script, text, placeholder art and music beside the game
-target_compile_definitions(pt_engine PUBLIC PT_LISA_DATE_DIR="${CMAKE_SOURCE_DIR}/assets/lisa_date")
-# copied on every build (a text or picture change alone relinks nothing)
-add_custom_target(pt_lisa_date_assets ALL COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/lisa_date" "${CMAKE_BINARY_DIR}/lisa_date")
-add_dependencies(pt pt_lisa_date_assets)
-add_dependencies(pt_release pt_lisa_date_assets)
+# The port's data pack beside the game (src/engine/fs/data_pack.h): the bonus scene's files of assets/lisa_date packed by
+# tools/make_data_pack.py whenever one of them changes, or a tree without that folder takes the pack it ships (assets/extras.pak).
+# No loose copy of the folder goes beside the game; the one older builds left there is removed.
+set(PT_DATA_PACK "${CMAKE_BINARY_DIR}/extras.pak")
+if(EXISTS "${CMAKE_SOURCE_DIR}/assets/lisa_date/script.txt")
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  file(GLOB_RECURSE PT_DATA_PACK_INPUTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/lisa_date/*")
+  add_custom_command(OUTPUT "${PT_DATA_PACK}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/make_data_pack.py" --source "${CMAKE_SOURCE_DIR}/assets/lisa_date" --out "${PT_DATA_PACK}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${PT_DATA_PACK}"
+    DEPENDS ${PT_DATA_PACK_INPUTS} "${CMAKE_SOURCE_DIR}/tools/make_data_pack.py" VERBATIM)
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/assets/extras.pak")
+  add_custom_command(OUTPUT "${PT_DATA_PACK}" COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/assets/extras.pak" "${PT_DATA_PACK}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/assets/extras.pak" VERBATIM)
+else()
+  message(WARNING "Neither assets/lisa_date nor assets/extras.pak: the game builds without its data pack")
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/assets/lisa_date/script.txt" OR EXISTS "${CMAKE_SOURCE_DIR}/assets/extras.pak")
+  add_custom_target(pt_data_pack ALL DEPENDS "${PT_DATA_PACK}" COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/lisa_date")
+  add_dependencies(pt pt_data_pack)
+  add_dependencies(pt_release pt_data_pack)
+endif()
 # the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
 file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
 foreach(license ${PT_FONT_LICENSES})
@@ -591,6 +651,11 @@ target_link_libraries(pt_mods_test PRIVATE pt_engine)
 
 add_executable(pt_lisa_date_test tests/lisa_date_test.cpp)
 target_link_libraries(pt_lisa_date_test PRIVATE pt_engine)
+if(TARGET pt_data_pack)
+  add_dependencies(pt_lisa_date_test pt_data_pack)
+endif()
+# the test reads the source files themselves and compares the data pack with them
+target_compile_definitions(pt_lisa_date_test PRIVATE PT_LISA_DATE_DIR="${CMAKE_SOURCE_DIR}/assets/lisa_date" PT_DATA_PACK_FILE="${PT_DATA_PACK}")
 
 # the prompts' keycaps follow the keyboard layout (KeyBindingName with stand-in AZERTY, QWERTZ and Turkish F layouts)
 add_executable(pt_key_layout_test tests/key_layout_test.cpp)
@@ -628,6 +693,9 @@ target_link_libraries(pt_dialog_nav_test PRIVATE pt_engine)
 # the Museum's unlock keys: what each exhibit waits for and what a sound, a picture or a demo shown in play opens
 add_executable(pt_archive_unlock_test tests/archive_unlock_test.cpp)
 target_link_libraries(pt_archive_unlock_test PRIVATE pt_engine)
+if(TARGET pt_gpu_d3d12)
+  target_link_libraries(pt_archive_unlock_test PRIVATE pt_gpu_d3d12)
+endif()
 
 if(WIN32)
   add_executable(pt_discord_presence_test tests/discord_presence_test.cpp)
@@ -641,6 +709,8 @@ endif()
 
 add_executable(pt_display_modes_test tests/display_modes_test.cpp)
 target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
+add_executable(pt_display_policy_test tests/display_policy_test.cpp)
+target_link_libraries(pt_display_policy_test PRIVATE pt_engine)
 
 add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
 target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)

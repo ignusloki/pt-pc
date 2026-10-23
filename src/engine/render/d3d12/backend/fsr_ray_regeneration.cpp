@@ -60,9 +60,10 @@ bool FsrRayRegeneration::Available(std::string& reason) {
     auto& p = *impl_;
     if (!p.checked) {
         p.checked = true;
-        p.reason = "FSR Ray Regeneration requires a supported Radeon RX 9000 GPU, DirectX 12 and Windows 11";
+        p.reason = "FSR Ray Regeneration needs an AMD Radeon GPU with DirectX 12";
 #if defined(PT_WITH_FSR_RR)
         if (p.device.Info().vendor_id == 0x1002) {
+            p.reason = "AMD's driver offers no FSR Ray Regeneration for this GPU (AMD lists the Radeon RX 9000 series and Windows 11)";
             const auto path = ExecutableDir() / L"amd_fidelityfx_loader_dx12.dll";
             if (!std::filesystem::exists(ExecutableDir() / L"amd_fidelityfx_denoiser_dx12.dll")) {
                 p.reason = "amd_fidelityfx_denoiser_dx12.dll is missing next to pt.exe";
@@ -77,11 +78,18 @@ bool FsrRayRegeneration::Available(std::string& reason) {
                         q.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_DENOISER;
                         q.device = NativeDevice(p.device);
                         q.outputCount = &count;
-                        if (p.fn.Query(nullptr, &q.header) == FFX_API_RETURN_OK && count && count < 256) {
+                        const auto counted = p.fn.Query(nullptr, &q.header);
+                        if (counted != FFX_API_RETURN_OK || !count) {
+                            LogInfo("fsr rr: amd_fidelityfx_denoiser_dx12.dll providers for this GPU: none (query {})", counted);
+                        }
+                        if (counted == FFX_API_RETURN_OK && count && count < 256) {
                             std::vector<uint64_t> ids(count);
                             std::vector<const char*> names(count);
                             q.versionIds = ids.data(); q.versionNames = names.data();
                             if (p.fn.Query(nullptr, &q.header) == FFX_API_RETURN_OK) {
+                                std::string listed;
+                                for (uint64_t i = 0; i < count; ++i) listed += std::format("{}{}", i ? ", " : "", names[i] ? names[i] : "?");
+                                LogInfo("fsr rr: amd_fidelityfx_denoiser_dx12.dll providers for this GPU: {}", listed);
                                 p.version = ids[0];
                                 p.version_name = names[0] ? names[0] : "1.2.0";
                                 p.supported = true;

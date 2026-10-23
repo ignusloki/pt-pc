@@ -148,6 +148,16 @@ bool ActivateWindow(void* handle) {
     return GetForegroundWindow() == window;
 }
 
+void ClearWindow(void* handle) {
+    HWND window = static_cast<HWND>(handle);
+    RECT client{};
+    if (!window || !GetClientRect(window, &client)) return;
+    if (HDC dc = GetDC(window)) {
+        FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        ReleaseDC(window, dc);
+    }
+}
+
 void AllowForeground(uint32_t pid) { AllowSetForegroundWindow(pid ? pid : ASFW_ANY); }
 void LowerCurrentThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 
@@ -349,6 +359,7 @@ ForegroundWindow GetForegroundWindowInfo(bool) { return {}; }
 bool IsForegroundWindow(void*) { return false; }
 bool ForegroundIsOwnProcess() { return false; }
 bool ActivateWindow(void*) { return false; }
+void ClearWindow(void*) {}
 void AllowForeground(uint32_t) {}
 void LowerCurrentThreadPriority() {
 #ifdef __linux__

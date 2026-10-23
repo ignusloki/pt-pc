@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 
 #include "engine/core/log.h"
+#include "engine/fs/game_folder.h"
+#include "engine/fs/pt_release.h"
 #include "engine/platform/os.h"
 #include "game/save_data.h"
 #include "game/ui/pc_settings.h"
@@ -276,6 +278,7 @@ public:
             if (packages.size() > 1) return {{}, ui_.T("pc_first_run_several_pkgs", {Utf8(picked)})};
             return {{}, ui_.T("pc_first_run_not_found", {Utf8(picked)})};
         }
+        LogGame(game);
         if (const std::string error = Check(game); !error.empty()) return {{}, error};
         return {game};
     }
@@ -290,6 +293,12 @@ public:
     }
 
 private:
+    static void LogGame(const fs::path& game) {
+        const pt::release::Identity id = pt::release::Identify(game);
+        pt::LogInfo("first run: game folder {}: title_id={} content_id={} region={} (by {})", Utf8(game), id.title_id.empty() ? "?" : id.title_id,
+                    id.content_id.empty() ? "?" : id.content_id, id.region.empty() ? "unknown" : id.region, id.how.empty() ? "nothing but its files" : id.how);
+    }
+
     std::string Check(const fs::path& game) {
         const int missing = c_.missing_packages ? c_.missing_packages(game) : 0;
         if (missing == 0) return {};
@@ -297,10 +306,10 @@ private:
         return ui_.T("pc_first_run_incomplete", {Utf8(game)});
     }
 
-    std::vector<fs::path> Targets() const {
+    std::vector<fs::path> Targets(const std::string& folder_name) const {
         std::vector<fs::path> targets;
-        if (!c_.program_dir_read_only && !c_.program_dir.empty()) targets.push_back(c_.program_dir / "CUSA01127");
-        if (!c_.user_dir.empty()) targets.push_back(c_.user_dir / "CUSA01127");
+        if (!c_.program_dir_read_only && !c_.program_dir.empty()) targets.push_back(c_.program_dir / folder_name);
+        if (!c_.user_dir.empty()) targets.push_back(c_.user_dir / folder_name);
         return targets;
     }
 
@@ -320,8 +329,16 @@ private:
             return {{}, ui_.T("pc_first_run_no_extractor", {c_.helper_candidates.empty() ? std::string() : Utf8(c_.helper_candidates.front())})};
         }
         const uint64_t pkg_bytes = FileSize(pkg);
+        const std::string title = pt::setup::PackageTitle(pkg);
+        const std::string content_id = ContentId(pkg);
+        const std::string folder_name = pt::release::ExtractionFolderName(title);
+        const char* region = pt::release::RegionOfContentId(content_id);
+        if (!region)
+            if (const pt::release::KnownTitle* known = pt::release::FindKnownTitle(title)) region = known->region;
+        pt::LogInfo("first run: package title_id={} content_id={} region={}; the game files go to a folder named {}", title.empty() ? "?" : title,
+                    content_id.empty() ? "?" : content_id, region ? region : "unknown", folder_name);
         std::string tried;
-        for (const fs::path& target : Targets()) {
+        for (const fs::path& target : Targets(folder_name)) {
             tried += "\n" + Utf8(target);
             if (fs::exists(target, error)) {
                 if (!fs::is_directory(target, error) || !fs::is_empty(target, error)) {
@@ -344,7 +361,7 @@ private:
                 fs::remove_all(staging, error);
                 return {{}, ui_.T("pc_first_run_no_space", {std::format("{:.1f}", needed / (1024.0 * 1024.0 * 1024.0)), Utf8(parent)})};
             }
-            return Extract(helper, pkg, pkg_bytes, staging, target);
+            return Extract(helper, pkg, pkg_bytes, staging, target, folder_name);
         }
         return {{}, ui_.T("pc_first_run_no_target", {tried})};
     }
@@ -364,8 +381,9 @@ private:
         }
     }
 
-    Outcome Extract(const fs::path& helper, const fs::path& pkg, uint64_t pkg_bytes, const fs::path& staging, const fs::path& target) {
-        const fs::path output = staging / "CUSA01127", log = staging / "extraction.log";
+    Outcome Extract(const fs::path& helper, const fs::path& pkg, uint64_t pkg_bytes, const fs::path& staging, const fs::path& target,
+                    const std::string& folder_name) {
+        const fs::path output = staging / folder_name, log = staging / "extraction.log";
         pt::LogInfo("first run: extracting with {} into {}", Utf8(helper), Utf8(output));
 #ifndef _WIN32
         setenv("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "1", 1);
@@ -430,7 +448,18 @@ private:
         }
         fs::remove_all(staging, error);
         pt::LogInfo("first run: the game files are in {}", Utf8(target));
+        LogGame(target);
         return {target, {}, true};
+    }
+
+    static std::string ContentId(const fs::path& pkg) {
+        std::ifstream input(pkg, std::ios::binary);
+        char head[0x64] = {};
+        input.read(head, sizeof(head));
+        if (input.gcount() != static_cast<std::streamsize>(sizeof(head)) || std::string_view(head, 4) != "\x7F" "CNT") return {};
+        std::string id(head + 0x40, 0x24);
+        id.erase(std::find(id.begin(), id.end(), '\0'), id.end());
+        return id;
     }
 
     const Context& c_;
@@ -449,33 +478,9 @@ void Remember(const Context& c, const fs::path& game) {
 
 }
 
-bool LooksLikeGameDir(const fs::path& dir) {
-    std::error_code error;
-    return !dir.empty() && fs::is_regular_file(dir / "chunk1.psarc", error) && fs::is_regular_file(dir / "texture.qar", error);
-}
+bool LooksLikeGameDir(const fs::path& dir) { return pt::game_folder::LooksLikeGameDir(dir); }
 
-fs::path FindGameFolder(const fs::path& picked) {
-    if (picked.empty()) return {};
-    if (LooksLikeGameDir(picked)) return picked;
-    if (LooksLikeGameDir(picked / "CUSA01127")) return picked / "CUSA01127";
-    std::vector<fs::path> level{picked};
-    std::error_code error;
-    for (int depth = 0; depth < 2 && !level.empty(); ++depth) {
-        std::vector<fs::path> next;
-        for (const auto& dir : level) {
-            for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, error), end; !error && it != end && next.size() < 256;
-                 it.increment(error)) {
-                const fs::path name = it->path().filename();
-                if (!it->is_directory(error) || name == "sce_sys" || name == "sce_module") continue;
-                if (LooksLikeGameDir(it->path())) return it->path();
-                next.push_back(it->path());
-            }
-            error.clear();
-        }
-        level = std::move(next);
-    }
-    return {};
-}
+fs::path FindGameFolder(const fs::path& picked) { return pt::game_folder::FindGameFolder(picked); }
 
 int PlayerLanguage(const fs::path& user_dir) {
     if (!user_dir.empty()) {

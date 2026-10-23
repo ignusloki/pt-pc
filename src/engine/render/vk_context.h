@@ -109,9 +109,12 @@ public:
 
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
+    bool debug_utils = false;
+    VkDebugUtilsMessengerEXT address_messenger = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties properties{};
+    bool intel_first_frame_driver = false;
     VkDevice device = VK_NULL_HANDLE;
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     std::filesystem::path pipeline_cache_dir;
@@ -141,6 +144,7 @@ public:
     bool memory_budget = false;
     bool device_fault = false;
     bool checkpoints = false;
+    bool address_report = false;
     bool hdr_metadata = false;
     int hdr_peak_setting = 0;
     float display_peak_nits = 0.0f;

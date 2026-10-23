@@ -18,6 +18,7 @@
 
 #include "engine/core/log.h"
 #include "engine/core/resource_path.h"
+#include "engine/platform/os.h"
 
 namespace pt {
 namespace {
@@ -90,7 +91,7 @@ public:
             return support_;
         }
         support_.runtime = runtime;
-        LogInfo("neural rendering: runtime {} ({} bytes, sha256 {}, from {})", runtime->path.string(), runtime->size,
+        LogInfo("neural rendering: runtime {} ({} bytes, sha256 {}, from {})", os::PathToUtf8(runtime->path), runtime->size,
                 runtime->sha256.empty() ? "unread" : runtime->sha256, runtime->source);
         if (!EnsureInit(runtime->path)) {
             support_.reason = std::format("NGX did not initialise with this runtime (code {:#x})", init_code_);
@@ -120,7 +121,7 @@ public:
             return support_;
         }
         support_.available = true;
-        LogInfo("neural rendering: DLSS 5 available (runtime {})", runtime->path.string());
+        LogInfo("neural rendering: DLSS 5 available (runtime {})", os::PathToUtf8(runtime->path));
         return support_;
     }
 

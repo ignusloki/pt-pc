@@ -1,0 +1,32 @@
+# the PC page's two picture loaders (UiAssets::PreloadPreviews): the Museum's halls, then the loop browser. With a data folder
+# named in a script the ANSI code page cannot decode, both threw in 1.0.7 (Sentry NATIVE-2F: OneDrive\デスクトップ under code
+# page 932); tools/unicode_e2e_check.py runs this route under ja-JP
+sui menu pc
+swait 150
+sui menukey tabprev
+swait 20
+sexpect pctab pc_extras 0
+sexpect pcrow pc_loop_browser
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 90
+sshot {shots}/previews_museum.png
+swait 10
+sui menukey close
+swait 20
+sexpect pcrow pc_archive
+sui menukey up
+swait 4
+sexpect pcrow pc_loop_browser
+sui menukey accept
+swait 90
+sshot {shots}/previews_loops.png
+swait 10
+sui menukey close
+swait 20
+sexpect pcrow pc_loop_browser
+sui menukey close
+swait 90
+sexpect menu 1

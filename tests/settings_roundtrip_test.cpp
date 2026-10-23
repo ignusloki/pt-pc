@@ -24,8 +24,8 @@ bool Near(float a, float b) { return std::abs(a - b) <= 1e-5f * std::max(1.0f, s
 bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
-    return x.hdr==y.hdr && x.hdr_paper_white==y.hdr_paper_white && x.hdr_peak==y.hdr_peak && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
-           x.letterbox == y.letterbox && Near(x.subtitle_scale, y.subtitle_scale) &&
+    return x.hdr==y.hdr && x.hdr_paper_white==y.hdr_paper_white && x.hdr_peak==y.hdr_peak && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && a.audio.output_device==b.audio.output_device && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
+           x.letterbox == y.letterbox && Near(x.subtitle_scale, y.subtitle_scale) && Near(x.refresh_rate, y.refresh_rate) &&
            Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
            Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
            a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && a.game == b.game && Near(a.audio.volume, b.audio.volume) &&
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         const auto old = LoadText(ini, "[upscaling]\nneural_quality=performance\n");
         Check("legacy Performance keeps its Small model", old.upscaling.neural_model == "small");
         const auto balanced = LoadText(ini, "[upscaling]\nneural_quality=balanced\n");
-        Check("legacy Balanced migrates to Quality Large", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "large");
+        Check("legacy Balanced migrates to Quality, new model", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "small");
         const auto explicit_model = LoadText(ini, "[upscaling]\nneural_quality=performance\nneural_model=large\nneural_intensity=4\n");
         Check("explicit model independent of quality", explicit_model.upscaling.neural_model == "large");
         Check("neural strength capped at 300 percent", Near(explicit_model.upscaling.neural_intensity, 3.0f));
@@ -103,6 +103,8 @@ int main(int argc, char** argv) {
         {"audio.controller_speaker", [](auto& s) { s.audio.controller_speaker = true; }},
         {"audio.controller_speaker_volume", [](auto& s) { s.audio.controller_speaker_volume = 0.25f; }},
         {"audio.surround", [](auto& s) { s.audio.surround = true; }},
+        {"audio.output_device", [](auto& s) { s.audio.output_device = "Speakers (DualSense Wireless Controller)"; }},
+        {"audio.output_device unicode", [](auto& s) { s.audio.output_device = "耳机 (Realtek(R) Audio)"; }},
         {"input.rumble_profile", [](auto& s) { s.input.rumble_profile = 1; }},
         {"vr.height_offset", [](auto& s) { s.vr.height_offset = -0.2f; }},
         {"vr.world_size", [](auto& s) { s.vr.world_size = 1.5f; }},

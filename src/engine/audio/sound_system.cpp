@@ -389,6 +389,26 @@ bool SoundSystem::DeviceOpen() const {
     return output_ != nullptr;
 }
 
+std::string SoundSystem::OutputDeviceName() const {
+    return output_ ? output_->DeviceName() : std::string();
+}
+
+bool SoundSystem::ReopenDevice(bool surround_output) {
+    if (!engine_) return false;
+    if (output_) {
+        output_->Close();
+        output_.reset();
+    }
+    return OpenDevice(surround_output);
+}
+
+void SoundSystem::UpdateOutput(bool surround_output, uint64_t now_ns) {
+    if (output_ && output_->Poll(now_ns)) {
+        const bool opened = ReopenDevice(surround_output);
+        LogInfo("audio: playback device opened again: {}", opened ? output_->DeviceName() : std::string("none, offline rendering only"));
+    }
+}
+
 uint64_t SoundSystem::RenderedFrames() const {
     return engine_ ? engine_->RenderedFrames() : 0;
 }

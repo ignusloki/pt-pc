@@ -1438,6 +1438,20 @@ void GameUi::RecordPhotoMode(gpu::CommandList& cmd, gpu::Extent2D extent, const 
     auto matte=[&](glm::vec2 a,glm::vec2 b){ if(b.x>a.x && b.y>a.y) batch.Quad(a,b,{0,0},{1,1},color,black,ui::UiShade::Solid,ui::UiBlend::Alpha); };
     matte({0,0},{full.x,lo.y}); matte({0,hi.y},full);
     matte({0,lo.y},{lo.x,hi.y}); matte({hi.x,lo.y},{full.x,hi.y});
+    if (const std::vector<float> lines = PhotoGridLines(view.grid); !lines.empty() && hi.x > lo.x && hi.y > lo.y) {
+        const float width = std::max(1.0f, std::round(full.y / 720.0f));
+        const glm::vec4 light(1.0f, 1.0f, 1.0f, 0.55f);
+        const glm::vec4 dark(0.0f, 0.0f, 0.0f, 0.35f);
+        auto line = [&](glm::vec2 a, glm::vec2 b, glm::vec4 c) { batch.Quad(a, b, {0, 0}, {1, 1}, c, black, ui::UiShade::Solid, ui::UiBlend::Alpha); };
+        for (const float f : lines) {
+            const float x = std::round(lo.x + (hi.x - lo.x) * f - width * 0.5f);
+            const float y = std::round(lo.y + (hi.y - lo.y) * f - width * 0.5f);
+            line({x + width, lo.y}, {x + 2.0f * width, hi.y}, dark);
+            line({lo.x, y + width}, {hi.x, y + 2.0f * width}, dark);
+            line({x, lo.y}, {x + width, hi.y}, light);
+            line({lo.x, y}, {hi.x, y + width}, light);
+        }
+    }
     if (view.panel) {
         DrawPhotoPanel(batch, canvas, view);
     }

@@ -71,6 +71,17 @@ std::string JsonEscape(const std::string& text) {
     return out;
 }
 
+std::string UnrecordedProxyLine(const std::string& log) {
+    const size_t at = log.find("unrecorded proxy ");
+    if (at == std::string::npos) return {};
+    const size_t end = log.find_first_of("\r\n", at);
+    return log.substr(at, std::min<size_t>(end == std::string::npos ? log.size() - at : end - at, 600));
+}
+std::string ProxyTags(const std::string& line) { return line.empty() ? std::string() : ",\"unrecorded_proxy\":\"yes\""; }
+std::string ProxyExtra(const std::string& line) {
+    return line.empty() ? std::string() : ",\"extra\":{\"unrecorded_proxy\":\"" + JsonEscape(line) + "\"}";
+}
+
 std::string CrashVersionFromLog(const std::filesystem::path& log, const std::string& build, const std::string& dump_name) {
     if (ReadFile(log, kMaxLogBytes).find(dump_name) == std::string::npos) return "unknown";
     std::ifstream header(log, std::ios::binary);
@@ -96,13 +107,15 @@ void Upload(std::vector<std::filesystem::path> dumps, std::string version) {
         parts.push_back({"upload_file_minidump", pt::os::PathToUtf8(dump.filename()), "application/octet-stream", data});
         std::filesystem::path log = dump;
         log.replace_extension(".log");
-        std::string crash_version = "unknown";
+        std::string crash_version = "unknown", proxy;
         const std::string filename = pt::os::PathToUtf8(dump.filename());
         const std::string build = filename.size() > 29 ? filename.substr(9, filename.size() - 29) : "unknown";
         if (Exists(log)) {
             crash_version = CrashVersionFromLog(log, build, filename);
             if (crash_version != "unknown") {
-                parts.push_back({"pt.log", "pt.log", "text/plain", ReadFile(log, kMaxLogBytes)});
+                const std::string text = ReadFile(log, kMaxLogBytes);
+                proxy = UnrecordedProxyLine(text);
+                parts.push_back({"pt.log", "pt.log", "text/plain", text});
             }
         }
         parts.push_back({"sentry", "", "", "{\"release\":\"pt-port@" + JsonEscape(crash_version) + "\",\"tags\":{\"build\":\"" +
@@ -114,7 +127,7 @@ void Upload(std::vector<std::filesystem::path> dumps, std::string version) {
 #else
                                              "linux"
 #endif
-                                             "\"}}"});
+                                             "\"" + ProxyTags(proxy) + "}" + ProxyExtra(proxy) + "}"});
         const auto response = http::PostForm(kMinidumpUrl, parts);
         if (response && response->status >= 200 && response->status < 300) {
             std::filesystem::path sent = dump;
@@ -205,6 +218,7 @@ void SendLogReport(const std::filesystem::path& log, const std::filesystem::path
     std::thread([log, dir, version] {
         std::mt19937_64 random(std::random_device{}() ^ static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
         const std::string event_id = std::format("{:016x}{:016x}", random(), random());
+        const std::string proxy = UnrecordedProxyLine(ReadFile(log, kMaxLogBytes));
         const std::string event = "{\"event_id\":\"" + event_id + "\",\"level\":\"info\",\"logger\":\"pt-port\",\"message\":{\"formatted\":\"pt.log sent by the player\"}," +
                                   "\"release\":\"pt-port@" + JsonEscape(version) + "\",\"tags\":{\"report\":\"player\",\"os\":\"" +
 #ifdef _WIN32
@@ -214,7 +228,7 @@ void SendLogReport(const std::filesystem::path& log, const std::filesystem::path
 #else
                                   "linux"
 #endif
-                                  "\"}}";
+                                  "\"" + ProxyTags(proxy) + "}" + ProxyExtra(proxy) + "}";
         std::string body = "{\"event_id\":\"" + event_id + "\"}\n";
         body += "{\"type\":\"event\",\"length\":" + std::to_string(event.size()) + "}\n" + event + "\n";
         const std::string text = ReadFile(log, kMaxLogBytes);

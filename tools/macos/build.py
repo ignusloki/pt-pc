@@ -29,6 +29,8 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_sound_captions_test", "pt_lisa_date_test", "pt_camera_blend_test", "pt_rendering_api_test",
          "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test", "pt_pc_settings_refresh_test",
          "pt_key_layout_test", "pt_hdr_output_test", "pt_composite_output_test", "pt_point_shadow_projection_test",
+         "pt_game_folder_test", "pt_display_policy_test", "pt_output_device_test", "pt_photo_panel_test",
+         "pt_vk_address_log_test", "pt_vk_layers_test",
          "pt_macos_data_path_test", "pt_macos_hdr_test", "pt_metalfx_hdr_test")
 
 

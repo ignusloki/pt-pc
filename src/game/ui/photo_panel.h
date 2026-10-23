@@ -11,6 +11,10 @@ namespace pt::game {
 class Game;
 class GameAudio;
 
+enum class PhotoGrid { Off, Thirds, Golden, CenterCross, Count };
+
+std::vector<float> PhotoGridLines(int grid);
+
 float LetterboxAspect(int choice);
 
 struct PhotoSettings {
@@ -32,6 +36,7 @@ struct PhotoSettings {
     PhotoColorFilter filter = PhotoColorFilter::Off;
     bool body = true;
     bool flashlight = true;
+    int grid = 0;
 
     float FocusDistance() const;
     float Aperture() const;
@@ -54,6 +59,7 @@ struct PhotoPanelView {
     bool panel = false;
     float letterbox = 0.0f;
     PhotoCropRect crop;
+    int grid = 0;
     int language = 0;
     std::vector<PhotoPanelRow> rows;
     std::string note;
@@ -78,7 +84,7 @@ public:
 
 private:
     enum Row { kTakePhoto, kFocalLength, kRoll, kSpeed, kReset, kDof, kFocus, kAperture, kExposure, kBloom, kLens, kGrain,
-               kGrading, kAspect, kResolution, kFilter, kBody, kFlashlight, kResetSettings, kRowCount };
+               kGrading, kAspect, kGrid, kResolution, kFilter, kBody, kFlashlight, kResetSettings, kRowCount };
 
     void Change(GameAudio* audio, int delta);
     int Value(int row) const;

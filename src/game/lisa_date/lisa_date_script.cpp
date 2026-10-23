@@ -5,11 +5,7 @@
 #include <format>
 #include <sstream>
 
-#include "engine/core/resource_path.h"
-
-#ifndef PT_LISA_DATE_DIR
-#define PT_LISA_DATE_DIR ""
-#endif
+#include "engine/fs/data_pack.h"
 
 namespace pt::game {
 namespace {
@@ -326,11 +322,8 @@ const LisaDateChoice* LisaDateRun::CurrentChoice() const {
     return c->target >= 0 && c->target < static_cast<int>(script_.Choices().size()) ? &script_.Choices()[static_cast<size_t>(c->target)] : nullptr;
 }
 
-std::filesystem::path LisaDateDataDir() {
-    const std::filesystem::path beside = pt::ExecutableDir() / "lisa_date";
-    std::error_code ec;
-    if (std::filesystem::is_directory(beside, ec)) return beside;
-    return pt::os::PathFromUtf8(PT_LISA_DATE_DIR);
-}
+std::optional<std::vector<uint8_t>> LisaDateFile(std::string_view name) { return ExtrasPack().Read(name); }
+
+std::string LisaDatePicturePath(std::string_view name) { return PackPath(name); }
 
 }

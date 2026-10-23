@@ -9,6 +9,7 @@
 #include <sstream>
 #include <system_error>
 #include <thread>
+#include <ctime>
 
 #include "engine/core/ascii.h"
 #include "engine/core/log.h"
@@ -114,7 +115,8 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
         if (percent) percent(100);
         return FileSha256Impl(dest, nullptr);
     }
-    const std::filesystem::path part = dest.string() + ".part";
+    std::filesystem::path part = dest;
+    part += ".part";
     {
         std::ofstream out(part, std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -171,7 +173,12 @@ std::optional<Install> ParseInstall(std::string_view text) {
     if (const auto f = root.members.find("files"); f != root.members.end())
         for (const metadata_json::Value& e : f->second.items) {
             if (e.is_string && !e.text.empty()) install.files.push_back(e.text);
-            else if (e.object) { const std::string name = MemberText(e, "name"); if (!name.empty()) install.files.push_back(name); }
+            else if (e.object) {
+                const std::string name = MemberText(e, "name");
+                if (name.empty()) continue;
+                install.files.push_back(name);
+                if (AsciiLowerCopy(name) == AsciiLowerCopy(install.proxy)) install.proxy_sha256 = AsciiLowerCopy(MemberText(e, "sha256"));
+            }
         }
     return install;
 }
@@ -199,6 +206,198 @@ bool Usable(const Install& install) {
     const bool has_dir = std::any_of(install.files.begin(), install.files.end(),
                                      [](const std::string& f) { return AsciiLowerCopy(f).rfind(std::string(kDir) + "/", 0) == 0 || AsciiLowerCopy(f).rfind(std::string(kDir) + "\\", 0) == 0; });
     return has_proxy && has_dir;
+}
+
+bool RecordedProxyPresent(const std::filesystem::path& game_dir) {
+    const std::optional<Install> install = ReadInstall(game_dir);
+    if (!install || !Usable(*install)) return false;
+    std::error_code ec;
+    const std::filesystem::path proxy = game_dir / os::PathFromUtf8(install->proxy);
+    return std::filesystem::is_regular_file(proxy, ec) && HasMarker(proxy);
+}
+
+namespace {
+
+bool ModuleLoadedFrom(const std::filesystem::path& file) {
+#ifdef _WIN32
+    const HMODULE module = GetModuleHandleW(file.filename().c_str());
+    if (!module) return false;
+    std::wstring path(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
+    if (n == 0 || n >= path.size()) return false;
+    path.resize(n);
+    std::error_code ec;
+    return std::filesystem::equivalent(std::filesystem::path(path), file, ec);
+#else
+    (void)file;
+    return false;
+#endif
+}
+
+std::string NowStamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+    return stamp;
+}
+
+bool MoveAside(const std::filesystem::path& file, const std::filesystem::path& archive_dir, std::string& where) {
+    std::error_code ec;
+    std::filesystem::create_directories(archive_dir, ec);
+    std::filesystem::path to = archive_dir / file.filename();
+    for (int i = 1; std::filesystem::exists(to, ec) && i < 100; ++i) to = archive_dir / (os::PathToUtf8(file.filename()) + "." + std::to_string(i));
+    std::filesystem::rename(file, to, ec);
+    if (ec) {
+        std::filesystem::path beside = file;
+        beside += ".pt-retired";
+        ec.clear();
+        std::filesystem::remove(beside, ec);
+        ec.clear();
+        std::filesystem::rename(file, beside, ec);
+        if (ec) {
+            where = ec.message();
+            return false;
+        }
+        to = beside;
+    }
+    where = os::PathToUtf8(to);
+    return true;
+}
+
+}
+
+std::vector<ProxyFile> UnrecordedProxies(const std::filesystem::path& game_dir) {
+    std::vector<ProxyFile> out;
+    const std::optional<Install> install = ReadInstall(game_dir);
+    std::error_code ec;
+    for (const char* name : kProxyCandidates) {
+        const std::string lower = AsciiLowerCopy(std::string(name));
+        if (install && AsciiLowerCopy(install->proxy) == lower) continue;
+        if (install && std::any_of(install->files.begin(), install->files.end(), [&](const std::string& f) { return AsciiLowerCopy(f) == lower; })) continue;
+        const std::filesystem::path p = game_dir / name;
+        if (!std::filesystem::is_regular_file(p, ec)) continue;
+        ProxyFile f;
+        f.name = name;
+        f.sha256 = FileSha256Impl(p, &f.size);
+        f.marker = HasMarker(p);
+        f.loaded = ModuleLoadedFrom(p);
+        out.push_back(std::move(f));
+    }
+    return out;
+}
+
+std::string DescribeUnrecorded(const std::vector<ProxyFile>& files) {
+    std::string out;
+    for (const ProxyFile& f : files) {
+        if (!out.empty()) out += "; ";
+        out += std::format("unrecorded proxy {}: {} ({} bytes, sha256 {}, {}), no FG unlock record", f.loaded ? "loaded" : "present", f.name, f.size,
+                           f.sha256.empty() ? "unreadable" : f.sha256,
+                           f.sha256 == kPinnedProxySha256 ? "the dlssg_for_sm86 proxy 1.0.6 and 1.0.7 shipped"
+                           : f.marker                     ? "a dlssg_for_sm86 proxy"
+                                                          : "unknown proxy");
+    }
+    return out;
+}
+
+std::string RetireShippedProxy(const std::filesystem::path& game_dir, const std::filesystem::path& archive_dir) {
+    std::error_code ec;
+    if (std::filesystem::exists(game_dir / std::string(kManifest), ec)) return {};
+    const std::filesystem::path p = game_dir / "version.dll";
+    uint64_t size = 0;
+    if (!std::filesystem::is_regular_file(p, ec) || FileSha256Impl(p, &size) != kPinnedProxySha256) return {};
+    std::string where;
+    if (!MoveAside(p, archive_dir / NowStamp(), where))
+        return std::format("the version.dll 1.0.6 and 1.0.7 shipped by mistake (no FG unlock record) could not be moved out: {}", where);
+    return std::format("the version.dll 1.0.6 and 1.0.7 shipped by mistake (no FG unlock record) moved to {}; it stops loading at the next start", where);
+}
+
+ProxyRepair RepairRecordedProxy(const std::filesystem::path& game_dir, const std::filesystem::path& work_dir,
+                                const std::vector<std::filesystem::path>& sources, const std::filesystem::path& archive_dir) {
+    ProxyRepair r;
+    const std::optional<Install> install = ReadInstall(game_dir);
+    if (!install) return r;
+    r.result = ProxyRepair::Result::Fine;
+    const std::filesystem::path proxy_name = os::PathFromUtf8(install->proxy);
+    if (install->proxy.empty() || proxy_name.has_parent_path() || install->proxy.find("..") != std::string::npos ||
+        std::none_of(std::begin(kProxyCandidates), std::end(kProxyCandidates), [&](const char* c) { return AsciiLowerCopy(std::string(c)) == AsciiLowerCopy(install->proxy); })) {
+        r.detail = "the record names no proxy";
+        return r;
+    }
+    const std::string want = install->proxy_sha256.size() == 64 ? install->proxy_sha256 : std::string(kPinnedProxySha256);
+    const std::filesystem::path live = game_dir / proxy_name;
+    std::error_code ec;
+    const bool present = std::filesystem::is_regular_file(live, ec);
+    const std::string now = present ? FileSha256(live) : std::string();
+    if (now == want) {
+        r.detail = std::format("{} matches the record", install->proxy);
+        return r;
+    }
+    const std::string problem = present ? std::format("{} has sha256 {}, not the record's {}", install->proxy, now, want)
+                                        : std::format("{} is missing", install->proxy);
+    std::filesystem::path from;
+    bool move = false;
+    for (const auto& s : sources)
+        if (std::filesystem::is_regular_file(s, ec) && FileSha256(s) == want) {
+            from = s;
+            move = true;
+            break;
+        }
+#ifdef _WIN32
+    if (from.empty()) {
+        std::ifstream ts(work_dir / "tool-source.txt");
+        std::string kind, tag, zip_sha, filename;
+        std::getline(ts, kind);
+        std::getline(ts, tag);
+        std::getline(ts, zip_sha);
+        std::getline(ts, filename);
+        std::filesystem::path zip = ZipPath(work_dir);
+        if (!filename.empty() && !os::PathFromUtf8(filename).has_parent_path()) zip = work_dir / os::PathFromUtf8(filename);
+        if (zip_sha.size() != 64) zip_sha = std::string(kToolZipSha256);
+        if (std::filesystem::is_regular_file(zip, ec) && FileSha256(zip) == zip_sha) {
+            const std::filesystem::path stage = work_dir / "proxy-repair";
+            std::filesystem::remove_all(stage, ec);
+            std::filesystem::create_directories(stage, ec);
+            const std::string member = AsciiLowerCopy(install->proxy) == "version.dll" ? install->proxy : "alternatives/" + install->proxy;
+            wchar_t system[MAX_PATH]{};
+            GetSystemDirectoryW(system, MAX_PATH);
+            std::atomic<bool> never{false};
+            const auto tar = os::RunProcess(std::filesystem::path(system) / L"tar.exe", {"-xf", os::PathToUtf8(zip), "-C", os::PathToUtf8(stage), member},
+                                            stage, work_dir / "proxy-repair.log", never, std::chrono::minutes(2));
+            const std::filesystem::path got = stage / os::PathFromUtf8(member);
+            if (tar.exit_code == 0 && FileSha256(got) == want) from = got;
+        }
+    }
+#else
+    (void)work_dir;
+#endif
+    if (from.empty()) {
+        r.result = ProxyRepair::Result::NeedsReinstall;
+        r.detail = problem + "; neither the update's backup nor a verified package has the right file";
+        return r;
+    }
+    std::string where;
+    if (present && !MoveAside(live, archive_dir / NowStamp(), where)) {
+        r.result = ProxyRepair::Result::NeedsReinstall;
+        r.detail = problem + "; the wrong file could not be moved out: " + where;
+        return r;
+    }
+    if (move) std::filesystem::rename(from, live, ec);
+    else std::filesystem::copy_file(from, live, std::filesystem::copy_options::none, ec);
+    if (ec || FileSha256(live) != want) {
+        r.result = ProxyRepair::Result::NeedsReinstall;
+        r.detail = problem + "; putting the right file back failed: " + (ec ? ec.message() : std::string("its SHA-256 differs"));
+        return r;
+    }
+    r.result = ProxyRepair::Result::Restored;
+    r.detail = std::format("{}; put back from {} {}{}; it loads at the next start", problem, move ? "the update's backup" : "the verified package",
+                           os::PathToUtf8(move ? from : work_dir), present ? ", the other file moved to " + where : std::string());
+    return r;
 }
 
 std::string ChooseProxy(const std::filesystem::path& game_dir, std::string_view keep) {
@@ -354,8 +553,8 @@ bool InstallLive(const std::filesystem::path& work_dir, const std::filesystem::p
     const auto tar = os::RunProcess(std::filesystem::path(system) / L"tar.exe",
         {"-xf", os::PathToUtf8(zip), "-C", os::PathToUtf8(stage)}, stage, work_dir / "live-tar.log", cancel, std::chrono::minutes(2));
     if (tar.exit_code != 0) { detail = "the verified package could not be extracted"; return false; }
-    json::Value manifest;
-    if (!json::Reader(ReadText(stage / "manifest.json", 1 << 20)).Parse(manifest) || !manifest.object) {
+    metadata_json::Value manifest;
+    if (!metadata_json::Reader(ReadText(stage / "manifest.json", 1 << 20)).Parse(manifest) || !manifest.object) {
         detail = "the package manifest is missing"; return false;
     }
     const auto files = manifest.members.find("files");

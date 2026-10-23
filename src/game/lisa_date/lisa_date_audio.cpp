@@ -10,6 +10,7 @@
 
 #include "engine/audio/wem.h"
 #include "engine/core/log.h"
+#include "game/lisa_date/lisa_date_script.h"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -93,9 +94,12 @@ bool LisaDateDecodeOgg(std::span<const uint8_t> ogg, LisaDatePcm& pcm) {
     return !pcm.samples.empty();
 }
 
-bool LisaDateDecodeMusic(const std::filesystem::path& dir, const std::string& name, LisaDatePcm& pcm, float max_seconds) {
+namespace {
+
+template <typename Read>
+bool DecodeMusic(const Read& read, const std::string& where, const std::string& name, LisaDatePcm& pcm, float max_seconds) {
     pcm = {};
-    const std::vector<uint8_t> ogg = ReadAll(dir / (name + ".ogg"));
+    const std::vector<uint8_t> ogg = read(name + ".ogg");
     if (!ogg.empty() && max_seconds > 0.0f && ogg.size() <= 0x7FFFFFFFu) {
         int error = 0;
         if (stb_vorbis* v = stb_vorbis_open_memory(ogg.data(), static_cast<int>(ogg.size()), &error, nullptr)) {
@@ -131,13 +135,25 @@ bool LisaDateDecodeMusic(const std::filesystem::path& dir, const std::string& na
         if (out) std::free(out);
         LogWarn("lisa date: {}.ogg did not decode", name);
     }
-    if (ReadWav(ReadAll(dir / (name + ".wav")), pcm)) {
+    if (ReadWav(read(name + ".wav"), pcm)) {
         LogInfo("lisa date: music {}.wav, {} Hz, {} channels, {:.1f} s", name, pcm.rate, pcm.channels,
                 static_cast<float>(pcm.samples.size() / pcm.channels) / static_cast<float>(pcm.rate));
         return true;
     }
-    LogWarn("lisa date: no {}.ogg or {}.wav in {}", name, name, pt::os::PathToUtf8(dir));
+    LogWarn("lisa date: no {}.ogg or {}.wav in {}", name, name, where);
     return false;
+}
+
+}
+
+bool LisaDateDecodeMusic(const std::string& name, LisaDatePcm& pcm, float max_seconds) {
+    auto read = [](const std::string& file) { return LisaDateFile(file).value_or(std::vector<uint8_t>{}); };
+    return DecodeMusic(read, "the data pack", name, pcm, max_seconds);
+}
+
+bool LisaDateDecodeMusic(const std::filesystem::path& dir, const std::string& name, LisaDatePcm& pcm, float max_seconds) {
+    auto read = [&dir](const std::string& file) { return ReadAll(dir / file); };
+    return DecodeMusic(read, pt::os::PathToUtf8(dir), name, pcm, max_seconds);
 }
 
 LisaDatePcm LisaDateSlowed(const LisaDatePcm& pcm, float speed) {

@@ -2,8 +2,11 @@
 #include <zlib.h>
 
 #include "engine/core/ascii.h"
+#include "engine/fs/game_folder.h"
+#include "engine/fs/pt_release.h"
 #include "engine/platform/json_value.h"
 #include "engine/platform/update_journal.h"
+#include "engine/render/upscale/fg_unlock.h"
 #include "shipped_history.h"
 
 #include <algorithm>
@@ -103,7 +106,7 @@ inline constexpr const char* kGameArchives[] = {"chunk1.psarc", "texture.qar", "
 enum class SourceKind { Package, Folder };
 struct GameFiles {
     fs::path psarc, qar, pathid;
-    std::string title;
+    std::string title, content_id;
     std::vector<std::string> notes;
 };
 struct Source {
@@ -131,31 +134,19 @@ inline bool IsPathList(const fs::path& file) {
     const auto size = fs::file_size(file, error);
     return !error && size >= 32 && size < 64ull * 1024 * 1024;
 }
-inline std::string TitleId(const fs::path& folder) {
-    std::error_code error;
-    const fs::path sfo = folder / "sce_sys" / "param.sfo";
-    if (!fs::is_regular_file(sfo, error) || fs::file_size(sfo, error) > 1024 * 1024) return {};
-    std::ifstream input(sfo, std::ios::binary);
-    std::string data((std::istreambuf_iterator<char>(input)), {});
-    auto u32 = [&](size_t at) -> uint32_t { if (at + 4 > data.size()) return 0; uint32_t v; std::memcpy(&v, data.data() + at, 4); return v; };
-    auto u16 = [&](size_t at) -> uint16_t { if (at + 2 > data.size()) return 0; uint16_t v; std::memcpy(&v, data.data() + at, 2); return v; };
-    if (data.size() < 0x14 || data.compare(0, 4, std::string("\0PSF", 4)) != 0) return {};
-    const uint32_t keys = u32(8), values = u32(12), count = u32(16);
-    for (uint32_t i = 0; i < count && i < 512; ++i) {
-        const size_t entry = 0x14 + size_t(i) * 16;
-        if (entry + 16 > data.size()) break;
-        const size_t key = keys + u16(entry), value = values + u32(entry + 12), length = u32(entry + 4);
-        if (key >= data.size() || value > data.size() || length > data.size() - value) continue;
-        if (std::string(data.c_str() + key) == "TITLE_ID") {
-            std::string id = data.substr(value, length);
-            id.erase(std::find(id.begin(), id.end(), '\0'), id.end());
-            return id;
-        }
-    }
-    return {};
+inline std::string ParamSfoText(const fs::path& folder, const char* key) {
+    return release::ParamSfoValue(release::ReadSmallFile(folder / "sce_sys" / "param.sfo", 1024 * 1024), key);
 }
+inline std::string TitleId(const fs::path& folder) { return ParamSfoText(folder, "TITLE_ID"); }
+inline std::string ContentId(const fs::path& folder) { return ParamSfoText(folder, "CONTENT_ID"); }
 inline const char* Region(const std::string& title) {
-    return title == "CUSA01127" ? "US" : title == "CUSA01114" ? "Europe" : title == "CUSA01098" ? "Japan" : nullptr;
+    const release::KnownTitle* known = release::FindKnownTitle(title);
+    return known ? known->region : nullptr;
+}
+inline std::string RegionOf(const std::string& title, const std::string& content_id) {
+    if (const char* region = release::RegionOfContentId(content_id)) return region;
+    if (const char* region = Region(title)) return region;
+    return "unknown";
 }
 inline std::string Lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
@@ -193,8 +184,12 @@ inline bool ConfirmPt(GameFiles& files) {
     if (!levels && !region && !(files.pathid.empty() && files.title.empty())) return false;
     if (!levels && !region) files.notes.push_back("no path list and no title ID: could not confirm this is P.T.; installed because it has the Fox Engine archive pair");
     if (!files.title.empty() && !region) files.notes.push_back("title ID " + files.title + " is not a known P.T. release; installed because its archives are P.T.'s");
-    if (region && files.title != "CUSA01127")
-        files.notes.push_back(files.title + " is the " + region + " release; the port is tested with the US release CUSA01127 (other releases are expected to hold the same data, not yet verified)");
+    if (region && files.title != "CUSA01127") {
+        const release::KnownTitle* known = release::FindKnownTitle(files.title);
+        files.notes.push_back(files.title + " is " + (known && known->confirmed ? "the " : "listed as the ") + RegionOf(files.title, files.content_id) +
+                              " release; the port is tested with the US release CUSA01127 (other releases are expected to hold the same data; "
+                              "the game logs at its start what differs)");
+    }
     if (files.pathid.empty()) files.notes.push_back("pathid_list_ps4.bin is missing: enhanced textures cannot be generated; the game runs without it");
     return true;
 }
@@ -207,7 +202,12 @@ inline Source ResolveSource(const fs::path& input) {
         GameFiles files = FindArchives(dir);
         if (files.psarc.empty() || files.qar.empty()) return std::nullopt;
         files.title = TitleId(dir);
-        if (files.title.empty()) files.title = TitleId(dir.parent_path());
+        files.content_id = ContentId(dir);
+        if (files.title.empty() && files.content_id.empty()) {
+            files.title = TitleId(dir.parent_path());
+            files.content_id = ContentId(dir.parent_path());
+        }
+        if (files.title.empty()) files.title = release::TitleOfContentId(files.content_id);
         if (!ConfirmPt(files))
             throw std::runtime_error("This folder holds another game (" + (files.title.empty() ? std::string("no P.T. levels in its path list") : files.title) + "), not P.T.");
         return Source{SourceKind::Folder, dir, std::move(files)};
@@ -369,8 +369,7 @@ inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
         if (fs::file_size(assets / name, error) != fs::file_size(sources[i], error) || error) throw std::runtime_error(std::string("Copy of ") + name + " is incomplete.");
     }
     std::ofstream source(assets / "source.txt", std::ios::binary);
-    const char* region = Region(files.title);
-    source << "title_id=" << files.title << "\nregion=" << (region ? region : "unknown") << "\nsource=folder\n";
+    source << "content_id=" << files.content_id << "\ntitle_id=" << files.title << "\nregion=" << RegionOf(files.title, files.content_id) << "\nsource=folder\n";
     for (const auto& note : files.notes) source << "warning=" << note << "\n";
 }
 inline std::vector<std::string> WriteNotes(const Source& source, const fs::path& staging) {
@@ -449,6 +448,17 @@ inline void EnsureDataDirectory(const fs::path& install, const std::string& uniq
     if (error) throw std::runtime_error("Could not create the game's data folder.");
     if (check_parents) check_parents(data);
     ProbeWritableDirectory(data, unique_id, "game data folder");
+}
+inline std::string UpdateFolderProblem(const fs::path& install, const std::string& unique_id) {
+    try {
+        ProbeWritableDirectory(install, unique_id, "game folder " + PathUtf8(install));
+        std::error_code error;
+        if (fs::is_directory(install / "data", error)) ProbeWritableDirectory(install / "data", unique_id, "data folder " + PathUtf8(install / "data"));
+        ProbeWritableDirectory(install.parent_path(), unique_id, "folder above the game, " + PathUtf8(install.parent_path()) + ",");
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return {};
 }
 inline void ValidateProgramFiles(const std::vector<InstalledFile>& files) {
     for (const auto& file : files)
@@ -618,8 +628,47 @@ inline std::vector<PayloadEntry> ReadFileList(const fs::path& file) {
     }
     return entries;
 }
-inline std::set<std::string> UnlockFiles(const fs::path& install) {
+inline std::set<std::string> FgUnlockFiles(const fs::path& install) {
     std::set<std::string> keys;
+    const fs::path record = install / std::string(fg_unlock::kManifest);
+    std::error_code error;
+    if (!fs::is_regular_file(record, error)) return keys;
+    keys.insert(PathKey(std::string(fg_unlock::kManifest)));
+    keys.insert(PathKey(std::string(fg_unlock::kIni)));
+    json::Value root;
+    std::string text;
+    if (fs::file_size(record, error) <= 1024 * 1024 && !error) {
+        std::ifstream in(record, std::ios::binary);
+        text.assign((std::istreambuf_iterator<char>(in)), {});
+    }
+    if (!json::Reader(text).Parse(root) || !root.object) {
+        for (const char* name : fg_unlock::kProxyCandidates) keys.insert(PathKey(name));
+        return keys;
+    }
+    if (const auto proxy = root.members.find("proxy"); proxy != root.members.end() && proxy->second.is_string && !proxy->second.text.empty())
+        keys.insert(PathKey(proxy->second.text));
+    if (const auto files = root.members.find("files"); files != root.members.end())
+        for (const auto& item : files->second.items) {
+            if (item.is_string && !item.text.empty()) keys.insert(PathKey(item.text));
+            else if (item.object)
+                if (const auto name = item.members.find("name"); name != item.members.end() && !name->second.text.empty()) keys.insert(PathKey(name->second.text));
+        }
+    return keys;
+}
+inline bool IsFgProxyName(const std::string& path) {
+    for (const char* name : fg_unlock::kProxyCandidates)
+        if (PathKey(path) == PathKey(name)) return true;
+    return false;
+}
+inline bool HasFgProxyMarker(const fs::path& file) {
+    std::error_code error;
+    if (!fs::is_regular_file(file, error) || fs::file_size(file, error) > 64 * 1024 * 1024) return false;
+    std::ifstream in(file, std::ios::binary);
+    const std::string data((std::istreambuf_iterator<char>(in)), {});
+    return data.find(std::string(fg_unlock::kProxyMarker)) != std::string::npos;
+}
+inline std::set<std::string> UnlockFiles(const fs::path& install) {
+    std::set<std::string> keys = FgUnlockFiles(install);
     const fs::path record = install / "dlss5-autopilot.json";
     std::error_code error;
     if (!fs::is_regular_file(record, error) || fs::file_size(record, error) > 1024 * 1024) return keys;
@@ -671,6 +720,7 @@ struct ExistingInstall {
     std::vector<InstalledFile> files;
     std::vector<PayloadEntry> package_files;
     std::string source;
+    bool portable = false;
 };
 inline void WriteManifest(const fs::path& dir, const std::string& version, const std::vector<InstalledFile>& files, const std::string& source = {}) {
     const fs::path temporary = dir / (std::string(kManifestName) + ".new");
@@ -687,6 +737,13 @@ inline bool ArchivesUsable(const fs::path& assets) {
     std::error_code error;
     return fs::is_regular_file(assets / "chunk1.psarc", error) && IsPsarc(assets / "chunk1.psarc") &&
            fs::is_regular_file(assets / "texture.qar", error) && IsQar(assets / "texture.qar");
+}
+inline constexpr const char* kGameFolder = "CUSA01127";
+inline std::string InstalledGameFolder(const fs::path& install) {
+    if (ArchivesUsable(install / kGameFolder)) return kGameFolder;
+    for (const fs::path& folder : game_folder::ChildFolders(install, 64))
+        if (!release::TitleIdOfName(PathUtf8(folder.filename())).empty() && ArchivesUsable(folder)) return PathUtf8(folder.filename());
+    return {};
 }
 inline bool EmptyDirectory(const fs::path& dir) {
     std::error_code error;
@@ -724,13 +781,63 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
         || fs::is_regular_file(dir / "P.T..app/Contents/MacOS/pt", error)
 #endif
         ;
-    const bool archives = fs::is_regular_file(dir / "CUSA01127" / "chunk1.psarc", error) && fs::is_regular_file(dir / "CUSA01127" / "texture.qar", error);
+    const bool archives = !InstalledGameFolder(dir).empty() || (fs::is_regular_file(dir / kGameFolder / "chunk1.psarc", error) && fs::is_regular_file(dir / kGameFolder / "texture.qar", error));
     if (exe && archives) {
         install.found = true;
         install.package_files = ReadFileList(dir / kFileListName);
         return install;
     }
     throw std::runtime_error("This folder holds something else. Choose a new installation folder, or a folder with a P.T. install to update it.");
+}
+inline ExistingInstall InspectPortable(const fs::path& dir, const std::function<std::string(const fs::path&)>& hash_file = {}) {
+    ExistingInstall copy;
+    std::error_code error;
+    if (!fs::is_directory(dir, error) || fs::is_symlink(dir, error) || fs::exists(dir / kManifestName, error)) return copy;
+    if (!fs::is_regular_file(dir / kGameExe, error)) return copy;
+    copy.package_files = ReadFileList(dir / kFileListName);
+    const bool lists_game = std::any_of(copy.package_files.begin(), copy.package_files.end(), [](const PayloadEntry& entry) { return entry.path == kGameExe; });
+    if (!lists_game) {
+        copy.package_files.clear();
+        return copy;
+    }
+    copy.found = copy.portable = true;
+    if (hash_file) {
+        try {
+            copy.version = HistoryVersion(hash_file(dir / kGameExe));
+        } catch (const std::exception&) {
+        }
+    }
+    return copy;
+}
+inline std::vector<std::string> GameFilesFolders(const fs::path& dest) {
+    std::vector<std::string> found;
+    if (game_folder::LooksLikeGameDir(dest)) found.push_back("");
+    std::vector<fs::path> level{dest};
+    for (int depth = 0; depth < 2 && !level.empty(); ++depth) {
+        std::vector<fs::path> next;
+        for (const fs::path& dir : level)
+            for (fs::path& child : game_folder::ChildFolders(dir, 64)) {
+                std::error_code error;
+                if (fs::is_symlink(child, error)) continue;
+                if (game_folder::LooksLikeGameDir(child)) found.push_back(PathUtf8(fs::relative(child, dest, error)) + "/");
+                next.push_back(std::move(child));
+            }
+        level = std::move(next);
+    }
+    return found;
+}
+inline bool InGameFilesFolder(const std::string& path, const std::vector<std::string>& folders) {
+    const std::string key = PathKey(path);
+    for (const auto& folder : folders) {
+        if (folder.empty()) {
+            if (key == PathKey("chunk1.psarc") || key == PathKey("texture.qar") || key == PathKey("pathid_list_ps4.bin") || key == PathKey("source.txt") ||
+                key.starts_with(PathKey("sce_sys/")))
+                return true;
+        } else if (key.starts_with(PathKey(folder))) {
+            return true;
+        }
+    }
+    return false;
 }
 inline bool KnownProgramFile(const std::string& path) {
 #ifdef __APPLE__
@@ -740,6 +847,7 @@ inline bool KnownProgramFile(const std::string& path) {
     for (const char* name : kNames)
         if (path == name) return true;
     if (path == "voice/cmudict-en-us.dict" || path.starts_with("voice/en-us/") || path.starts_with("voice/vosk/")) return true;
+    if (path.starts_with("lisa_date/")) return true;
     return (path.starts_with("shaders/") && path.ends_with(".spv")) || path.starts_with("extractor/");
 }
 inline bool IsPlayerPath(std::string path) {
@@ -748,10 +856,15 @@ inline bool IsPlayerPath(std::string path) {
     if (IsUserDataPath(lower)) return true;
     for (const char* top : {"mods/", "cusa01127/", "enhanced-textures/", "saves/", "screenshots/", "photos/"})
         if (lower.starts_with(top)) return true;
+    if (const size_t slash = path.find('/'); slash != std::string::npos && !release::TitleIdOfName(path.substr(0, slash)).empty()) return true;
+    if (lower == Lower(std::string(fg_unlock::kManifest)) || lower == Lower(std::string(fg_unlock::kIni)) ||
+        lower.starts_with(Lower(std::string(fg_unlock::kDir)) + "/"))
+        return true;
     return lower == "pt.ini" || lower.ends_with(".log") || lower == "install-notes.txt" || lower == "icon0.png";
 }
 struct SwapResult {
     int replaced = 0, added = 0, removed = 0;
+    std::vector<std::string> notes;
 };
 inline fs::path JournalFile(const fs::path& install) { return install / "data" / update_journal::kName; }
 struct SwapJournal {
@@ -773,22 +886,42 @@ inline void PruneEmptyParents(const fs::path& root, const std::string& path) {
         if (error) return;
     }
 }
-inline std::vector<std::string> ObsoleteProgramFiles(const fs::path& dest, const ExistingInstall& old, const std::vector<std::string>& shipped_paths) {
+inline std::vector<std::string> ObsoleteProgramFiles(const fs::path& dest, const ExistingInstall& old, const std::vector<std::string>& shipped_paths,
+                                                     std::vector<std::string>* notes = nullptr) {
     std::set<std::string> shipped;
     for (const auto& path : shipped_paths) shipped.insert(PathKey(path));
     const std::set<std::string> unlock = UnlockFiles(dest);
+    const std::vector<std::string> game_files = GameFilesFolders(dest);
+    const bool fg_record = !FgUnlockFiles(dest).empty();
     std::set<std::string> seen;
     std::vector<std::string> obsolete;
+    auto note = [&](const std::string& text) { if (notes) notes->push_back(text); };
     auto consider = [&](const std::string& path) {
         const std::string key = PathKey(path);
-        if (shipped.count(key) || unlock.count(key) || IsPlayerPath(path) || PathKey(path) == PathKey(kManifestName) || !seen.insert(key).second) return;
+        if (shipped.count(key) || IsPlayerPath(path) || PathKey(path) == PathKey(kManifestName) || InGameFilesFolder(path, game_files) ||
+            !seen.insert(key).second)
+            return;
         try {
             Contained(dest, path);
         } catch (...) {
             return;
         }
         std::error_code error;
-        if (fs::is_regular_file(Contained(dest, path), error)) obsolete.push_back(path);
+        const fs::path file = Contained(dest, path);
+        if (!fs::is_regular_file(file, error)) return;
+        if (unlock.count(key)) {
+            if (IsFgProxyName(path)) note("kept " + path + ": the frame generation unlock's record " + std::string(fg_unlock::kManifest) + " names it");
+            return;
+        }
+        if (IsFgProxyName(path)) {
+            if (!HasFgProxyMarker(file)) {
+                note("kept " + path + ": not the community frame generation proxy an earlier package shipped (another program's file)");
+                return;
+            }
+            note("removed " + path + ": the community frame generation proxy that 1.0.6 and 1.0.7 shipped by mistake (" +
+                 (fg_record ? "the unlock's record does not name it" : "no frame generation unlock record") + ")");
+        }
+        obsolete.push_back(path);
     };
     if (!old.found) return obsolete;
     for (const auto& file : old.files) consider(file.path);
@@ -850,7 +983,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
         all.insert(all.end(), extra.begin(), extra.end());
         std::vector<std::string> everything = shipped_paths;
         everything.insert(everything.end(), all.begin(), all.end());
-        std::vector<std::string> obsolete = ObsoleteProgramFiles(dest, old, everything);
+        std::vector<std::string> obsolete = ObsoleteProgramFiles(dest, old, everything, &result.notes);
         if (!whole_trees.empty()) {
             // Signed apps move as one sealed tree. Desktop packages without whole_trees retain per-file delta updates.
             auto collapse = [&](const std::vector<std::string>& paths, bool removing) {
@@ -972,6 +1105,8 @@ struct InstallSteps {
     int pause_at = -1;
     std::string corrupt_after_swap;
     std::vector<std::string> whole_trees;
+    bool portable = false;
+    std::string installed_version;
 };
 struct InstallOutcome {
     bool updated = false;
@@ -1049,13 +1184,16 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
     std::error_code journal_error;
     const bool recovered = fs::exists(JournalFile(fs::absolute(destination)), journal_error) &&
                            RecoverEarlierUpdate(fs::absolute(destination), steps.process_alive);
-    const ExistingInstall old = InspectInstall(destination);
+    const ExistingInstall old = steps.portable ? InspectPortable(destination, steps.hash_file) : InspectInstall(destination);
+    if (steps.portable && !old.found) throw std::runtime_error("This folder is not a P.T. PC Port portable copy (no pt-files.json naming the game).");
     InstallOutcome outcome;
     outcome.recovered = recovered;
     destination = fs::absolute(destination);
     const fs::path parent = destination.parent_path();
     const bool update = old.found;
-    const bool need_archives = !update || !ArchivesUsable(destination / "CUSA01127");
+    const std::string existing_game = update && !steps.portable ? InstalledGameFolder(destination) : std::string();
+    const bool need_archives = existing_game.empty() && !steps.portable;
+    const std::string game_folder_name = existing_game.empty() ? std::string(kGameFolder) : existing_game;
     std::optional<Source> source;
     if (need_archives) {
         if (update && input.empty())
@@ -1136,7 +1274,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                 steps.extract(staging, source->path);
                 progress.At(before + archives);
             } else {
-                CopyArchives(source->files, staging / "CUSA01127");
+                CopyArchives(source->files, staging / kGameFolder);
             }
             outcome.notes = WriteNotes(*source, staging);
             outcome.archives_restored = update;
@@ -1160,8 +1298,8 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         if (!input.empty() && outside_install(input)) game_sources.push_back(input);
         if (update && !old.source.empty() && outside_install(Utf8Path(old.source))) game_sources.push_back(Utf8Path(old.source));
         std::string recorded = game_sources.empty() ? (update ? old.source : std::string()) : PathUtf8(fs::absolute(game_sources.front()));
-        {
-            const fs::path picture_path = destination / "CUSA01127" / "sce_sys" / "pic1.png";
+        if (!steps.portable) {
+            const fs::path picture_path = destination / game_folder_name / "sce_sys" / "pic1.png";
             if (!fs::is_regular_file(picture_path, error)) {
                 std::optional<std::string> picture;
                 for (const auto& look : game_sources)
@@ -1177,11 +1315,11 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                         }
                 }
                 if (picture) {
-                    fs::create_directories(staging / "CUSA01127" / "sce_sys", error);
-                    std::ofstream picture_file(staging / "CUSA01127" / "sce_sys" / "pic1.png", std::ios::binary);
+                    fs::create_directories(staging / game_folder_name / "sce_sys", error);
+                    std::ofstream picture_file(staging / game_folder_name / "sce_sys" / "pic1.png", std::ios::binary);
                     picture_file.write(picture->data(), std::streamsize(picture->size()));
                     picture_file.close();
-                    if (picture_file) extra.push_back("CUSA01127/sce_sys/pic1.png");
+                    if (picture_file) extra.push_back(game_folder_name + "/sce_sys/pic1.png");
                 }
                 outcome.title_picture_missing = !picture;
             }
@@ -1196,7 +1334,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                 }
             }
         }
-        WriteManifest(staging, steps.version, all_files, recorded);
+        if (!steps.portable) WriteManifest(staging, steps.version, all_files, recorded);
         CheckCancel();
         if (!update) {
             if (EmptyDirectory(destination)) fs::remove(destination);
@@ -1205,7 +1343,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
             if (shortcut) steps.shortcut(destination);
             return outcome;
         }
-        extra.push_back(kManifestName);
+        if (!steps.portable) extra.push_back(kManifestName);
         if (steps.before_swap) steps.before_swap();
         Report("Updating the program files...");
         outcome.updated = true;
@@ -1217,9 +1355,10 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
             } catch (const std::exception&) {
             }
         }
+        if (outcome.old_version.empty()) outcome.old_version = steps.installed_version;
         std::vector<std::string> shipped_paths;
         for (const auto& file : all_files) shipped_paths.push_back(file.path);
-        SwapJournal journal{JournalFile(destination), old.version, steps.version, steps.download, steps.pid};
+        SwapJournal journal{JournalFile(destination), outcome.old_version, steps.version, steps.download, steps.pid};
         journal.pause_at = steps.pause_at;
         try {
             outcome.swap = SwapProgramFiles(staging, destination, files, extra, old, backup, steps.fail_at, &journal, shipped_paths, steps.whole_trees);
@@ -1227,6 +1366,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
             throw std::runtime_error("Could not replace " + PathUtf8(e.path1().filename()) +
                                      ": it is in use (is P.T. still running?). Close it and try again. Nothing was changed.");
         }
+        for (const auto& note : outcome.swap.notes) outcome.notes.push_back("frame generation unlock: " + note);
         if (compare) {
             Report("Checking the installed files...");
             std::error_code e;
@@ -1268,7 +1408,8 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
             outcome.verified = new_entries.size();
         }
         progress.At(progress.total);
-        LogUpdate(destination, "update " + (outcome.old_version.empty() ? std::string("of an older install") : outcome.old_version) + " to " + steps.version +
+        LogUpdate(destination, "update " + (outcome.old_version.empty() ? std::string(steps.portable ? "of a portable copy" : "of an older install") : outcome.old_version) +
+                                   (steps.portable && !outcome.old_version.empty() ? " (a portable copy)" : "") + " to " + steps.version +
                                    ": " + std::to_string(outcome.swap.replaced) + " replaced, " + std::to_string(outcome.swap.added) + " added, " +
                                    std::to_string(outcome.unchanged) + " unchanged, " + std::to_string(outcome.swap.removed) + " removed" +
                                    (compare ? ", all " + std::to_string(outcome.verified) + " files checked" : std::string()) +
@@ -1621,21 +1762,33 @@ inline std::string TestPng() {
     return std::string("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x78\x9c\x63\xf8\xcf\xc0\x00\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xae\x42\x60\x82",
                        69);
 }
-inline std::string TestParamSfo(const std::string& title) {
+inline std::string TestParamSfo(const std::string& title, const std::string& content_id = {}) {
+    std::vector<std::pair<std::string, std::string>> items;
+    if (!content_id.empty()) items.push_back({"CONTENT_ID", content_id});
+    items.push_back({"TITLE_ID", title});
+    std::string keys, values, entries;
+    auto u16 = [&](std::string& out, uint16_t v) { out.append(reinterpret_cast<const char*>(&v), 2); };
+    auto u32 = [&](std::string& out, uint32_t v) { out.append(reinterpret_cast<const char*>(&v), 4); };
+    for (const auto& [key, value] : items) {
+        u16(entries, uint16_t(keys.size()));
+        u16(entries, 0x0204);
+        u32(entries, uint32_t(value.size() + 1));
+        u32(entries, 64);
+        u32(entries, uint32_t(values.size()));
+        keys += key;
+        keys += '\0';
+        values += value;
+        values.resize(values.size() + 64 - value.size(), '\0');
+    }
     std::string sfo("\0PSF\x01\x01\x00\x00", 8);
-    auto u16 = [&](uint16_t v) { sfo.append(reinterpret_cast<const char*>(&v), 2); };
-    auto u32 = [&](uint32_t v) { sfo.append(reinterpret_cast<const char*>(&v), 4); };
-    u32(0x24);
-    u32(0x30);
-    u32(1);
-    u16(0);
-    u16(0x0204);
-    u32(uint32_t(title.size() + 1));
-    u32(16);
-    u32(0);
-    sfo += std::string("TITLE_ID\0\0\0\0\0\0\0\0", 12);
-    sfo += title;
-    sfo.resize(0x30 + 16, '\0');
+    const uint32_t key_table = uint32_t(0x14 + entries.size());
+    u32(sfo, key_table);
+    u32(sfo, key_table + uint32_t((keys.size() + 3) / 4 * 4));
+    u32(sfo, uint32_t(items.size()));
+    sfo += entries;
+    sfo += keys;
+    sfo.resize(key_table + (keys.size() + 3) / 4 * 4, '\0');
+    sfo += values;
     return sfo;
 }
 inline std::string SelfTestTitlePictureUpdate(const fs::path& root, const std::function<std::string(const fs::path&)>& hash_file) {
@@ -1718,6 +1871,41 @@ inline std::string SelfTestTitlePictureUpdate(const fs::path& root, const std::f
         if (read(side / "CUSA01127" / "sce_sys" / "pic1.png") != TestPng() || outcome.title_picture_missing) failures += " title-guess";
     } catch (const std::exception& e) {
         failures += std::string(" title-guess: ") + e.what();
+    }
+    try {
+        const fs::path eu = root / "eu" / "P.T. PC Port";
+        old_install(eu);
+        fs::rename(eu / "CUSA01127", eu / "CUSA01114");
+        const fs::path eu_dump = root / "eu" / "dump" / "my-eu-copy";
+        write(eu_dump / "chunk1.psarc", "PSAR dump archive");
+        write(eu_dump / "texture.qar", qar);
+        write(eu_dump / "sce_sys" / "pic1.png", TestPng());
+        write(eu_dump / "sce_sys" / "param.sfo", TestParamSfo("CUSA01114", "EP4511-CUSA01114_00-PPPPPPPPTTTTTTTT"));
+        const auto outcome = RunInstall(eu_dump, eu, false, steps("f"));
+        if (!outcome.updated || outcome.archives_restored) failures += " region-eu-archives-restored";
+        if (read(eu / "CUSA01114" / "chunk1.psarc") != "PSAR old archive") failures += " region-eu-archives-changed";
+        if (fs::exists(eu / "CUSA01127")) failures += " region-eu-stray-folder";
+        if (read(eu / "CUSA01114" / "sce_sys" / "pic1.png") != TestPng()) failures += " region-eu-picture";
+        if (read(eu / "data" / "pt.ini") != "settings" || read(eu / "mods" / "mine" / "init.lua") != "player mod") failures += " region-eu-player-files";
+        const auto again = RunInstall({}, eu, false, steps("g"));
+        if (!again.updated || again.archives_restored || fs::exists(eu / "CUSA01127") || read(eu / "CUSA01114" / "chunk1.psarc") != "PSAR old archive")
+            failures += " region-eu-update-without-source";
+        const Source found = ResolveSource(eu_dump);
+        if (found.files.title != "CUSA01114" || found.files.content_id != "EP4511-CUSA01114_00-PPPPPPPPTTTTTTTT" ||
+            RegionOf(found.files.title, found.files.content_id) != "Europe")
+            failures += " region-eu-identify";
+        write(eu_dump / "pathid_list_ps4.bin", "/Assets/sh/level/pt14_hallway/" + std::string(40, 'x'));
+        write(eu_dump / "sce_sys" / "param.sfo", TestParamSfo("CUSA09999", "HP4511-CUSA09999_00-PPPPPPPPTTTTTTTT"));
+        const Source other = ResolveSource(eu_dump);
+        if (RegionOf(other.files.title, other.files.content_id) != "Asia") failures += " region-other-identify";
+        CopyArchives(other.files, root / "eu" / "copy");
+        if (read(root / "eu" / "copy" / "source.txt").find("content_id=HP4511-CUSA09999_00-PPPPPPPPTTTTTTTT\ntitle_id=CUSA09999\nregion=Asia") == std::string::npos)
+            failures += " region-other-source";
+        if (!IsPlayerPath("CUSA01114/chunk1.psarc") || !IsPlayerPath("CUSA01114-app/") || !IsPlayerPath("cusa01098/texture.qar") || IsPlayerPath("CUSA01114.txt") ||
+            IsPlayerPath("shaders/a.spv"))
+            failures += " region-player-path";
+    } catch (const std::exception& e) {
+        failures += std::string(" region: ") + e.what();
     }
     std::error_code error;
     fs::remove_all(root, error);
@@ -2015,6 +2203,220 @@ inline std::string SelfTestFileUpdate(const fs::path& root, const std::function<
         }
     } catch (const std::exception& e) {
         failures += std::string(" files-update: ") + e.what();
+    }
+    std::error_code error;
+    fs::remove_all(root, error);
+    return failures;
+}
+inline std::string SelfTestPortableUpdate(const fs::path& root, const std::function<std::string(const fs::path&)>& hash_file) {
+    std::string failures;
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary | std::ios::trunc) << bytes;
+    };
+    auto read = [](const fs::path& file) {
+        std::ifstream in(file, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    auto tree = [&](const fs::path& dir, const std::function<bool(const std::string&)>& skip) {
+        std::vector<std::pair<std::string, std::string>> out;
+        std::error_code error;
+        for (fs::recursive_directory_iterator it(dir, error), end; !error && it != end; it.increment(error)) {
+            std::string path = PathUtf8(fs::relative(it->path(), dir));
+            if (it->is_directory(error)) path += "/";
+            if (skip && skip(path)) continue;
+            out.push_back({path, it->is_regular_file(error) ? read(it->path()) : std::string()});
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    auto list = [](const std::vector<std::pair<std::string, std::string>>& files) {
+        std::string text = "{\"format\": 1, \"files\": [";
+        for (size_t i = 0; i < files.size(); ++i)
+            text += (i ? ", " : "") + std::string("{\"path\": \"") + files[i].first + "\", \"size\": " + std::to_string(files[i].second.size()) +
+                    ", \"sha256\": \"" + std::string(64, '0') + "\"}";
+        return text + "]}\n";
+    };
+    std::string qar(0x40, '\0');
+    qar[0x40 - 0x24 + 0x16] = 'a';
+    qar[0x40 - 0x24 + 0x17] = 'q';
+    std::vector<std::pair<std::string, std::string>> new_files{
+        {kGameExe, "new exe"}, {"shaders/same.spv", "same shader"}, {"shaders/changed.spv", "changed shader, new"}, {"voice/models/new.bin", "new model"}};
+    new_files.push_back({kFileListName, list(new_files)});
+    const std::vector<std::pair<std::string, std::string>> old_files{
+        {kGameExe, "old exe"}, {"shaders/same.spv", "same shader"}, {"shaders/changed.spv", "changed shader, old"}, {"licenses/OLD.txt", "an old licence"}};
+    const std::string payload = MakeTestPayload(root / "payload-scratch", new_files, hash_file);
+    const auto* data = reinterpret_cast<const unsigned char*>(payload.data());
+    const size_t size = payload.size();
+    auto steps = [&](const std::string& id) {
+        InstallSteps steps;
+        steps.version = "9.9.9";
+        steps.unique_id = id;
+        steps.check_parents = [](const fs::path&) {};
+        steps.verify_integrity = [] {};
+        steps.payload_bytes = [=] { return PayloadBytes(data, size); };
+        steps.unpack = [=](const fs::path& staging) { return UnpackPayload(data, size, staging, hash_file); };
+        steps.entries = [=] { return ListPayload(data, size); };
+        steps.hash_file = hash_file;
+        steps.fetch = [=](const fs::path& folder, const std::vector<PayloadEntry>& wanted) {
+            std::set<std::string> names;
+            for (const auto& entry : wanted) names.insert(entry.path);
+            return UnpackPayload(data, size, folder, hash_file, [&names](const std::string& name) { return names.count(name) > 0; });
+        };
+        steps.extract = [](const fs::path&, const fs::path&) { throw std::runtime_error("no package in this test"); };
+        steps.shortcut = [](const fs::path&) {};
+        steps.known_folders = [] { return std::vector<fs::path>{}; };
+        steps.portable = true;
+        steps.installed_version = "9.9.8";
+        return steps;
+    };
+    auto old_copy = [&](const fs::path& dest) {
+        for (const auto& [name, bytes] : old_files) write(dest / Utf8Path(name), bytes);
+        write(dest / kFileListName, list(old_files));
+        write(dest / "README.md", "a readme every published setup installed");
+        write(dest / "extractor" / "chunk1.psarc", "PSAR" + std::string(60, '\0'));
+        write(dest / "extractor" / "texture.qar", qar);
+        write(dest / "extractor" / "sce_sys" / "pic1.png", "the player's title picture");
+        write(dest / "data" / "pt.ini", "settings");
+        write(dest / "data" / "saves" / "progress.dat", "save");
+        write(dest / "mods" / "mine" / "init.lua", "player mod");
+        write(dest / "enhanced-textures" / "cache" / "a.dds", "generated texture");
+        write(dest / "notes-of-the-player.txt", "the player's own file");
+        write(dest / "dxgi.dll", "reshade");
+        write(dest / "dlss5-autopilot.json", "{\"complete\": true, \"route\": \"native\", \"files\": [\"dxgi.dll\"]}");
+    };
+    auto player = [](const std::string& path) {
+        const std::string lower = Lower(path);
+        return IsPlayerPath(path) || lower == "data/" || lower == "mods/" || lower == "enhanced-textures/" || lower.starts_with("extractor/") ||
+               lower == "notes-of-the-player.txt" || lower == "dxgi.dll" || lower == "dlss5-autopilot.json";
+    };
+    try {
+        const fs::path fresh = root / "fresh" / "PT";
+        UnpackPayload(data, size, fresh, hash_file);
+        const fs::path dest = root / "copy" / "PT";
+        old_copy(dest);
+        try {
+            if (InspectInstall(dest).found) failures += " portable-taken-as-install";
+        } catch (const std::exception&) {
+        }
+        const ExistingInstall seen = InspectPortable(dest, hash_file);
+        if (!seen.found || !seen.portable || seen.has_manifest || seen.package_files.size() != old_files.size()) failures += " portable-inspect";
+        if (GameFilesFolders(dest) != std::vector<std::string>{"extractor/"}) failures += " portable-game-folder";
+        const auto outcome = RunInstall({}, dest, false, steps("p"));
+        if (!outcome.updated || outcome.old_version != "9.9.8" || outcome.unchanged != 1 || outcome.verified != new_files.size())
+            failures += " portable-counts(" + std::to_string(outcome.unchanged) + "/" + std::to_string(outcome.verified) + ")";
+        if (fs::exists(dest / kManifestName)) failures += " portable-manifest-written";
+        if (fs::exists(dest / "README.md") || fs::exists(dest / "licenses")) failures += " portable-stale-kept";
+        if (read(dest / "extractor" / "chunk1.psarc").size() != 64 || read(dest / "extractor" / "texture.qar") != qar ||
+            read(dest / "extractor" / "sce_sys" / "pic1.png") != "the player's title picture")
+            failures += " portable-game-files";
+        if (read(dest / "data" / "pt.ini") != "settings" || read(dest / "data" / "saves" / "progress.dat") != "save" || read(dest / "mods" / "mine" / "init.lua") != "player mod" ||
+            read(dest / "enhanced-textures" / "cache" / "a.dds") != "generated texture" || read(dest / "notes-of-the-player.txt") != "the player's own file" ||
+            read(dest / "dxgi.dll") != "reshade")
+            failures += " portable-player";
+        if (tree(dest, player) != tree(fresh, player)) failures += " portable-tree";
+        if (!InspectPortable(dest, hash_file).found) failures += " portable-after";
+        const fs::path bare = root / "bare" / "PT";
+        write(bare / kGameExe, "exe");
+        if (InspectPortable(bare).found) failures += " portable-no-list";
+        write(bare / kFileListName, list({{"README.md", "x"}}));
+        if (InspectPortable(bare).found) failures += " portable-list-without-game";
+        write(bare / kFileListName, list({{kGameExe, "exe"}}));
+        WriteManifest(bare, "1.0.7", {{kGameExe, std::string(64, '0')}});
+        if (InspectPortable(bare).found) failures += " portable-with-manifest";
+        const fs::path undo = root / "undo" / "PT";
+        old_copy(undo);
+        const auto before = tree(undo, {});
+        auto failing = steps("f");
+        failing.fail_at = 2;
+        try {
+            RunInstall({}, undo, false, failing);
+            failures += " portable-fail-not-thrown";
+        } catch (const std::exception&) {
+        }
+        if (tree(undo, {}) != before) failures += " portable-fail-undo";
+        for (const auto& entry : fs::directory_iterator(undo.parent_path()))
+            if (entry.path() != undo) failures += " portable-left-" + PathUtf8(entry.path().filename());
+    } catch (const std::exception& e) {
+        failures += std::string(" portable-update: ") + e.what();
+    }
+    std::error_code error;
+    fs::remove_all(root, error);
+    return failures;
+}
+inline std::string SelfTestFgUnlockFiles(const fs::path& root) {
+    std::string failures;
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary | std::ios::trunc) << bytes;
+    };
+    auto read = [](const fs::path& file) {
+        std::ifstream in(file, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    const std::string proxy = "MZ the community proxy " + std::string(fg_unlock::kProxyMarker) + " loader";
+    struct Case {
+        const char* name;
+        std::string record;
+        std::string version_dll = "";
+        bool kept;
+        bool winmm = false;
+    };
+    const std::vector<Case> cases{
+        {"shipped", "", "", false},
+        {"recorded", R"({"format": 1, "complete": true, "proxy": "version.dll", "files": [{"name": "version.dll", "size": 1, "sha256": "x"}, {"name": "dlssg_sm86.ini"}, {"name": "dlssg_sm86/runtime/x.dll"}]})", "", true},
+        {"recorded-live", R"({"complete":true,"proxy":"version.dll","files":[{"name":"dlssg_sm86.ini","sha256":"a"},{"name":"version.dll","sha256":"b"}]})", "", true},
+        {"recorded-strings", R"({"complete": true, "files": ["version.dll", "dlssg_sm86/x.dll"]})", "", true},
+        {"record-unreadable", "{ not json", "", true},
+        {"record-other-proxy", R"({"complete": true, "proxy": "winmm.dll", "files": [{"name": "winmm.dll"}, {"name": "dlssg_sm86/x.dll"}]})", "", false, true},
+        {"foreign", "", "MZ another program's version.dll (an ASI loader)", true},
+    };
+    for (const Case& c : cases) {
+        const fs::path dest = root / c.name / "PT", staging = dest.parent_path() / ".pt-update-t", backup = dest.parent_path() / ".pt-update-old-t";
+        const std::string label = std::string("-") + c.name;
+        const std::string old_dll = c.version_dll.empty() ? proxy : c.version_dll;
+        write(dest / kGameExe, "old exe");
+        write(dest / "version.dll", old_dll);
+        write(dest / "CUSA01127" / "chunk1.psarc", "PSAR");
+        if (!c.record.empty()) {
+            write(dest / std::string(fg_unlock::kManifest), c.record);
+            write(dest / std::string(fg_unlock::kIni), "[ini]");
+            write(dest / std::string(fg_unlock::kDir) / "runtime" / "x.dll", "runtime");
+        }
+        if (c.winmm) write(dest / "winmm.dll", proxy);
+        WriteManifest(dest, "1.0.7", {{kGameExe, std::string(64, '0')}, {"version.dll", std::string(64, '0')}});
+        write(dest / kFileListName, "{\"format\": 1, \"files\": [{\"path\": \"version.dll\", \"size\": 1, \"sha256\": \"" + std::string(64, '0') + "\"}]}");
+        write(staging / kGameExe, "new exe");
+        write(staging / kManifestName, "pt-port-install 1\nversion=1.0.8\n");
+        try {
+            const auto swap = SwapProgramFiles(staging, dest, {{kGameExe, ""}}, {kManifestName}, InspectInstall(dest), backup);
+            std::error_code error;
+            const bool present = fs::exists(dest / "version.dll", error);
+            if (present != c.kept) failures += (c.kept ? " fg-proxy-removed" : " fg-proxy-kept") + label;
+            if (present && read(dest / "version.dll") != old_dll) failures += " fg-proxy-changed" + label;
+            if (!c.kept && read(backup / "version.dll") != old_dll) failures += " fg-proxy-not-in-backup" + label;
+            if (!c.record.empty() && (read(dest / std::string(fg_unlock::kManifest)) != c.record || read(dest / std::string(fg_unlock::kIni)) != "[ini]" ||
+                                      read(dest / std::string(fg_unlock::kDir) / "runtime" / "x.dll") != "runtime"))
+                failures += " fg-record-files" + label;
+            if (c.winmm && read(dest / "winmm.dll") != proxy) failures += " fg-recorded-winmm" + label;
+            if (read(dest / kGameExe) != "new exe") failures += " fg-new-files" + label;
+            const bool said = std::any_of(swap.notes.begin(), swap.notes.end(), [&](const std::string& n) {
+                return n.starts_with(c.kept ? "kept version.dll" : "removed version.dll");
+            });
+            if (!said) failures += " fg-note" + label;
+            if (swap.removed != (c.kept ? 0 : 1)) failures += " fg-counts" + label;
+        } catch (const std::exception& e) {
+            failures += std::string(" fg-swap") + label + ": " + e.what();
+        }
+    }
+    if (!IsPlayerPath("pt-dlssg-route.json") || !IsPlayerPath("dlssg_sm86.ini") || !IsPlayerPath("DLSSG_SM86/runtime/x.dll") || IsPlayerPath("version.dll"))
+        failures += " fg-player-paths";
+    {
+        const fs::path dest = root / "unlockfiles";
+        write(dest / std::string(fg_unlock::kManifest), R"({"proxy": "dbghelp.dll", "files": [{"name": "dlssg_sm86/a.dll"}]})");
+        const auto keys = UnlockFiles(dest);
+        if (!keys.count(PathKey("dbghelp.dll")) || !keys.count(PathKey("dlssg_sm86/a.dll")) || keys.count(PathKey("version.dll")))
+            failures += " fg-unlock-files";
     }
     std::error_code error;
     fs::remove_all(root, error);

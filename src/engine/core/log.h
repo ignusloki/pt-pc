@@ -12,7 +12,9 @@ enum class LogLevel { Debug, Info, Warn, Error };
 
 void LogWrite(LogLevel level, std::string_view text);
 void LogSetFile(const std::filesystem::path& path);
+bool LogTryWrite(LogLevel level, std::string_view text);
 void LogSetTick(uint64_t tick);
+double LogClock();
 
 template <typename... Args>
 void LogDebug(std::format_string<Args...> fmt, Args&&... args) {

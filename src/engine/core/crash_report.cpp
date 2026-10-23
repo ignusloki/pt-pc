@@ -4,7 +4,9 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 
 #include <SDL3/SDL.h>
@@ -27,15 +29,62 @@ namespace {
 
 std::filesystem::path g_dump_dir;
 std::string g_build = "dev";
+std::string g_crash_note;
 std::atomic<bool> g_exit_logged{false};
 std::atomic<int> g_dumping{0};
 
 #ifdef _WIN32
+void DescribeCppException(const EXCEPTION_RECORD* record, char* out, size_t size) {
+    out[0] = 0;
+    if (record->ExceptionCode != 0xE06D7363 || record->NumberParameters < 4 || record->ExceptionInformation[0] != 0x19930520) return;
+    __try {
+        const uintptr_t object = record->ExceptionInformation[1];
+        const uintptr_t base = record->ExceptionInformation[3];
+        const auto* throw_info = reinterpret_cast<const int32_t*>(record->ExceptionInformation[2]);
+        if (!throw_info || !base) return;
+        const auto* types = reinterpret_cast<const int32_t*>(base + throw_info[3]);
+        const char* thrown = nullptr;
+        const std::exception* standard = nullptr;
+        for (int32_t i = 0; i < types[0] && i < 64; ++i) {
+            const auto* type = reinterpret_cast<const int32_t*>(base + types[1 + i]);
+            const char* name = reinterpret_cast<const char*>(base + type[1] + 16);
+            if (!thrown) thrown = name;
+            if (type[3] == -1 && std::strcmp(name, ".?AVexception@std@@") == 0) standard = reinterpret_cast<const std::exception*>(object + type[2]);
+        }
+        const char* what = standard ? standard->what() : nullptr;
+        std::snprintf(out, size, " (C++ %s%s%s)", thrown ? thrown : "?", what ? ": " : "", what ? what : "");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        std::snprintf(out, size, " (C++ exception, unreadable)");
+    }
+}
+
 LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* info) {
-    char reason[96];
-    std::snprintf(reason, sizeof(reason), "unhandled exception %#lx at %p", info->ExceptionRecord->ExceptionCode,
-                  info->ExceptionRecord->ExceptionAddress);
-    WriteCrashDump(reason, info);
+    char thrown[384];
+    DescribeCppException(info->ExceptionRecord, thrown, sizeof(thrown));
+    char reason[512];
+    std::snprintf(reason, sizeof(reason), "unhandled exception %#lx at %p%s", info->ExceptionRecord->ExceptionCode,
+                  info->ExceptionRecord->ExceptionAddress, thrown);
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        struct Job {
+            const char* reason;
+            EXCEPTION_POINTERS* info;
+            DWORD thread;
+        } job{reason, info, GetCurrentThreadId()};
+        const HANDLE writer = CreateThread(
+            nullptr, 256 * 1024,
+            [](void* p) -> DWORD {
+                auto* j = static_cast<Job*>(p);
+                WriteCrashDumpFor(j->reason, j->info, j->thread);
+                return 0;
+            },
+            &job, 0, nullptr);
+        if (writer) {
+            WaitForSingleObject(writer, 30000);
+            CloseHandle(writer);
+        }
+    } else {
+        WriteCrashDump(reason, info);
+    }
     LogExit(static_cast<int>(info->ExceptionRecord->ExceptionCode), "crash");
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -129,6 +178,7 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
     g_build = build.empty() ? "dev" : build;
 #ifdef _WIN32
     SetUnhandledExceptionFilter(OnUnhandledException);
+    ReserveCrashStack();
     _set_purecall_handler(OnPureCall);
     _set_invalid_parameter_handler(OnInvalidParameter);
     SetConsoleCtrlHandler(OnConsoleControl, TRUE);
@@ -158,22 +208,27 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
     LogInfo("crash reporting: build {}, dumps to {}", g_build, g_dump_dir.empty() ? std::string(".") : pt::os::PathToUtf8(g_dump_dir));
 }
 
-std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointers) {
-    if (g_dumping.fetch_add(1) != 0) {
-        LogError("crash: {} (dump already written)", reason);
-        return {};
-    }
+std::filesystem::path CrashDumpDir() {
+    return g_dump_dir;
+}
+
+const std::string& CrashBuildName() {
+    return g_build;
+}
+
+namespace {
+std::filesystem::path WriteDumpFile(const char* suffix, void* exception_pointers, unsigned long thread_id) {
     std::filesystem::path path;
 #ifdef _WIN32
     SYSTEMTIME t;
     GetLocalTime(&t);
-    char name[96];
-    std::snprintf(name, sizeof(name), "pt-crash-%s-%04u%02u%02u-%02u%02u%02u.dmp", g_build.c_str(), t.wYear, t.wMonth, t.wDay, t.wHour,
-                  t.wMinute, t.wSecond);
+    char name[128];
+    std::snprintf(name, sizeof(name), "pt-crash-%s-%04u%02u%02u-%02u%02u%02u%s.dmp", g_build.c_str(), t.wYear, t.wMonth, t.wDay, t.wHour,
+                  t.wMinute, t.wSecond, suffix);
     path = g_dump_dir / name;
     const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file != INVALID_HANDLE_VALUE) {
-        MINIDUMP_EXCEPTION_INFORMATION exception{GetCurrentThreadId(), static_cast<EXCEPTION_POINTERS*>(exception_pointers), FALSE};
+        MINIDUMP_EXCEPTION_INFORMATION exception{thread_id, static_cast<EXCEPTION_POINTERS*>(exception_pointers), FALSE};
         const auto type = static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo |
                                                      MiniDumpWithUnloadedModules);
         MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type, exception_pointers ? &exception : nullptr, nullptr,
@@ -182,9 +237,74 @@ std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointer
     } else {
         path.clear();
     }
+#else
+    (void)suffix;
+    (void)exception_pointers;
+    (void)thread_id;
 #endif
-    LogError("crash: {}, dump {}", reason, path.empty() ? std::string("not written") : pt::os::PathToUtf8(path));
     return path;
+}
+}
+
+std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointers) {
+#ifdef _WIN32
+    return WriteCrashDumpFor(reason, exception_pointers, GetCurrentThreadId());
+#else
+    return WriteCrashDumpFor(reason, exception_pointers, 0);
+#endif
+}
+
+std::filesystem::path WriteCrashDumpFor(const char* reason, void* exception_pointers, unsigned long thread_id) {
+    if (g_dumping.fetch_add(1) != 0) {
+        LogError("crash: {} (dump already written)", reason);
+        return {};
+    }
+    const std::filesystem::path path = WriteDumpFile("", exception_pointers, thread_id);
+    LogError("crash: {}, dump {}", reason, path.empty() ? std::string("not written") : pt::os::PathToUtf8(path));
+    if (!g_crash_note.empty()) LogError("crash: {}", g_crash_note);
+    return path;
+}
+
+std::filesystem::path WriteHangDump(const char* reason) {
+    #ifdef _WIN32
+    const std::filesystem::path path = WriteDumpFile("-hang", nullptr, GetCurrentThreadId());
+#else
+    const std::filesystem::path path = WriteDumpFile("-hang", nullptr, 0);
+#endif
+    LogWarn("hang: {}, dump {}", reason, path.empty() ? std::string("not written") : pt::os::PathToUtf8(path));
+    return path;
+}
+
+void CheckCrashFilter(const char* after) {
+#ifdef _WIN32
+    const LPTOP_LEVEL_EXCEPTION_FILTER previous = SetUnhandledExceptionFilter(OnUnhandledException);
+    if (previous == OnUnhandledException) return;
+    HMODULE module = nullptr;
+    wchar_t file[MAX_PATH] = L"";
+    if (previous && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCWSTR>(reinterpret_cast<void*>(previous)), &module)) {
+        GetModuleFileNameW(module, file, MAX_PATH);
+    }
+    LogWarn("crash reporting: the unhandled exception filter was replaced during {} ({}{}); the game's is set again", after,
+            previous ? "by " : "removed", previous ? (file[0] ? pt::os::PathToUtf8(std::filesystem::path(file)) : std::string("an unknown module")) : "");
+#else
+    (void)after;
+#endif
+}
+
+void ReserveCrashStack() {
+#ifdef _WIN32
+    ULONG size = 64 * 1024;
+    SetThreadStackGuarantee(&size);
+#endif
+}
+
+bool ExitLogged() {
+    return g_exit_logged.load();
+}
+
+void SetCrashNote(const std::string& note) {
+    g_crash_note = note;
 }
 
 void FatalError(const std::string& reason, bool show_message, int code) {

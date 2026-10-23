@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import stat
 import struct
 import zipfile
@@ -89,7 +90,7 @@ def prepare(runtime, extractor, source, out, rid=None):
             cached_textures = any(p.lower() == "enhanced-textures" and
                                   (i == 0 or relative[i - 1].lower() != "licenses" or Path(relative[-1]).suffix.lower() not in {".txt", ".json", ".md"})
                                   for i, p in enumerate(relative))
-            if cached_textures or lower.intersection({"game", "cusa01127", "cusa01114", "cusa01098"}) or Path(relative[-1]).suffix.lower() in {".pkg", ".psarc", ".qar"}:
+            if cached_textures or "game" in lower or any(re.match(r"cusa\d{5}($|[^0-9a-z])", part) for part in lower) or Path(relative[-1]).suffix.lower() in {".pkg", ".psarc", ".qar"}:
                 raise RuntimeError(f"Game assets in runtime ZIP: {entry.filename}")
             if relative[0].lower() == "data":
                 raise RuntimeError("Writable data directory in runtime ZIP")

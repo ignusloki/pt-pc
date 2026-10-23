@@ -2,9 +2,11 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <string>
 
 #include "engine/audio/channel_layout.h"
+#include "engine/audio/playback_endpoints.h"
 #include "engine/audio/spatial_output.h"
 #include "engine/core/log.h"
 #include "engine/platform/device_start.h"
@@ -30,16 +32,37 @@ bool AudioOutput::Open(uint32_t sample_rate, bool surround, RenderFunction rende
         return false;
     }
     render_ = std::move(render);
+    std::vector<uint32_t> sdl_ids;
+    const std::vector<PlaybackEndpoint> endpoints = ListPlaybackEndpoints(&sdl_ids);
+    const OutputSelection selection = SelectPlaybackEndpoint(endpoints, preferred_device_);
+    pick_ = selection.pick;
+    LogInfo("audio: playback devices: {}", DescribePlaybackEndpoints(endpoints));
+    if (selection.pick == OutputPick::ChosenMissing) {
+        LogWarn("audio: the output device '{}' chosen in the settings is not connected; the system default plays until it is back",
+                preferred_device_);
+    }
+    const PlaybackEndpoint* chosen = selection.endpoint ? &endpoints[*selection.endpoint] : nullptr;
+    const SDL_AudioDeviceID target = selection.endpoint ? sdl_ids[*selection.endpoint] : SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    chosen_physical_ = selection.endpoint ? sdl_ids[*selection.endpoint] : 0;
+    default_at_open_ = SystemDefaultPlaybackName();
     if (prefer_spatial_) {
-        auto spatial = std::make_unique<SpatialOutput>();
-        if (spatial->Open(sample_rate, render_)) {
-            spatial_ = std::move(spatial);
-            channels_ = 8;
-            return true;
+        if (chosen && chosen->id.empty()) {
+            LogInfo("audio: spatial sound: '{}' has no single Windows endpoint of that name, so it plays through the ordinary output",
+                    chosen->name);
+        } else {
+            auto spatial = std::make_unique<SpatialOutput>();
+            if (spatial->Open(sample_rate, render_, chosen ? chosen->id : std::string())) {
+                spatial_ = std::move(spatial);
+                channels_ = 8;
+                device_name_ = spatial_->DeviceName();
+                device_endpoint_id_ = spatial_->DeviceId();
+                LogOutput("Windows spatial sound");
+                return true;
+            }
         }
     }
     SDL_AudioSpec preferred_spec{};
-    const bool queried = SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &preferred_spec, nullptr);
+    const bool queried = SDL_GetAudioDeviceFormat(target, &preferred_spec, nullptr);
     const int preferred_channels = queried ? preferred_spec.channels : -1;
     if (!queried) {
         LogWarn("audio: could not query preferred playback format (surround requested: {}): {}", surround, SDL_GetError());
@@ -52,7 +75,7 @@ bool AudioOutput::Open(uint32_t sample_rate, bool surround, RenderFunction rende
         if (probe_channels == 0) break;
 
         const SDL_AudioSpec requested_spec{SDL_AUDIO_F32, static_cast<int>(probe_channels), static_cast<int>(sample_rate)};
-        const SDL_AudioDeviceID device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &requested_spec);
+        const SDL_AudioDeviceID device = SDL_OpenAudioDevice(target, &requested_spec);
         if (!device) {
             last_error = SDL_GetError();
             LogWarn("audio: {}-channel device open failed (surround requested: {}, preferred channels: {}): {}",
@@ -149,14 +172,99 @@ bool AudioOutput::Open(uint32_t sample_rate, bool surround, RenderFunction rende
         LogInfo("audio: playback at {} Hz (surround requested: {}, preferred channels: {}, requested channels: {}, actual channels: {}, renderer channels: {})",
                 sample_rate, surround, preferred_channels, probe_channels, bound_dst.channels, channels_);
         LogSdlAudioDevices(false);
+        const char* name = SDL_GetAudioDeviceName(device_id_);
+        device_name_ = name ? name : "";
+        device_endpoint_id_.clear();
+        for (const PlaybackEndpoint& endpoint : endpoints) {
+            if (endpoint.name == device_name_) device_endpoint_id_ = endpoint.id;
+        }
+        LogOutput("the ordinary output");
         return true;
     }
 
+    if (chosen) {
+        LogWarn("audio: the chosen output device '{}' would not open ({}); the system default plays instead", chosen->name,
+                last_error.empty() ? SDL_GetError() : last_error);
+        RenderFunction keep = render_;
+        const std::string preferred = preferred_device_;
+        preferred_device_.clear();
+        const bool opened = Open(sample_rate, surround, std::move(keep));
+        preferred_device_ = preferred;
+        return opened;
+    }
     LogError("audio: cannot open playback device (surround requested: {}, preferred channels: {}, last error: {})", surround,
              preferred_channels, last_error.empty() ? SDL_GetError() : last_error);
     render_ = {};
     channels_ = 2;
     LogSdlAudioDevices(false);
+    return false;
+}
+
+void AudioOutput::LogOutput(const char* path) const {
+    LogInfo("audio: main output '{}' (endpoint {}), {}, through {}", device_name_.empty() ? std::string("?") : device_name_,
+            device_endpoint_id_.empty() ? std::string("id unknown") : device_endpoint_id_,
+            pick_ == OutputPick::Chosen ? std::string("chosen in the settings") : std::string(OutputPickLabel(pick_)) + " device",
+            path);
+    const ControllerEndpoint kind = ControllerEndpointKind(device_name_);
+    if (kind == ControllerEndpoint::None) return;
+    if (pick_ == OutputPick::Chosen) {
+        LogInfo("audio: the chosen main output is the {} controller's own audio endpoint: the whole game plays on the controller",
+                ControllerEndpointLabel(kind));
+    } else {
+        LogWarn("audio: the system's default playback device is the {} controller's own audio endpoint, so the whole game plays on the "
+                "controller; choose headphones or speakers under PC settings > Sound > Output device (the game does not change the "
+                "system default)",
+                ControllerEndpointLabel(kind));
+    }
+}
+
+bool AudioOutput::Poll(uint64_t now_ns) {
+    if (!IsOpen() || now_ns < next_poll_ns_) return false;
+    next_poll_ns_ = now_ns + 1'000'000'000ull;
+    const auto listed = [](uint32_t id, const std::string& name) {
+        int count = 0;
+        SDL_AudioDeviceID* ids = SDL_GetAudioPlaybackDevices(&count);
+        bool found = false;
+        for (int i = 0; ids && i < count && !found; ++i) {
+            if (id != 0) {
+                found = ids[i] == id;
+            } else if (const char* n = SDL_GetAudioDeviceName(ids[i])) {
+                found = name == n;
+            }
+        }
+        SDL_free(ids);
+        return found;
+    };
+    if (pick_ == OutputPick::ChosenMissing && listed(0, preferred_device_)) {
+        LogInfo("audio: the chosen output device '{}' is connected again; the main output moves to it", preferred_device_);
+        return true;
+    }
+    if (pick_ == OutputPick::Chosen && chosen_physical_ != 0 && !listed(chosen_physical_, {})) {
+        LogWarn("audio: the chosen output device '{}' went away; the system default plays until it is back", device_name_);
+        return true;
+    }
+    if (spatial_) {
+        if (pick_ != OutputPick::Chosen) {
+            const std::string now = SystemDefaultPlaybackName();
+            if (!now.empty() && now != default_at_open_) {
+                LogInfo("audio: the system's default playback device is now '{}'; the spatial output moves to it from '{}'", now,
+                        device_name_);
+                return true;
+            }
+        }
+        return false;
+    }
+    const char* name = SDL_GetAudioDeviceName(device_id_);
+    if (name && device_name_ != name) {
+        const std::string previous = device_name_;
+        device_name_ = name;
+        device_endpoint_id_.clear();
+        for (const PlaybackEndpoint& endpoint : NativePlaybackEndpoints()) {
+            if (endpoint.name == device_name_) device_endpoint_id_ = endpoint.id;
+        }
+        LogInfo("audio: the main output moved from '{}' to '{}' (the system's default playback device changed)", previous, device_name_);
+        LogOutput("the ordinary output");
+    }
     return false;
 }
 
@@ -173,6 +281,11 @@ void AudioOutput::Close() {
     }
     render_ = {};
     channels_ = 2;
+    device_name_.clear();
+    device_endpoint_id_.clear();
+    chosen_physical_ = 0;
+    default_at_open_.clear();
+    pick_ = OutputPick::SystemDefault;
 }
 
 void AudioOutput::Callback(void* user, SDL_AudioStream* stream, int additional, int) {
