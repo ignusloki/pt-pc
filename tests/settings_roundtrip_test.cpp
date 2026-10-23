@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         const auto old = LoadText(ini, "[upscaling]\nneural_quality=performance\n");
         Check("legacy Performance keeps its Small model", old.upscaling.neural_model == "small");
         const auto balanced = LoadText(ini, "[upscaling]\nneural_quality=balanced\n");
-        Check("legacy Balanced migrates to Quality, new model", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "small");
+        Check("legacy Balanced migrates to Quality and Large model", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "large");
         const auto explicit_model = LoadText(ini, "[upscaling]\nneural_quality=performance\nneural_model=large\nneural_intensity=4\n");
         Check("explicit model independent of quality", explicit_model.upscaling.neural_model == "large");
         Check("neural strength capped at 300 percent", Near(explicit_model.upscaling.neural_intensity, 3.0f));
