@@ -370,7 +370,7 @@ void LowerCurrentThreadPriority() {
 
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || PT_IOS
     // APK libraries run in this process. Desktop executables/upscaling helpers are not supported on Android.
     return {};
 #else
@@ -417,7 +417,7 @@ ProcessResult RunProcess(const std::filesystem::path& program, const std::vector
 std::wstring QuoteWindowsArgument(const std::wstring& arg) { return arg; }
 
 bool StartDetached(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || PT_IOS
     return false; // Android activities own process startup.
 #else
     std::vector<std::string> owned{program.string()};
@@ -445,7 +445,7 @@ std::filesystem::path ExtendedLengthPath(const std::filesystem::path& path) { re
 ChildProcess::~ChildProcess() = default;
 
 bool ChildProcess::Start(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || PT_IOS
     return false; // Desktop preview executables are not APK entry points.
 #else
     if (handle_ != kNone) return false;

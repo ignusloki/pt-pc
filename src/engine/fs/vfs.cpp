@@ -17,15 +17,18 @@ namespace pt {
 bool Vfs::Mount(const std::filesystem::path& game_dir) {
     game_dir_ = game_dir;
     const auto psarc_path = game_dir / "chunk1.psarc";
-    if (!std::filesystem::exists(psarc_path)) {
-        LogError("vfs: {} not found, game dir must be the extracted P.T. folder that holds chunk1.psarc and texture.qar", pt::os::PathToUtf8(psarc_path));
+    std::error_code error;
+    if (!std::filesystem::exists(psarc_path, error)) {
+        // an unreadable folder (a phone's: files copied with adb belong to the shell, docs/mobile.md) is said, not thrown
+        LogError("vfs: {} {}, game dir must be the extracted CUSA01127 folder", pt::os::PathToUtf8(psarc_path),
+                 error ? "cannot be read (" + error.message() + ")" : std::string("not found"));
         return false;
     }
     if (!archive_.Open(psarc_path)) {
         return false;
     }
     const auto qar_path = game_dir / "texture.qar";
-    if (!std::filesystem::exists(qar_path) || !textures_.Open(qar_path)) {
+    if (!std::filesystem::exists(qar_path, error) || !textures_.Open(qar_path)) {
         LogError("vfs: {} missing or unreadable", pt::os::PathToUtf8(qar_path));
         return false;
     }

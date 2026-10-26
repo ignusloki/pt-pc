@@ -133,6 +133,7 @@ public:
     bool force_vsync = false;
     bool swapchain_refused = false;
 
+    bool bc_textures = true;
     bool want_ray_query = false;
     bool ray_query_supported = false;
     bool depth_bounds = false;

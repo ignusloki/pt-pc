@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
 #include <filesystem>
 #include <system_error>
 

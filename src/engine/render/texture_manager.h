@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/render/texture_mip.h"
 
 #include <glm/glm.hpp>
 
@@ -25,11 +26,7 @@ class QarArchive;
 
 namespace pt {
 
-struct TextureMip {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    std::span<const uint8_t> data;
-};
+
 
 struct MaterialGpu {
     uint32_t albedo = 0;

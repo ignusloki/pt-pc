@@ -162,6 +162,10 @@ vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_T
 build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
 are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
 
+An iOS development prototype is integrated from ilsonb's PR #5. Build, free-account
+signing, Finder game-file transfer and device-testing steps are in [docs/mobile.md](docs/mobile.md).
+Android retains its released .NET launcher and direct PKG import flow.
+
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the
 scripted routes in `tests/walkthrough/` and checks the log; it is how I make sure a change did not break a loop.

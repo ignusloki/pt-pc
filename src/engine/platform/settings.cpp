@@ -111,6 +111,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.d3d12_interrupted", out.display.d3d12_interrupted);
     Read(v, "display.d3d12_auto_fallback", out.display.d3d12_auto_fallback);
     Read(v, "display.vulkan_implicit_layers", out.display.vulkan_implicit_layers);
+    Read(v, "display.render_scale", out.display.render_scale);
     Read(v, "input.mouse_sensitivity", out.input.mouse_sensitivity);
     Read(v, "input.gamepad_sensitivity", out.input.gamepad_sensitivity);
     Read(v, "input.gamepad_dead_zone", out.input.gamepad_dead_zone);
@@ -270,6 +271,7 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
     out.display.subtitle_scale = std::isfinite(out.display.subtitle_scale) ? std::clamp(out.display.subtitle_scale, 1.0f, 2.0f) : 1.0f;
+    out.display.render_scale = std::isfinite(out.display.render_scale) ? std::clamp(out.display.render_scale, 0.25f, 1.0f) : 1.0f;
     out.input.mouse_sensitivity = std::clamp(out.input.mouse_sensitivity, 0.05f, 20.0f);
     out.input.gamepad_sensitivity = std::isfinite(out.input.gamepad_sensitivity) ? std::clamp(out.input.gamepad_sensitivity, 0.25f, 4.0f) : 1.0f;
     out.input.gamepad_dead_zone = std::clamp(out.input.gamepad_dead_zone, 0.0f, 0.9f);
@@ -332,6 +334,8 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; 0 keeps the implicit Vulkan layers of other programs (overlays, recorders) out of the game; the game sets 0 when a start\n"
          << "; died inside the Vulkan loader and the next one worked without them; 1 loads them\n"
          << "vulkan_implicit_layers = " << s.display.vulkan_implicit_layers << "\n\n"
+         << "; the 3D view's size against the screen's pixels, 0.25 to 1 (below 1 for phones and slower GPUs)\n"
+         << "render_scale = " << s.display.render_scale << "\n\n"
          << "[input]\n"
          << "mouse_sensitivity = " << s.input.mouse_sensitivity << "\n"
          << "; gamepad turn speed after the original stick response, 1 keeps the original\n"

@@ -109,8 +109,9 @@ void SceneRenderer::RecordPost(gpu::CommandList& cmd, const SceneLighting& light
             if (bloom_compute_ && !separate_add) {
                 RecordBloomDispatches(cmd, passes, weight);
             } else {
+            const float offset_scale = static_cast<float>(bloom_[0].Extent().height) / 270.0f;
             for (int i = 0; i < passes; ++i) {
-                const glm::vec4 kawase(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
+                const glm::vec4 kawase((static_cast<float>(i) + 0.5f) * offset_scale, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
                 blur(0, 1, kawase_, kawase, false);
                 if (separate_add) {
                     blur(1, 0, kawase_, kawase, false);
@@ -325,7 +326,7 @@ void SceneRenderer::RecordBloomDispatches(gpu::CommandList& cmd, int passes, flo
     gpu::PassPush step;
     step.f1 = glm::vec4(weight / static_cast<float>(passes), 0.0f, 0.0f, 0.0f);
     for (int i = 0; i < passes; ++i) {
-        step.f0 = glm::vec4(static_cast<float>(i) + 0.5f, i == 0 ? weight : 1.0f, 1.0f, 0.0f);
+        step.f0 = glm::vec4((static_cast<float>(i) + 0.5f) * (static_cast<float>(e.height) / 270.0f), i == 0 ? weight : 1.0f, 1.0f, 0.0f);
         cmd.UseTargets( {{&bloom_[0], gpu::Layout::ShaderReadOnly}, {&bloom_[1], gpu::Layout::General}});
         step.ids = glm::uvec4(gpu::kImgBloomA, 0u, 0u, 0u);
         PushConstants(cmd, &step, sizeof(step));

@@ -35,11 +35,11 @@ void RequestMacMicrophoneAccess() {
     @autoreleasepool {
         const auto access = GetMacMicrophoneAccess();
         if (access == MacMicrophoneAccess::Unavailable) {
-            LogWarn("microphone permission: launch the packaged Mac app to request access");
+            LogWarn("microphone permission: launch the packaged {} app to request access", PT_IOS ? "iOS" : "Mac");
         } else if (access == MacMicrophoneAccess::Authorized) {
             LogInfo("microphone permission: access already granted");
         } else if (access == MacMicrophoneAccess::Denied) {
-            LogWarn("microphone permission: blocked; enable P.T. in System Settings > Privacy & Security > Microphone");
+            LogWarn("microphone permission: blocked; enable P.T. in {} > Privacy & Security > Microphone", PT_IOS ? "Settings" : "System Settings");
         } else if (access == MacMicrophoneAccess::NotDetermined && !request_pending.exchange(true)) {
             LogInfo("microphone permission: requesting access before gameplay");
             [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {

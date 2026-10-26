@@ -14,10 +14,10 @@ struct AppSettings {
     struct Display {
         int width = 1600;
         int height = 900;
-        int fullscreen = 0;
+        int fullscreen = PT_IOS ? 1 : 0;
         float refresh_rate = 0.0f;
         bool vsync = true;
-        int fps_limit = 0;
+        int fps_limit = PT_IOS ? 30 : 0;
         bool hdr = false;
         int hdr_paper_white = 200;
         int hdr_peak = 0;
@@ -30,6 +30,15 @@ struct AppSettings {
         int d3d12_interrupted = 0;
         bool d3d12_auto_fallback = false;
         int vulkan_implicit_layers = 1;
+        // the 3D view's size against the screen's pixels, 0.25 to 1 (phones: their screens have far more pixels than their GPUs
+        // can light at 60 fps); the frame is scaled up to the screen
+#if PT_IOS
+        // the 3D view at half the screen's size on phones: the RedMagic 11 Pro's hallway took 25% less GPU time than at 0.6
+        // (15 against 20 ms), the iPhone 17 Pro Max ran 18 fps at its full 2868 x 1320
+        float render_scale = 0.5f;
+#else
+        float render_scale = 1.0f;
+#endif
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
@@ -93,7 +102,7 @@ struct AppSettings {
     } ray_tracing;
     struct Graphics {
         int anisotropy = 0;
-        int shadow_quality = 3;
+        int shadow_quality = PT_IOS ? 2 : 3;
         bool ambient_occlusion = true;
         bool reflections = true;
         bool bloom = true;

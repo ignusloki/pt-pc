@@ -160,7 +160,7 @@ std::string VulkanLibraryPath() {
         const std::filesystem::path base = ExecutableDir();
         std::error_code ec;
         for (const std::filesystem::path& candidate :
-             {base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
+             {base / "Frameworks" / "MoltenVK.framework" / "MoltenVK", base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
               std::filesystem::path("/usr/local/lib/libMoltenVK.dylib"), std::filesystem::path("/usr/local/lib/libvulkan.1.dylib")}) {
             if (std::filesystem::is_regular_file(candidate, ec)) return std::filesystem::weakly_canonical(candidate, ec).string();
         }
@@ -424,7 +424,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             {"descriptorBindingUpdateUnusedWhilePending", have12.descriptorBindingUpdateUnusedWhilePending},
             {"descriptorBindingStorageBufferUpdateAfterBind", have12.descriptorBindingStorageBufferUpdateAfterBind},
             {"scalarBlockLayout", have12.scalarBlockLayout}, {"samplerAnisotropy", have2.features.samplerAnisotropy},
-            {"textureCompressionBC", have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+            {"textureCompressionBC", PT_IOS ? VK_TRUE : have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
             {"shaderInt16", have2.features.shaderInt16}, {"shaderClipDistance", have2.features.shaderClipDistance},
         };
         bool complete = true;
@@ -463,6 +463,9 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     // Texture uploads check individual format support; do not request an unavailable family feature.
     features.features.textureCompressionBC = supported.textureCompressionBC;
     LogInfo("vulkan: Android BC family feature {} (individual formats checked at upload)", supported.textureCompressionBC);
+#elif PT_IOS
+    bc_textures = supported.textureCompressionBC && !std::getenv("PT_NO_BC");
+    features.features.textureCompressionBC = bc_textures;
 #else
     features.features.textureCompressionBC = VK_TRUE;
 #endif
@@ -982,7 +985,7 @@ void Context::SetHdrMetadata() {
     const bool hdr10 = swapchain.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT;
     if (!swapchain.handle) return;
     if (!(scrgb || hdr10)) {
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
         if (window_ && !SetMacHdrMetadata(window_, swapchain.color_space, nullptr))
             LogWarn("macOS: could not clear HDR metadata on the SDR window");
 #endif
@@ -1009,7 +1012,7 @@ void Context::SetHdrMetadata() {
     metadata.maxContentLightLevel = peak;
     metadata.maxFrameAverageLightLevel = hdr_paper_nits;
     if (hdr_metadata && vkSetHdrMetadataEXT) vkSetHdrMetadataEXT(device, 1, &swapchain.handle, &metadata);
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
     // Reapply after MoltenVK on every swapchain creation or HDR-level change, including when the extension is absent.
     if (scrgb && window_) {
         if (SetMacHdrMetadata(window_, swapchain.color_space, &metadata)) {

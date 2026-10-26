@@ -1,6 +1,6 @@
 #include "engine/platform/macos_data_path.h"
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
 #include <CoreFoundation/CoreFoundation.h>
 
 #include <memory>

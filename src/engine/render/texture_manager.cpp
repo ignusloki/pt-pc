@@ -1,6 +1,7 @@
 #include "engine/platform/os.h"
 #include "engine/render/texture_manager.h"
 
+#include "engine/render/bc_decode.h"
 #include <stb_image.h>
 
 #include <algorithm>
@@ -21,6 +22,8 @@
 namespace pt {
 namespace {
 
+// A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
+// light for a colour texture). Uncompressed, so loading never stalls on an encoder.
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
     int w = 0, h = 0, channels = 0;
@@ -347,6 +350,22 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     if (mips.empty() || (images_.size() >= kMaxTextures && (free_.empty() || cube))) {
         return kWhite;
     }
+#if PT_IOS
+    std::vector<std::vector<uint8_t>> decoded;
+    std::vector<TextureMip> decoded_mips;
+    bool compressed = false;
+    FormatBlockBytes(format, compressed);
+    auto& context = static_cast<gpu::vk::Device&>(*device_).Context();
+    if (compressed && !context.bc_textures) {
+        VkFormat native_format = gpu::vk::Native(format);
+        if (!DecodeBcLevels(native_format, mips, decoded, decoded_mips)) {
+            LogError("textures: cannot decode {} format {}", name, static_cast<int>(format));
+            return kWhite;
+        }
+        format = gpu::vk::FromNative(native_format);
+        mips = decoded_mips;
+    }
+#endif
 #ifdef __ANDROID__
     VkImageFormatProperties supported{};
     const auto physical = static_cast<gpu::vk::Device&>(*device_).Context().physical;
@@ -572,7 +591,7 @@ void TextureManager::DecodeAhead(const QarArchive& qar, const std::vector<std::s
     if (mods::Active()) {
         return;
     }
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || PT_IOS
     // Keep the beta's two in-flight texture batches with the shared upstream job pool.
     std::erase_if(decode_workers_, [](const auto& worker) { return worker->Done(); });
     if (decode_workers_.size() >= 2) {

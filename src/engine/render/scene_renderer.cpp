@@ -18,6 +18,16 @@
 #include "engine/fs/vfs.h"
 
 namespace pt {
+
+// Adapted from ilsonb's mobile profiling: halve the iOS bloom chain, keeping desktop/Android targets unchanged.
+uint32_t BloomRows() {
+    if (const char* env = std::getenv("PT_BLOOM_ROWS"); env && std::atoi(env) >= 16) return static_cast<uint32_t>(std::clamp(std::atoi(env), 16, 270));
+#if PT_IOS
+    return 135u;
+#else
+    return 270u;
+#endif
+}
 namespace {
 
 constexpr gpu::Format kAlbedoFormat = gpu::Format::R8G8B8A8Unorm;
@@ -742,8 +752,8 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
     mirror_cache_index_ = mirror_render_cache_index_ = 0;
     const gpu::ImageUsageFlags color = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::Sampled;
     const gpu::ImageUsageFlags dumped = color | gpu::ImageUsage::TransferSrc;
-    const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(270.0 * output.width / std::max(output.height, 1u))));
-    const gpu::Extent2D quarter{bloom_width, 270u};
+    const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(double(BloomRows()) * output.width / std::max(output.height, 1u))));
+    const gpu::Extent2D quarter{bloom_width, BloomRows()};
     const gpu::ImageUsageFlags bloom_usage = bloom_compute_ ? color | gpu::ImageUsage::Storage : color;
     const gpu::AspectFlags c = gpu::Aspect::Color;
     bool ok = CreateTarget(albedo_, kAlbedoFormat, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&

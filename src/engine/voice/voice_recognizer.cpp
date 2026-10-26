@@ -28,7 +28,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
-#if !defined(_WIN32) && !defined(__ANDROID__)
+#if !defined(_WIN32) && !defined(__ANDROID__) && !PT_IOS
 #include <spawn.h>
 #include <sys/wait.h>
 #ifdef __APPLE__
@@ -223,7 +223,7 @@ uint64_t VariantStateNeeded(std::string_view variant) {
 
 constexpr const char* kProbeOption = "--voice-cpu-probe";
 
-#if !defined(_WIN32) && !defined(__ANDROID__)
+#if !defined(_WIN32) && !defined(__ANDROID__) && !PT_IOS
 std::filesystem::path OwnExecutable() {
 #ifdef __APPLE__
     char path[4096];
@@ -286,6 +286,20 @@ std::filesystem::path RuntimeDirectory(const std::filesystem::path& model_dir) {
 bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failure& failure) {
     const std::filesystem::path dir = RuntimeDirectory(model_dir);
     std::lock_guard lock(g_api_mutex);
+#ifdef PT_WHISPER_STATIC
+    // phones (cmake/Mobile.cmake): whisper and ggml are part of the game, with ggml's CPU code built in
+    (void)dir;
+    (void)failure;
+    if (!g_api.ready) {
+#define PT_WHISPER_DIRECT(name) g_api.name = &::name;
+        PT_WHISPER_FUNCTIONS(PT_WHISPER_DIRECT)
+#undef PT_WHISPER_DIRECT
+        g_api.cpu = "built in";
+        g_api.ready = true;
+        LogInfo("voice: whisper.cpp built into the game");
+    }
+    return true;
+#endif
     if (g_api.ready) return true;
     TestLoaderStall();
     failure = VoiceRecognizer::Failure::Runtime;
@@ -351,7 +365,7 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
         const std::string name = os::PathToUtf8(path.filename());
         const std::string variant = name.substr(std::strlen(kLibraryPrefix) + 9, name.size() - std::strlen(kLibraryPrefix) - 9 - std::strlen(kModuleExtension));
 // Android runs inside app_process, which cannot re-execute the native game as a probe.
-#if !defined(_WIN32) && !defined(__ANDROID__)
+#if !defined(_WIN32) && !defined(__ANDROID__) && !PT_IOS
         if (const std::string fault = ProbeVariant(dir, variant); !fault.empty()) {
             LogWarn("voice: ggml-cpu-{} (score {}) failed in a test process: {}; trying the next variant", variant, value, fault);
             continue;
@@ -406,7 +420,7 @@ bool LoadRuntime(const std::filesystem::path& model_dir, VoiceRecognizer::Failur
 
 int VoiceCpuProbe(int argc, char** argv) {
     if (argc < 4 || std::strcmp(argv[1], kProbeOption) != 0) return -1;
-#if defined(_WIN32) || defined(__ANDROID__)
+#if defined(_WIN32) || defined(__ANDROID__) || PT_IOS
     return 2;
 #else
     rlimit none{0, 0};
@@ -595,8 +609,11 @@ bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::st
     ApplyTune(settings);
     if (const char* prompt = std::getenv("PT_VOICE_PROMPT")) settings.prompt = prompt;
     if (const char* model = std::getenv("PT_VOICE_RESCUE_MODEL")) settings.rescue_model = model;
-    for (const auto& file : {model_dir / WhisperModelName(), model_dir / kVadModel,
-                             RuntimeDirectory(model_dir) / LibraryName("whisper")}) {
+    std::vector<std::filesystem::path> required{model_dir / WhisperModelName(), model_dir / kVadModel};
+#ifndef PT_WHISPER_STATIC
+    required.push_back(RuntimeDirectory(model_dir) / LibraryName("whisper"));
+#endif
+    for (const auto& file : required) {
         if (!std::filesystem::is_regular_file(file)) {
             LogError("voice: {} is missing from {}", os::PathToUtf8(file.filename()), os::PathToUtf8(file.parent_path()));
             failure_ = Failure::Files;

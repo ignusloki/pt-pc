@@ -3,6 +3,8 @@
 #include "engine/platform/android.h"
 #include "engine/core/ascii.h"
 #include "engine/platform/update_check.h"
+#include "engine/platform/touch_controls.h"
+#include "engine/platform/ios_lifecycle.h"
 #include "engine/platform/update_journal.h"
 #include "engine/platform/json_value.h"
 #include "engine/platform/macos_data_path.h"
@@ -39,7 +41,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <iomanip>
 #include <span>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -1052,7 +1056,7 @@ void ApplyFullscreen(App& app) {
         SDL_SetWindowFullscreen(app.window, false);
         SDL_SetWindowSize(app.window, app.settings.display.width, app.settings.display.height);
     }
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
     // Cocoa applies fullscreen requests asynchronously. Finish the transition before rebuilding the Vulkan drawable.
     if (!SDL_SyncWindow(app.window)) pt::LogWarn("display: fullscreen transition timed out: {}", SDL_GetError());
     if (app.renderer.Context().device) app.renderer.Resize(0, 0);
@@ -1100,7 +1104,9 @@ std::filesystem::path UserDataDir() {
 #ifdef __ANDROID__
     return std::filesystem::path(SDL_GetAndroidInternalStoragePath()) / "profile";
 #endif
-#ifdef __APPLE__
+#if PT_IOS
+    return pt::os::PathFromUtf8(pt::os::GetEnv("HOME")) / "Documents" / "data";
+#elif defined(__APPLE__)
     /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
        /Applications; the data folder is then the user's (docs/macos.md). A build folder keeps it next to pt. */
     static const std::filesystem::path directory = [] {
@@ -1192,13 +1198,22 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
         source = found_near.where;
         return found_near.folder;
     }
+#if PT_IOS
+    // Finder/Files transfer prototype: discover regional or renamed extracted folders by their content.
+    {
+        const std::filesystem::path root = pt::os::PathFromUtf8(pt::os::GetEnv("HOME")) / "Documents";
+        source = "iOS Documents";
+        if (const auto found = pt::game_folder::FindGameFolder(root); !found.empty()) return found;
+        return root / "CUSA01127";
+    }
+#endif
     const std::filesystem::path remembered_file = RememberedGameDirFile();
     if (!remembered_file.empty()) {
         std::ifstream in(remembered_file, std::ios::binary);
         std::string line;
         if (std::getline(in, line)) {
             std::filesystem::path remembered = std::filesystem::path(reinterpret_cast<const char8_t*>(line.c_str()));
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
             std::error_code path_error;
             const auto resolved = pt::platform::ResolveMacDataPath(remembered, path_error);
             if (!path_error) remembered = resolved;
@@ -1226,7 +1241,7 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
 #else
     context.helper_candidates.push_back(context.program_dir / "extractor" / "PT.PkgExtract");
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !PT_IOS
     context.helper_candidates.push_back(pt::ExecutablePath().parent_path() / "extractor" / "PT.PkgExtract");
     context.program_dir_read_only = UserDataDir() != pt::ExecutableDir() / "data";
 #endif
@@ -2912,12 +2927,12 @@ public:
         }
         const pt::AppSettings& s = app_.settings;
         pt::game::PcSettingSection display{"pc_section_display", 0, {}};
-#ifdef __ANDROID__
-        auto display_mode = Row(kDisplayMode, "pc_display_mode", {"pc_fullscreen"}, 0, "pc_note_android_display");
+#if defined(__ANDROID__) || PT_IOS
+        auto display_mode = Row(kDisplayMode, "pc_display_mode", {"pc_fullscreen"}, 0, PT_IOS ? "" : "pc_note_android_display");
         display_mode.enabled = false;
         display.rows.push_back(std::move(display_mode));
         const auto extent = app_.renderer.RenderExtent();
-        auto resolution = Row(kResolution, "pc_resolution", {std::format("{} x {}", extent.width, extent.height)}, 0, "pc_note_android_resolution");
+        auto resolution = Row(kResolution, "pc_resolution", {std::format("{} x {}", extent.width, extent.height)}, 0, PT_IOS ? "" : "pc_note_android_resolution");
         resolution.enabled = false;
         display.rows.push_back(std::move(resolution));
 #else
@@ -3548,8 +3563,8 @@ public:
 
     void TestSetFrameGeneration(int value) { Set(kFrameGeneration, value); }
     void Set(int id, int value) override {
-#ifdef __ANDROID__
-        // The Android activity owns the fullscreen surface; desktop choices cannot resize it.
+#if defined(__ANDROID__) || PT_IOS
+        // The mobile platform owns the fullscreen surface; desktop choices cannot resize it.
         if (id == kDisplayMode || id == kResolution || id == kHdr || id == kHdrPaperWhite || id == kHdrPeak) return;
 #endif
         pt::AppSettings& s = app_.settings;
@@ -5162,10 +5177,14 @@ bool WindowActive(SDL_Window* window) {
     return pt::os::IsForegroundWindow(WindowHandle(window)) || pt::os::ForegroundIsOwnProcess();
 }
 
+pt::TouchControls* g_touch = nullptr;
+pt::IosLifecycle* g_ios_lifecycle = nullptr;
+
 bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
         return true;
     }
+    if (g_ios_lifecycle && !g_ios_lifecycle->Background() && g_ios_lifecycle->TakeResume()) app.renderer.Resize(0, 0);
     if (pt::devices::TakeGamepadsReady()) {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
         if (input) input->Init();
@@ -5178,6 +5197,9 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             LogWindowInput(app.window, g_focus_trace.right_down ? "right button down" : "right button up");
         }
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (g_touch) {
+            g_touch->ProcessEvent(event, app.window);
+        }
         if (input) {
             input->ProcessEvent(event);
         }
@@ -5240,7 +5262,7 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
             }
         }
     }
-    if (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) {
+    if ((g_ios_lifecycle && g_ios_lifecycle->Background()) || (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED)) {
         SDL_Delay(16);
         return false;
     }
@@ -5544,6 +5566,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
     }
     pt::VirtualPads virtual_pads;
+    // touch controls on phones and tablets: a virtual pad of their own, slot 3 (the scripts use the first ones)
+    pt::TouchControls touch_controls;
+    if (app.window && pt::TouchControls::Wanted()) {
+        touch_controls.Attach(virtual_pads, 3);
+        g_touch = &touch_controls;
+    }
+    struct TouchReset {
+        ~TouchReset() { g_touch = nullptr; }
+    } touch_reset;
     pt::game::PromptTextures prompt_textures;
     prompt_textures.Init(vfs, app.textures, app.window != nullptr);
     script.SetPads(options.virtual_pads ? &virtual_pads : nullptr, &input);
@@ -6251,6 +6282,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
         pc_settings.CollectGyroCalibration();
+        if (g_touch) polled.mouse_look += g_touch->TakeLook() * 2.6f * app.settings.input.mouse_sensitivity;
         if (app.window) {
             static bool cursor_hidden = false;
             static glm::vec2 cursor_last(-1.0f);
@@ -6297,6 +6329,26 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 toggle_settings();
             } else if (ui_ready) {
                 ui.OpenPcSettings();
+            }
+        }
+        if (static const bool debug_touch = std::getenv("PT_DEBUG_TOUCH") != nullptr; debug_touch) {
+            static glm::vec2 last_left{}, last_right{};
+            static glm::vec3 last_feet{};
+            static uint64_t last_feet_tick = 0;
+            if (frame - last_feet_tick >= 15) {
+                const glm::vec3 feet = game.GetPlayer().Feet();
+                if (glm::length(feet - last_feet) > 0.001f) {
+                    pt::LogInfo("touch: feet {:.3f} {:.3f} {:.3f} moved {:.3f}", feet.x, feet.y, feet.z, glm::length(feet - last_feet));
+                }
+                last_feet = feet;
+                last_feet_tick = frame;
+            }
+            if (glm::length(polled.left_stick - last_left) > 0.05f || glm::length(polled.right_stick - last_right) > 0.05f ||
+                (glm::length(polled.left_stick) == 0.0f) != (glm::length(last_left) == 0.0f)) {
+                pt::LogInfo("touch: game reads left {:.2f} {:.2f} right {:.2f} {:.2f}", polled.left_stick.x, polled.left_stick.y,
+                            polled.right_stick.x, polled.right_stick.y);
+                last_left = polled.left_stick;
+                last_right = polled.right_stick;
             }
         }
         pending_input.left_stick = polled.left_stick;
@@ -6602,6 +6654,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 ui.QueueMenuInput(touch);
             }
 #endif
+            if (g_touch && g_touch->TakeColumn() && ui_ready && ui.MenuOpen()) {
+                pt::game::MenuInput touch;
+                if (ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc && ui.Menu().PcPage().Tabbed()) touch.tab_next = true;
+                else touch.switch_column = true;
+                ui.QueueMenuInput(touch);
+            }
             ui.Update(theater ? theater->theater->Sandbox() : game, state, step);
 #ifdef __ANDROID__
             pt::SyncAndroidTouchMenu(ui_ready && ui.MenuOpen() && !theater ?
@@ -7199,6 +7257,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
             app.renderer.ImGuiNewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
+            if (g_touch) {
+                g_touch->SetMenuOpen(show_settings || (ui_ready && ui.MenuOpen()));
+                g_touch->Draw(ImGui::GetForegroundDrawList(), ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+            }
             if (show_debug) {
                 pt::game::DrawGameDebugPanel(game);
                 if (ImGui::Begin("View")) {
@@ -7222,7 +7284,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const glm::ivec2 setting(app.settings.display.width, app.settings.display.height);
             const bool minimized = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_MINIMIZED) != 0;
             const glm::ivec2 size = pt::display::RenderSize(mode, {width, height}, setting, minimized);
+#if PT_IOS
+            width = std::max(1, static_cast<int>(std::lround(width * app.settings.display.render_scale)));
+            height = std::max(1, static_cast<int>(std::lround(height * app.settings.display.render_scale)));
+            base_render_extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+#else
             if (size.x > 0 && size.y > 0) base_render_extent = {static_cast<uint32_t>(size.x), static_cast<uint32_t>(size.y)};
+#endif
             static glm::ivec4 mismatch_logged(0);
             const glm::ivec4 mismatch = mode == pt::display::kExclusive && !minimized && size != setting ? glm::ivec4(size, setting) : glm::ivec4(0);
             if (mismatch != mismatch_logged) {
@@ -7889,7 +7957,34 @@ int main(int argc, char** argv) {
 #endif
     pt::IoSetMainThread();
     App app;
+#if PT_IOS
+    if (std::ifstream env(UserDataDir() / "env.txt"); env) {
+        for (std::string line; std::getline(env, line);) {
+            const auto eq = line.find('=');
+            if (eq != std::string::npos && eq > 0 && line[0] != '#')
+                setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+        }
+    }
+#endif
+#if PT_IOS
+    // PT_ARGS (env.txt): command line options for a phone's game, split at spaces, "quoted" for a path with spaces (docs/mobile.md)
+    std::vector<std::string> extra_args;
+    std::vector<char*> mobile_argv(argv, argv + argc);
+    if (const char* args = std::getenv("PT_ARGS"); args && *args) {
+        std::istringstream words(args);
+        for (std::string word; words >> std::quoted(word);) extra_args.push_back(word);
+        for (std::string& word : extra_args) mobile_argv.push_back(word.data());
+        argc = static_cast<int>(mobile_argv.size());
+        argv = mobile_argv.data();
+    }
+#endif
     app.options = ParseOptions(argc, argv);
+#if PT_IOS
+    // a phone's own paths change between installs (iOS), so PT_ARGS' relative paths are in the user data folder
+    for (std::filesystem::path* path : {&app.options.voice_test, &app.options.log_path, &app.options.screenshot}) {
+        if (!path->empty() && path->is_relative()) *path = UserDataDir() / *path;
+    }
+#endif
     if (!app.options.make_loop_previews.empty()) {
         SetUpLoopPreviewRun(app.options);
     }
@@ -8249,8 +8344,14 @@ int main(int argc, char** argv) {
             const char* beside = "pt";
             const char* program = "pt";
 #endif
+#if PT_IOS
+            const std::string text = "Copy your extracted P.T. game folder into this app's Documents using Finder > device > Files > P.T. "
+                                     "It must contain chunk1.psarc, texture.qar and pathid_list_ps4.bin. Then reopen P.T. "
+                                     "This prototype cannot import a PKG inside the app yet.";
+#else
             const std::string text = pt::first_run::Text("pc_game_not_found", pt::first_run::PlayerLanguage(UserDataDir()),
                                                          {pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), beside, program});
+#endif
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
         return 1;
@@ -8271,12 +8372,29 @@ int main(int argc, char** argv) {
         file_prefetch.Start({game_dir / "chunk1.psarc", game_dir / "texture.qar"});
     }
 
+#if PT_IOS
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+#endif
     if (!SDL_Init(options.headless ? 0 : SDL_INIT_VIDEO)) {
         pt::LogError("SDL_Init: {}", SDL_GetError());
         pt::LogError("SDL_Init: {}", pt::SdlVideoDiagnostics());
         startup_failure(std::string("No window can be opened: ") + SDL_GetError() + ".", driver_advice);
         return 1;
     }
+#if PT_IOS
+    pt::IosLifecycle ios_lifecycle([&app] {
+        if (g_touch) g_touch->Reset();
+        if (app.renderer.Context().device) vkDeviceWaitIdle(app.renderer.Context().device);
+    });
+    if (!ios_lifecycle.Watching()) {
+        pt::LogError("iOS: cannot register lifecycle watch: {}", SDL_GetError());
+        return 1;
+    }
+    g_ios_lifecycle = &ios_lifecycle;
+    struct LifecycleReset { ~LifecycleReset() { g_ios_lifecycle = nullptr; } } lifecycle_reset;
+#endif
     pt::boot::Phase("video");
     pt::devices::Start({.gamepad = !options.headless || options.virtual_pads,
                         .audio = !options.headless,
@@ -8298,7 +8416,21 @@ int main(int argc, char** argv) {
     app.settings_path = !options.settings_path.empty() ? options.settings_path
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
+#if PT_IOS
+    pt::ApplyGraphicsPreset(app.settings, pt::GraphicsPreset::Low, false);
+    app.settings.display.subtitle_scale = 1.5f;
+    app.settings.network.check_updates = false;
+#endif
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
+#if PT_IOS
+    app.settings.network.check_updates = false;
+    app.settings.network.discord_presence = false;
+    app.settings.ray_tracing = {};
+    app.settings.vr.enabled = false;
+    app.settings.display.hdr = false;
+    app.settings.display.fullscreen = 1;
+    app.settings.upscaling.frame_generation = "off";
+#endif
     if (pt::nr_native::Enabled()) pt::ConfigureNativeNeuralRuntime(app.settings.upscaling.neural_runtime);
 #ifdef __ANDROID__
     app.settings.ray_tracing = {};
@@ -8595,6 +8727,9 @@ int main(int argc, char** argv) {
             }
         }
     }
+#if PT_IOS
+    while (ios_lifecycle.Background()) { SDL_PumpEvents(); SDL_Delay(16); }
+#endif
     const bool renderer_ready = app.renderer.Init(app.window, settings);
     pt::start_watch::Finish();
     if (renderer_ready && app.start_layers_retry && !app.settings_path.empty()) {
