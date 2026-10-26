@@ -5,6 +5,18 @@ head `7deae4c591691ba7d072699b87d19efaa02b7586`, onto the shared Mac/Android 1.0
 source. See [integration decisions](integration/ios-pr5.md). Android continues to
 use the [.NET launcher and PKG importer](android-beta-installation.md).
 
+## iOS Beta 1 source release
+
+The `v1.0.11` tag is iOS **Beta 1**. Build and sign the app yourself; no public IPA
+or maintainer provisioning profile is supplied. The iPhone 15 Pro Max and M1
+12.9-inch iPad Pro worked in short tests on iOS/iPadOS 26.6.2, but the user
+reports poor performance on both. Optimization and broader testing remain open.
+This is not an App Store or TestFlight release.
+
+On a clean Mac, install the full Xcode app and its iOS SDK, select its developer
+tools, and install `cmake`, `ninja`, `shaderc` and `vulkan-headers` with Homebrew.
+Clone this repository and check out `v1.0.11`. Then obtain MoltenVK as below.
+
 ## Build on a Mac
 
 The integration host has Xcode 27.1 (27A9275), iOS/iOS Simulator SDK 27.1,

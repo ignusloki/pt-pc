@@ -4,8 +4,8 @@
     <OutputType>Exe</OutputType>
     <ApplicationId>org.ignusloki.pt.prototype</ApplicationId>
     <ApplicationTitle>P.T. Android Prototype</ApplicationTitle>
-    <ApplicationDisplayVersion>1.0.10-android-beta.5</ApplicationDisplayVersion>
-    <ApplicationVersion>15</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.11</ApplicationDisplayVersion>
+    <ApplicationVersion>16</ApplicationVersion>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
     <RuntimeIdentifier>android-arm64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -26,13 +26,13 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <ApplicationId>org.ignusloki.pt.beta</ApplicationId>
-    <ApplicationTitle>P.T. Android Beta</ApplicationTitle>
+    <ApplicationTitle>P.T. Android</ApplicationTitle>
     <AndroidKeyStore>true</AndroidKeyStore>
     <AndroidUseApkSigner>true</AndroidUseApkSigner>
   </PropertyGroup>
   <Target Name="RequireReleaseSigning" BeforeTargets="PrepareForBuild" Condition="'$(Configuration)' == 'Release'">
     <Error Condition="'$(AndroidSigningKeyStore)' == '' or '$(AndroidSigningKeyAlias)' == '' or '$(AndroidSigningKeyPass)' == '' or '$(AndroidSigningStorePass)' == ''"
-           Text="Android beta Release builds require an explicit signing key. Use tools/android/build.py with --keystore, --key-alias and --password-file." />
+           Text="Android Release builds require an explicit signing key. Use tools/android/build.py with --keystore, --key-alias and --password-file." />
   </Target>
   <ItemGroup>
     <AndroidResource Include="$(PtAndroidStage)/resources/drawable/pt_icon.png" Link="Resources/drawable/pt_icon.png" />

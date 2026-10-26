@@ -14,11 +14,11 @@
 
 </div>
 
-**Unified macOS and Android release:** [v1.0.10](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.10)
-includes Apple silicon and Intel Mac packages plus **Android Beta 5**. Android
-remains experimental; read its [installation and phone requirements](docs/android-beta-installation.md).
-See the [release notes](docs/release-notes-1.0.10.md) and
-[upstream integration report](docs/integration/upstream-1.0.8.md).
+**Release 1.0.11:** rebuilt Apple silicon/Intel Mac packages, the first official **Android source release**, plus **iOS Beta 1**
+for users who build and sign the mobile apps themselves. iOS performance still needs optimization.
+Read the [changelog](docs/release-notes-1.0.11.md),
+[Android installation guide](docs/android-installation.md), and
+[iPhone/iPad beta build and signing guide](docs/mobile.md).
 
 > [!IMPORTANT]
 > **The upstream port is made by LoreanXavier in their spare time.** If it gave you a good scare, please consider supporting it on [**Patreon**](https://www.patreon.com/loreanxavier). It pays for the testing hardware and keeps the updates coming.

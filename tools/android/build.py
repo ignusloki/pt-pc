@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 NDK_VERSION = "28.2.13676358"
-VERSION = "1.0.10-android-beta.5"
+VERSION = "1.0.11"
 
 
 def run(*args, env=None):
@@ -110,15 +110,19 @@ def main():
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--native-only", action="store_true")
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
+    parser.add_argument("--application-id", help="Personal app ID for self-built APKs; permits coexistence with the signed beta")
     parser.add_argument("--version", default=VERSION)
-    parser.add_argument("--version-code", type=int, default=15)
+    parser.add_argument("--version-code", type=int, default=16)
     parser.add_argument("--keystore", type=Path, help="Private APK signing key; required for Release")
     parser.add_argument("--key-alias", help="Alias in the private signing keystore")
     parser.add_argument("--password-file", type=Path, help="Private file containing the keystore/key password")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]*", args.version) or args.version_code < 1:
         parser.error("Use a valid release version and a positive version code")
+    if args.application_id and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+", args.application_id):
+        parser.error("Use a Java-style application ID with at least two components")
     release = args.configuration == "Release"
+    app_id = args.application_id or ("org.ignusloki.pt.beta" if release else "org.ignusloki.pt.prototype")
     if release and not args.native_only:
         if not (args.keystore and args.keystore.is_file() and args.key_alias and args.password_file and args.password_file.is_file()):
             parser.error("Release requires --keystore, --key-alias and --password-file")
@@ -170,10 +174,9 @@ def main():
                    "-p:AndroidSigningKeyPass=env:PT_ANDROID_SIGNING_PASSWORD",
                    "-p:AndroidSigningStorePass=env:PT_ANDROID_SIGNING_PASSWORD"]
     run("dotnet", "build", REPO / "android/Launcher/Launcher.csproj", "-c", args.configuration,
-        "-t:SignAndroidPackage", f"-p:ApplicationDisplayVersion={args.version}", f"-p:ApplicationVersion={args.version_code}",
+        "-t:SignAndroidPackage", f"-p:ApplicationId={app_id}", f"-p:ApplicationDisplayVersion={args.version}", f"-p:ApplicationVersion={args.version_code}",
         f"-p:AndroidSdkDirectory={sdk}", f"-p:JavaSdkDirectory={args.jdk.resolve()}",
         f"-p:LibOrbisSource={extractor}", f"-p:PtAndroidStage={stage}", *signing, env=signing_env)
-    app_id = "org.ignusloki.pt.beta" if release else "org.ignusloki.pt.prototype"
     apk = REPO / f"android/Launcher/bin/{args.configuration}/net10.0-android36.0/android-arm64/{app_id}-Signed.apk"
     if not apk.is_file():
         raise RuntimeError(f"Signed APK missing: {apk}")
