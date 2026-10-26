@@ -1,4 +1,18 @@
+<div align="center">
+
 # P.T. for PC
+
+**A native PC port of P.T., the 2014 PS4 teaser by Kojima Productions. Windows, Linux and macOS.**
+
+<a href="https://www.patreon.com/loreanxavier"><img src="https://img.shields.io/badge/Support%20the%20port%20on%20Patreon-F96854?style=for-the-badge&logo=patreon&logoColor=white" alt="Support the port on Patreon" height="48"></a>
+
+<a href="https://github.com/ignusloki/pt-pc/releases/latest"><img src="https://img.shields.io/github/v/release/ignusloki/pt-pc?style=for-the-badge&label=Download&color=2b2b2b" alt="Download the latest Mac and Android release"></a>
+<a href="https://github.com/ignusloki/pt-pc/releases"><img src="https://img.shields.io/github/downloads/ignusloki/pt-pc/total?style=for-the-badge&color=2b2b2b" alt="Downloads"></a>
+<a href="https://discord.gg/3vKwUf2eTb"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+
+![Lisa in the hallway](docs/media/lisa.gif)
+
+</div>
 
 **Unified macOS and Android release:** [v1.0.10](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.10)
 includes Apple silicon and Intel Mac packages plus **Android Beta 5**. Android
@@ -6,11 +20,11 @@ remains experimental; read its [installation and phone requirements](docs/androi
 See the [release notes](docs/release-notes-1.0.10.md) and
 [upstream integration report](docs/integration/upstream-1.0.8.md).
 
+> [!IMPORTANT]
+> **The upstream port is made by LoreanXavier in their spare time.** If it gave you a good scare, please consider supporting it on [**Patreon**](https://www.patreon.com/loreanxavier). It pays for the testing hardware and keeps the updates coming.
+
+> [!NOTE]
 > **Upstream bug reports:** Lorean's GitHub Issues are closed because of ongoing spam attacks. Please join the [Discord server](https://discord.gg/3vKwUf2eTb) to report bugs.
-
-![Lisa in the hallway](docs/media/lisa.gif)
-
-If the port is worth something to you, you can buy me a coffee: [ko-fi.com/loreanxavier](https://ko-fi.com/loreanxavier). It keeps the testing hardware and the releases coming.
 
 This is a native PC port of P.T., the 2014 PS4 teaser by Kojima Productions. It is not an emulator. The game logic was
 rebuilt in C++ from the original's behaviour, with Vulkan and DirectX 12 renderers; every level, model, texture, sound,
@@ -157,6 +171,12 @@ helper in C# that reads fake PKGs with LibOrbisPkg. docs/installer.md describes 
 
 Other docs: docs/upscaling.md, docs/vr.md, docs/updates.md, and the file format notes in docs/formats/ that came out of
 reverse engineering the game data, with the tools in tools/ that read those formats.
+
+## Support the port
+
+<a href="https://www.patreon.com/loreanxavier"><img src="https://img.shields.io/badge/Become%20a%20patron-F96854?style=for-the-badge&logo=patreon&logoColor=white" alt="Become a patron" height="40"></a>
+
+Patreon supports LoreanXavier's upstream development, hardware testing and fixes: new GPUs and handhelds to test on, the Mac and Steam Deck work, and the time to keep fixing what players report. Thank you to everyone who already helps.
 
 ## Thanks
 
