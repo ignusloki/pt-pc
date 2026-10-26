@@ -64,6 +64,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
       XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${PT_IOS_BUNDLE_ID}"
       MACOSX_BUNDLE_GUI_IDENTIFIER "$(PRODUCT_BUNDLE_IDENTIFIER)")
   endif()
+  # Compile the same forest artwork as the Mac app for both iPhone and iPad.
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(pt_ios_icons "${CMAKE_BINARY_DIR}/ios-icons")
+  add_custom_command(OUTPUT "${pt_ios_icons}/compiled/Assets.car" "${pt_ios_icons}/icon-info.plist"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ios/make_icons.py"
+      --source "${CMAKE_SOURCE_DIR}/assets/macos/pt-icon.png" --output "${pt_ios_icons}"
+      --minimum-os "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/assets/macos/pt-icon.png"
+      "${CMAKE_SOURCE_DIR}/tools/ios/make_icons.py" "${CMAKE_SOURCE_DIR}/tools/ios/make_icons.swift" VERBATIM)
+  add_custom_target(pt_ios_icons DEPENDS "${pt_ios_icons}/compiled/Assets.car" "${pt_ios_icons}/icon-info.plist")
+  add_dependencies(pt pt_ios_icons)
+  set_property(TARGET pt APPEND PROPERTY LINK_DEPENDS "${pt_ios_icons}/compiled/Assets.car" "${pt_ios_icons}/icon-info.plist")
+  add_custom_command(TARGET pt POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${pt_ios_icons}/compiled" "$<TARGET_FILE_DIR:pt>"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ios/make_icons.py"
+      --output "${pt_ios_icons}" --bundle "$<TARGET_FILE_DIR:pt>" VERBATIM)
   configure_file("${bcdecode_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/bcdecode-LICENSE.txt" COPYONLY)
   add_custom_command(TARGET pt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/licenses"

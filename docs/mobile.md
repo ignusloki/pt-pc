@@ -47,13 +47,12 @@ python3 tools/ios/build.py --build build/ios-xcode --xcode --configure-only \
   --moltenvk /absolute/path/MoltenVK.framework --source-cache build/macos-local-validation
 ```
 
-On this host, Xcode project generation currently fails: `IDESimulatorFoundation`
-expects a symbol absent from `/Library/Developer/PrivateFrameworks/DVTDownloads`.
-`xcodebuild` recommends `xcodebuild -runFirstLaunch`; repair/update the Xcode
-installation before using this path. No system framework or credential changes
-were performed during integration. Ninja device compilation works independently.
+The initial host setup failed loading `IDESimulatorFoundation` because of a
+`DVTDownloads` framework mismatch. This was resolved before device deployment;
+Xcode project generation and Personal Team provisioning now succeed after the
+user repaired account authentication and renewed the development certificate.
 
-After generation succeeds, open `build/ios-xcode/pt_port.xcodeproj` in Xcode, sign in under Settings → Accounts,
+Open `build/ios-xcode/pt_port.xcodeproj` in Xcode, sign in under Settings → Accounts,
 select the **pt** scheme and connected device. In pt → Signing & Capabilities,
 select your Personal Team, enable automatic signing and choose your own unique
 bundle identifier. Set **Code Signing Allowed = Yes** for the pt target (the
@@ -103,7 +102,7 @@ while backgrounded. Microphone input uses the existing saved toggle and shared
 AVFoundation startup permission flow; denial must allow ordinary gameplay.
 
 Planned user test devices: **iPhone 15 Pro Max**, reported iOS **26.6.2**, and
-**12.9-inch iPad Pro (5th generation, M1)**. Confirm the iPadOS version separately.
+**12.9-inch iPad Pro (5th generation, M1)**. The connected iPad was verified to run iPadOS 26.6.2.
 The PR author's hardware reports are contributor evidence, not local validation.
 
 - Fresh launch without assets, Finder copy, reopen and game discovery.
@@ -122,3 +121,12 @@ The PR author's hardware reports are contributor evidence, not local validation.
 Compilation, simulator execution and physical-device testing are separate
 validation stages. The downloaded framework has only a device arm64 slice;
 this prototype does not claim simulator execution support.
+
+## Shared app icon
+
+Both iPhone and iPad use `assets/macos/pt-icon.png`, the same forest artwork as
+the Mac app. The iOS build generates opaque size variants and compiles them with
+Apple's asset compiler; the original Mac image is unchanged. `make_icons.swift`
+uses CoreGraphics/ImageIO from the host Xcode tools, so no Python imaging package
+is required. The bundle audit checks the compiled asset catalog and primary-icon
+metadata for both device families.

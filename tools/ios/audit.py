@@ -14,7 +14,9 @@ info = plistlib.loads((app / 'Info.plist').read_bytes())
 assert info['NSMicrophoneUsageDescription']
 assert info['UIFileSharingEnabled'] and info['LSSupportsOpeningDocumentsInPlace']
 assert set(info['UIDeviceFamily']) == {1, 2}
-required = ['pt', 'extras.pak', 'Frameworks/MoltenVK.framework/MoltenVK',
+assert info['CFBundleIcons']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
+assert info['CFBundleIcons~ipad']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
+required = ['Assets.car', 'pt', 'extras.pak', 'Frameworks/MoltenVK.framework/MoltenVK',
             'voice/ggml-base.en-q5_1.bin', 'voice/ggml-silero-v6.2.0.bin',
             'licenses/bcdecode-LICENSE.txt', 'licenses/MoltenVK-Apache-2.0.txt']
 for name in required:

@@ -38,8 +38,8 @@ def main():
     entitlement_file = staging / 'entitlements.plist'
     entitlement_file.write_bytes(plistlib.dumps(entitlements))
     for framework in sorted((app / 'Frameworks').glob('*.framework')):
-        run('codesign', '--force', '--sign', env['PT_IDENTITY'], str(framework))
-    run('codesign', '--force', '--sign', env['PT_IDENTITY'], '--entitlements', str(entitlement_file), str(app))
+        run('codesign', '--force', '--sign', env['PT_IDENTITY'], '--timestamp=none', '--generate-entitlement-der', str(framework))
+    run('codesign', '--force', '--sign', env['PT_IDENTITY'], '--entitlements', str(entitlement_file), '--timestamp=none', '--generate-entitlement-der', str(app))
     run('codesign', '--verify', '--deep', '--strict', str(app))
     device = env['PT_DEVICE']
     run('xcrun', 'devicectl', 'device', 'install', 'app', '--device', device, str(app))

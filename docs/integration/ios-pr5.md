@@ -70,3 +70,34 @@ Regression targets: `pt_touch_controls_test`, `pt_ios_lifecycle_test`,
 `pt_settings_roundtrip_test`, `pt_graphics_preset_test`, `pt_mouse_render_test`,
 `pt_fast_walk_test`. The decoder regression can also be enabled for a host CMake
 build with `PT_BC_DECODE_TESTS=ON` and built as `pt_bc_decode_test`.
+
+## First physical-device follow-up (2026-10-26)
+
+The user repaired Xcode account authentication and renewed the development
+certificate. Xcode project generation and Personal Team provisioning now succeed.
+The iPhone 15 Pro Max accepted the signed app and all three extracted archives.
+After the user trusted the developer profile, the OS launch succeeded. The user
+reports that the game works, with poor performance. This was a short user test,
+not a measured frame-rate, full playthrough or microphone validation. The current
+candidate is a Debug build; performance work is separate from the icon change.
+
+The app now compiles the Mac forest artwork into iPhone and iPad app-icon assets,
+including opaque PNGs and primary-icon metadata for both device families. The
+original Mac icon is unchanged. The deployment helper now uses Xcode's explicit
+`--timestamp=none --generate-entitlement-der` flags, which corrected the initial
+manual development-signing failure. Updates retain the existing bundle ID and
+app container; game files and saves are not removed.
+
+The icon-bearing app was installed over the iPhone app and launched successfully,
+preserving its game/profile container. A retrieved iPhone log reaches gameplay
+and samples 30 fps at the configured 30 fps cap; this is not a broad performance
+benchmark or a resolution of the user's performance report.
+
+The connected **iPad Pro 12.9-inch (5th generation, M1), iPadOS 26.6.2** was
+provisioned after the user enabled Developer Mode. The icon-bearing app and all
+three extracted archives were installed. Device-reported byte sizes match the
+Mac source files. After the user trusted the developer account, OS launch
+succeeded. Its startup log selects the Apple M1 GPU, finds the game archives,
+records microphone permission granted and reaches the first-boot options menu.
+Interactive iPad gameplay, touch feel, sustained performance, recognition and
+background/resume tests are still for the user to perform.
