@@ -1,0 +1,32 @@
+name: Build P.T. iOS IPA
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          brew install cmake ninja shaderc vulkan-headers
+
+      - name: Configure and Build
+        run: |
+          cmake -G Ninja -B build/ios \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS
+          cmake --build build/ios --target pt
+
+      - name: Package Payload into IPA
+        run: |
+          mkdir -p Payload
+          mv build/ios/pt.app Payload/
+          zip -r PT_PC_Port.ipa Payload
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pt-ios-ipa
+          path: PT_PC_Port.ipa
