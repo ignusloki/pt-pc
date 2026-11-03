@@ -26,6 +26,7 @@ target_include_directories(ggml-base PRIVATE "${whisper_SOURCE_DIR}/ggml/src")
 set(PT_MOBILE_VOICE_MODELS "${CMAKE_BINARY_DIR}/voice/ggml-base.en-q5_1.bin" "${CMAKE_BINARY_DIR}/voice/ggml-silero-v6.2.0.bin")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  include("${CMAKE_SOURCE_DIR}/cmake/IosSdlScenes.cmake")
   option(PT_IOS_DIAGNOSTICS "Record iOS startup, memory and GPU diagnostics" OFF)
   if(PT_IOS_DIAGNOSTICS)
     target_compile_definitions(pt_engine PUBLIC PT_IOS_DIAGNOSTICS=1)
@@ -60,7 +61,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PT_VERSION}"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PT_VERSION}")
   if(PT_IOS_DIAGNOSTICS)
-    set_target_properties(pt PROPERTIES MACOSX_BUNDLE_BUNDLE_VERSION "101104")
+    set_target_properties(pt PROPERTIES MACOSX_BUNDLE_BUNDLE_VERSION "101105")
   endif()
   set_target_properties(pt PROPERTIES
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"

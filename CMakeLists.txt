@@ -315,6 +315,9 @@ endif()
 add_executable(pt_ios_lifecycle_test EXCLUDE_FROM_ALL tests/ios_lifecycle_test.cpp)
 target_link_libraries(pt_ios_lifecycle_test PRIVATE pt_engine)
 
+add_executable(pt_ios_scene_state_test EXCLUDE_FROM_ALL tests/ios_scene_state_test.cpp)
+target_include_directories(pt_ios_scene_state_test PRIVATE src)
+
 add_executable(pt_touch_controls_test EXCLUDE_FROM_ALL tests/touch_controls_test.cpp)
 target_link_libraries(pt_touch_controls_test PRIVATE pt_engine)
 if(PT_IOS OR PT_BC_DECODE_TESTS)

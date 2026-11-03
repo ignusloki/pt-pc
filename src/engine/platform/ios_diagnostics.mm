@@ -115,7 +115,7 @@ void Sample(const char* kind, std::string_view note, bool clean_exit = false, Re
     // A complete last snapshot survives abrupt termination; no crash handler is required.
     FILE* state = std::fopen((directory / "last-state.tmp").c_str(), "w");
     if (state) {
-        std::fprintf(state, "P.T. iOS diagnostic 4\nmain-returned=%s\n", clean_exit ? "yes" : "no");
+        std::fprintf(state, "P.T. iOS diagnostic 5\nmain-returned=%s\n", clean_exit ? "yes" : "no");
         std::fputs(line, state);
     }
     for (const Operation& op : operations) {
@@ -174,7 +174,7 @@ Session::Session(const std::filesystem::path& data, const char* build) {
 #else
         NSString* version = NSProcessInfo.processInfo.operatingSystemVersionString;
 #endif
-        std::fprintf(file, "P.T. iOS startup diagnostic 4 (memory profile and loading events) | build=%s | device=%s | iOS=%s | physical-memory=%.0fMiB | main-thread=%s\n",
+        std::fprintf(file, "P.T. iOS startup diagnostic 5 (AirPlay scene guards) | build=%s | device=%s | iOS=%s | physical-memory=%.0fMiB | main-thread=%s\n",
             build, device.machine, version.UTF8String,
             NSProcessInfo.processInfo.physicalMemory / 1048576.0, NSThread.isMainThread ? "yes" : "no");
         std::fprintf(file, "No game content or microphone recordings are captured. Heartbeats every 0.5s for 180s. memory-pressure: 0=no notification yet, 1=normal, 2=warning, 4=critical. Main registers are queried on heartbeats only. Available-to-process is not total device free RAM.\n");

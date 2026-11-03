@@ -8036,7 +8036,7 @@ int main(int argc, char** argv) {
     pt::LogSetFile(log_path);
     pt::ios_diag::Stage("engine log opened");
 #if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
-    pt::LogInfo("iOS startup diagnostic 4 (memory profile and loading events): all diagnostic logs in Documents/data/ios-diagnostics");
+    pt::LogInfo("iOS startup diagnostic 5 (AirPlay scene guards): all diagnostic logs in Documents/data/ios-diagnostics");
 #endif
 #if PT_IOS
     pt::LogInfo("iOS: mipmapped texture limit {} px (512 on devices with 4 GiB RAM or less)", pt::IosTextureLimit());
