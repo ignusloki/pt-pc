@@ -5,6 +5,8 @@
 #include "engine/platform/update_check.h"
 #include "engine/platform/touch_controls.h"
 #include "engine/platform/ios_lifecycle.h"
+#include "engine/platform/ios_diagnostics.h"
+#include "engine/platform/ios_memory.h"
 #include "engine/platform/update_journal.h"
 #include "engine/platform/json_value.h"
 #include "engine/platform/macos_data_path.h"
@@ -5411,6 +5413,7 @@ int RunViewer(App& app, pt::Vfs& vfs) {
 }
 
 int RunGame(App& app, pt::Vfs& vfs) {
+    pt::ios_diag::Stage("game data initialization");
     const Options& options = app.options;
     pt::game::Game game(vfs, *app.models);
     pt::game::GameConfig config;
@@ -5468,6 +5471,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     game.SetSoundCaptions(app.settings.accessibility.sound_captions);
     game.SetFovOffset(app.settings.accessibility.fov_offset);
     pt::game::GameSound sound(game);
+    pt::ios_diag::Stage("sound initialization");
     std::vector<float> captured;
     pt::audio::AudioOutput::SetPreferSpatial(app.settings.audio.spatial);
     pt::audio::AudioOutput::SetPreferredDevice(app.settings.audio.output_device);
@@ -5489,7 +5493,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool hide_game_ui = false;
     pt::game::PhotoPanelView photo_view;
     pt::LogInfo("startup: game UI");
+    pt::ios_diag::Stage("game UI initialization");
     const bool ui_ready = ui.Init(app.renderer, app.textures, vfs);
+    pt::ios_diag::Stage(ui_ready ? "game UI ready; preparing startup screens" : "game UI failed; preparing startup screens");
     static constexpr const char* kDiscordClientId = "1559538474065993750";
     const char* discord_id_env = std::getenv("PT_DISCORD_CLIENT_ID");
     const std::string discord_id = discord_id_env && *discord_id_env ? discord_id_env : kDiscordClientId;
@@ -5628,10 +5634,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool mouse_captured = false;
     bool mouse_capture_requested = false;
     std::vector<pt::DrawItem> draw_items;
+    pt::ios_diag::Stage("scene resources");
     app.scene.LoadResources(vfs);
     pt::VfxPass vfx_pass;
     pt::game::VfxScene vfx_scene;
     pt::LogInfo("startup: effects pass");
+    pt::ios_diag::Stage("effects pass initialization");
     if (vfx_pass.Init(app.renderer, app.textures, vfs)) {
         app.scene.vfx_forward = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordForward(c); };
         app.scene.vfx_liquid_depth = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordLiquidDepth(c); };
@@ -5639,10 +5647,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
         app.scene.vfx_has_filter = [&vfx_pass](uint32_t layers) { return vfx_pass.HasFilter(layers); };
     }
     pt::vk::PipelineWarmup pipeline_warmup;
+    pt::ios_diag::Stage("pipeline warmup setup");
     vfx_pass.AddPipelineWarmup(pipeline_warmup, pt::SceneRenderer::kHdrTargetFormat, pt::SceneRenderer::kDepthTargetFormat,
                                pt::SceneRenderer::kPostTargetFormat);
     app.renderer.AddPipelineWarmup(pipeline_warmup);
     pipeline_warmup.Start(std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u));
+    pt::ios_diag::Stage("entering game loop");
     const bool shaders_cold = app.renderer.Context().pipeline_cache_cold;
     bool pipelines_warm = false;
     bool shader_screen = shader_screen_wanted;
@@ -7503,6 +7513,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 frozen_seconds += std::chrono::duration<double>(part_t0 - frozen_since).count();
                 frozen_since = {};
             }
+            if (!first_frame_shown) pt::ios_diag::Stage("first frame: acquire drawable and wait for GPU");
             if (!app.renderer.BeginFrame()) {
                 continue;
             }
@@ -7570,11 +7581,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 app.scene.RequestTargetDump();
             }
             const auto part_t4 = std::chrono::steady_clock::now();
+            if (!first_frame_shown) pt::ios_diag::Stage("first frame: record scene and UI");
             app.scene.Render(camera, draw_items, lighting, dt);
             take_reflection_readback(view);
             last_render_frame = frame;
             const auto part_t5 = std::chrono::steady_clock::now();
+            if (!first_frame_shown) pt::ios_diag::Stage("first frame: submit and present");
             app.renderer.EndFrame(app.window != nullptr);
+            pt::ios_diag::FramePresented();
             if (!first_frame_shown) {
                 first_frame_shown = true;
                 pt::boot::Phase("first frame", ui_ready && ui.ShaderScreenShown()     ? "the shader preparation screen"
@@ -7946,6 +7960,9 @@ bool WouldOpenWindow(const Options& options) {
 }
 
 int main(int argc, char** argv) {
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    pt::ios_diag::Session ios_diagnostics(UserDataDir(), PT_BUILD_ID);
+#endif
     if (const int probe = pt::VoiceCpuProbe(argc, argv); probe >= 0) return probe;
 #ifdef _WIN32
     const HANDLE inherited = GetStdHandle(STD_ERROR_HANDLE);
@@ -8003,6 +8020,9 @@ int main(int argc, char** argv) {
             std::error_code ec;
             std::filesystem::create_directories(UserDataDir(), ec);
             log_path = UserDataDir() / "pt.log";
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+            log_path = UserDataDir() / "ios-diagnostics" / "pt.log";
+#endif
         }
     }
     g_output_dir = log_path.parent_path();
@@ -8014,6 +8034,13 @@ int main(int argc, char** argv) {
             std::filesystem::copy_file(log_path, log_path.parent_path() / "pt-previous.log", std::filesystem::copy_options::overwrite_existing, ec);
     }
     pt::LogSetFile(log_path);
+    pt::ios_diag::Stage("engine log opened");
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    pt::LogInfo("iOS startup diagnostic 4 (memory profile and loading events): all diagnostic logs in Documents/data/ios-diagnostics");
+#endif
+#if PT_IOS
+    pt::LogInfo("iOS: mipmapped texture limit {} px (512 on devices with 4 GiB RAM or less)", pt::IosTextureLimit());
+#endif
     if (UpdateJournalAtStart(options) == JournalAtStart::Relaunch) {
         pt::LogExit(0, "restarted after an interrupted update was undone");
         return 0;
@@ -8313,6 +8340,7 @@ int main(int argc, char** argv) {
     }
 
     pt::boot::Phase("crash reporting");
+    pt::ios_diag::Stage("game folder discovery");
     pt::Vfs vfs;
     std::string game_dir_source;
     bool first_run_quit = false;
@@ -8321,6 +8349,7 @@ int main(int argc, char** argv) {
         pt::LogInfo("game files found at {}", pt::os::PathToUtf8(game_dir));
     }
     pt::boot::Phase("game folder", game_dir_source);
+    pt::ios_diag::Stage("mounting game archives");
     const bool mounted = vfs.Mount(game_dir);
     pt::boot::Phase("game archives");
     if (const int missing = mounted ? vfs.MissingCorePackages() : 0; missing > 0 && !options.headless) {
@@ -8377,6 +8406,7 @@ int main(int argc, char** argv) {
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
 #endif
+    pt::ios_diag::Stage("SDL video initialization");
     if (!SDL_Init(options.headless ? 0 : SDL_INIT_VIDEO)) {
         pt::LogError("SDL_Init: {}", SDL_GetError());
         pt::LogError("SDL_Init: {}", pt::SdlVideoDiagnostics());
@@ -8396,6 +8426,7 @@ int main(int argc, char** argv) {
     struct LifecycleReset { ~LifecycleReset() { g_ios_lifecycle = nullptr; } } lifecycle_reset;
 #endif
     pt::boot::Phase("video");
+    pt::ios_diag::Stage("devices and settings");
     pt::devices::Start({.gamepad = !options.headless || options.virtual_pads,
                         .audio = !options.headless,
                         .background = !options.headless && !options.virtual_pads});
@@ -8627,6 +8658,7 @@ int main(int argc, char** argv) {
                                                      : "SDL_CreateWindow");
         const SDL_WindowFlags api_flag = app.rendering_api == pt::RenderingApi::D3D12 ? SDL_WindowFlags(0) : SDL_WINDOW_VULKAN;
         const SDL_WindowFlags start_fullscreen = WindowMode(app) != pt::display::kWindow ? SDL_WINDOW_FULLSCREEN : SDL_WindowFlags(0);
+        pt::ios_diag::Stage("creating window");
         app.window = SDL_CreateWindow("P.T.", app.settings.display.width, app.settings.display.height,
                                       api_flag | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN | start_fullscreen);
         pt::start_watch::Done(app.window ? "created" : "failed");
@@ -8730,7 +8762,10 @@ int main(int argc, char** argv) {
 #if PT_IOS
     while (ios_lifecycle.Background()) { SDL_PumpEvents(); SDL_Delay(16); }
 #endif
+    pt::ios_diag::Stage("graphics device, swapchain and composite pipeline initialization");
     const bool renderer_ready = app.renderer.Init(app.window, settings);
+    pt::ios_diag::RecordImages();
+    pt::ios_diag::Stage(renderer_ready ? "graphics device ready; optional graphics routes" : "graphics device initialization failed");
     pt::start_watch::Finish();
     if (renderer_ready && app.start_layers_retry && !app.settings_path.empty()) {
         app.settings.display.vulkan_implicit_layers = 0;
@@ -8994,6 +9029,7 @@ int main(int argc, char** argv) {
         app.renderer.Context().CheckDeviceLost(VK_ERROR_DEVICE_LOST, "PT_TEST_CRASH");
     }
     if (renderer_ready) pt::LogInfo("startup: texture manager and scene renderer");
+    pt::ios_diag::Stage("texture manager and scene renderer initialization");
     if (renderer_ready && app.textures.Init(app.renderer.Gpu()) && app.scene.Init(app.renderer, app.textures)) {
         pt::LogInfo("startup: scene renderer ready");
         app.textures.SetAnisotropy(AnisotropyFromApp(app.settings));
@@ -9004,6 +9040,7 @@ int main(int argc, char** argv) {
             if (ImGui::GetCurrentContext()) ImGui::GetIO().IniFilename = imgui_ini.c_str();
         }
         pt::LogInfo("startup: model cache");
+        pt::ios_diag::Stage("model cache and microphone permission");
         app.models = std::make_unique<pt::ModelCache>(vfs, app.scene, app.textures);
         bool xr_started = true;
 #ifdef PT_D3D12_GAME

@@ -320,6 +320,8 @@ target_link_libraries(pt_touch_controls_test PRIVATE pt_engine)
 if(PT_IOS OR PT_BC_DECODE_TESTS)
   add_executable(pt_bc_decode_test EXCLUDE_FROM_ALL tests/bc_decode_test.cpp)
   target_link_libraries(pt_bc_decode_test PRIVATE pt_engine)
+  add_executable(pt_ios_texture_budget_test EXCLUDE_FROM_ALL tests/ios_texture_budget_test.cpp)
+  target_link_libraries(pt_ios_texture_budget_test PRIVATE pt_engine)
 endif()
 
 add_executable(pt_tests tests/test_strcode.cpp)

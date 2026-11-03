@@ -10,6 +10,7 @@
 
 #include "engine/core/log.h"
 #include "engine/render/gpu_types.h"
+#include "engine/platform/ios_diagnostics.h"
 
 namespace pt {
 namespace {
@@ -338,6 +339,7 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
         return it->second.mesh ? &it->second : nullptr;
     }
     ModelEntry entry;
+    ios_diag::Scope diagnostic("model", path);
     entry.pinned = stage_scope_ == 0 || keep || transform;
     const TextureManager::ModelScope texture_scope(textures_);
     struct LoadingTextures {
@@ -349,6 +351,7 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
     FmdlModel read;
     FmdlModel& model = parsed ? *parsed : read;
     if (!parsed) {
+        diagnostic.Step("read and parse model");
         if (!LoadModelFile(vfs_, path, read)) {
             ++failed_;
             entries_.emplace(key, std::move(entry));
@@ -382,10 +385,13 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
         }
     }
     std::vector<int32_t> alpha_tested[2] = {std::vector<int32_t>(model.materials.size(), -1), std::vector<int32_t>(model.materials.size(), -1)};
+    diagnostic.Step("build materials and load textures");
     for (const FmdlMaterial& m : model.materials) {
+        ios_diag::Scope material_diagnostic("material", m.name);
         entry.material_indices.push_back(textures_.AddMaterial(BuildMaterial(m, 0)));
     }
     bool skinned = false;
+    diagnostic.Step("configure submeshes and additional materials");
     std::vector<uint32_t> local_materials;
     for (const SubMesh& s : model.mesh.submeshes) {
         local_materials.push_back(s.material);
@@ -452,7 +458,9 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
     entry.bone_parents = model.bone_parent;
     entry.bone_bind_world = model.bone_world;
     entry.skinned = skinned && !model.bone_names.empty();
+    diagnostic.Step("upload mesh to GPU");
     entry.mesh = scene_.Upload(model.mesh);
+    diagnostic.Step(entry.mesh ? "mesh uploaded; cache model" : "mesh upload failed");
     if (entry.mesh) {
         entry.mesh->skinned = entry.skinned;
     }

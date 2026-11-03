@@ -12,6 +12,8 @@
 #include "engine/core/log.h"
 #include "engine/core/parallel_for.h"
 #include "engine/fs/mods.h"
+#include "engine/platform/ios_diagnostics.h"
+#include "engine/platform/ios_lifecycle.h"
 
 namespace pt::game {
 namespace {
@@ -283,6 +285,7 @@ void StageManager::PrefetchMazeFor(std::string_view floor) {
 }
 
 std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std::string& label) {
+    ios_diag::Scope diagnostic("stage", fpk_path);
     using clock = std::chrono::steady_clock;
     const auto ms = [](clock::time_point from, clock::time_point to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
     const auto started = clock::now();
@@ -290,11 +293,13 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
     ParsedStage parsed;
     const bool prefetched = prefetch_ && prefetch_path_ == fpk_path;
     if (prefetched) {
+        diagnostic.Step("wait for prefetched assets");
         prefetch_->task->Wait();
         parsed = std::move(prefetch_->parsed);
         prefetch_.reset();
         prefetch_path_.clear();
     } else {
+        diagnostic.Step("parse packages");
         DropPrefetch();
         parsed = Parse(vfs_, fpk_path);
     }
@@ -333,6 +338,7 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
         }
     }
     std::vector<std::string> adopted;
+    diagnostic.Step("adopt prefetched textures");
     for (auto& [path, ftex] : parsed.textures) {
         if (models_.Textures().AdoptDecoded(path, std::move(ftex))) {
             adopted.push_back(path);
@@ -344,10 +350,12 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
     double models_ms = 0.0;
     double geoms_ms = 0.0;
     const ModelCache::StageScope stage_models(models_);
+    diagnostic.Step("load models, materials, textures and collision");
     std::unordered_set<std::string> referenced;
     for (const auto& file : stage->files) {
         for (const auto& placement : file->static_models) {
             const auto model_started = clock::now();
+            PumpIosLoadingEvents();
             const auto pre_model = parsed.models.find(placement.model_file);
             const ModelEntry* model = models_.Get(placement.model_file, pre_model != parsed.models.end() ? pre_model->second.get() : nullptr);
             if (referenced.insert(placement.model_file).second) {

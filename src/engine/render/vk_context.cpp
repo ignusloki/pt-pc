@@ -30,6 +30,7 @@
 #include "engine/core/log.h"
 #include "engine/platform/os.h"
 #include "engine/platform/start_watch.h"
+#include "engine/platform/ios_diagnostics.h"
 #include "engine/render/hdr_output.h"
 #include "engine/render/android_vulkan_diagnostics.h"
 #include "engine/render/intel_vulkan_driver.h"
@@ -272,7 +273,11 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         LogInfo("vulkan: layers the loader lists: {}", names.empty() ? "none" : names);
     }
 
-    if (validation) {
+    bool messages_wanted = validation;
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    messages_wanted = debug_utils;
+#endif
+    if (messages_wanted && vkCreateDebugUtilsMessengerEXT) {
         VkDebugUtilsMessengerCreateInfoEXT messenger_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
         messenger_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         messenger_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
@@ -393,6 +398,23 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         return false;
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    {
+        VkPhysicalDeviceDescriptorIndexingProperties indexing{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
+        VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        props.pNext = &indexing;
+        vkGetPhysicalDeviceProperties2(physical, &props);
+        LogInfo("iOS GPU limits: maxImageDimension2D {}, per-stage samplers {}, sampled images {}, resources {}", properties.limits.maxImageDimension2D,
+                properties.limits.maxPerStageDescriptorSamplers, properties.limits.maxPerStageDescriptorSampledImages, properties.limits.maxPerStageResources);
+        LogInfo("iOS GPU update-after-bind limits: per-stage samplers {}, sampled images {}, resources {}; per-set samplers {}, sampled images {}",
+                indexing.maxPerStageDescriptorUpdateAfterBindSamplers, indexing.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                indexing.maxPerStageUpdateAfterBindResources, indexing.maxDescriptorSetUpdateAfterBindSamplers, indexing.maxDescriptorSetUpdateAfterBindSampledImages);
+        VkPhysicalDeviceMemoryProperties memory{};
+        vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+        for (uint32_t i = 0; i < memory.memoryHeapCount; ++i)
+            LogInfo("iOS GPU heap {}: {:.0f} MiB, flags {}", i, memory.memoryHeaps[i].size / 1048576.0, memory.memoryHeaps[i].flags);
+    }
+#endif
 #ifdef _WIN32
     intel_first_frame_driver = IntelDriverCrashesFirstFrame(properties.vendorID, properties.driverVersion, true);
     if (intel_first_frame_driver) {
@@ -424,11 +446,17 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             {"descriptorBindingUpdateUnusedWhilePending", have12.descriptorBindingUpdateUnusedWhilePending},
             {"descriptorBindingStorageBufferUpdateAfterBind", have12.descriptorBindingStorageBufferUpdateAfterBind},
             {"scalarBlockLayout", have12.scalarBlockLayout}, {"samplerAnisotropy", have2.features.samplerAnisotropy},
-            {"textureCompressionBC", PT_IOS ? VK_TRUE : have2.features.textureCompressionBC}, {"fillModeNonSolid", have2.features.fillModeNonSolid},
+#if !PT_IOS
+            {"textureCompressionBC", have2.features.textureCompressionBC},
+#endif
+            {"fillModeNonSolid", have2.features.fillModeNonSolid},
             {"shaderInt16", have2.features.shaderInt16}, {"shaderClipDistance", have2.features.shaderClipDistance},
         };
         bool complete = true;
         for (const auto& feature : needed) {
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+            LogInfo("iOS GPU required feature {} = {}", feature.name, feature.value);
+#endif
             if (!feature.value) {
                 LogError("vulkan: required feature {} is not available on {}", feature.name, properties.deviceName);
                 complete = false;
@@ -463,9 +491,10 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     // Texture uploads check individual format support; do not request an unavailable family feature.
     features.features.textureCompressionBC = supported.textureCompressionBC;
     LogInfo("vulkan: Android BC family feature {} (individual formats checked at upload)", supported.textureCompressionBC);
-#elif PT_IOS
+#elif PT_IOS || PT_BC_DECODE_TEST
     bc_textures = supported.textureCompressionBC && !std::getenv("PT_NO_BC");
     features.features.textureCompressionBC = bc_textures;
+    LogInfo("vulkan: native BC textures {}; CPU decoding {}", bc_textures ? "enabled" : "disabled", bc_textures ? "off" : "on");
 #else
     features.features.textureCompressionBC = VK_TRUE;
 #endif
@@ -609,6 +638,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         LogError("vulkan: vkCreateDevice not called (PT_TEST_START_FAULT)");
         return false;
     }
+    ios_diag::Stage("Vulkan device creation");
     const VkResult device_result = creator ? creator->CreateDevice(physical, device_info, device) : vkCreateDevice(physical, &device_info, nullptr, &device);
     start_watch::Done(device_result == VK_SUCCESS ? "created" : "failed");
     if (!Check(device_result, "vkCreateDevice")) {
@@ -680,6 +710,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         allocator_info.pHeapSizeLimit = heap_limits;
         LogWarn("vulkan: test video memory budget {} MB (PT_VRAM_BUDGET_MB): device local heaps limited", vram_budget_mb);
     }
+    ios_diag::Stage("GPU memory allocator initialization");
     if (!Check(vmaCreateAllocator(&allocator_info, &allocator), "vmaCreateAllocator")) {
         return false;
     }
@@ -1143,6 +1174,10 @@ VkResult Context::QueuePresent(const VkPresentInfoKHR& info) {
 
 bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels,
                           uint32_t layers, VkImageAspectFlags aspect, bool cube) {
+    ios_diag::Scope diagnostic("GPU image", g_alloc_tag);
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    diagnostic.Step(std::format("{}x{}x{} format {} mips {} layers {}", extent.width, extent.height, extent.depth, static_cast<int>(format), mip_levels, layers));
+#endif
     VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     info.imageType = extent.depth > 1 ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     info.format = format;
@@ -1166,6 +1201,7 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
     if (InjectFailure("vmaCreateImage")) {
         return false;
     }
+    diagnostic.Step("VMA image allocation");
     if (const VkResult r = vmaCreateImage(allocator, &info, &alloc, &out.image, &out.allocation, nullptr); r != VK_SUCCESS) {
         out = Image{};
         LogAllocationFailure("vmaCreateImage", r,
@@ -1189,6 +1225,7 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
     out.mip_levels = mip_levels;
     out.layers = layers;
     out.usage = usage;
+    diagnostic.Step("create image view");
     if (!Check(vkCreateImageView(device, &view_info, nullptr, &out.view), "vkCreateImageView")) {
         out.view = VK_NULL_HANDLE;
         DestroyImage(out);
@@ -1223,6 +1260,10 @@ void Context::DestroyImage(gpu::ImageResource& image) {
 }
 
 bool Context::CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible) {
+    ios_diag::Scope diagnostic("GPU buffer", g_alloc_tag);
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    diagnostic.Step(std::format("{} bytes usage {} host-visible {}", size, usage, host_visible));
+#endif
     VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     info.size = size;
     info.usage = usage;
@@ -1238,6 +1279,7 @@ bool Context::CreateBuffer(Buffer& out, VkDeviceSize size, VkBufferUsageFlags us
         return false;
     }
     VmaAllocationInfo result{};
+    diagnostic.Step("VMA buffer allocation");
     if (const VkResult r = vmaCreateBuffer(allocator, &info, &alloc, &out.buffer, &out.allocation, &result); r != VK_SUCCESS) {
         out = Buffer{};
         LogAllocationFailure("vmaCreateBuffer", r,
@@ -1413,6 +1455,7 @@ void Context::LogAllocationFailure(const char* what, VkResult result, const std:
 }
 
 void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
+    ios_diag::Scope diagnostic("GPU upload", "one-time submit");
     VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     alloc.commandPool = upload_pool_;
     alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -1432,15 +1475,22 @@ void Context::Submit(const std::function<void(VkCommandBuffer)>& record) {
     VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkFence fence;
     vkCreateFence(device, &fence_info, nullptr, &fence);
+    diagnostic.Step("submit command buffer");
     CheckDeviceLost(vkQueueSubmit2(queue, 1, &submit, fence), "one-time submit");
+    diagnostic.Step("wait for GPU fence");
     CheckDeviceLost(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "one-time submit wait");
     vkDestroyFence(device, fence, nullptr);
     vkFreeCommandBuffers(device, upload_pool_, 1, &cmd);
 }
 
 void Context::SubmitDeferred(const std::function<void(VkCommandBuffer)>& record, Buffer staging) {
+    ios_diag::Scope diagnostic("GPU upload", "deferred submit");
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    diagnostic.Step(std::format("staging {} bytes, queued {} bytes, {} pending submissions", staging.size, deferred_bytes_, deferred_.size()));
+#endif
     ReapDeferred(false);
     while (!deferred_.empty() && deferred_bytes_ + staging.size > kDeferredStagingLimit) {
+        diagnostic.Step("wait for staging budget GPU fence");
         DeferredSubmit& oldest = deferred_.front();
         CheckDeviceLost(vkWaitForFences(device, 1, &oldest.fence, VK_TRUE, UINT64_MAX), "deferred submit wait");
         ReapDeferred(false);
@@ -1464,6 +1514,7 @@ void Context::SubmitDeferred(const std::function<void(VkCommandBuffer)>& record,
     submit.pCommandBufferInfos = &cmd_info;
     VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     vkCreateFence(device, &fence_info, nullptr, &pending.fence);
+    diagnostic.Step("submit command buffer");
     CheckDeviceLost(vkQueueSubmit2(queue, 1, &submit, pending.fence), "deferred submit");
     deferred_bytes_ += staging.size;
     deferred_.push_back(pending);

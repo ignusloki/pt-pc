@@ -1,5 +1,6 @@
 #include "engine/platform/os.h"
 #include "engine/render/renderer.h"
+#include "engine/platform/ios_diagnostics.h"
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -142,6 +143,7 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         SDL_GetWindowSizeInPixels(window_, &w, &h);
         width = static_cast<uint32_t>(w);
         height = static_cast<uint32_t>(h);
+        ios_diag::Stage("swapchain creation");
         bool created = ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr);
         if (!created && settings.hdr) {
             LogWarn("vulkan: the HDR swapchain was refused, SDR is used");
@@ -192,9 +194,11 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     sampler_info.mipmap = gpu::MipmapMode::Linear;
     sampler_info.max_lod = 1000.0f;
     wrap_sampler_ = gpu_->CreateSampler(sampler_info);
+    ios_diag::Stage("output targets and composite pipeline");
     if (!CreateTargets(width, height) || !CreateCompositePipeline(output_format)) {
         return false;
     }
+    ios_diag::Stage("ImGui initialization");
     if (window_ && !InitImGui(window_)) {
         return false;
     }

@@ -34,6 +34,19 @@ int main() {
     format = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
     assert(pt::DecodeBcLevels(format, {&mip, 1}, storage, output));
     assert(storage[0][3] == 255);
+    // SceneRenderer's film-grain resource is BC1 RGBA, with a complete mip chain.
+    // Its two-color mode must preserve punch-through alpha, unlike BC1 RGB above.
+    std::array<uint8_t, 8> rgba_block{0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    std::array<pt::TextureMip, 3> chain{{{4, 4, rgba_block}, {2, 2, rgba_block}, {1, 1, rgba_block}}};
+    format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    assert(pt::DecodeBcLevels(format, chain, storage, output));
+    assert(format == VK_FORMAT_R8G8B8A8_UNORM && output.size() == 3);
+    assert(storage[0].size() == 64 && storage[1].size() == 16 && storage[2].size() == 4);
+    for (const auto& level : storage)
+        for (size_t at = 3; at < level.size(); at += 4) assert(level[at] == 0);
+    format = VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+    assert(pt::DecodeBcLevels(format, chain, storage, output));
+    assert(format == VK_FORMAT_R8G8B8A8_SRGB);
     block = {}; mip = {1, 1, block}; format = VK_FORMAT_BC7_UNORM_BLOCK;
     assert(!pt::DecodeBcLevels(format, {&mip, 1}, storage, output));
 }

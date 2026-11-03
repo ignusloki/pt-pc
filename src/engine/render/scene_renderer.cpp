@@ -1,4 +1,5 @@
 #include "engine/render/scene_renderer.h"
+#include "engine/render/bc_decode.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -988,6 +989,14 @@ void SceneRenderer::WriteImageDescriptors() {
 }
 
 bool SceneRenderer::UploadImage(gpu::ImageResource& image, gpu::Format format, gpu::Extent3D extent, const void* data, size_t size) {
+#if PT_IOS || PT_BC_DECODE_TEST
+    bool compressed = false;
+    FormatBlockBytes(format, compressed);
+    if (compressed && !renderer_->Context().bc_textures) {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        return UploadImageMips(image, format, extent, {{bytes, bytes + size}});
+    }
+#endif
     const vk::AllocTag tag("scene images");
     bool created = false;
     if (!image.image || image.format != format || image.extent.width != extent.width || image.extent.height != extent.height ||
@@ -1024,6 +1033,27 @@ bool SceneRenderer::UploadImage(gpu::ImageResource& image, gpu::Format format, g
 }
 
 bool SceneRenderer::UploadImageMips(gpu::ImageResource& image, gpu::Format format, gpu::Extent3D extent, const std::vector<std::vector<uint8_t>>& mips) {
+#if PT_IOS || PT_BC_DECODE_TEST
+    bool compressed = false;
+    FormatBlockBytes(format, compressed);
+    if (compressed && !renderer_->Context().bc_textures) {
+        // These scene textures bypass TextureManager::Create (film grain noise and the flare mask).
+        // Decode before destroying the built-in fallback or asking Metal to create an unsupported BC image.
+        std::vector<TextureMip> source;
+        for (size_t level = 0; level < mips.size(); ++level)
+            source.push_back({std::max(1u, extent.width >> level), std::max(1u, extent.height >> level), mips[level]});
+        std::vector<std::vector<uint8_t>> decoded;
+        std::vector<TextureMip> decoded_mips;
+        VkFormat plain = gpu::vk::Native(format);
+        if (extent.depth != 1 || mips.empty() || !DecodeBcLevels(plain, source, decoded, decoded_mips)) {
+            LogError("scene renderer: cannot decode BC resource {}x{} format {}", extent.width, extent.height, static_cast<int>(format));
+            return false;
+        }
+        LogInfo("scene renderer: decoded BC resource {}x{} format {} to {} ({} mip levels)", extent.width, extent.height,
+                static_cast<int>(format), static_cast<int>(gpu::vk::FromNative(plain)), decoded.size());
+        return UploadImageMips(image, gpu::vk::FromNative(plain), extent, decoded);
+    }
+#endif
     const vk::AllocTag tag("scene images");
     const uint32_t levels = static_cast<uint32_t>(mips.size());
     if (image.image) {

@@ -4,6 +4,12 @@
 #include <functional>
 
 namespace pt {
+#if PT_IOS
+// Called between loading operations on the main thread, outside GPU submissions.
+void PumpIosLoadingEvents();
+#else
+inline void PumpIosLoadingEvents() {}
+#endif
 // SDL requires iOS lifecycle handling in an event watch, before UIKit's notification returns.
 class IosLifecycle {
 public:

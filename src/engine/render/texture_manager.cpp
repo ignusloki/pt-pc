@@ -18,6 +18,8 @@
 #include "engine/core/log.h"
 #include "engine/fs/mods.h"
 #include "engine/render/vk/vk_device.h"
+#include "engine/platform/ios_diagnostics.h"
+#include "engine/platform/ios_lifecycle.h"
 
 namespace pt {
 namespace {
@@ -350,13 +352,19 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     if (mips.empty() || (images_.size() >= kMaxTextures && (free_.empty() || cube))) {
         return kWhite;
     }
-#if PT_IOS
+    ios_diag::Scope diagnostic("texture-upload", name);
+    PumpIosLoadingEvents();
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    diagnostic.Step(std::format("source {}x{} format {} mips {} layers {}", mips[0].width, mips[0].height, static_cast<int>(format), mips.size(), layers));
+#endif
+#if PT_IOS || PT_BC_DECODE_TEST
     std::vector<std::vector<uint8_t>> decoded;
     std::vector<TextureMip> decoded_mips;
     bool compressed = false;
     FormatBlockBytes(format, compressed);
     auto& context = static_cast<gpu::vk::Device&>(*device_).Context();
     if (compressed && !context.bc_textures) {
+        diagnostic.Step("CPU decode BC levels");
         VkFormat native_format = gpu::vk::Native(format);
         if (!DecodeBcLevels(native_format, mips, decoded, decoded_mips)) {
             LogError("textures: cannot decode {} format {}", name, static_cast<int>(format));
@@ -386,6 +394,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         ++dropped;
     }
     const auto create_image = [&] {
+        diagnostic.Step("allocate GPU image");
         gpu::ImageDesc desc;
         desc.format = format;
         desc.extent = {mips[0].width, mips[0].height, 1};
@@ -417,6 +426,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         total += (mip.data.size() + 15) & ~uint64_t(15);
     }
     gpu::BufferResource staging;
+    diagnostic.Step("allocate staging buffer");
     gpu::BufferDesc staging_desc;
     staging_desc.size = total;
     staging_desc.usage = gpu::BufferUsage::TransferSrc;
@@ -428,6 +438,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         return kWhite;
     }
     std::vector<gpu::BufferImageCopy> regions;
+    diagnostic.Step("copy pixels into staging buffer");
     uint64_t offset = 0;
     for (uint32_t layer = 0; layer < layers; ++layer) {
         for (uint32_t level = 0; level < mip_count; ++level) {
@@ -463,9 +474,11 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         list.Barrier(to_read);
     };
     if (upload_wait) {
+        diagnostic.Step("submit upload and wait for GPU");
         device_->Submit(record_upload);
         device_->DestroyBuffer(staging);
     } else {
+        diagnostic.Step("submit deferred upload");
         device_->SubmitDeferred(record_upload, staging);
     }
     const bool reuse = !cube && !free_.empty();
@@ -488,6 +501,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
     writes[1].binding = 2;
     writes[1].first = static_cast<uint32_t>(cube_slots_.size());
     writes[1].images = std::span(&cube_info, 1);
+    diagnostic.Step("write texture descriptors");
     device_->WriteBindings(std::span(writes, cube_slot ? 2 : 1));
     if (cube_slot) {
         const uint32_t slot = static_cast<uint32_t>(cube_slots_.size());
@@ -508,6 +522,7 @@ uint32_t TextureManager::Create(const std::string& name, gpu::Format format, std
         pinned_.push_back(pinned);
     }
     by_name_[name] = index;
+    diagnostic.Step("ready");
     return index;
 }
 
@@ -533,9 +548,11 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
         }
     }
     FtexTexture ftex;
+    ios_diag::Scope diagnostic("texture-read", stem);
     bool read = false;
     if (auto it = decoding_.find(stem); it != decoding_.end() && !raw) {
         if (auto job = decode_jobs_.find(stem); job != decode_jobs_.end()) {
+            diagnostic.Step("wait for texture prefetch job");
             job->second->Wait();
             decode_jobs_.erase(job);
         }
@@ -546,6 +563,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
             read = true;
         }
     } else {
+        diagnostic.Step("read FTEX streams and decompress");
         const auto started = std::chrono::steady_clock::now();
         read = LoadFtex(qar, stem, ftex);
         read_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -579,6 +597,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
         }
     }
     const auto upload_started = std::chrono::steady_clock::now();
+    diagnostic.Step("prepare GPU texture");
     const uint32_t index = Create(key, ftex.Format(), mips, ftex.faces, ftex.faces == 6);
     upload_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - upload_started).count();
     if (ok) {

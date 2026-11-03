@@ -26,6 +26,12 @@ target_include_directories(ggml-base PRIVATE "${whisper_SOURCE_DIR}/ggml/src")
 set(PT_MOBILE_VOICE_MODELS "${CMAKE_BINARY_DIR}/voice/ggml-base.en-q5_1.bin" "${CMAKE_BINARY_DIR}/voice/ggml-silero-v6.2.0.bin")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  option(PT_IOS_DIAGNOSTICS "Record iOS startup, memory and GPU diagnostics" OFF)
+  if(PT_IOS_DIAGNOSTICS)
+    target_compile_definitions(pt_engine PUBLIC PT_IOS_DIAGNOSTICS=1)
+    target_sources(pt_engine PRIVATE src/engine/platform/ios_diagnostics.mm)
+    set_source_files_properties(src/engine/platform/ios_diagnostics.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  endif()
   # Vulkan is MoltenVK: the official release's dynamic framework (PT_MOLTENVK_IOS, MoltenVK-ios.tar:
   # MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework), embedded in the bundle's Frameworks/ and loaded by
   # SDL and the game (vk_context.cpp VulkanLibraryPath). Not linked statically: volk's own vkGetInstanceProcAddr would clash.
@@ -53,6 +59,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     MACOSX_BUNDLE_BUNDLE_NAME "P.T."
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PT_VERSION}"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PT_VERSION}")
+  if(PT_IOS_DIAGNOSTICS)
+    set_target_properties(pt PROPERTIES MACOSX_BUNDLE_BUNDLE_VERSION "101104")
+  endif()
   set_target_properties(pt PROPERTIES
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
     XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"

@@ -13,6 +13,7 @@
 #include "engine/core/pathcode.h"
 #include "engine/fs/io_stats.h"
 #include "engine/fs/mods.h"
+#include "engine/platform/ios_memory.h"
 
 namespace pt {
 namespace {
@@ -118,12 +119,17 @@ static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexT
     const uint32_t entries = out.mip_count * out.faces;
     std::map<uint8_t, std::optional<std::vector<uint8_t>>> files;
     out.mips.assign(entries, {});
+#if PT_IOS || PT_BC_DECODE_TEST
+    const uint32_t max_dimension = IosTextureLimit();
+#elif defined(__ANDROID__)
+    const uint32_t max_dimension = 1024;
+#endif
     for (uint32_t i = 0; i < entries; ++i) {
-#if defined(__ANDROID__) || PT_IOS
+#if defined(__ANDROID__) || PT_IOS || PT_BC_DECODE_TEST
         // Discard oversized mip levels before reading their streams or allocating their decoded CPU data.
         // Empty leading levels are already handled by TextureManager::Load, including all faces of a cube.
         const uint32_t level = i % out.mip_count;
-        if (std::max(out.MipWidth(level), out.MipHeight(level)) > 1024 && level + 1 < out.mip_count) continue;
+        if (std::max(out.MipWidth(level), out.MipHeight(level)) > max_dimension && level + 1 < out.mip_count) continue;
 #endif
         const size_t e = 0x40 + size_t(i) * 16;
         const uint32_t offset = Read<uint32_t>(*header, e);

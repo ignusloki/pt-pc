@@ -6,6 +6,9 @@
 #include <thread>
 
 #include "engine/core/log.h"
+#if PT_IOS
+#include <os/proc.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -65,6 +68,9 @@ SystemMemory QuerySystemMemory() {
         out.free_physical_mb = static_cast<double>(system.ullAvailPhys) / 1048576.0;
         out.commit_headroom_mb = static_cast<double>(system.ullAvailPageFile) / 1048576.0;
     }
+#elif PT_IOS
+    // iOS exposes a process allowance, not desktop-style free RAM or commit space.
+    out.free_physical_mb = out.commit_headroom_mb = os_proc_available_memory() / 1048576.0;
 #elif defined(__ANDROID__)
     // This is available physical RAM, not swap or a separate VRAM pool on the phone's integrated GPU.
     if (FILE* file = std::fopen("/proc/meminfo", "r")) {
@@ -104,7 +110,7 @@ bool WaitForFreeMemory(double free_mb, int seconds) {
         }
 #ifdef _WIN32
         Sleep(1000);
-#elif defined(__ANDROID__)
+#elif defined(__ANDROID__) || PT_IOS
         std::this_thread::sleep_for(std::chrono::seconds(1));
 #endif
     }

@@ -14,13 +14,15 @@ p.add_argument('--bundle-id', default='org.ignusloki.pt.mobile')
 p.add_argument('--decoder-source', type=Path)
 p.add_argument('--xcode', action='store_true', help='Generate an Xcode project for Personal Team signing')
 p.add_argument('--configure-only', action='store_true')
+p.add_argument('--diagnostics', action='store_true', help='Record startup stages, memory, shader compilation and GPU messages')
 a = p.parse_args()
 b = a.build.resolve()
 args = ['cmake', '-S', str(root), '-B', str(b), '-G', 'Xcode' if a.xcode else 'Ninja',
         '-DCMAKE_SYSTEM_NAME=iOS', '-DCMAKE_OSX_SYSROOT=iphoneos', '-DCMAKE_OSX_ARCHITECTURES=arm64',
         '-DCMAKE_OSX_DEPLOYMENT_TARGET=17.0', '-DCMAKE_BUILD_TYPE=Debug',
         '-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO',
-        '-DPT_MOLTENVK_IOS=' + str(a.moltenvk.resolve()), '-DPT_OPENXR=OFF', '-DPT_IOS_BUNDLE_ID=' + a.bundle_id]
+        '-DPT_MOLTENVK_IOS=' + str(a.moltenvk.resolve()), '-DPT_OPENXR=OFF', '-DPT_IOS_BUNDLE_ID=' + a.bundle_id,
+        '-DPT_IOS_DIAGNOSTICS=' + ('ON' if a.diagnostics else 'OFF')]
 if a.decoder_source:
     args.append('-DFETCHCONTENT_SOURCE_DIR_BCDECODE=' + str(a.decoder_source.resolve()))
 if a.source_cache:

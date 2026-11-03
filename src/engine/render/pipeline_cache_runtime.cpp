@@ -18,7 +18,12 @@ struct PipelineDeviceState {
     PipelineCreationStats stats;
 };
 std::unordered_map<VkDevice, PipelineDeviceState> g_pipeline_devices;
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+const bool g_pipeline_log = true;
+std::atomic<uint64_t> g_pipeline_call{0};
+#else
 const bool g_pipeline_log = std::getenv("PT_PIPELINE_LOG") != nullptr;
+#endif
 std::atomic<bool> g_play_phase{false};
 thread_local bool t_warmup_thread = false;
 
@@ -60,6 +65,10 @@ VkResult CreateTimed(VkDevice device, uint32_t count, bool compute, const char* 
         std::lock_guard lock(g_pipeline_mutex);
         cache = CacheFor(device);
     }
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    const uint64_t call = ++g_pipeline_call;
+    LogInfo("pipeline: begin #{} {} {}{}", call, compute ? "compute" : "graphics", label ? label : "?", t_warmup_thread ? " (warm-up)" : "");
+#endif
     const auto start = std::chrono::steady_clock::now();
     const VkResult result = create(cache);
     const uint64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
@@ -75,6 +84,9 @@ VkResult CreateTimed(VkDevice device, uint32_t count, bool compute, const char* 
         }
     }
     const double ms = static_cast<double>(ns) * 1e-6;
+#if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
+    LogInfo("pipeline: end #{} VkResult {}", call, static_cast<int>(result));
+#endif
     if (g_pipeline_log) {
         LogInfo("pipeline: {} {} {:.2f} ms{}", compute ? "compute" : "graphics", label ? label : "?", ms, t_warmup_thread ? " (warm-up)" : "");
     } else if (g_play_phase && !t_warmup_thread) {
