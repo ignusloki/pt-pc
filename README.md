@@ -14,11 +14,12 @@
 
 </div>
 
-**Release 1.0.11:** rebuilt Apple silicon/Intel Mac packages, the first official **Android source release**, plus **iOS Beta 1**
-for users who build and sign the mobile apps themselves. iOS performance still needs optimization.
-Read the [changelog](docs/release-notes-1.0.11.md),
+**Release 1.0.12:** **iOS Beta 2** fixes iPhone 13 startup and AirPlay crashes, with
+an optimized IPA that needs to be sideloaded. Apple silicon/Intel Mac packages are rebuilt;
+Android remains an official source release. No original game files are included.
+Read the [changelog](docs/release-notes-1.0.12.md),
 [Android installation guide](docs/android-installation.md), and
-[iPhone/iPad beta build and signing guide](docs/mobile.md).
+[iPhone/iPad beta guide](docs/mobile.md).
 
 > [!IMPORTANT]
 > **The upstream port is made by LoreanXavier in their spare time.** If it gave you a good scare, please consider supporting it on [**Patreon**](https://www.patreon.com/loreanxavier). It pays for the testing hardware and keeps the updates coming.

@@ -1,7 +1,7 @@
-# Android 1.0.11 — build and install your own APK
+# Android 1.0.12 — build and install your own APK
 
-This is the first official **Android source release**. No new public APK is
-provided for 1.0.11. The last prebuilt download remains
+Android remains an official **source release**. No new public APK is
+provided for 1.0.12. The last prebuilt download remains
 [1.0.10 Android Beta 5](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.10),
 with its [existing installation guide](android-beta-installation.md).
 
@@ -27,7 +27,7 @@ pinned LibOrbisPkg reader:
 ```sh
 git clone https://github.com/ignusloki/pt-pc.git
 cd pt-pc
-git checkout v1.0.11
+git checkout v1.0.12
 git clone https://github.com/maxton/LibOrbisPkg.git /your/work/LibOrbisPkg
 git -C /your/work/LibOrbisPkg checkout 643477263b2644e0803e0f58b8726ea4e3f3b7d4
 ```
@@ -40,7 +40,7 @@ python3 tools/android/build.py \
   --jdk /absolute/path/to/jdk-21 \
   --liborbis /your/work/LibOrbisPkg \
   --application-id com.yourname.pt.selfbuilt \
-  --version 1.0.11 --version-code 16
+  --version 1.0.12 --version-code 17
 ```
 
 The development APK is named `PT-Android-Prototype-arm64.apk` under

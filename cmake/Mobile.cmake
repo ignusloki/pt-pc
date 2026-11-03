@@ -54,15 +54,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   endif()
 
   set(PT_IOS_BUNDLE_ID "org.ignusloki.pt.mobile" CACHE STRING "iOS bundle identifier (a development team's own for signing)")
+  set(PT_IOS_BUILD_NUMBER "" CACHE STRING "Optional numeric iOS bundle build number")
+  if(PT_IOS_BUILD_NUMBER STREQUAL "")
+    if(NOT PT_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+      message(FATAL_ERROR "Set PT_IOS_BUILD_NUMBER for a non-numeric iOS release version")
+    endif()
+    # 1.0.12 -> 101200, newer than the 101105 diagnostic beta build.
+    math(EXPR pt_ios_build "${CMAKE_MATCH_1} * 100000 + ${CMAKE_MATCH_2} * 10000 + ${CMAKE_MATCH_3} * 100")
+    if(PT_IOS_DIAGNOSTICS)
+      math(EXPR pt_ios_build "${pt_ios_build} + 5")
+    endif()
+  elseif(PT_IOS_BUILD_NUMBER MATCHES "^[0-9]+$")
+    set(pt_ios_build "${PT_IOS_BUILD_NUMBER}")
+  else()
+    message(FATAL_ERROR "PT_IOS_BUILD_NUMBER must contain digits only")
+  endif()
   set_target_properties(pt PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/ios/Info.plist.in"
     MACOSX_BUNDLE_GUI_IDENTIFIER "${PT_IOS_BUNDLE_ID}"
     MACOSX_BUNDLE_BUNDLE_NAME "P.T."
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PT_VERSION}"
-    MACOSX_BUNDLE_BUNDLE_VERSION "${PT_VERSION}")
-  if(PT_IOS_DIAGNOSTICS)
-    set_target_properties(pt PROPERTIES MACOSX_BUNDLE_BUNDLE_VERSION "101105")
-  endif()
+    MACOSX_BUNDLE_BUNDLE_VERSION "${pt_ios_build}")
   set_target_properties(pt PROPERTIES
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
     XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
