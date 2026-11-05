@@ -106,6 +106,12 @@ float HalfToFloat(uint16_t h) {
 
 bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     settings_ = settings;
+    if (!EnhancedRenderingAvailable()) settings_.rendering_pipeline = RenderingPipeline::Original;
+    ctx_.enhanced_rendering = EnhancedRendering();
+    hdr_color = settings.hdr_color;
+    hdr_ui_brightness = settings.hdr_ui_brightness;
+    SetHdrSdrEotf(settings.hdr_sdr_eotf);
+    LogInfo("renderer: {} pipeline", RenderingPipelineName(settings_.rendering_pipeline));
     if (const char* brightness = std::getenv("PT_OUTPUT_BRIGHTNESS")) {
         brightness_override_ = static_cast<float>(std::atof(brightness));
     }
@@ -283,7 +289,7 @@ bool Renderer::CreateTargets(uint32_t width, uint32_t height) {
     if (!make(final_, final_format_, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
         return false;
     }
-    if (!make(hdr_boost_, kHdrBoostFormat, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
+    if (!EnhancedRendering() && !make(hdr_boost_, kHdrBoostFormat, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
         return false;
     }
     if (!make(ui_top_, final_format_, ImageUsage::ColorAttachment | ImageUsage::Sampled)) {
@@ -303,7 +309,7 @@ void Renderer::WriteCompositeSets() {
     }
     const gpu::ImageViewHandle noise = grain_noise_ ? grain_noise_ : scene_color_.view;
     const gpu::ImageBinding infos[4] = {Bind(scene_color_.view, linear_sampler_), Bind(final_.view, linear_sampler_),
-                                        Bind(hdr_boost_.view, linear_sampler_), Bind(noise, wrap_sampler_)};
+                                        Bind(EnhancedRendering() ? noise : hdr_boost_.view, EnhancedRendering() ? wrap_sampler_ : linear_sampler_), Bind(noise, wrap_sampler_)};
     gpu::BindingWrite writes[4];
     for (int i = 0; i < 4; ++i) {
         writes[i] = {i % 2 == 0 ? composite_set_ : final_set_, static_cast<uint32_t>(i < 2 ? 0 : 1), 0, gpu::BindingType::CombinedImageSampler,
@@ -373,7 +379,7 @@ bool Renderer::CreateCompositePipeline(gpu::Format output_format) {
 
     gpu::PipelineLayoutDesc layout_info;
     layout_info.sets = {composite_set_layout_};
-    layout_info.push_bytes = 80;
+    layout_info.push_bytes = EnhancedRendering() ? 128 : 80;
     layout_info.push_stages = gpu::ShaderStage::Fragment;
     composite_layout_ = gpu_->CreatePipelineLayout(layout_info);
     return BuildCompositePipeline(output_format, composite_pipeline_) && BuildCompositePipeline(final_format_, final_composite_pipeline_) &&
@@ -405,7 +411,7 @@ bool Renderer::CreateLayerPipeline() {
     }
     gpu::PipelineLayoutDesc layout_info;
     layout_info.sets = {layer_set_layout_};
-    layout_info.push_bytes = 80;
+    layout_info.push_bytes = EnhancedRendering() ? 128 : 80;
     layout_info.push_stages = gpu::ShaderStage::Fragment;
     layer_layout_ = gpu_->CreatePipelineLayout(layout_info);
     if (!layer_layout_) {
@@ -816,12 +822,14 @@ bool Renderer::BeginFrame(bool present) {
     const gpu::Rect2D area{{0, 0}, RenderExtent()};
     cmd.BeginRendering(area, {&color, 1});
     cmd.EndPass();
-    cmd.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
-                             gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
-    color.view = hdr_boost_.view;
-    color.clear_value = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    cmd.BeginRendering(area, {&color, 1});
-    cmd.EndPass();
+    if (!EnhancedRendering()) {
+        cmd.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
+                                 gpu::Bits(gpu::Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        color.view = hdr_boost_.view;
+        color.clear_value = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        cmd.BeginRendering(area, {&color, 1});
+        cmd.EndPass();
+    }
     streamline::SetMarker(streamline::Marker::SimulationEnd);
     streamline::SetMarker(streamline::Marker::RenderSubmitStart);
     return true;
@@ -859,15 +867,39 @@ void Renderer::CompositePush(float (&out)[20], float mode, gpu::Extent2D extent,
     std::copy(std::begin(push), std::end(push), std::begin(out));
 }
 
+void Renderer::EnhancedCompositePush(float (&out)[32], float mode, gpu::Extent2D extent, bool with_top_ui, bool grain_off) const {
+    const float brightness = plain_output || output_mode_ != RendererOutputMode::Sdr ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    const float across = extent.height ? (static_cast<float>(extent.width) / static_cast<float>(extent.height)) / (16.0f / 9.0f) : 1.0f;
+    const bool hdr_output = output_mode_ != RendererOutputMode::Sdr;
+    const float push[32] = {static_cast<float>(hdr_sdr_eotf_), brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
+                            plain_output || grain_off ? 0.0f : grain[0], grain[1], grain[2], plain_output ? 0.0f : grain[3], grain_offset[0], grain_offset[1], across,
+                            static_cast<float>(output_mode_), HdrPaperWhite(), HdrPeak(),
+                            hdr_output && !plain_output ? 1.0f : 0.0f, with_top_ui ? 1.0f : 0.0f};
+    std::copy(std::begin(push), std::end(push), std::begin(out));
+    const auto grade = hdr_color.Push(hdr_output && !plain_output);
+    std::copy(grade.begin(), grade.end(), out + 20);
+}
+
+void Renderer::WriteCompositePush(gpu::CommandList& cmd, gpu::PipelineLayoutHandle layout, float mode,
+                                  gpu::Extent2D extent, bool with_top_ui, bool grain_off) const {
+    if (EnhancedRendering()) {
+        float push[32];
+        EnhancedCompositePush(push, mode, extent, with_top_ui, grain_off);
+        cmd.PushConstants(layout, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+    } else {
+        float push[20];
+        CompositePush(push, mode, extent, with_top_ui, grain_off);
+        cmd.PushConstants(layout, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+    }
+}
+
 void Renderer::Composite(gpu::CommandList& cmd, gpu::BindingSetHandle set, float mode, gpu::Extent2D extent, gpu::Format target_format,
                          gpu::Offset2D offset, bool with_top_ui, bool grain_off) {
     cmd.SetViewport({offset, extent});
     const gpu::PipelineHandle pipeline = target_format == final_format_ ? final_composite_pipeline_ : composite_pipeline_;
     cmd.BindPipeline(gpu::BindPoint::Graphics, pipeline);
     cmd.BindSets(gpu::BindPoint::Graphics, composite_layout_, 0, {&set, 1});
-    float push[20];
-    CompositePush(push, mode, extent, with_top_ui, grain_off);
-    cmd.PushConstants(composite_layout_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+    WriteCompositePush(cmd, composite_layout_, mode, extent, with_top_ui, grain_off);
     cmd.Draw(3, 1, 0, 0);
 }
 
@@ -887,8 +919,10 @@ void Renderer::EndFrame(bool draw_ui) {
     list.Barrier(ColorBarrier(scene_color_.image, PipelineStage::ColorAttachmentOutput | PipelineStage::ComputeShader,
                               Access::ColorAttachmentWrite | Access::ShaderStorageWrite, Layout::ColorAttachment, PipelineStage::FragmentShader,
                               gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
-    list.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
-                              Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    if (!EnhancedRendering()) {
+        list.Barrier(ColorBarrier(hdr_boost_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
+                                  Layout::ColorAttachment, PipelineStage::FragmentShader, gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
+    }
     const gpu::ImageHandle target_image = window_ ? (presenting_ ? gpu::vk::Wrap<gpu::ImageTag>(ctx_.swapchain.images[image_index_]) : gpu::ImageHandle{})
                                                   : output_.image;
     const gpu::ImageViewHandle target_view =
@@ -984,9 +1018,7 @@ void Renderer::EndFrame(bool draw_ui) {
             list.SetViewport({{0, 0}, extent});
             list.BindPipeline(gpu::BindPoint::Graphics, layer_pipeline_);
             list.BindSets(gpu::BindPoint::Graphics, layer_layout_, 0, {&set, 1});
-            float push[20];
-            CompositePush(push, 1.0f, extent, true, false);
-            list.PushConstants(layer_layout_, gpu::ShaderStage::Fragment, 0, sizeof(push), push);
+            WriteCompositePush(list, layer_layout_, 1.0f, extent, true, false);
             list.Draw(3, 1, 0, 0);
         }
         list.EndPass();

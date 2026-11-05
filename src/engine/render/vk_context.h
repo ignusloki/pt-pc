@@ -72,6 +72,7 @@ private:
 
 class Context {
 public:
+    bool enhanced_rendering = false;
     bool Init(SDL_Window* window, bool validation, bool want_hdr = false);
     void Shutdown();
 

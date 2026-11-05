@@ -316,7 +316,8 @@ bool Device::PreloadShaders(std::span<const char* const> names) {
         if (modules_.contains(name)) {
             continue;
         }
-        const VkShaderModule module = pt::vk::LoadShaderModule(ctx_.device, name);
+        const std::string file = ctx_.enhanced_rendering ? std::string("enhanced_") + name : name;
+        const VkShaderModule module = pt::vk::LoadShaderModule(ctx_.device, file.c_str());
         ok = ok && module != VK_NULL_HANDLE;
         if (module) {
             modules_.emplace(name, module);
@@ -352,7 +353,8 @@ bool Device::CreateGraphicsPipelines(std::span<const GraphicsPipelineDesc> descs
                 return m;
             }
         }
-        const VkShaderModule m = pt::vk::LoadShaderModule(ctx_.device, name);
+        const std::string file = ctx_.enhanced_rendering ? std::string("enhanced_") + name : name;
+        const VkShaderModule m = pt::vk::LoadShaderModule(ctx_.device, file.c_str());
         missing = missing || m == VK_NULL_HANDLE;
         loaded.emplace_back(name, m);
         return m;
@@ -494,7 +496,8 @@ VkPipeline Device::CreatePipeline(const GraphicsPipelineDesc& desc, VkShaderModu
 }
 
 PipelineHandle Device::CreateComputePipeline(const ComputePipelineDesc& desc) {
-    return Wrap<PipelineTag>(pt::CreateComputePipeline(ctx_.device, Native(desc.layout), desc.shader));
+    const std::string file = ctx_.enhanced_rendering ? std::string("enhanced_") + desc.shader : desc.shader;
+    return Wrap<PipelineTag>(pt::CreateComputePipeline(ctx_.device, Native(desc.layout), file.c_str()));
 }
 
 void Device::DestroyPipeline(PipelineHandle pipeline) {

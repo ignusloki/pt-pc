@@ -83,6 +83,7 @@ def validate_build(build, exe):
         if not is_macho(path):
             raise RuntimeError(f"Expected a Mach-O executable or library: {path}")
     expected = {p.name + ".spv" for p in (REPO / "shaders").iterdir() if p.suffix in {".vert", ".frag", ".comp"}}
+    expected |= {"enhanced_" + name for name in expected if name != "hdr_boost.frag.spv"}
     if not expected.issubset({p.name for p in (build / "shaders").glob("*.spv")}):
         raise RuntimeError("Shader build is incomplete; build pt_release or pt_shaders first")
 

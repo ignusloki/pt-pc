@@ -9,8 +9,11 @@ namespace {
 constexpr const char* kShader = R"(
 #include <metal_stdlib>
 using namespace metal;
+struct HdrEncoding { float brightness; uint extended_rgb; };
 
-float3 hdr_color(float4 value, float brightness) {
+float3 hdr_color(float4 value, HdrEncoding encoding) {
+    if (encoding.extended_rgb) return value.rgb;
+    float brightness = encoding.brightness;
     // Keep the display transfer here: linear-light half floats lose dark channels at low brightness.
     return pow(clamp(value.rgb, 0.0f, 1.0f), float3(1.0f / brightness)) * clamp(value.a, 1.0f, 8.0f);
 }
@@ -19,18 +22,23 @@ kernel void pack_hdr(texture2d<float, access::read> current [[texture(0)]],
                      texture2d<float, access::read> previous [[texture(1)]],
                      texture2d<float, access::write> packed_current [[texture(2)]],
                      texture2d<float, access::write> packed_previous [[texture(3)]],
-                     constant float& brightness [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {
+                     constant HdrEncoding& encoding [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {
     if (p.x >= current.get_width() || p.y >= current.get_height()) return;
-    packed_current.write(float4(hdr_color(current.read(p), brightness), 1.0f), p);
-    packed_previous.write(float4(hdr_color(previous.read(p), brightness), 1.0f), p);
+    packed_current.write(float4(hdr_color(current.read(p), encoding), 1.0f), p);
+    packed_previous.write(float4(hdr_color(previous.read(p), encoding), 1.0f), p);
 }
 
 kernel void unpack_hdr(texture2d<float, access::read> interpolated [[texture(0)]],
                        texture2d<float, access::read> current [[texture(1)]],
                        texture2d<float, access::read> previous [[texture(2)]],
                        texture2d<float, access::write> output [[texture(3)]],
-                       constant float& brightness [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {
+                       constant HdrEncoding& encoding [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {
     if (p.x >= output.get_width() || p.y >= output.get_height()) return;
+    if (encoding.extended_rgb) {
+        output.write(float4(interpolated.read(p).rgb, 1.0f), p);
+        return;
+    }
+    float brightness = encoding.brightness;
     float3 color = max(interpolated.read(p).rgb, 0.0f);
     // Retain the original split for a static image, including the existing grain/UI behaviour.
     // This reference only chooses an encoding: the interpolated RGB carries all HDR brightness.
@@ -90,19 +98,20 @@ bool MetalFxHdrTransport::Init(id<MTLDevice> device, NSUInteger width, NSUIntege
     return true;
 }
 
-bool MetalFxHdrTransport::EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous, float brightness) {
+bool MetalFxHdrTransport::EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous, float brightness, bool extended_rgb) {
     id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
     if (!encoder || !pack_) { [encoder endEncoding]; return false; }
     brightness = std::clamp(brightness, 0.1f, 4.0f);
     [encoder setTexture:current atIndex:0]; [encoder setTexture:previous atIndex:1];
     [encoder setTexture:current_ atIndex:2]; [encoder setTexture:previous_ atIndex:3];
-    [encoder setBytes:&brightness length:sizeof(brightness) atIndex:0];
+    const struct { float brightness; uint32_t extended; } encoding{brightness, extended_rgb ? 1u : 0u};
+    [encoder setBytes:&encoding length:sizeof(encoding) atIndex:0];
     Dispatch(encoder, pack_, current_);
     return true;
 }
 
 bool MetalFxHdrTransport::DecodeOutput(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous,
-                                     id<MTLTexture> output, float brightness) {
+                                     id<MTLTexture> output, float brightness, bool extended_rgb) {
     // Exported Vulkan textures may have untracked hazards; order all MetalFX writes before the conversion.
     [command encodeSignalEvent:barrier_ value:++barrier_value_];
     [command encodeWaitForEvent:barrier_ value:barrier_value_];
@@ -112,7 +121,8 @@ bool MetalFxHdrTransport::DecodeOutput(id<MTLCommandBuffer> command, id<MTLTextu
     [encoder setTexture:interpolated_ atIndex:0];
     [encoder setTexture:current atIndex:1]; [encoder setTexture:previous atIndex:2];
     [encoder setTexture:output atIndex:3];
-    [encoder setBytes:&brightness length:sizeof(brightness) atIndex:0];
+    const struct { float brightness; uint32_t extended; } encoding{brightness, extended_rgb ? 1u : 0u};
+    [encoder setBytes:&encoding length:sizeof(encoding) atIndex:0];
     Dispatch(encoder, unpack_, output);
     return true;
 }

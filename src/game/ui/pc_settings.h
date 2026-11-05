@@ -14,6 +14,7 @@ struct PcSettingRow {
     std::vector<std::string> values;
     int value = 0;
     bool enabled = true;
+    bool preview_scene = false;
     bool wrap = true;
     bool action = false;
     bool link = false;
@@ -80,6 +81,7 @@ public:
     virtual std::string_view Title() const { return "pc_title"; }
     virtual int RefreshEveryFrames() const { return 15; }
     virtual bool Back() { return false; }
+    virtual bool PreviewWholePage() const { return false; }
     virtual bool IsLoopBrowser() const { return false; }
     virtual bool CompactRows() const { return IsLoopBrowser(); }
     virtual std::string PreviewFile(int) const { return {}; }

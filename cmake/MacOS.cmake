@@ -4,6 +4,7 @@
 # One build per CPU architecture, arm64 on Apple silicon and x86_64 on Intel: ggml's CPU variants (the voice recognizer) are
 # chosen from the target's processor, so a universal build would only get one architecture's variants. The default is the host's.
 target_link_libraries(pt_engine PUBLIC "-framework CoreFoundation")
+configure_file("${CMAKE_SOURCE_DIR}/docs/enhanced-rendering/hdr-post-licenses.txt" "${CMAKE_BINARY_DIR}/licenses/HDR-post-processing-MIT.txt" COPYONLY)
 configure_file("${google_sbc_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/google-libsbc-LICENSE.txt" COPYONLY)
 configure_file("${zstd_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/zstd-BSD.txt" COPYONLY)
 

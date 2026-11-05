@@ -31,16 +31,13 @@ uint32_t BloomRows() {
 }
 namespace {
 
-constexpr gpu::Format kAlbedoFormat = gpu::Format::R8G8B8A8Unorm;
 constexpr gpu::Format kNormalFormat = gpu::Format::R16G16B16A16Sfloat;
-constexpr gpu::Format kMaterialFormat = gpu::Format::R8G8B8A8Unorm;
 constexpr gpu::Format kDepthFormat = SceneRenderer::kDepthTargetFormat;
 constexpr gpu::Format kLightFormat = gpu::Format::R16G16B16A16Sfloat;
 constexpr gpu::Format kHdrFormat = SceneRenderer::kHdrTargetFormat;
 constexpr gpu::Format kAoFormat = gpu::Format::R8Unorm;
 constexpr gpu::Format kRefMapFormat = gpu::Format::R16G16B16A16Sfloat;
 constexpr gpu::Format kPostFormat = SceneRenderer::kPostTargetFormat;
-constexpr gpu::Format kBloomFormat = gpu::Format::R8G8B8A8Srgb;
 constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 
 const char* const kDebugViewNames =
@@ -125,7 +122,9 @@ bool SceneRenderer::EnsureShadowTarget() {
 
 bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
-    ldr_format_ = gpu::Format::R8G8B8A8Unorm;
+    ldr_format_ = renderer.EnhancedRendering() ? kPostTargetFormat : gpu::Format::R8G8B8A8Unorm;
+    albedo_format_ = material_format_ = renderer.EnhancedRendering() ? kPostTargetFormat : gpu::Format::R8G8B8A8Unorm;
+    bloom_format_ = renderer.EnhancedRendering() ? kPostTargetFormat : gpu::Format::R8G8B8A8Srgb;
     textures_ = &textures;
     gpu_ = &renderer.Gpu();
 
@@ -151,7 +150,7 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     const auto& ctx = renderer.Context();
     VkFormatProperties3 bloom_features{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
     VkFormatProperties2 bloom_format{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &bloom_features};
-    vkGetPhysicalDeviceFormatProperties2(ctx.physical, gpu::vk::Native(kBloomFormat), &bloom_format);
+    vkGetPhysicalDeviceFormatProperties2(ctx.physical, gpu::vk::Native(bloom_format_), &bloom_format);
     constexpr VkFormatFeatureFlags2 storage = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
         VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT | VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
     const char* bloom_override = std::getenv("PT_BLOOM_COMPUTE");
@@ -237,7 +236,7 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
                 desc.vertex = "mesh.vert";
                 desc.fragment = "gbuffer_pt.frag";
                 desc.mesh_input = true;
-                desc.colors = {kAlbedoFormat, kNormalFormat, kMaterialFormat};
+                desc.colors = {albedo_format_, kNormalFormat, material_format_};
                 desc.depth = kDepthFormat;
                 desc.depth_test = true;
                 desc.depth_write = true;
@@ -347,7 +346,7 @@ bool SceneRenderer::CreatePipelines() {
     desc.vertex = "mesh.vert";
     desc.fragment = "gbuffer.frag";
     desc.mesh_input = true;
-    desc.colors = {kAlbedoFormat, kNormalFormat, kMaterialFormat};
+    desc.colors = {albedo_format_, kNormalFormat, material_format_};
     desc.depth = kDepthFormat;
     desc.depth_test = true;
     desc.depth_write = true;
@@ -433,14 +432,14 @@ bool SceneRenderer::CreatePipelines() {
     gpu::GraphicsPipelineDesc post;
     post.layout = layout_;
     post.fragment = "bright.frag";
-    post.colors = {kBloomFormat};
+    post.colors = {bloom_format_};
     bright_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "kawase.frag";
     kawase_ = gpu_->CreateGraphicsPipeline(post);
     post.blend = gpu::BlendMode::Additive;
     bloom_add_ = gpu_->CreateGraphicsPipeline(post);
     post.blend = gpu::BlendMode::None;
-    post.colors = {kBloomFormat, kBloomFormat};
+    post.colors = {bloom_format_, bloom_format_};
     post.blends = {gpu::BlendMode::None, gpu::BlendMode::Additive};
     post.fragment = "kawase_sum.frag";
     kawase_sum_ = gpu_->CreateGraphicsPipeline(post);
@@ -450,15 +449,18 @@ bool SceneRenderer::CreatePipelines() {
     }
     LogInfo("scene renderer: bloom chain on {}", bloom_compute_ ? "dispatches" : "render passes");
     post.blends.clear();
-    post.colors = {kBloomFormat};
+    post.colors = {bloom_format_};
     post.fragment = "gaussian.frag";
     gaussian_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "tonemap.frag";
     tonemap_ = gpu_->CreateGraphicsPipeline(post);
-    post.colors = {Renderer::kHdrBoostFormat};
-    post.fragment = "hdr_boost.frag";
-    hdr_boost_pipeline_ = gpu_->CreateGraphicsPipeline(post);
+    if (!renderer_->EnhancedRendering()) {
+        post.colors = {Renderer::kHdrBoostFormat};
+        post.fragment = "hdr_boost.frag";
+        hdr_boost_pipeline_ = gpu_->CreateGraphicsPipeline(post);
+        if (!hdr_boost_pipeline_) return false;
+    }
     post.colors = {ldr_format_};
     post.fragment = "fxaa.frag";
     fxaa_ = gpu_->CreateGraphicsPipeline(post);
@@ -541,7 +543,7 @@ bool SceneRenderer::CreatePipelines() {
 
     // Compute bloom is optional: creation failure or unsupported platforms use the render-pass chain.
     const gpu::PipelineHandle all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
-                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, hdr_boost_pipeline_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
+                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
                               mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, mb_decode_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
                               debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
                               reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_, backdrop_, date_resolve_, date_resolve_out_};
@@ -757,8 +759,8 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
     const gpu::Extent2D quarter{bloom_width, BloomRows()};
     const gpu::ImageUsageFlags bloom_usage = bloom_compute_ ? color | gpu::ImageUsage::Storage : color;
     const gpu::AspectFlags c = gpu::Aspect::Color;
-    bool ok = CreateTarget(albedo_, kAlbedoFormat, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
-              CreateTarget(material_, kMaterialFormat, extent, dumped, c) &&
+    bool ok = CreateTarget(albedo_, albedo_format_, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
+              CreateTarget(material_, material_format_, extent, dumped, c) &&
               CreateTarget(depth_, kDepthFormat, extent,
                            gpu::ImageUsage::DepthStencilAttachment | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferSrc,
                            gpu::Aspect::Depth) &&
@@ -784,29 +786,30 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
                            color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(mirror_capture_cache_[1], kHdrFormat, {std::min(512u, extent.width), std::min(512u, extent.height)},
                            color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
-              CreateTarget(bloom_[0], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, bloom_usage, c) &&
-              CreateTarget(bloom_[2], kBloomFormat, quarter, bloom_usage, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
+              CreateTarget(bloom_[0], bloom_format_, quarter, bloom_usage, c) && CreateTarget(bloom_[1], bloom_format_, quarter, bloom_usage, c) &&
+              CreateTarget(bloom_[2], bloom_format_, quarter, bloom_usage, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
               CreateTarget(ldr_[0], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(ldr_[1], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(history_, ldr_format_, output, color | gpu::ImageUsage::TransferDst, c) &&
               CreateTarget(ao_[0], kAoFormat, extent, color, c) && CreateTarget(ao_[1], kAoFormat, extent, color | gpu::ImageUsage::TransferSrc, c);
     const gpu::Extent2D shift1{std::max(output.width >> 1, 1u), std::max(output.height >> 1, 1u)};
-    const gpu::Extent2D shift2{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
-    const gpu::Extent2D shift3{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
-    ok = ok && CreateTarget(dof_half_, kPostFormat, shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
+    const gpu::Extent2D shift2 = renderer_->EnhancedRendering() ? shift1 : gpu::Extent2D{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
+    const gpu::Extent2D shift3 = renderer_->EnhancedRendering() ? shift1 : gpu::Extent2D{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
+    const gpu::Extent2D blur_extent = renderer_->EnhancedRendering() ? output : shift1;
+    ok = ok && CreateTarget(dof_half_, kPostFormat, renderer_->EnhancedRendering() ? gpu::Extent2D{1, 1} : shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
          CreateTarget(dof_quarter_[1], kPostFormat, shift2, color, c) && CreateTarget(dof_eighth_[0], kPostFormat, shift3, color, c) &&
          CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kPostFormat, output, color, c) &&
          CreateTarget(object_velocity_, kPostFormat, extent, color, c) && CreateTarget(mb_blur_[0], kPostFormat, output, color, c) &&
          CreateTarget(mb_blur_[1], kPostFormat, output, color, c) &&
-         CreateTarget(mb_original_bake_, kPostFormat, shift1, color, c) &&
-         CreateTarget(mb_original_blur_[0], kPostFormat, shift1, color, c) &&
-         CreateTarget(mb_original_blur_[1], kPostFormat, shift1, color, c);
+         CreateTarget(mb_original_bake_, kPostFormat, blur_extent, color, c) &&
+         CreateTarget(mb_original_blur_[0], kPostFormat, blur_extent, color, c) &&
+         CreateTarget(mb_original_blur_[1], kPostFormat, blur_extent, color, c);
     for (uint32_t i = 0; i < 5 && ok; ++i) {
         const uint32_t round = (2u << i) - 1u;
         ok = CreateTarget(mb_tile_[i], kPostFormat, {(output.width + round) >> (i + 1), (output.height + round) >> (i + 1)}, color, c);
     }
     ok = ok && CreateTarget(mb_neighbour_, kPostFormat, mb_tile_[4].Extent(), color, c) &&
-         CreateTarget(mb_bake_, kPostFormat, output, color, c);
+         CreateTarget(mb_bake_, kPostFormat, renderer_->EnhancedRendering() ? gpu::Extent2D{1, 1} : output, color, c);
     ok = ok && (!upscaling || CreateUpscaleTargets(extent, output));
     ok = ok && (!upscaling ||
                 (CreateTarget(mirror_history_, kHdrFormat, extent, color | gpu::ImageUsage::TransferDst, c) &&
@@ -1156,10 +1159,15 @@ void SceneRenderer::CreateBuiltinResources() {
     UploadImage(material_tex_, gpu::Format::R8G8B8A8Unorm, {256, 2, 1}, material.data(), material.size());
 
     ScreenSettings identity;
+    if (renderer_->EnhancedRendering()) {
+        UpdateEnhancedColorLut(identity);
+    } else {
+    ScreenSettings identity;
     std::vector<uint8_t> lut;
     BuildColorLut(std::string(), identity, lut);
     UploadImage(color_lut_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
     UploadImage(color_lut_prev_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
+    }
 }
 
 bool SceneRenderer::LoadResources(Vfs& vfs) {
@@ -1263,6 +1271,7 @@ bool SceneRenderer::BuildColorLut(const std::string& path, const ScreenSettings&
 }
 
 void SceneRenderer::UpdateColorLut(const ScreenSettings& screen) {
+    if (renderer_->EnhancedRendering()) { UpdateEnhancedColorLut(screen); return; }
     const std::string key = std::format("{}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}", screen.lut_path, screen.color_scale.x, screen.color_scale.y,
                                         screen.color_scale.z, screen.start_slope, screen.end_slope);
     if (key == color_lut_key_) {
@@ -1439,6 +1448,7 @@ float SceneRenderer::MeterLuminance(const glm::vec2* texels, uint32_t count) {
 }
 
 void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings) {
+    if (renderer_->EnhancedRendering()) { ReadEnhancedMeasurements(slot, dt, settings); return; }
     const bool advance_exposure = std::isfinite(dt) && dt > 0.0f;
     constexpr double kExposureFrame = 1.0 / 30.0;
     if (advance_exposure) {
@@ -1649,10 +1659,15 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
                                                                         "pt_specular_moments0", "pt_specular_moments1", "pt_variance_ping",
                                                                         "pt_variance_pong", "pt_layer_geometry", "pt_layer_raw", "pt_layer_history0",
                                                                         "pt_layer_history1"};
-    for (uint32_t i = 0; i < RayTracing::kPathImages32 + RayTracing::kPathImages16; ++i) {
-        const bool wide = i < RayTracing::kPathImages32;
-        RenderTarget& target = wide ? pt_images32_[i] : pt_images16_[i - RayTracing::kPathImages32];
-        if (!target.Valid() || !selected(wide ? kPathNames32[i] : kPathNames16[i - RayTracing::kPathImages32])) {
+    static const char* const enhanced32[] = {"pt_reservoir", "pt_reservoir_history0", "pt_reservoir_history1", "pt_reference",
+        "pt_diffuse_moments0", "pt_diffuse_moments1", "pt_specular_moments0", "pt_specular_moments1", "pt_variance_ping", "pt_variance_pong"};
+    static const char* const enhanced16[] = {"pt_spec_unshadowed", "pt_layer_geometry", "pt_layer_raw", "pt_layer_history0", "pt_layer_history1"};
+    const char* const* names32 = renderer_->EnhancedRendering() ? enhanced32 : kPathNames32;
+    const char* const* names16 = renderer_->EnhancedRendering() ? enhanced16 : kPathNames16;
+    for (uint32_t i = 0; i < PathImages32() + PathImages16(); ++i) {
+        const bool wide = i < PathImages32();
+        RenderTarget& target = wide ? pt_images32_[i] : pt_images16_[i - PathImages32()];
+        if (!target.Valid() || !selected(wide ? names32[i] : names16[i - PathImages32()])) {
             continue;
         }
         gpu::BufferResource buffer;
@@ -1663,7 +1678,7 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
         }
         gpu_->Submit([&](gpu::CommandList& cmd) { RecordDumpCopy(cmd, target, buffer); });
         gpu_->InvalidateMapped(buffer, 0, ~0ull);
-        write(wide ? kPathNames32[i] : kPathNames16[i - RayTracing::kPathImages32], buffer.mapped, e, target.image.format);
+        write(wide ? names32[i] : names16[i - PathImages32()], buffer.mapped, e, target.image.format);
         gpu_->DestroyBuffer(buffer);
     }
     if (rt_ && RtFullAny() && light_count_ > 0) {

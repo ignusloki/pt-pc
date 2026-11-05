@@ -73,6 +73,8 @@ bool VkRayTracing::Init(gpu::Device& device, gpu::BindingLayoutHandle textures_s
     const VkDescriptorSetLayout textures_layout = gpu::vk::Native(textures_set_layout);
     const VkDescriptorSetLayout frame_layout = gpu::vk::Native(frame_set_layout);
     ctx_ = &ctx;
+    path_images32_ = ctx.enhanced_rendering ? 10u : RayTracing::kPathImages32;
+    path_images16_ = ctx.enhanced_rendering ? 5u : RayTracing::kPathImages16;
     device_ = ctx.device;
     constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     constexpr uint32_t kBindings = 4 + kAoImages + 2 + 3;
@@ -86,8 +88,8 @@ bool VkRayTracing::Init(gpu::Device& device, gpu::BindingLayoutHandle textures_s
     bindings[3 + kAoImages] = {3 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages, nullptr};
     bindings[4 + kAoImages] = {4 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kFullImages - kFullDepthImages, kStages, nullptr};
     bindings[5 + kAoImages] = {5 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kFullDepthImages, kStages, nullptr};
-    bindings[6 + kAoImages] = {6 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kPathImages32, kStages, nullptr};
-    bindings[7 + kAoImages] = {7 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kPathImages16, kStages, nullptr};
+    bindings[6 + kAoImages] = {6 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, path_images32_, kStages, nullptr};
+    bindings[7 + kAoImages] = {7 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, path_images16_, kStages, nullptr};
     bindings[8 + kAoImages] = {8 + kAoImages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages, nullptr};
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout_info.bindingCount = kBindings;
@@ -98,7 +100,7 @@ bool VkRayTracing::Init(gpu::Device& device, gpu::BindingLayoutHandle textures_s
     const VkDescriptorPoolSize sizes[4] = {{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, Renderer::kFramesInFlight},
                                            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * Renderer::kFramesInFlight},
                                            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, Renderer::kFramesInFlight},
-                                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, (kAoImages + kFullImages + kPathImages32 + kPathImages16) * Renderer::kFramesInFlight}};
+                                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, (kAoImages + kFullImages + path_images32_ + path_images16_) * Renderer::kFramesInFlight}};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = Renderer::kFramesInFlight;
     pool_info.poolSizeCount = 4;
@@ -411,13 +413,13 @@ void VkRayTracing::SetFullImages(std::span<const gpu::ImageViewHandle> views) {
 }
 
 void VkRayTracing::SetPathImages(std::span<const gpu::ImageViewHandle> views32, std::span<const gpu::ImageViewHandle> views16) {
-    std::vector<VkDescriptorImageInfo> images(kPathImages32 + kPathImages16);
+    std::vector<VkDescriptorImageInfo> images(path_images32_ + path_images16_);
     std::vector<VkWriteDescriptorSet> writes;
     for (Slot& slot : slots_) {
         writes.clear();
-        for (uint32_t i = 0; i < kPathImages32 + kPathImages16; ++i) {
-            const bool wide = i < kPathImages32;
-            const uint32_t element = wide ? i : i - kPathImages32;
+        for (uint32_t i = 0; i < path_images32_ + path_images16_; ++i) {
+            const bool wide = i < path_images32_;
+            const uint32_t element = wide ? i : i - path_images32_;
             const std::span<const gpu::ImageViewHandle> views = wide ? views32 : views16;
             if (element >= views.size()) {
                 continue;

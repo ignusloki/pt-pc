@@ -23,10 +23,18 @@ void ApplyGraphicsPreset(AppSettings& s, GraphicsPreset preset, bool rt) {
         break;
     default: break;
     }
+    if (s.active_pipeline == RenderingPipeline::Enhanced) {
+        if (preset == GraphicsPreset::Original) g.film_grain_type = 0;
+        if (preset == GraphicsPreset::Low) { g.bloom_strength=0;g.ghost_strength=0; }
+        if (preset == GraphicsPreset::High || preset == GraphicsPreset::Ultra) {
+            g.lens_ghosts=true;g.ghost_strength=.25f;g.flare_strength=.5f;
+            g.film_grain_type=1;g.film_grain=.5f;
+        }
+    }
 }
 GraphicsPreset DetectGraphicsPreset(const AppSettings& s, bool rt) {
     for(auto p:{GraphicsPreset::Low,GraphicsPreset::Original,GraphicsPreset::High,GraphicsPreset::Ultra}) {
-        AppSettings candidate;ApplyGraphicsPreset(candidate,p,rt);
+        AppSettings candidate;candidate.active_pipeline=s.active_pipeline;ApplyGraphicsPreset(candidate,p,rt);
         if(candidate.graphics==s.graphics && candidate.ray_tracing==s.ray_tracing) return p;
     }
     return GraphicsPreset::Custom;

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "engine/platform/rendering_pipeline.h"
+#include "engine/platform/hdr_color_settings.h"
+
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -19,6 +22,11 @@ struct AppSettings {
         bool vsync = true;
         int fps_limit = PT_IOS ? 30 : 0;
         bool hdr = false;
+        std::string rendering_pipeline = "original";
+        bool hdr_menu_preview = true;
+        int hdr_ui_brightness = 200;
+        int hdr_sdr_eotf = 1;
+        HdrColorSettings hdr_color;
         int hdr_paper_white = 200;
         int hdr_peak = 0;
         int letterbox = 0;
@@ -108,15 +116,30 @@ struct AppSettings {
         bool bloom = true;
         bool depth_of_field = true;
         bool motion_blur = true;
+        bool camera_motion_blur = true;
         bool lens_distortion = true;
         bool lens_ghosts = true;
         bool deband = false;
         float film_grain = 1.0f;
+        int film_grain_type = 1;
+        int bloom_type = 1;
+        int flare_type = 1;
+        int lut_sampling = 1;
+        int post_sampling = 1;
+        int sharpening_type = 1;
+        float bloom_strength = 1.0f;
+        float flare_strength = 0.75f;
+        float ghost_strength = 1.0f;
         float clarity = 0.0f;
         int texture_detail = 1;
         int ray_quality = 1;
         bool operator==(const Graphics&) const = default;
     } graphics;
+    // graphics belongs to the running profile. A pending menu change only takes
+    // effect on restart, so saving cannot overwrite the other profile.
+    RenderingPipeline active_pipeline = RenderingPipeline::Original;
+    Graphics original_graphics;
+    Graphics enhanced_graphics;
     struct Game {
         bool game_plus = true;
         bool operator==(const Game&) const = default;

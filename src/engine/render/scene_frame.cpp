@@ -1,4 +1,5 @@
 #include <glm/gtc/matrix_transform.hpp>
+#include "engine/render/exposure_math.h"
 
 #include <algorithm>
 #include <bit>
@@ -1225,6 +1226,8 @@ void SceneRenderer::UploadFrame(FrameSlot& slot) {
     uint8_t* base = static_cast<uint8_t*>(slot.frame_data.mapped);
     std::memcpy(base + offsetof(gpu::FrameData, fog), frame_->fog, sizeof(frame_->fog));
     std::memcpy(base + offsetof(gpu::FrameData, mirror), &frame_->mirror, sizeof(frame_->mirror));
+    frame_->hdr_output = glm::vec4(hdr_scene_active_ ? 1.0f : 0.0f, graphics.post_sampling == 0 ? 1.0f : 0.0f, 0.0f, 0.0f);
+    std::memcpy(base + offsetof(gpu::FrameData, hdr_output), &frame_->hdr_output, sizeof(frame_->hdr_output));
     std::memcpy(base + offsetof(gpu::FrameData, views), frame_->views, sizeof(gpu::View) * view_count_);
     std::memcpy(base + offsetof(gpu::FrameData, lights), frame_->lights, sizeof(gpu::Light) * light_upload_count_);
     std::memcpy(base + offsetof(gpu::FrameData, probes), frame_->probes, sizeof(gpu::Probe) * probe_count_);
@@ -2356,7 +2359,7 @@ void SceneRenderer::RecordReflections(gpu::CommandList& cmd, const ViewSetup& vi
     cmd.CopyImage(hdr_.image, gpu::Layout::TransferSrc, hdr_copy_.image, gpu::Layout::TransferDst, {&copy, 1});
     push.f0 = glm::vec4(plane, depth_legacy ? 1.0f : 0.0f);
     push.ids.z = rt_glossy_active_ ? 1u : 0u;
-    push.ids.y = rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1u : 0u;
+    push.ids.y = renderer_->EnhancedRendering() ? (hdr_scene_active_ ? 1u : 0u) : (rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1u : 0u);
     const ScreenSettings& screen = lighting_->screen;
     push.f1 = glm::vec4(1.0f, 1.0f, screen.reflect_scale, screen.reflect_bias);
     push.f2 = glm::vec4(horizontal, screen.reflect_edge ? 1.0f : 0.0f);
@@ -2457,7 +2460,7 @@ void SceneRenderer::RecordObjectVelocity(gpu::CommandList& cmd, const ViewSetup&
         push.ids = glm::uvec4(view.index, d.material, motion_view_, sub.skinned ? d.skin_base : gpu::kInvalid);
         push.tint = d.tint;
         const uint32_t previous_skin = sub.skinned ? d.previous_skin : gpu::kInvalid;
-        push.aux[0] = glm::vec4(std::bit_cast<float>(d.previous_model), std::bit_cast<float>(previous_skin), 0.0f, 0.0f);
+        push.aux[0] = glm::vec4(std::bit_cast<float>(d.previous_model), std::bit_cast<float>(previous_skin), graphics.camera_motion_blur ? 1.0f : 0.0f, 0.0f);
         PushConstants(cmd, &push, sizeof(push));
         cmd.DrawIndexed(sub.index_count, 1, sub.first_index, sub.vertex_offset, 0);
     }
@@ -2624,6 +2627,7 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
         context.depth_format = kDepthTargetFormat;
         context.depth_view = depth_.image.view;
         context.exposure = exposure_;
+        context.hdr_output = hdr_scene_active_;
         context.frame_index = renderer_->FrameIndex();
         context.mirrored = view.mirrored || !main_view;
         if (lighting_->tpp.enabled && toggles.tpp_atmosphere) {
@@ -2676,9 +2680,11 @@ void SceneRenderer::SettleExposure(const ExposureSettings& settings) {
         cmd.EndLabel();
     });
     gpu_->InvalidateMapped(slot.luminance, 0, ~0ull);
-    const float measured = MeterLuminance(static_cast<const glm::vec2*>(slot.luminance.mapped), slot.luminance_groups);
+    const auto* meter = static_cast<const glm::vec2*>(slot.luminance.mapped);
+    const float measured = renderer_->EnhancedRendering() ? exposure_math::Meter({meter, slot.luminance_groups}) : MeterLuminance(meter, slot.luminance_groups);
     adaptation_valid_ = true;
     exposure_samples_.clear();
+    if (renderer_->EnhancedRendering()) for (auto& pending : slots_) pending.measured = false;
     if (measured < 0.0f) {
         return;
     }
@@ -2692,7 +2698,7 @@ void SceneRenderer::SettleExposure(const ExposureSettings& settings) {
         const float adapted = raw * std::exp2(ev);
         ev = std::clamp(ev + 0.5f * (std::log2(settings.key + 0.001f) - std::log2(adapted + 0.001f)), settings.min_ev, settings.max_ev);
     }
-    ev_ = ev;
+    ev_ = renderer_->EnhancedRendering() ? (settings.pinned ? settings.pinned_ev : exposure_math::TargetEv(raw, settings.key, settings.min_ev, settings.max_ev)) : ev;
     exposure_ = ExposureFor(ev_, settings) * renderer_->exposure;
     for (uint32_t i = 0; i < view_count_; ++i) {
         frame_->views[i].exposure = glm::vec4(exposure_, 1.0f / std::max(exposure_, 1.0e-12f), ev_, frame_->views[i].exposure.w);
@@ -2754,6 +2760,14 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     if(!EnsureShadowTarget()) {
         targets_retry_at_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         return;
+    }
+    const bool hdr_output = renderer_->EnhancedRendering() && renderer_->OutputMode() != RendererOutputMode::Sdr && vr_eye_ < 0 && !renderer_->plain_output;
+    if (hdr_output != hdr_scene_active_) {
+        history_valid_ = date_history_valid_ = mirror_history_valid_ = reflect_history_valid_ = false;
+        rt_full_history_ = pt_history_ = pt_reference_valid_ = false;
+        mirror_stale_cache_[0] = {}; mirror_stale_cache_[1] = {};
+        up_.reset = true;
+        hdr_scene_active_ = hdr_output;
     }
     const gpu::Extent2D output = renderer_->RenderExtent();
     const bool upscaling = BeginUpscaleFrame(output);

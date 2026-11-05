@@ -43,8 +43,13 @@ int main() {
             id<MTLCommandQueue> queue = [device newCommandQueue];
             pt::MetalFxHdrTransport hdr;
             int failures = 0, checks = 0;
+            for (bool extended : {false, true}) {
             const std::array<std::array<float, 4>, 6> colors = {{{1, 1, 1, 1.5f}, {.25f, .5f, .75f, 2},
                 {.1f, .04f, .02f, 1}, {0, 0, 0, 1}, {.5f, .5f, .5f, 1.25f}, {1, .75f, .25f, 8}}};
+            const std::array<std::array<float, 4>, 6> extended_colors = {{{2.5f, 2.5f, 2.5f, 1}, {-.1f, .5f, 1.8f, 1},
+                {.001f, .0001f, .002f, 1}, {0, 0, 0, 1}, {.5f, .5f, .5f, 1}, {3.5f, .75f, .1f, 1}}};
+            const auto& inputs = extended ? extended_colors : colors;
+            std::printf("Checking %s MetalFX HDR transport\n", extended ? "Enhanced signed RGB" : "Original gain");
             // Reuse the production transport across an output resize, then switch brightness with history resets.
             for (NSUInteger height : {128u, 192u}) {
                 const NSUInteger width = 192;
@@ -72,7 +77,7 @@ int main() {
                 if (!queue || !current || !previous || !output || !motion || !depth || !readback) return 1;
                 std::vector<uint16_t> pixels(width*height*4), zero_motion(width*height*2, 0);
                 for (NSUInteger y = 0; y < height; ++y) for (NSUInteger x = 0; x < width; ++x) {
-                    const auto& color = colors[(y/(height/2))*3+x/64];
+                    const auto& color = inputs[(y/(height/2))*3+x/64];
                     for (int c = 0; c < 4; ++c) pixels[(y*width+x)*4+c] = Half(color[c]);
                 }
                 const MTLRegion region = MTLRegionMake2D(0, 0, width, height);
@@ -96,10 +101,10 @@ int main() {
                     const int before = failures;
                     for (int frame = 0; frame < 8; ++frame) {
                         id<MTLCommandBuffer> command = [queue commandBuffer];
-                        if (!hdr.EncodeInputs(command, current, previous, brightness)) return 1;
+                        if (!hdr.EncodeInputs(command, current, previous, brightness, extended)) return 1;
                         fx.shouldResetHistory = frame == 0;
                         [fx encodeToCommandBuffer:command];
-                        if (!hdr.DecodeOutput(command, current, previous, output, brightness)) return 1;
+                        if (!hdr.DecodeOutput(command, current, previous, output, brightness, extended)) return 1;
                         id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
                         [blit copyFromTexture:output sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
                             sourceSize:MTLSizeMake(width,height,1) toBuffer:readback destinationOffset:0
@@ -117,11 +122,11 @@ int main() {
                             const float gain = Float(pixel[3]);
                             bool good = std::isfinite(gain) && gain >= 1 && gain <= 8;
                             for (int c = 0; c < 3; ++c) {
-                                const float expected = Display(colors[i][c], colors[i][3], brightness);
-                                const float actual = Display(Float(pixel[c]), gain, brightness);
-                                good = good && std::isfinite(actual) && std::abs(expected-actual) <= .02f*std::max(expected, .01f);
+                                const float expected = extended ? inputs[i][c] : Display(inputs[i][c], inputs[i][3], brightness);
+                                const float actual = extended ? Float(pixel[c]) : Display(Float(pixel[c]), gain, brightness);
+                                good = good && std::isfinite(actual) && std::abs(expected-actual) <= .02f*std::max(std::abs(expected), .01f);
                                 // Static images must also preserve the grain/UI input split, not only total brightness.
-                                good = good && std::abs(Float(pixel[c])-colors[i][c]) < .012f;
+                                good = good && std::abs(Float(pixel[c])-inputs[i][c]) < .012f;
                             }
                             ++checks;
                             if (!good) {
@@ -136,6 +141,7 @@ int main() {
                 }
                 [fx release]; [current release]; [previous release]; [output release];
                 [motion release]; [depth release]; [readback release];
+            }
             }
             std::printf("MetalFX HDR transport: %d checks, %d failures\n",checks,failures);
             [queue release]; [device release];

@@ -75,6 +75,7 @@ struct SceneVfxContext {
     std::function<void()> copy_scene;
     glm::vec4 fog[8]{};
     uint32_t fog_mode = 0;
+    bool hdr_output = false;
     uint32_t subset = 0;
     uint32_t* recorded = nullptr;
 };
@@ -351,6 +352,12 @@ private:
     void CreateBuiltinResources();
     void UpdateColorLut(const ScreenSettings& screen);
     bool BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out);
+    bool BuildEnhancedColorLut(const std::string& path, const ScreenSettings& screen, std::vector<float>& out);
+    void UpdateEnhancedColorLut(const ScreenSettings& screen);
+    void ReadEnhancedMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings);
+    void RecordEnhancedPost(gpu::CommandList& cmd, const SceneLighting& lighting, float dt);
+    bool RecordEnhancedDepthOfField(gpu::CommandList& cmd, const ScreenSettings& screen, int& current);
+    bool RecordEnhancedMotionBlur(gpu::CommandList& cmd, const ScreenSettings& screen, int& current);
 
     void PrepareFrame(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting);
     void BuildShadowViews(const SceneLighting& lighting, const glm::vec3& eye);
@@ -526,6 +533,10 @@ private:
     bool targets_upscaled_ = false;
     uint64_t neural_output_epoch_ = 1;
     bool history_valid_ = false;
+    bool hdr_scene_active_ = false;
+    gpu::Format albedo_format_ = gpu::Format::R8G8B8A8Unorm;
+    gpu::Format material_format_ = gpu::Format::R8G8B8A8Unorm;
+    gpu::Format bloom_format_ = gpu::Format::R8G8B8A8Srgb;
 
     gpu::ImageResource lut1_;
     gpu::ImageResource lut2_;
@@ -688,7 +699,9 @@ private:
     bool PathReference() const;
     void RecordPathReferenceOut(gpu::CommandList& cmd, const ViewSetup& view);
     gpu::PipelineHandle pt_resolve_;
-    RenderTarget pt_images32_[RayTracing::kPathImages32];
+    uint32_t PathImages32() const { return renderer_->EnhancedRendering() ? 10u : RayTracing::kPathImages32; }
+    uint32_t PathImages16() const { return renderer_->EnhancedRendering() ? 5u : RayTracing::kPathImages16; }
+    RenderTarget pt_images32_[10];
     RenderTarget pt_images16_[RayTracing::kPathImages16];
     gpu::Extent2D pt_failed_extent_{0, 0};
     std::chrono::steady_clock::time_point pt_failed_at_{};

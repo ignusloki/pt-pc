@@ -17,6 +17,13 @@ struct Push {
     glm::vec2 inverse_extent;
     uint32_t draw;
 };
+struct EnhancedPush {
+    glm::vec2 inverse_extent;
+    uint32_t draw;
+    float eotf;
+    std::array<float, 12> grading;
+    glm::vec4 ui;
+};
 
 }
 
@@ -96,7 +103,7 @@ bool UiBatch::Init(Renderer& renderer, TextureManager& textures) {
     }
     gpu::PipelineLayoutDesc layout_info;
     layout_info.sets = {textures.BindingLayout(), set_layout_};
-    layout_info.push_bytes = sizeof(Push);
+    layout_info.push_bytes = renderer.EnhancedRendering() ? sizeof(EnhancedPush) : sizeof(Push);
     layout_info.push_stages = gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment;
     layout_ = gpu_->CreatePipelineLayout(layout_info);
     if (!layout_) {
@@ -256,7 +263,15 @@ void UiBatch::RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t 
             bound = pipeline;
         }
         const Push push{glm::vec2(1.0f / std::max(1u, extent.width), 1.0f / std::max(1u, extent.height)), command.draw};
+        if (renderer_->EnhancedRendering()) {
+            const bool hdr = renderer_->OutputMode() != RendererOutputMode::Sdr;
+            const EnhancedPush enhanced{push.inverse_extent, push.draw, float(renderer_->HdrSdrEotf()),
+                renderer_->hdr_color.Push(hdr),
+                glm::vec4(hdr ? std::min(float(renderer_->hdr_ui_brightness), renderer_->HdrPeak()) / renderer_->HdrPaperWhite() : 1.0f, 0, 0, 0)};
+            cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(enhanced), &enhanced);
+        } else {
         cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(push), &push);
+        }
         cmd.Draw(command.count, 1, command.first, 0);
     }
 }

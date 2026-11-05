@@ -76,6 +76,8 @@ bool D3D12RayTracingAvailable();
 std::unique_ptr<RayTracing> CreateRayTracing(gpu::Device& device);
 
 class VkRayTracing final : public RayTracing {
+    uint32_t path_images32_ = kPathImages32;
+    uint32_t path_images16_ = kPathImages16;
 public:
     bool Init(gpu::Device& device, gpu::BindingLayoutHandle textures_layout, gpu::BindingLayoutHandle frame_layout) override;
     void Shutdown() override;

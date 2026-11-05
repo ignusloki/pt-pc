@@ -194,16 +194,16 @@ bool SceneRenderer::EnsurePathTargets() {
     gpu_->WaitIdle();
     DestroyPathTargets();
     const gpu::Extent2D half{(extent_.width + 1) / 2, (extent_.height + 1) / 2};
-    gpu::ImageViewHandle views32[RayTracing::kPathImages32]{};
-    gpu::ImageViewHandle views16[RayTracing::kPathImages16]{};
+    std::vector<gpu::ImageViewHandle> views32(PathImages32());
+    std::vector<gpu::ImageViewHandle> views16(PathImages16());
     const gpu::ImageUsageFlags usage = gpu::ImageUsage::Storage | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc;
     bool ok = true;
-    for (uint32_t i = 0; i < RayTracing::kPathImages32 && ok; ++i) {
-        ok = CreateTarget(pt_images32_[i], gpu::Format::R32G32B32A32Sfloat, extent_, usage, gpu::Aspect::Color);
+    for (uint32_t i = 0; i < PathImages32() && ok; ++i) {
+        ok = CreateTarget(pt_images32_[i], gpu::Format::R32G32B32A32Sfloat, renderer_->EnhancedRendering() && i >= 4 ? half : extent_, usage, gpu::Aspect::Color);
         views32[i] = pt_images32_[i].image.view;
     }
-    for (uint32_t i = 0; i < RayTracing::kPathImages16 && ok; ++i) {
-        ok = CreateTarget(pt_images16_[i], gpu::Format::R16G16B16A16Sfloat, i == 0 || i >= 7 ? extent_ : half, usage, gpu::Aspect::Color);
+    for (uint32_t i = 0; i < PathImages16() && ok; ++i) {
+        ok = CreateTarget(pt_images16_[i], gpu::Format::R16G16B16A16Sfloat, renderer_->EnhancedRendering() || i == 0 || i >= 7 ? extent_ : half, usage, gpu::Aspect::Color);
         views16[i] = pt_images16_[i].image.view;
     }
     if (!ok) {
@@ -220,11 +220,11 @@ bool SceneRenderer::EnsurePathTargets() {
             value.float32[0] = x;
             cmd.ClearColorImage(t.image, gpu::Layout::General, value, 1, 1);
         };
-        for (RenderTarget& t : pt_images32_) {
-            clear(t, -1.0f);
+        for (uint32_t i = 0; i < PathImages32(); ++i) {
+            clear(pt_images32_[i], renderer_->EnhancedRendering() && i >= 4 ? 0.0f : -1.0f);
         }
-        for (RenderTarget& t : pt_images16_) {
-            clear(t, 0.0f);
+        for (uint32_t i = 0; i < PathImages16(); ++i) {
+            clear(pt_images16_[i], 0.0f);
         }
     });
     rt_->SetPathImages(views32, views16);
@@ -405,8 +405,8 @@ void SceneRenderer::RecordPathTrace(gpu::CommandList& cmd, const ViewSetup& view
 }
 
 void SceneRenderer::RecordPathLayers(gpu::CommandList& cmd, const ViewSetup& view) {
-    cmd.UseTargets({{&pt_images16_[8], gpu::Layout::General}, {&pt_images16_[9], gpu::Layout::General},
-                     {&pt_images16_[10], gpu::Layout::General}, {&depth_, gpu::Layout::DepthReadOnly},
+    cmd.UseTargets({{&pt_images16_[renderer_->EnhancedRendering() ? 2 : 8], gpu::Layout::General}, {&pt_images16_[renderer_->EnhancedRendering() ? 3 : 9], gpu::Layout::General},
+                     {&pt_images16_[renderer_->EnhancedRendering() ? 4 : 10], gpu::Layout::General}, {&depth_, gpu::Layout::DepthReadOnly},
                      {&diffuse_, gpu::Layout::ColorAttachment}, {&specular_, gpu::Layout::ColorAttachment}});
     BindSets(cmd, gpu::BindPoint::Graphics);
     cmd.BeginPass(ViewArea(view), {{&diffuse_, false, {}}, {&specular_, false, {}}});
@@ -426,7 +426,7 @@ void SceneRenderer::RecordPathLayers(gpu::CommandList& cmd, const ViewSetup& vie
 }
 
 void SceneRenderer::RecordRrGuides(gpu::CommandList& cmd, const ViewSetup& view) {
-    cmd.UseTargets({{&pt_images16_[7], gpu::Layout::General}, {&pt_images16_[8], gpu::Layout::General}, {&rt_full_images_[10], gpu::Layout::General},
+    cmd.UseTargets({{&pt_images16_[renderer_->EnhancedRendering() ? 1 : 7], gpu::Layout::General}, {&pt_images16_[renderer_->EnhancedRendering() ? 2 : 8], gpu::Layout::General}, {&rt_full_images_[10], gpu::Layout::General},
                      {&depth_, gpu::Layout::DepthReadOnly}, {&normal_, gpu::Layout::ShaderReadOnly},
                      {&material_, gpu::Layout::ShaderReadOnly}, {&albedo_, gpu::Layout::ShaderReadOnly},
                      {&rr_diffuse_albedo_, gpu::Layout::ColorAttachment}, {&rr_specular_albedo_, gpu::Layout::ColorAttachment},

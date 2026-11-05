@@ -86,6 +86,76 @@ void Read(const Values& values, const char* key, std::string& out) {
     }
 }
 
+void ReadEnhancedGraphics(const Values& values, AppSettings::Graphics& g) {
+    Read(values, "enhanced_graphics.anisotropy", g.anisotropy);
+    Read(values, "enhanced_graphics.shadow_quality", g.shadow_quality);
+    Read(values, "enhanced_graphics.ambient_occlusion", g.ambient_occlusion);
+    Read(values, "enhanced_graphics.reflections", g.reflections);
+    Read(values, "enhanced_graphics.bloom", g.bloom);
+    Read(values, "enhanced_graphics.depth_of_field", g.depth_of_field);
+    Read(values, "enhanced_graphics.motion_blur", g.motion_blur);
+    Read(values, "enhanced_graphics.camera_motion_blur", g.camera_motion_blur);
+    Read(values, "enhanced_graphics.lens_distortion", g.lens_distortion);
+    Read(values, "enhanced_graphics.lens_ghosts", g.lens_ghosts);
+    Read(values, "enhanced_graphics.deband", g.deband);
+    Read(values, "enhanced_graphics.film_grain", g.film_grain);
+    Read(values, "enhanced_graphics.film_grain_type", g.film_grain_type);
+    Read(values, "enhanced_graphics.bloom_type", g.bloom_type);
+    Read(values, "enhanced_graphics.flare_type", g.flare_type);
+    Read(values, "enhanced_graphics.lut_sampling", g.lut_sampling);
+    Read(values, "enhanced_graphics.post_sampling", g.post_sampling);
+    Read(values, "enhanced_graphics.sharpening_type", g.sharpening_type);
+    Read(values, "enhanced_graphics.bloom_strength", g.bloom_strength);
+    Read(values, "enhanced_graphics.flare_strength", g.flare_strength);
+    Read(values, "enhanced_graphics.ghost_strength", g.ghost_strength);
+    Read(values, "enhanced_graphics.clarity", g.clarity);
+    Read(values, "enhanced_graphics.texture_detail", g.texture_detail);
+    Read(values, "enhanced_graphics.ray_quality", g.ray_quality);
+    g.shadow_quality = std::clamp(g.shadow_quality, 0, 3);
+    g.anisotropy = std::clamp(g.anisotropy, 0, 16);
+    g.texture_detail = std::clamp(g.texture_detail, 0, 2);
+    g.ray_quality = std::clamp(g.ray_quality, 0, 4);
+    g.film_grain_type = std::clamp(g.film_grain_type, 0, 1);
+    g.bloom_type = std::clamp(g.bloom_type, 0, 1);
+    g.flare_type = std::clamp(g.flare_type, 0, 1);
+    g.lut_sampling = std::clamp(g.lut_sampling, 0, 1);
+    g.post_sampling = std::clamp(g.post_sampling, 0, 1);
+    g.sharpening_type = std::clamp(g.sharpening_type, 0, 1);
+    g.film_grain = std::isfinite(g.film_grain) ? std::clamp(g.film_grain, 0.0f, 1.0f) : 1.00f;
+    g.clarity = std::isfinite(g.clarity) ? std::clamp(g.clarity, 0.0f, 1.0f) : 0.00f;
+    g.bloom_strength = std::isfinite(g.bloom_strength) ? std::clamp(g.bloom_strength, 0.0f, 2.0f) : 1.00f;
+    g.flare_strength = std::isfinite(g.flare_strength) ? std::clamp(g.flare_strength, 0.0f, 2.0f) : 0.75f;
+    g.ghost_strength = std::isfinite(g.ghost_strength) ? std::clamp(g.ghost_strength, 0.0f, 2.0f) : 1.00f;
+}
+
+void WriteEnhancedGraphics(std::ostream& text, const AppSettings::Graphics& g) {
+    text << "\n[enhanced_graphics]\n";
+    text << "anisotropy = " << g.anisotropy << "\n";
+    text << "shadow_quality = " << g.shadow_quality << "\n";
+    text << "ambient_occlusion = " << g.ambient_occlusion << "\n";
+    text << "reflections = " << g.reflections << "\n";
+    text << "bloom = " << g.bloom << "\n";
+    text << "depth_of_field = " << g.depth_of_field << "\n";
+    text << "motion_blur = " << g.motion_blur << "\n";
+    text << "camera_motion_blur = " << g.camera_motion_blur << "\n";
+    text << "lens_distortion = " << g.lens_distortion << "\n";
+    text << "lens_ghosts = " << g.lens_ghosts << "\n";
+    text << "deband = " << g.deband << "\n";
+    text << "film_grain = " << g.film_grain << "\n";
+    text << "film_grain_type = " << g.film_grain_type << "\n";
+    text << "bloom_type = " << g.bloom_type << "\n";
+    text << "flare_type = " << g.flare_type << "\n";
+    text << "lut_sampling = " << g.lut_sampling << "\n";
+    text << "post_sampling = " << g.post_sampling << "\n";
+    text << "sharpening_type = " << g.sharpening_type << "\n";
+    text << "bloom_strength = " << g.bloom_strength << "\n";
+    text << "flare_strength = " << g.flare_strength << "\n";
+    text << "ghost_strength = " << g.ghost_strength << "\n";
+    text << "clarity = " << g.clarity << "\n";
+    text << "texture_detail = " << g.texture_detail << "\n";
+    text << "ray_quality = " << g.ray_quality << "\n";
+}
+
 }
 
 bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
@@ -101,8 +171,23 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.vsync", out.display.vsync);
     Read(v, "display.fps_limit", out.display.fps_limit);
     Read(v, "display.hdr", out.display.hdr);
+    Read(v, "display.rendering_pipeline", out.display.rendering_pipeline);
+    Read(v, "display.hdr_ui_brightness", out.display.hdr_ui_brightness);
+    Read(v, "display.hdr_sdr_eotf", out.display.hdr_sdr_eotf);
+    Read(v, "display.hdr_menu_preview", out.display.hdr_menu_preview);
     Read(v, "display.hdr_paper_white", out.display.hdr_paper_white);
     Read(v, "display.hdr_peak", out.display.hdr_peak);
+    Read(v, "hdr_color.exposure", out.display.hdr_color.exposure);
+    Read(v, "hdr_color.contrast", out.display.hdr_color.contrast);
+    Read(v, "hdr_color.highlights", out.display.hdr_color.highlights);
+    Read(v, "hdr_color.shadows", out.display.hdr_color.shadows);
+    Read(v, "hdr_color.saturation", out.display.hdr_color.saturation);
+    Read(v, "hdr_color.highlight_saturation", out.display.hdr_color.highlight_saturation);
+    Read(v, "hdr_color.wide_gamut", out.display.hdr_color.wide_gamut);
+    Read(v, "hdr_color.blowout", out.display.hdr_color.blowout);
+    out.display.hdr_color.Normalize();
+    out.display.hdr_ui_brightness = std::clamp(out.display.hdr_ui_brightness, 80, 500);
+    out.display.hdr_sdr_eotf = std::clamp(out.display.hdr_sdr_eotf, 0, 2);
     Read(v, "display.letterbox", out.display.letterbox);
     Read(v, "display.subtitle_scale", out.display.subtitle_scale);
     Read(v, "display.rendering_api", out.display.rendering_api);
@@ -295,10 +380,17 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.vr.resolution_scale = std::isfinite(out.vr.resolution_scale) ? std::clamp(out.vr.resolution_scale, 0.5f, 2.0f) : 1.0f;
     const int anisotropy = out.graphics.anisotropy;
     out.graphics.anisotropy = anisotropy >= 16 ? 16 : anisotropy >= 8 ? 8 : anisotropy >= 4 ? 4 : anisotropy >= 2 ? 2 : 0;
+    out.original_graphics = out.graphics;
+    ReadEnhancedGraphics(v, out.enhanced_graphics);
+    out.active_pipeline = ResolveRenderingPipeline(out.display.rendering_pipeline);
+    if (out.display.rendering_pipeline != "enhanced") out.display.rendering_pipeline = "original";
+    if (out.active_pipeline == RenderingPipeline::Enhanced) out.graphics = out.enhanced_graphics;
     return true;
 }
 
 bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
+    const auto& original_graphics = s.active_pipeline == RenderingPipeline::Original ? s.graphics : s.original_graphics;
+    const auto& enhanced_graphics = s.active_pipeline == RenderingPipeline::Enhanced ? s.graphics : s.enhanced_graphics;
     std::ostringstream text;
     text << "; P.T. port settings. The in-game options (brightness, subtitles, camera inversion) live in the save data.\n\n"
          << "[display]\n"
@@ -313,6 +405,11 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; frames per second at most, 0 for no limit (menus and the paused game stay at 60 or less either way)\n"
          << "fps_limit = " << s.display.fps_limit << "\n"
          << "hdr = " << (s.display.hdr ? 1 : 0) << "\n"
+         << "; rendering pipeline for the next start: original or enhanced (desktop Mac)\n"
+         << "rendering_pipeline = " << s.display.rendering_pipeline << "\n"
+         << "hdr_ui_brightness = " << s.display.hdr_ui_brightness << "\n"
+         << "hdr_sdr_eotf = " << s.display.hdr_sdr_eotf << "\n"
+         << "hdr_menu_preview = " << s.display.hdr_menu_preview << "\n"
          << "; HDR output levels in nits: paper white (80 to 500) is the picture's white and the menus, the peak (400 to 4000) is how bright\n"
          << "; the lamps, the flashlight and the glow around them go; a peak of 0 takes the display's own, 1000 where Windows does not tell it\n"
          << "hdr_paper_white = " << s.display.hdr_paper_white << "\n"
@@ -440,26 +537,36 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
     text << "\n[graphics]\n"
          << "; not in the original; 0 keeps the original's look\n"
          << "; anisotropic filtering of the textures: 0 (the original's trilinear filtering), 2, 4, 8 or 16\n"
-         << "anisotropy = " << s.graphics.anisotropy << "\n"
-         << "shadow_quality = " << s.graphics.shadow_quality << "\n"
-         << "ambient_occlusion = " << s.graphics.ambient_occlusion << "\n"
-         << "reflections = " << s.graphics.reflections << "\n"
-         << "bloom = " << s.graphics.bloom << "\n"
-         << "depth_of_field = " << s.graphics.depth_of_field << "\n"
-         << "motion_blur = " << s.graphics.motion_blur << "\n"
-         << "lens_distortion = " << s.graphics.lens_distortion << "\n"
+         << "anisotropy = " << original_graphics.anisotropy << "\n"
+         << "shadow_quality = " << original_graphics.shadow_quality << "\n"
+         << "ambient_occlusion = " << original_graphics.ambient_occlusion << "\n"
+         << "reflections = " << original_graphics.reflections << "\n"
+         << "bloom = " << original_graphics.bloom << "\n"
+         << "depth_of_field = " << original_graphics.depth_of_field << "\n"
+         << "motion_blur = " << original_graphics.motion_blur << "\n"
+         << "lens_distortion = " << original_graphics.lens_distortion << "\n"
          << "; the lens flares' large reflections across the screen near a lamp, as in the original; 0 leaves them out\n"
-         << "lens_ghosts = " << s.graphics.lens_ghosts << "\n"
+         << "lens_ghosts = " << original_graphics.lens_ghosts << "\n"
          << "; the sub-LSB dither at the tonemap, the colour grading and the final image, against banding in a lamp's glow; 0 is the original's (PS4) output\n"
-         << "deband = " << s.graphics.deband << "\n"
-         << "film_grain = " << s.graphics.film_grain << "\n"
-         << "clarity = " << s.graphics.clarity << "\n"
-         << "texture_detail = " << s.graphics.texture_detail << "\n"
+         << "deband = " << original_graphics.deband << "\n"
+         << "film_grain = " << original_graphics.film_grain << "\n"
+         << "clarity = " << original_graphics.clarity << "\n"
+         << "texture_detail = " << original_graphics.texture_detail << "\n"
          << "; ray quality: 0 balanced (2 rays for the soft shadows and the traced ambient occlusion), 1 high (4), 3 ultra (8 rays,\n"
          << "; traced shadows from every light, bounce light and glossy reflections, the [raytracing] full_* parts), 4 path traced\n"
          << "; (the lights sampled per pixel with traced shadows, bounces of light in place of the probe ambient; no preset uses it);\n"
          << "; 2 reads as 3; 5 is the older Ultra (8 rays alone), for comparisons only\n"
-         << "ray_quality = " << (s.graphics.ray_quality == 2 ? kRayQualityOldUltraIni : s.graphics.ray_quality) << "\n";
+         << "ray_quality = " << (original_graphics.ray_quality == 2 ? kRayQualityOldUltraIni : original_graphics.ray_quality) << "\n";
+    WriteEnhancedGraphics(text, enhanced_graphics);
+    text << "\n[hdr_color]\n";
+    text << "exposure = " << s.display.hdr_color.exposure << "\n";
+    text << "contrast = " << s.display.hdr_color.contrast << "\n";
+    text << "highlights = " << s.display.hdr_color.highlights << "\n";
+    text << "shadows = " << s.display.hdr_color.shadows << "\n";
+    text << "saturation = " << s.display.hdr_color.saturation << "\n";
+    text << "highlight_saturation = " << s.display.hdr_color.highlight_saturation << "\n";
+    text << "wide_gamut = " << s.display.hdr_color.wide_gamut << "\n";
+    text << "blowout = " << s.display.hdr_color.blowout << "\n";
     text << "\n[vr]\n"
          << "; experimental, untested on a real headset (docs/vr.md); needs an OpenXR runtime; applies at the next start\n"
          << "enabled = " << (s.vr.enabled ? 1 : 0) << "\n"

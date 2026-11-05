@@ -51,6 +51,10 @@ public:
     int RowAt(glm::vec2 units) const;
     bool BackAt(glm::vec2 units) const;
     bool QuitAt(glm::vec2 units) const;
+    bool ScenePreviewActive() const {
+        const auto* row = CurrentRow();
+        return (source_ && source_->PreviewWholePage()) || (row && row->enabled && row->preview_scene);
+    }
     bool IsLoopBrowser() const { return source_ && source_->IsLoopBrowser(); }
     bool Browser() const;
     PcGallery Gallery() const;

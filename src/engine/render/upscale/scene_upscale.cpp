@@ -1029,7 +1029,8 @@ void SceneRenderer::RecordUpscaleResolve(gpu::CommandList& cmd, bool upscaled) {
     push.f0 = glm::vec4(up_.jitter_pixels.x / static_cast<float>(extent_.width), up_.jitter_pixels.y / static_cast<float>(extent_.height),
                         1.0f / static_cast<float>(output_extent_.width), 1.0f / static_cast<float>(output_extent_.height));
     push.f1 = glm::vec4(static_cast<float>(extent_.width), static_cast<float>(extent_.height), upscaled && handy_demod_ ? 1.0f : 0.0f,
-                        rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1.0f : 0.0f);
+                        renderer_->EnhancedRendering() ? (hdr_scene_active_ ? 1.0f : 0.0f) :
+                        (rt_reflections_ && renderer_->OutputMode() != RendererOutputMode::Sdr ? 1.0f : 0.0f));
     Fullscreen(cmd, up_resolve_, push);
     cmd.EndPass();
     cmd.UseTargets({{&post_hdr_, gpu::Layout::ShaderReadOnly},

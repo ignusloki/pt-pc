@@ -65,6 +65,7 @@ struct FrameData {
     Probe probes[kMaxProbes];
     glm::vec4 fog[8]{};
     glm::vec4 mirror{0.0f};
+    glm::vec4 hdr_output{0.0f};
 };
 
 struct DrawPush {

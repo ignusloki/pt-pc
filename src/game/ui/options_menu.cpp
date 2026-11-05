@@ -295,6 +295,18 @@ void OptionsMenu::SwitchPage(Game& game, Page page) {
     LogInfo("ui: option menu page {}", page == Page::Pc ? "PC settings" : "original");
 }
 
+void OptionsMenu::SetHdrActive(bool active) {
+    if (hdr_active_ == active) return;
+    hdr_active_ = active;
+    view_.State(kGaugeGroup).color_scale.a = active ? 0.45f : 1.0f;
+    ApplyTexts();
+}
+
+bool OptionsMenu::ScenePreviewActive() const {
+    return !first_boot_ && state_ == State::Active && page_ == Page::Pc &&
+        switch_frame_ < 0.0f && !pc_.Confirming() && !pc_.IsQuestion() && pc_.ScenePreviewActive();
+}
+
 void OptionsMenu::ApplyPages() {
     float original = page_ == Page::Original ? 1.0f : 0.0f;
     float pc = page_ == Page::Pc ? 1.0f : 0.0f;
@@ -317,6 +329,14 @@ void OptionsMenu::ApplyPages() {
     if (page_ == Page::Pc || next_page_ == Page::Pc) {
         pc_.SetMeasure(view_, text_language_);
         pc_.Apply(view_, text_language_);
+    }
+    const bool preview = ScenePreviewActive();
+    if (preview || scene_preview_active_)
+        for (const uint16_t id : {2, 37, 155, 158}) view_.State(id).visible = !preview;
+    scene_preview_active_ = preview;
+    if (hdr_active_) {
+        view_.State(kBrightnessLabel).text = std::string(PcText("pc_hdr_sdr_brightness_disabled", text_language_));
+        view_.State(kTip).text = std::string(PcText("pc_note_hdr_sdr_brightness_disabled", text_language_));
     }
     ApplyPrompts();
 }
@@ -795,11 +815,11 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
         game.Options().invert_x = horizontal_;
         Play(horizontal_ ? "UI_sys_opt_camera_b_sel_2" : "UI_sys_opt_camera_b_sel_1");
     }
-    if (input.brightness_down && brightness_ > 0) {
+    if (!hdr_active_ && input.brightness_down && brightness_ > 0) {
         cursor();
         game.Options().brightness = --brightness_;
         HoldBrightness();
-    } else if (input.brightness_up && brightness_ < 10) {
+    } else if (!hdr_active_ && input.brightness_up && brightness_ < 10) {
         cursor();
         game.Options().brightness = ++brightness_;
         HoldBrightness();
@@ -897,7 +917,7 @@ void OptionsMenu::OriginalClick(Game& game, glm::vec2 units, MenuInput& input) {
     const glm::vec2 gauge = view_.WorldPosition(kGaugeGroup) + glm::vec2(5.0f, -14.0f);
     if (std::abs(units.x - gauge.x) <= 20.0f && std::abs(units.y - gauge.y) <= 1.5f) {
         const int target = std::clamp(static_cast<int>(std::lround((units.x - (gauge.x - 19.2f)) / 38.4f * 10.0f)), 0, 10);
-        if (target != brightness_) {
+        if (!hdr_active_ && target != brightness_) {
             const bool up = target > brightness_;
             brightness_ = up ? target - 1 : target + 1;
             (up ? input.brightness_up : input.brightness_down) = true;
@@ -923,7 +943,7 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
         archive_view_.DrawFullScreen(batch, canvas, *assets_, pc_.Panel(), PcText(pc_.FullScreenHint(), text_language_), prompt_style_, text_language_);
         return;
     }
-    if (pillar_alpha_ > 0.0f) {
+    if (pillar_alpha_ > 0.0f && !ScenePreviewActive()) {
         const float left = canvas.origin.x;
         const float right = canvas.origin.x + UiCanvas::kWidth * canvas.scale;
         const float width = static_cast<float>(batch.Extent().width);

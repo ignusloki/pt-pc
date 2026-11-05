@@ -466,7 +466,7 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
     }
     FogBlock fog;
     std::copy(std::begin(context.fog), std::end(context.fog), std::begin(fog.fog));
-    fog.mode = glm::uvec4(context.fog_mode, 0u, 0u, 0u);
+    fog.mode = glm::uvec4(context.fog_mode, context.hdr_output ? 1u : 0u, 0u, 0u);
     const uint64_t fog_offset = offscreen ? 2 * kFogStride : 0;
     std::memcpy(static_cast<uint8_t*>(slot.fog.mapped) + fog_offset, &fog, sizeof(fog));
     gpu_->FlushMapped(slot.fog, fog_offset, sizeof(fog));

@@ -18,6 +18,11 @@
 
 namespace pt::vfx {
 
+std::atomic<bool> g_enhanced_rendering{false};
+void SetEnhancedRendering(bool enabled) { g_enhanced_rendering = enabled; }
+std::atomic<int> g_flare_quality{0};
+std::atomic<float> g_flare_strength{1.0f};
+void SetFlareQuality(int quality, float strength) { g_flare_quality = quality; g_flare_strength = strength; }
 std::atomic<float> g_flare_ghost_scale{0.0f};
 void SetFlareGhostScale(float scale) { g_flare_ghost_scale = scale; }
 
@@ -1168,7 +1173,9 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         const glm::vec4 uv = shape.attr[kUv] >= 0 ? Eval(c, shape.attr[kUv]) : glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
         glm::vec4 color = shape.attr[kColor] >= 0 ? Eval(c, shape.attr[kColor]) : glm::vec4(1.0f);
         if (mesh) {
-            color = WrapUnorm8(color);
+            // Legacy mesh tint packing wraps RGB modulo 256, losing HDR energy
+            // and even changing its hue. Retain the authored coverage convention.
+            color = view.hdr_output ? glm::vec4(glm::max(glm::vec3(color), glm::vec3(0.0f)), WrapUnorm8(color).a) : WrapUnorm8(color);
         } else {
             color.a = Saturate(color.a);
         }
@@ -1484,9 +1491,11 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
     const glm::vec4 clip = view.view_projection * glm::vec4(light.position, 1.0f);
     const glm::vec2 ndc = std::fabs(clip.w) > 1e-6f ? glm::vec2(clip.x, -clip.y) / clip.w : glm::vec2(0.0f);
     const bool on_screen = std::fabs(ndc.x) <= 1.0f && std::fabs(ndc.y) <= 1.0f;
+    const bool smooth_flare = g_flare_quality.load() == 1;
     glm::vec4 params(Unorm8(0.5f), Unorm8(0.5f), 0.0f, std::max(flare.depth_tolerance, 0.001f));
     if (on_screen) {
-        params = glm::vec4(Unorm8(ndc.x * 0.5f + 0.5f), Unorm8(ndc.y * -0.5f + 0.5f), HalfTrunc(clip.w), params.w);
+        if (smooth_flare) params = glm::vec4(ndc.x * 0.5f + 0.5f, ndc.y * -0.5f + 0.5f, clip.w, params.w);
+        else params = glm::vec4(Unorm8(ndc.x * 0.5f + 0.5f), Unorm8(ndc.y * -0.5f + 0.5f), HalfTrunc(clip.w), params.w);
     }
     glm::vec4 root(0.0f);
     if (def->exposure_blend > 0.0f) {
@@ -1533,7 +1542,7 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
             sy *= el.angle_scale_y.Eval(light.cone);
         }
         alpha *= fade;
-        if (full_ghost) alpha *= ghost_scale;
+        if (full_ghost && !g_enhanced_rendering.load()) alpha *= ghost_scale;
         if (el.angle_alpha.valid) {
             alpha *= el.angle_alpha.Eval(light.cone);
         }
@@ -1584,8 +1593,13 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
         }
         q.uv = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
         q.uv_next = q.uv;
-        q.color = glm::vec4(PackedColor(el.color), alpha * el.color.a);
+        q.color = glm::vec4(view.hdr_output ? glm::max(glm::vec3(el.color), glm::vec3(0.0f)) : PackedColor(el.color), alpha * el.color.a);
         q.params = params;
+        q.color *= glm::vec4(glm::vec3(g_flare_strength.load() * (full_ghost && g_enhanced_rendering.load() ? ghost_scale : 1.0f)), 1.0f);
+        q.extra.x = smooth_flare ? (full_ghost ? 0.04f : 0.025f) : 0.0f;
+        q.extra.y = full_ghost ? 1.0f : 0.0f;
+        q.extra.z = ndc.x * 0.5f + 0.5f;
+        q.extra.w = ndc.y * -0.5f + 0.5f;
         q.luminance = root;
         q.info = glm::uvec4(textures ? textures(el.texture) : 0u, kQuadFlare, kNoTexture, 0u);
         out.quads.push_back(q);

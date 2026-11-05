@@ -57,6 +57,10 @@ void SceneRenderer::RecordReflectionSample(gpu::CommandList& cmd, const SceneLig
 }
 
 void SceneRenderer::RecordPost(gpu::CommandList& cmd, const SceneLighting& lighting, float dt) {
+    if (renderer_->EnhancedRendering()) {
+        RecordEnhancedPost(cmd, lighting, dt);
+        return;
+    }
     const ScreenSettings& screen = lighting.screen;
     const ExposureSettings& exposure = lighting.exposure;
     gpu::PassPush push;
@@ -460,15 +464,17 @@ void SceneRenderer::UpdateMotion(const Camera& camera, float dt) {
     if (glm::distance(previous.position, camera.position) > kCameraCutDistance || glm::dot(previous.Forward(), camera.Forward()) < 0.7071f) {
         previous = camera;
         up_.reset = true;
+        if (renderer_->EnhancedRendering()) motion_history_valid_ = false;
         cut = true;
     }
     if (!motion_history_valid_) {
+        if (renderer_->EnhancedRendering()) previous = camera;
         up_.reset = true;
     }
     const float aspect = static_cast<float>(output_extent_.width) / static_cast<float>(std::max(1u, output_extent_.height));
     previous_view_projection_ = previous.Projection(aspect) * previous.View();
     const float step = std::clamp(interval, 1.0e-4f, 1.0f);
-    frame_time_ = reference ? static_cast<double>(step) : static_cast<double>(step * 0.016666668f) + frame_time_ * 0.9833333333333333;
+    frame_time_ = reference || renderer_->EnhancedRendering() ? static_cast<double>(step) : static_cast<double>(step * 0.016666668f) + frame_time_ * 0.9833333333333333;
     if (reference || !lighting_->screen.smooth_camera_motion_blur) {
         blur_previous_view_projection_ = previous_view_projection_;
         blur_rates_valid_ = false;

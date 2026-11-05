@@ -4,17 +4,18 @@
 
 namespace pt {
 
-// MetalFX interpolates RGB, but does not retain the renderer's custom HDR-gain alpha.
-// Transport display-encoded HDR colour in RGB, then rebuild the compositor's input.
+// MetalFX interpolates RGB, but does not retain Original's custom HDR-gain alpha.
+// Original reconstructs that representation; Enhanced carries signed extended RGB
+// directly and restores coverage alpha. Neither path clips the other one's data.
 class MetalFxHdrTransport {
 public:
     ~MetalFxHdrTransport();
     bool Init(id<MTLDevice> device, NSUInteger width, NSUInteger height, MTLTextureUsage input_usage,
               MTLTextureUsage output_usage);
     void Release();
-    bool EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous, float brightness);
+    bool EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous, float brightness, bool extended_rgb = false);
     bool DecodeOutput(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous,
-                      id<MTLTexture> output, float brightness);
+                      id<MTLTexture> output, float brightness, bool extended_rgb = false);
     id<MTLTexture> Current() const { return current_; }
     id<MTLTexture> Previous() const { return previous_; }
     id<MTLTexture> Interpolated() const { return interpolated_; }

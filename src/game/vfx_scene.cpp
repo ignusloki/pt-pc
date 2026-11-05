@@ -740,7 +740,8 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
         pass.Submit(list);
         return;
     }
-    const vfx::ViewInfo view = View(camera, aspect);
+    vfx::ViewInfo view = View(camera, aspect);
+    view.hdr_output = pass.HdrOutput();
     std::vector<vfx::LightOut> lights;
     const SceneLighting* scene = &lighting;
     auto probe = [scene](const glm::vec3& p, bool ambient) {

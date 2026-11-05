@@ -43,7 +43,10 @@ class PackagingTests(unittest.TestCase):
         (self.build/'texture-tools').mkdir()
         (self.build/'texture-tools/retired-tool').write_bytes(b'old build cache')
         for shader in (REPO/'shaders').iterdir():
-            if shader.suffix in {'.vert','.frag','.comp'}:(self.build/'shaders'/f'{shader.name}.spv').write_bytes(b'SPIR-V fixture')
+            if shader.suffix in {'.vert','.frag','.comp'}:
+                (self.build/'shaders'/f'{shader.name}.spv').write_bytes(b'SPIR-V fixture')
+                if shader.name != 'hdr_boost.frag':
+                    (self.build/'shaders'/f'enhanced_{shader.name}.spv').write_bytes(b'Enhanced SPIR-V fixture')
         (self.source/'LICENSE.txt').write_text('Fixture license')
         (self.extractor/'PT.PkgExtract').write_bytes(self.magic)
     def tearDown(self):self.temp.cleanup()
@@ -131,6 +134,10 @@ class PackagingTests(unittest.TestCase):
     def test_incomplete_build_refused(self):
         (self.build/'voice/libggml-cpu-fixture.so').unlink()
         with self.assertRaisesRegex(RuntimeError,'Missing build output'):make_app.validate_build(self.build,self.build/'pt_release')
+    def test_missing_enhanced_shader_refused(self):
+        (self.build/'shaders/enhanced_tonemap.frag.spv').unlink()
+        with self.assertRaisesRegex(RuntimeError,'Shader build is incomplete'):
+            make_app.validate_build(self.build,self.build/'pt_release')
     def test_static_moltenvk_refused(self):
         (self.build/'libMoltenVK.dylib').write_bytes(b'!<arch>\n')
         with self.assertRaisesRegex(RuntimeError,'Expected a Mach-O'):make_app.validate_build(self.build,self.build/'pt_release')

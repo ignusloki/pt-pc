@@ -86,6 +86,7 @@ public:
     bool TakeStreetReturn() { return std::exchange(street_return_, false); }
     int TextLanguage() const { return text_language_; }
     int Selector() const { return selector_; }
+    void SetHdrActive(bool active);
     void SetPromptStyle(const PromptStyle& style) { prompt_style_ = style; }
     PromptDevice Prompts() const { return shown_prompts_; }
     const ui::UifModel* Model() const { return model_; }
@@ -99,6 +100,9 @@ private:
         float speed = 1.0f;
     };
 
+    bool hdr_active_ = false;
+    bool scene_preview_active_ = false;
+    bool ScenePreviewActive() const;
     void ApplyStatic();
     void ApplyPages();
     void SwitchPage(Game& game, Page page);

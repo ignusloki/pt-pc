@@ -20,6 +20,8 @@
 namespace pt::vfx {
 
 void SetFlareGhostScale(float scale);
+void SetFlareQuality(int quality, float strength);
+void SetEnhancedRendering(bool enabled);
 
 struct ViewInfo {
     glm::vec3 position{0.0f};
@@ -30,6 +32,7 @@ struct ViewInfo {
     float aspect = 16.0f / 9.0f;
     float fov_y = 1.0f;
     float near_plane = 0.05f;
+    bool hdr_output = false;
 };
 
 enum QuadFlag : uint32_t {

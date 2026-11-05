@@ -685,7 +685,7 @@ private:
                 id<MTLTexture> native_previous = export_texture(previous);
                 id<MTLTexture> native_output = export_texture(interp_);
                 const bool hdr = UsesHdrTransport();
-                if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous, prepare_.output_brightness)) {
+                if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous, prepare_.output_brightness, ctx_.enhanced_rendering)) {
                     LogError("frame generation: encoding HDR input failed");
                     return nullptr;
                 }
@@ -710,7 +710,7 @@ private:
                 hdr_brightness_ = hdr ? prepare_.output_brightness : 0.0f;
                 reset_ = false;
                 [interpolator encodeToCommandBuffer:command];
-                if (hdr && !hdr_transport_.DecodeOutput(command, native_current, native_previous, native_output, prepare_.output_brightness)) {
+                if (hdr && !hdr_transport_.DecodeOutput(command, native_current, native_previous, native_output, prepare_.output_brightness, ctx_.enhanced_rendering)) {
                     LogError("frame generation: decoding HDR output failed");
                     return nullptr;
                 }
@@ -788,7 +788,7 @@ private:
             hdr_brightness_ = 0.0f;
             LogInfo("frame generation: interpolator for {}x{} motion and depth -> {}x{} colour", render.width, render.height, display_.width,
                     display_.height);
-            if (UsesHdrTransport()) LogInfo("frame generation: HDR brightness travels in RGB with the display transfer; custom gain is restored after interpolation");
+            if (UsesHdrTransport()) LogInfo("frame generation: {} HDR RGB transport", ctx_.enhanced_rendering ? "extended signed" : "original gain");
             return true;
         }
         return false;

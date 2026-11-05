@@ -1,0 +1,26 @@
+# Run with an isolated Original settings file and --no-save.
+700 sstep 15
+700 swait 30
+700 sui menu pc
+700 swait 90
+700 sexpect pcrow pc_display_mode
+700 sexpect pcvaluekey pc_rendering_pipeline pc_pipeline_original
+700 sui menukey down
+700 swait 4
+700 sui menukey down
+700 swait 4
+700 sui menukey down
+700 swait 4
+700 sui menukey down
+700 swait 4
+700 sui menukey down
+700 swait 4
+700 sexpect pcrow pc_rendering_pipeline
+700 sui menukey right
+700 swait 20
+700 sui menukey accept
+700 swait 40
+700 sexpect pcvaluekey pc_rendering_pipeline pc_pipeline_enhanced
+700 sshot pipeline_enhanced_next_start.png
+700 slog
+700 squit

@@ -102,6 +102,13 @@ inline float ResolveHdrPeak(float setting, float display) {
     return std::isfinite(chosen) ? std::clamp(chosen, float(kHdrPeakMin), float(kHdrPeakMax)) : float(kHdrPeakFallback);
 }
 
+inline float EnhancedHdrShoulder(float m, float ratio) {
+    const float knee = std::min(1.0f, .8f * ratio);
+    if (m <= knee) return m;
+    const float headroom = ratio - knee;
+    const float excess = m - knee;
+    return knee + headroom * (excess / (excess + headroom));
+}
 constexpr float kHdrSourceWhite = 3.0f;
 inline float HdrShoulder(float m, float ratio) {
     if (m <= 1.0f || ratio <= 1.001f) return std::min(m, 1.0f);
