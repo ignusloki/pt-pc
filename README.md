@@ -14,10 +14,11 @@
 
 </div>
 
-**Release 1.0.12:** **iOS Beta 2** fixes iPhone 13 startup and AirPlay crashes, with
-an optimized IPA that needs to be sideloaded. Apple silicon/Intel Mac packages are rebuilt;
-Android remains an official source release. No original game files are included.
-Read the [changelog](docs/release-notes-1.0.12.md),
+**Release 1.0.13:** Mac players can choose **Original** or **Enhanced** rendering.
+Original remains the default; Enhanced adds HDR colour customization, independent UI
+brightness, smoother lighting effects and a live settings preview. Android and iOS
+retain Original rendering. No original game files are included.
+Read the [changelog](docs/release-notes-1.0.13.md),
 [Android installation guide](docs/android-installation.md), and
 [iPhone/iPad beta guide](docs/mobile.md).
 

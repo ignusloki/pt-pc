@@ -37,20 +37,33 @@ targets and read-only folders still fail their checks. The app does not mount a 
 
 ## Optional features
 
+PC Settings → Display → Rendering selects **Original** or **Enhanced**. Original
+is the default and retains the current presentation and effect settings. Enhanced
+adapts the HDR and post-processing improvements from
+[hartapfel/pt-pc-hdr](https://github.com/hartapfel/pt-pc-hdr). Switching pipelines
+takes effect after restarting, and each pipeline remembers its own effect settings.
+Both work with SDR output. See the [1.0.13 notes](release-notes-1.0.13.md).
+
 HDR uses floating point scRGB through MoltenVK. The Mac presentation layer keeps the shader's 80-nits-per-unit scale in
 Core Animation's HDR metadata, reapplies it after a resize or HDR-level change, and clears it on return to SDR. This avoids
 MoltenVK 1.4.2's default metadata scale of one nit per unit dimming the image. PC Settings → Display → HDR paper white
 controls ordinary whites and menus (200 nits by default); HDR peak brightness controls highlights (Auto falls back to
-1000 nits when the display peak is unknown). Screen capability and room lighting still affect the visible result.
+1000 nits when the display peak is unknown). With Enhanced, paper white controls
+the game while **HDR UI brightness** adjusts menus and subtitles independently.
+Enhanced also adds exposure, contrast, highlights, shadows, saturation, wide-gamut
+colour handling and SDR-response choices. The see-through settings preview shows
+adjustments against the paused scene; neutral grading can be restored at any time.
+Screen capability and room lighting still affect the visible result.
 
 MetalFX temporal upscaling is available when the Mac GPU supports it. It uses the existing render inputs and ordered
 Vulkan/Metal timeline handoff, and remains Off by default. The menu explains unavailable choices; choosing an
 unsupported scaler does not remove the native rendering path. See [upscaling](upscaling.md). MetalFX frame generation
 is experimental, Off by default, and available only on supported Apple silicon with macOS 26 or newer.
-For scRGB HDR, the frame interpolator receives RGB with the highlight gain and brightness curve included. Keeping the
+For Original scRGB HDR, the frame interpolator receives RGB with the highlight gain and brightness curve included. Keeping the
 display transfer in these half-float intermediates preserves dark channels at low brightness. The
 Mac backend restores the compositor's colour/gain representation afterward; it does not rely on MetalFX preserving
-custom alpha. SDR follows its existing path. The real MetalFX GPU regression checks static highlights, colour, dark
+custom alpha. Enhanced passes extended signed RGB through interpolation, preserving
+wide-gamut channels and highlights without the legacy gain buffer. SDR follows its existing path. The real MetalFX GPU regression checks static highlights, colour, dark
 areas and fades after interpolation warm-up, including brightness changes and output resize. This check skips devices
 and SDKs without the macOS 26 frame interpolator.
 The native HDR-presentation check skips hosts without a Metal device or the renderer's required argument buffers tier 2.
