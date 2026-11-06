@@ -17,6 +17,11 @@ struct Value {
     bool object = false;
     bool is_string = false;
 };
+inline std::string StringMember(const Value& v, const char* name) {
+    const auto it = v.members.find(name);
+    return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
+}
+
 class Reader {
 public:
     explicit Reader(std::string_view s) : s_(s) {}

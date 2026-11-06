@@ -1,3 +1,4 @@
+#include "game/fox_angles.h"
 #include "game/player.h"
 
 #include <algorithm>
@@ -29,18 +30,6 @@ constexpr float kLookDecelFrames = 1.0f;
 constexpr float kLookFrame = 0.016683333f;
 constexpr float kLookFocal = 21.0f;
 constexpr float kBodyTurnDivisor = 12.0f;
-
-float Wrap(float a) {
-    const float t = a + kPi;
-    return t >= 0.0f ? std::fmod(t, 2.0f * kPi) - kPi : kPi - std::fmod(-t, 2.0f * kPi);
-}
-
-float FoxYawOf(const glm::vec3& v) {
-    if (std::abs(v.x) + std::abs(v.z) < 1e-6f) {
-        return 0.0f;
-    }
-    return std::atan2(v.x, v.z);
-}
 
 glm::vec3 RotateYaw(float fox_yaw, const glm::vec3& v) {
     const float c = std::cos(fox_yaw);
@@ -136,7 +125,7 @@ void Player::Spawn(const glm::mat4& world) {
 void Player::Warp(const glm::vec3& position, float fox_yaw) {
     controller.position = position;
     controller.Reset();
-    body_yaw_ = body_yaw_target_ = Wrap(fox_yaw);
+    body_yaw_ = body_yaw_target_ = WrapFoxAngle(fox_yaw);
     yaw = target_yaw = fox_yaw + kPi;
     look_roll_ = 0.0f;
     look_velocity_ = glm::vec2(0.0f);
@@ -225,9 +214,7 @@ void Player::FollowCamera(float yaw_value, float pitch_value) {
     look_velocity_ = glm::vec2(0.0f);
 }
 
-glm::vec3 Player::LookDirection() const {
-    return glm::normalize(glm::vec3(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)));
-}
+glm::vec3 Player::LookDirection() const { return ViewForward(yaw, pitch); }
 
 glm::vec3 Player::CameraForward() const {
     return glm::vec3(-std::sin(yaw), 0.0f, -std::cos(yaw));
@@ -313,7 +300,7 @@ void Player::UpdateLocomotion(const InputState& input) {
 void Player::LocomotionFrame(const PlayerFrameContext& context) {
     const float m = stick_magnitude_;
     StepStandWalk(m, LeftStickLocked());
-    const float delta = Wrap(stick_heading_ - body_yaw_);
+    const float delta = WrapFoxAngle(stick_heading_ - body_yaw_);
     const int direction = WalkDirection(delta);
     motion_.rate = standing_ ? 1.0f : SpeedRate(delta, m, context.full_screen_blur);
     motion_.heading = stick_heading_;
@@ -373,14 +360,14 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     }
     peephole_look_active_ = context.peephole_theater;
     if (peephole_look_active_ && context.peephole_center_valid) {
-        peephole_yaw_ = Wrap(body_yaw_ - kPi);
+        peephole_yaw_ = WrapFoxAngle(body_yaw_ - kPi);
     }
     const uint32_t lock_b = locks.Mask('B');
     if (input.vr_look && !(lock_b & 2) && !context.peephole_theater) {
         if (vr_looked_) {
-            vr_turn_ = Wrap(vr_turn_ + Wrap(yaw - vr_last_yaw_));
+            vr_turn_ = WrapFoxAngle(vr_turn_ + WrapFoxAngle(yaw - vr_last_yaw_));
         }
-        target_yaw = yaw = Wrap(input.vr_look_angles.x + vr_turn_);
+        target_yaw = yaw = WrapFoxAngle(input.vr_look_angles.x + vr_turn_);
         vr_last_yaw_ = yaw;
         vr_looked_ = true;
         target_pitch = pitch = ClampPitch(vr_script_pitch_ ? *vr_script_pitch_ : input.vr_look_angles.y);
@@ -454,7 +441,7 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
         }
     }
     if (dt > 0.0f) {
-        pc_turns_[pc_turn_next_] = glm::vec4(Wrap(pc_yaw_from - target_yaw), target_pitch - pc_pitch_from, dt, 0.0f);
+        pc_turns_[pc_turn_next_] = glm::vec4(WrapFoxAngle(pc_yaw_from - target_yaw), target_pitch - pc_pitch_from, dt, 0.0f);
         pc_turn_next_ = (pc_turn_next_ + 1) % pc_turns_.size();
     }
     glm::vec3 pc_sum(0.0f);
@@ -512,7 +499,7 @@ glm::vec2 Player::PeepholeTurnDelta(glm::vec2 delta) const {
     float next_yaw = base_yaw + delta.x;
     float next_pitch = base_pitch + delta.y;
     ClampPeepholeLook(next_yaw, next_pitch);
-    return glm::vec2(Wrap(next_yaw - base_yaw), next_pitch - base_pitch);
+    return glm::vec2(WrapFoxAngle(next_yaw - base_yaw), next_pitch - base_pitch);
 }
 
 void Player::ClampPeepholeLook(float& yaw_value, float& pitch_value) const {
@@ -524,7 +511,7 @@ void Player::ClampPeepholeLook(float& yaw_value, float& pitch_value) const {
 
 void Player::ClampPeepholeLook(float& yaw_value, float& pitch_value, float center_yaw) {
     constexpr float limit = 0.2617994f;
-    const float offset = Wrap(yaw_value - center_yaw);
+    const float offset = WrapFoxAngle(yaw_value - center_yaw);
     if (std::abs(offset) > limit) {
         yaw_value = center_yaw + std::clamp(offset, -limit, limit);
     }
@@ -580,7 +567,7 @@ void Player::UpdateZoom(float dt, const PlayerFrameContext& context) {
 void Player::UpdateBody(float dt, const CollisionWorld& world) {
     if (!peephole_look_active_) {
         const float follow = 1.0f - std::pow(1.0f - 1.0f / kBodyTurnDivisor, dt * 299.7003f * 0.2f);
-        body_yaw_ = Wrap(body_yaw_ + Wrap(body_yaw_target_ - body_yaw_) * follow);
+        body_yaw_ = WrapFoxAngle(body_yaw_ + WrapFoxAngle(body_yaw_target_ - body_yaw_) * follow);
     }
     const BodyAdvance advance = body_.Advance(dt * kMotionFps * motion_.rate, dt * kMotionFps);
     glm::vec3 offset = RotateYaw(body_yaw_, glm::vec3(advance.root.x, 0.0f, advance.root.y));
@@ -621,7 +608,7 @@ void Player::UpdateBody(float dt, const CollisionWorld& world) {
 void Player::UpdateEye(float dt) {
     const glm::vec3 head_x = body_.HeadRotation() * glm::vec3(1.0f, 0.0f, 0.0f);
     roll_ = kHeadRollShare * camera_roll * std::atan2(head_x.y, std::sqrt(head_x.x * head_x.x + head_x.z * head_x.z));
-    glm::vec3 eye = BodyToWorld(body_.Head()) + RotateYaw(Wrap(target_yaw + kPi), kHeadEyeOffset);
+    glm::vec3 eye = BodyToWorld(body_.Head()) + RotateYaw(WrapFoxAngle(target_yaw + kPi), kHeadEyeOffset);
     if (handoff_weight_ > 0.0f) {
         handoff_weight_ -= dt * stick_magnitude_;
         if (handoff_weight_ > 0.0f) {
@@ -643,10 +630,10 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
         }
     }
     body_yaw_target_ = context.peephole_theater && context.peephole_center_valid ?
-        Wrap(context.peephole_center_yaw + kPi) : CameraFoxYaw();
+        WrapFoxAngle(context.peephole_center_yaw + kPi) : CameraFoxYaw();
     if (context.peephole_theater && PlayerLocomotionData().loaded) {
         const float follow = 1.0f - std::pow(1.0f - 1.0f / kBodyTurnDivisor, dt * 299.7003f * 0.2f);
-        body_yaw_ = Wrap(body_yaw_ + Wrap(body_yaw_target_ - body_yaw_) * follow);
+        body_yaw_ = WrapFoxAngle(body_yaw_ + WrapFoxAngle(body_yaw_target_ - body_yaw_) * follow);
     }
     UpdateLook(dt, input, context);
     UpdateLocomotion(input);
@@ -757,7 +744,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     const bool have_feet = drawn_body_.FootTargets(clip_model);
     const glm::mat4 pose = PoseTransform();
     const glm::mat4 to_model = glm::inverse(pose);
-    const float turned = Wrap(body_yaw_ - last_body_yaw_);
+    const float turned = WrapFoxAngle(body_yaw_ - last_body_yaw_);
     last_body_yaw_ = body_yaw_;
     const bool planting = have_feet && !walking;
     turn_still_ = planting && std::abs(turned) < 1.0e-4f && glm::length(offset - offset_before) < 1.0e-5f ? turn_still_ + dt : 0.0f;
@@ -770,7 +757,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             if (foot.state == Foot::Locked && have_feet) {
                 foot.state = Foot::Stepping;
                 foot.from = foot.floor;
-                foot.from_twist = Wrap(foot.yaw - body_yaw_);
+                foot.from_twist = WrapFoxAngle(foot.yaw - body_yaw_);
                 foot.time = 0.0f;
                 foot.length = kReleaseSeconds;
                 foot.arc = false;
@@ -784,7 +771,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         }
         if (foot.state == Foot::Locked) {
             const glm::vec2 apart(foot.floor.x - clip_world.x, foot.floor.z - clip_world.z);
-            const float twist = Wrap(foot.yaw - body_yaw_);
+            const float twist = WrapFoxAngle(foot.yaw - body_yaw_);
             off[side] = std::max(glm::length(apart) / (draw_stopping_ ? kStopStepDistance : kStepDistance), std::abs(twist) / kStepAngle);
             if (turn_still_ >= kSettleSeconds && (glm::length(apart) > kSettleDistance || std::abs(twist) > kSettleAngle)) {
                 off[side] = std::max(off[side], 0.999f);
@@ -800,7 +787,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         const bool other_steps = feet_[1 - pick].state == Foot::Stepping;
         const bool lifted = off[pick] >= 2.0f;
         if (foot.state == Foot::Locked && (lifted || (off[pick] >= 0.999f && !other_steps))) {
-            const float twist = Wrap(foot.yaw - body_yaw_);
+            const float twist = WrapFoxAngle(foot.yaw - body_yaw_);
             foot.state = Foot::Stepping;
             foot.from = foot.floor;
             foot.from_twist = twist;
@@ -816,7 +803,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         }
         const glm::vec3 clip_world(pose * glm::vec4(clip_model[side], 1.0f));
         if (foot.state == Foot::Locked) {
-            float twist = Wrap(foot.yaw - body_yaw_);
+            float twist = WrapFoxAngle(foot.yaw - body_yaw_);
             if (std::abs(twist) > kMaxTwist) {
                 foot.yaw = body_yaw_ + std::copysign(kMaxTwist, twist);
                 twist = std::copysign(kMaxTwist, twist);

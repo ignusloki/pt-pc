@@ -1,3 +1,4 @@
+#include <utility>
 #pragma once
 #include <zlib.h>
 
@@ -81,16 +82,13 @@ struct ProgressTrace {
                std::to_string(last_total ? last_done * 100 / last_total : 0) + "% (" + std::to_string(last_done) + "/" + std::to_string(last_total) + " bytes)";
     }
 };
-inline fs::path Utf8Path(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+inline fs::path Utf8Path(const std::string& text) { return pt::update_journal::FromUtf8(text); }
 inline fs::path FolderPath(const fs::path& folder) {
     fs::path path = fs::absolute(folder).lexically_normal();
     while (!path.has_filename() && path.has_relative_path()) path = path.parent_path();
     return path;
 }
-inline std::string PathUtf8(const fs::path& path) {
-    const std::u8string text = path.generic_u8string();
-    return std::string(text.begin(), text.end());
-}
+inline std::string PathUtf8(const fs::path& path) { return pt::update_journal::ToUtf8(path); }
 
 inline fs::path Contained(const fs::path& root, const std::string& name) {
     const fs::path relative = Utf8Path(name);
@@ -148,10 +146,7 @@ inline std::string RegionOf(const std::string& title, const std::string& content
     if (const char* region = Region(title)) return region;
     return "unknown";
 }
-inline std::string Lower(std::string text) {
-    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
-    return text;
-}
+inline std::string Lower(std::string text) { return pt::AsciiLowerOwned(std::move(text)); }
 inline GameFiles FindArchives(const fs::path& folder) {
     GameFiles found;
     std::error_code error;

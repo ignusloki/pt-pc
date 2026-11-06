@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/ui/uif.h"
 
 #include <algorithm>
@@ -5,32 +6,15 @@
 #include <cstring>
 #include <format>
 #include <unordered_map>
+#include <utility>
 
 #include "engine/core/strcode.h"
 
 namespace pt::ui {
 namespace {
 
-uint16_t U16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
-float F32(const uint8_t* p) {
-    float v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
 glm::vec4 Vec4(const uint8_t* p) {
-    return {F32(p), F32(p + 4), F32(p + 8), F32(p + 12)};
+    return {ReadBinaryUnchecked<float>(p), ReadBinaryUnchecked<float>(p + 4), ReadBinaryUnchecked<float>(p + 8), ReadBinaryUnchecked<float>(p + 12)};
 }
 
 const std::unordered_map<uint64_t, int>& TextureSlots() {
@@ -99,13 +83,13 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
     }
     const uint8_t* b = data.data();
     const size_t size = data.size();
-    const uint16_t node_count = U16(b + 0x0A);
-    const uint16_t name_count = U16(b + 0x0C);
-    const uint16_t texture_count = U16(b + 0x0E);
-    const uint32_t node_table = U32(b + 0x10);
-    const uint32_t name_table = U32(b + 0x14);
-    const uint32_t texture_table = U32(b + 0x18);
-    const uint32_t blob = U32(b + 0x1C);
+    const uint16_t node_count = ReadBinaryUnchecked<uint16_t>(b + 0x0A);
+    const uint16_t name_count = ReadBinaryUnchecked<uint16_t>(b + 0x0C);
+    const uint16_t texture_count = ReadBinaryUnchecked<uint16_t>(b + 0x0E);
+    const uint32_t node_table = ReadBinaryUnchecked<uint32_t>(b + 0x10);
+    const uint32_t name_table = ReadBinaryUnchecked<uint32_t>(b + 0x14);
+    const uint32_t texture_table = ReadBinaryUnchecked<uint32_t>(b + 0x18);
+    const uint32_t blob = ReadBinaryUnchecked<uint32_t>(b + 0x1C);
     auto in_range = [&](size_t at, size_t bytes) { return at + bytes <= size; };
     if (!in_range(blob + static_cast<size_t>(name_table) + name_count * 8ull, 0) || !in_range(node_table, node_count * 8ull) ||
         !in_range(texture_table, texture_count * 8ull)) {
@@ -117,8 +101,8 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
         names_.push_back(hash & kStrCode64Mask);
     }
     for (uint16_t i = 0; i < texture_count; ++i) {
-        const uint32_t length = U32(b + texture_table + i * 8ull);
-        const uint32_t offset = U32(b + texture_table + i * 8ull + 4);
+        const uint32_t length = ReadBinaryUnchecked<uint32_t>(b + texture_table + i * 8ull);
+        const uint32_t offset = ReadBinaryUnchecked<uint32_t>(b + texture_table + i * 8ull + 4);
         if (!in_range(static_cast<size_t>(blob) + offset, length)) {
             return fail("UIF texture path out of range");
         }
@@ -129,62 +113,62 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
     for (uint16_t i = 0; i < node_count; ++i) {
         const uint8_t* entry = b + node_table + i * 8ull;
         UifNode node;
-        node.id = U16(entry);
-        node.type = static_cast<UifNodeType>(U16(entry + 2));
-        const uint32_t at = U32(entry + 4);
+        node.id = ReadBinaryUnchecked<uint16_t>(entry);
+        node.type = static_cast<UifNodeType>(ReadBinaryUnchecked<uint16_t>(entry + 2));
+        const uint32_t at = ReadBinaryUnchecked<uint32_t>(entry + 4);
         const size_t node_size = node.type == UifNodeType::Root ? 8 : node.type == UifNodeType::Mesh ? 0x88 : node.type == UifNodeType::Text ? 0x8C : 0x50;
         if (!in_range(at, node_size)) {
             return fail(std::format("UIF node {} out of range", node.id));
         }
         const uint8_t* n = b + at;
-        parents.push_back(U16(n));
+        parents.push_back(ReadBinaryUnchecked<uint16_t>(n));
         if (node.type != UifNodeType::Root) {
-            node.flags = U16(n + 4);
-            node.text_flags = U16(n + 6);
-            node.size = {F32(n + 8), F32(n + 12)};
-            node.scale = {F32(n + 16), F32(n + 20)};
+            node.flags = ReadBinaryUnchecked<uint16_t>(n + 4);
+            node.text_flags = ReadBinaryUnchecked<uint16_t>(n + 6);
+            node.size = {ReadBinaryUnchecked<float>(n + 8), ReadBinaryUnchecked<float>(n + 12)};
+            node.scale = {ReadBinaryUnchecked<float>(n + 16), ReadBinaryUnchecked<float>(n + 20)};
             if ((node.flags & 0x100) != 0) {
                 node.rotation = Vec4(n + 0x18);
             } else {
-                const float half = glm::radians(F32(n + 0x20)) * 0.5f;
+                const float half = glm::radians(ReadBinaryUnchecked<float>(n + 0x20)) * 0.5f;
                 node.rotation = {0.0f, 0.0f, std::sin(half), std::cos(half)};
             }
             node.translate = Vec4(n + 0x28);
-            node.priority = F32(n + 0x38);
+            node.priority = ReadBinaryUnchecked<float>(n + 0x38);
             node.color = Vec4(n + 0x3C);
         }
         if (node.type == UifNodeType::Mesh) {
-            const uint16_t vertex_count = U16(n + 0x50);
-            const uint16_t primitive_count = U16(n + 0x52);
-            const uint32_t positions = U32(n + 0x54);
-            const uint32_t uvs = U32(n + 0x58);
-            const uint32_t triangles = U32(n + 0x64);
+            const uint16_t vertex_count = ReadBinaryUnchecked<uint16_t>(n + 0x50);
+            const uint16_t primitive_count = ReadBinaryUnchecked<uint16_t>(n + 0x52);
+            const uint32_t positions = ReadBinaryUnchecked<uint32_t>(n + 0x54);
+            const uint32_t uvs = ReadBinaryUnchecked<uint32_t>(n + 0x58);
+            const uint32_t triangles = ReadBinaryUnchecked<uint32_t>(n + 0x64);
             if (!in_range(static_cast<size_t>(blob) + positions, vertex_count * 16ull) || !in_range(static_cast<size_t>(blob) + uvs, vertex_count * 16ull) ||
                 !in_range(static_cast<size_t>(blob) + triangles, primitive_count * 6ull)) {
                 return fail(std::format("UIF mesh {} data out of range", node.id));
             }
             for (uint16_t v = 0; v < vertex_count; ++v) {
-                node.positions.push_back({F32(b + blob + positions + v * 16ull), F32(b + blob + positions + v * 16ull + 4)});
-                node.uvs.push_back({F32(b + blob + uvs + v * 16ull), F32(b + blob + uvs + v * 16ull + 4)});
+                node.positions.push_back({ReadBinaryUnchecked<float>(b + blob + positions + v * 16ull), ReadBinaryUnchecked<float>(b + blob + positions + v * 16ull + 4)});
+                node.uvs.push_back({ReadBinaryUnchecked<float>(b + blob + uvs + v * 16ull), ReadBinaryUnchecked<float>(b + blob + uvs + v * 16ull + 4)});
             }
             for (uint32_t k = 0; k < primitive_count * 3u; ++k) {
-                node.indices.push_back(U16(b + blob + triangles + k * 2ull));
+                node.indices.push_back(ReadBinaryUnchecked<uint16_t>(b + blob + triangles + k * 2ull));
             }
-            const uint32_t strip = U32(n + 0x60);
-            const uint16_t point_count = U16(n + 0x6A);
-            const uint32_t point_table = U32(n + 0x70);
+            const uint32_t strip = ReadBinaryUnchecked<uint32_t>(n + 0x60);
+            const uint16_t point_count = ReadBinaryUnchecked<uint16_t>(n + 0x6A);
+            const uint32_t point_table = ReadBinaryUnchecked<uint32_t>(n + 0x70);
             if (point_count && in_range(point_table, point_count * 0x18ull) && in_range(static_cast<size_t>(blob) + strip, vertex_count * 2ull)) {
                 for (uint16_t k = 0; k < point_count; ++k) {
                     const uint8_t* e = b + point_table + k * 0x18ull;
                     UifPoint point;
-                    point.name = U16(e) < names_.size() ? names_[U16(e)] : 0;
-                    point.position = {F32(e + 8), F32(e + 12)};
-                    const uint32_t list = U32(e + 4);
+                    point.name = ReadBinaryUnchecked<uint16_t>(e) < names_.size() ? names_[ReadBinaryUnchecked<uint16_t>(e)] : 0;
+                    point.position = {ReadBinaryUnchecked<float>(e + 8), ReadBinaryUnchecked<float>(e + 12)};
+                    const uint32_t list = ReadBinaryUnchecked<uint32_t>(e + 4);
                     if (e[2] == 1 && list != 0xFFFFFFFFu && in_range(static_cast<size_t>(blob) + list, e[3] * 2ull)) {
                         for (uint8_t j = 0; j < e[3]; ++j) {
-                            const uint16_t slot = U16(b + blob + list + j * 2ull);
+                            const uint16_t slot = ReadBinaryUnchecked<uint16_t>(b + blob + list + j * 2ull);
                             if (slot < vertex_count) {
-                                point.vertices.push_back(U16(b + blob + strip + slot * 2ull));
+                                point.vertices.push_back(ReadBinaryUnchecked<uint16_t>(b + blob + strip + slot * 2ull));
                             }
                         }
                     }
@@ -192,17 +176,17 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
                 }
             }
             DefaultParams(node.material.params);
-            if (const uint16_t material = U16(n + 0x74); material < names_.size()) {
+            if (const uint16_t material = ReadBinaryUnchecked<uint16_t>(n + 0x74); material < names_.size()) {
                 node.material_name = names_[material];
             }
-            const uint16_t binding_count = U16(n + 0x78);
-            const uint16_t param_count = U16(n + 0x7A);
-            const uint32_t bindings = U32(n + 0x7C);
-            const uint32_t params = U32(n + 0x80);
+            const uint16_t binding_count = ReadBinaryUnchecked<uint16_t>(n + 0x78);
+            const uint16_t param_count = ReadBinaryUnchecked<uint16_t>(n + 0x7A);
+            const uint32_t bindings = ReadBinaryUnchecked<uint32_t>(n + 0x7C);
+            const uint32_t params = ReadBinaryUnchecked<uint32_t>(n + 0x80);
             if (in_range(bindings, binding_count * 4ull)) {
                 for (uint16_t k = 0; k < binding_count; ++k) {
-                    const uint16_t name = U16(b + bindings + k * 4ull);
-                    const uint16_t texture = U16(b + bindings + k * 4ull + 2);
+                    const uint16_t name = ReadBinaryUnchecked<uint16_t>(b + bindings + k * 4ull);
+                    const uint16_t texture = ReadBinaryUnchecked<uint16_t>(b + bindings + k * 4ull + 2);
                     if (name < names_.size()) {
                         auto it = TextureSlots().find(names_[name]);
                         if (it != TextureSlots().end()) {
@@ -213,11 +197,11 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
             }
             if (in_range(params, param_count * 8ull)) {
                 for (uint16_t k = 0; k < param_count; ++k) {
-                    const uint16_t name = U16(b + params + k * 8ull + 2);
+                    const uint16_t name = ReadBinaryUnchecked<uint16_t>(b + params + k * 8ull + 2);
                     if (name < names_.size()) {
                         auto it = ParamSlots().find(names_[name]);
                         if (it != ParamSlots().end()) {
-                            node.material.params[it->second] = F32(b + params + k * 8ull + 4);
+                            node.material.params[it->second] = ReadBinaryUnchecked<float>(b + params + k * 8ull + 4);
                         }
                     }
                 }
@@ -225,8 +209,8 @@ bool UifModel::Parse(std::span<const uint8_t> data, std::string* error) {
         } else if (node.type == UifNodeType::Text) {
             node.box_min = Vec4(n + 0x50);
             node.box_max = Vec4(n + 0x60);
-            const uint16_t text = U16(n + 0x80);
-            const uint16_t font = U16(n + 0x82);
+            const uint16_t text = ReadBinaryUnchecked<uint16_t>(n + 0x80);
+            const uint16_t font = ReadBinaryUnchecked<uint16_t>(n + 0x82);
             node.text_name = text < names_.size() ? names_[text] : 0;
             node.font_name = font < names_.size() ? names_[font] : 0;
         }
@@ -253,8 +237,7 @@ const UifNode* UifModel::FindById(uint16_t id) const {
 }
 
 UifNode* UifModel::FindById(uint16_t id) {
-    const int index = IndexOfId(id);
-    return index >= 0 ? &nodes_[index] : nullptr;
+    return const_cast<UifNode*>(std::as_const(*this).FindById(id));
 }
 
 uint16_t UifModel::AddNode(UifNode node, uint64_t name) {

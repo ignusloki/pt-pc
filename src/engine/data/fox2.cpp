@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/data/fox2.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,15 +12,6 @@ namespace {
 
 constexpr uint32_t kMagic = 0x786F62F2;
 constexpr uint64_t kEmptyStringHash = 0xB8A0BF169F98ull;
-
-template <typename T>
-T Read(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 size_t Align16(size_t v) {
     return (v + 15) & ~size_t(15);
@@ -87,22 +79,22 @@ const Property* Entity::FindDynamic(std::string_view name) const {
 
 bool DataSetFile::Load(std::string name, std::span<const uint8_t> data) {
     name_ = std::move(name);
-    if (Read<uint32_t>(data, 0) != kMagic) {
+    if (ReadBinary<uint32_t>(data, 0) != kMagic) {
         LogError("fox2: {} has a bad magic", name_);
         return false;
     }
-    const uint32_t entity_count = Read<uint32_t>(data, 8);
-    const uint32_t string_table = Read<uint32_t>(data, 0x0C);
-    const uint32_t first_entity = Read<uint32_t>(data, 0x10);
+    const uint32_t entity_count = ReadBinary<uint32_t>(data, 8);
+    const uint32_t string_table = ReadBinary<uint32_t>(data, 0x0C);
+    const uint32_t first_entity = ReadBinary<uint32_t>(data, 0x10);
 
     strings_.clear();
     strings_[kEmptyStringHash] = "";
     for (size_t pos = string_table; pos + 12 <= data.size();) {
-        const uint64_t hash = Read<uint64_t>(data, pos);
+        const uint64_t hash = ReadBinary<uint64_t>(data, pos);
         if (hash == 0) {
             break;
         }
-        const uint32_t length = Read<uint32_t>(data, pos + 8);
+        const uint32_t length = ReadBinary<uint32_t>(data, pos + 8);
         if (pos + 12 + length > data.size()) {
             break;
         }
@@ -114,12 +106,12 @@ bool DataSetFile::Load(std::string name, std::span<const uint8_t> data) {
         size_t pos = base;
         for (uint32_t i = 0; i < count; ++i) {
             Property p;
-            p.name_hash = Read<uint64_t>(data, pos);
-            p.type = static_cast<DataType>(Read<uint8_t>(data, pos + 8));
-            p.container = static_cast<Container>(Read<uint8_t>(data, pos + 9));
-            const uint16_t element_count = Read<uint16_t>(data, pos + 0x0A);
-            const uint16_t payload_offset = Read<uint16_t>(data, pos + 0x0C);
-            const uint16_t size = Read<uint16_t>(data, pos + 0x0E);
+            p.name_hash = ReadBinary<uint64_t>(data, pos);
+            p.type = static_cast<DataType>(ReadBinary<uint8_t>(data, pos + 8));
+            p.container = static_cast<Container>(ReadBinary<uint8_t>(data, pos + 9));
+            const uint16_t element_count = ReadBinary<uint16_t>(data, pos + 0x0A);
+            const uint16_t payload_offset = ReadBinary<uint16_t>(data, pos + 0x0C);
+            const uint16_t size = ReadBinary<uint16_t>(data, pos + 0x0E);
             p.name = Lookup(p.name_hash);
             p.element_size = DataTypeSize(p.type);
             const size_t payload = pos + payload_offset;
@@ -127,7 +119,7 @@ bool DataSetFile::Load(std::string name, std::span<const uint8_t> data) {
                 const size_t stride = Align16(8 + p.element_size);
                 for (uint16_t e = 0; e < element_count; ++e) {
                     const size_t entry = payload + e * stride;
-                    p.keys.push_back(Read<uint64_t>(data, entry));
+                    p.keys.push_back(ReadBinary<uint64_t>(data, entry));
                     p.payload.insert(p.payload.end(), data.begin() + entry + 8, data.begin() + entry + 8 + p.element_size);
                 }
             } else if (p.element_size) {
@@ -147,17 +139,17 @@ bool DataSetFile::Load(std::string name, std::span<const uint8_t> data) {
             return false;
         }
         Entity e;
-        e.class_id = Read<uint16_t>(data, pos + 2);
-        e.address = Read<uint64_t>(data, pos + 0x0A);
-        e.id = Read<uint64_t>(data, pos + 0x12);
-        e.class_version = Read<uint16_t>(data, pos + 0x1A);
-        e.class_hash = Read<uint64_t>(data, pos + 0x1C);
+        e.class_id = ReadBinary<uint16_t>(data, pos + 2);
+        e.address = ReadBinary<uint64_t>(data, pos + 0x0A);
+        e.id = ReadBinary<uint64_t>(data, pos + 0x12);
+        e.class_version = ReadBinary<uint16_t>(data, pos + 0x1A);
+        e.class_hash = ReadBinary<uint64_t>(data, pos + 0x1C);
         e.class_name = Lookup(e.class_hash);
-        const uint16_t static_count = Read<uint16_t>(data, pos + 0x24);
-        const uint16_t dynamic_count = Read<uint16_t>(data, pos + 0x26);
-        const uint32_t static_offset = Read<uint32_t>(data, pos + 0x28);
-        const uint32_t dynamic_offset = Read<uint32_t>(data, pos + 0x2C);
-        const uint32_t entity_size = Read<uint32_t>(data, pos + 0x30);
+        const uint16_t static_count = ReadBinary<uint16_t>(data, pos + 0x24);
+        const uint16_t dynamic_count = ReadBinary<uint16_t>(data, pos + 0x26);
+        const uint32_t static_offset = ReadBinary<uint32_t>(data, pos + 0x28);
+        const uint32_t dynamic_offset = ReadBinary<uint32_t>(data, pos + 0x2C);
+        const uint32_t entity_size = ReadBinary<uint32_t>(data, pos + 0x30);
         parse_properties(pos + static_offset, static_count, e.properties);
         parse_properties(pos + dynamic_offset, dynamic_count, e.dynamic_properties);
         by_address_[e.address] = entities_.size();

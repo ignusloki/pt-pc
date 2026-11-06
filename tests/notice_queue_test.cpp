@@ -1,3 +1,4 @@
+#include "check.h"
 #include "game/ui/notice_queue.h"
 #include "game/ui/pc_settings.h"
 
@@ -9,10 +10,6 @@ namespace {
 
 int failed = 0;
 
-void Check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    failed += !ok;
-}
 
 }
 
@@ -24,8 +21,8 @@ int main() {
 
     {
         NoticeQueue queue;
-        Check(queue.Push(update) && queue.Push(tier) && queue.Push(another_notice), "three lines queue at once");
-        Check(!queue.Push(tier), "a line that is waiting is not queued again");
+        pt::test::Check(failed, queue.Push(update) && queue.Push(tier) && queue.Push(another_notice), "three lines queue at once");
+        pt::test::Check(failed, !queue.Push(tier), "a line that is waiting is not queued again");
         std::vector<std::string> order;
         std::vector<float> lengths;
         std::string last;
@@ -49,19 +46,19 @@ int main() {
             }
         }
         lengths.push_back(shown);
-        Check(order.size() == 3 && order[0] == update && order[1] == tier && order[2] == another_notice, "the lines come in the order they were asked");
-        Check(!early && lengths.size() == 3 && lengths[2] > NoticeQueue::kLength - 0.1f, "each line stays for its whole time");
-        Check(!overlap, "a line on screen has an opacity");
-        Check(queue.Idle(), "the queue is empty after the last");
+        pt::test::Check(failed, order.size() == 3 && order[0] == update && order[1] == tier && order[2] == another_notice, "the lines come in the order they were asked");
+        pt::test::Check(failed, !early && lengths.size() == 3 && lengths[2] > NoticeQueue::kLength - 0.1f, "each line stays for its whole time");
+        pt::test::Check(failed, !overlap, "a line on screen has an opacity");
+        pt::test::Check(failed, queue.Idle(), "the queue is empty after the last");
     }
 
     {
         NoticeQueue queue;
         queue.Push(update);
         queue.Update(0.0f, false);
-        Check(!queue.Visible() && queue.Time() < 0.0f, "a line waits while the banner may not show");
+        pt::test::Check(failed, !queue.Visible() && queue.Time() < 0.0f, "a line waits while the banner may not show");
         for (int i = 0; i < 100; ++i) queue.Update(0.1f, true);
-        Check(!queue.Visible() && queue.Idle(), "a line is not shown past its time");
+        pt::test::Check(failed, !queue.Visible() && queue.Idle(), "a line is not shown past its time");
     }
     {
         NoticeQueue queue;
@@ -69,9 +66,9 @@ int main() {
         queue.Push(tier);
         for (int i = 0; i < 30; ++i) queue.Update(0.1f, true);
         const float at = queue.Time();
-        Check(queue.Visible() && at >= NoticeQueue::kSeen && at < NoticeQueue::kLength, "a line has been on screen for a while");
+        pt::test::Check(failed, queue.Visible() && at >= NoticeQueue::kSeen && at < NoticeQueue::kLength, "a line has been on screen for a while");
         queue.Update(0.1f, false);
-        Check(!queue.Visible() && queue.Cut() && queue.Done() && queue.Time() == at, "the line taken away is cut and hidden");
+        pt::test::Check(failed, !queue.Visible() && queue.Cut() && queue.Done() && queue.Time() == at, "the line taken away is cut and hidden");
         int shown_update = 0;
         std::vector<std::string> after;
         std::string last;
@@ -83,35 +80,35 @@ int main() {
                 shown_update += last == update;
             }
         }
-        Check(shown_update == 0 && after.size() == 1 && after[0] == tier, "the cut line is not shown again, the next line comes");
-        Check(queue.Idle(), "the queue is empty after it");
+        pt::test::Check(failed, shown_update == 0 && after.size() == 1 && after[0] == tier, "the cut line is not shown again, the next line comes");
+        pt::test::Check(failed, queue.Idle(), "the queue is empty after it");
     }
     {
         NoticeQueue queue;
         queue.Push(update);
         for (int i = 0; i < 6; ++i) queue.Update(0.1f, true);
         queue.Update(0.1f, false);
-        Check(!queue.Visible() && queue.Restarted() && !queue.Cut() && queue.Time() < 0.0f, "a line taken away too soon starts again");
+        pt::test::Check(failed, !queue.Visible() && queue.Restarted() && !queue.Cut() && queue.Time() < 0.0f, "a line taken away too soon starts again");
         queue.Update(0.1f, false);
-        Check(!queue.Restarted(), "the restart is reported once");
+        pt::test::Check(failed, !queue.Restarted(), "the restart is reported once");
         queue.Update(0.1f, true);
-        Check(queue.Visible() && queue.Current() == update && queue.Time() <= 0.0f, "it comes again from its beginning");
+        pt::test::Check(failed, queue.Visible() && queue.Current() == update && queue.Time() <= 0.0f, "it comes again from its beginning");
         for (int i = 0; i < 100; ++i) queue.Update(0.1f, true);
-        Check(queue.Idle() && !queue.Cut(), "and then it is shown for its whole time");
+        pt::test::Check(failed, queue.Idle() && !queue.Cut(), "and then it is shown for its whole time");
     }
     {
         NoticeQueue queue;
         queue.Push(another_notice);
         for (int i = 0; i < 30; ++i) queue.Update(0.1f, true);
         queue.Update(0.1f, false);
-        Check(queue.Cut() && queue.Push(another_notice), "a cut line can come again as a new event");
+        pt::test::Check(failed, queue.Cut() && queue.Push(another_notice), "a cut line can come again as a new event");
     }
 
     {
         NoticeQueue queue;
         queue.Push(another_notice);
         for (int i = 0; i < 100; ++i) queue.Update(0.1f, true);
-        Check(queue.Push(another_notice), "a finished line can come again");
+        pt::test::Check(failed, queue.Push(another_notice), "a finished line can come again");
     }
 
     return failed ? 1 : 0;

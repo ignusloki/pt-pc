@@ -43,17 +43,6 @@ MTLPixelFormat MetalFormat(VkFormat format) {
     }
 }
 
-const char* MetalFormatName(MTLPixelFormat format) {
-    switch (format) {
-    case MTLPixelFormatR8Unorm: return "R8Unorm";
-    case MTLPixelFormatR16Float: return "R16Float";
-    case MTLPixelFormatRG16Float: return "RG16Float";
-    case MTLPixelFormatRGBA16Float: return "RGBA16Float";
-    case MTLPixelFormatDepth32Float: return "Depth32Float";
-    default: return "?";
-    }
-}
-
 // the texture usages the scaler asks for, against what MoltenVK gave the Vulkan image's MTLTexture
 std::string UsageCheck(id<MTLTexture> texture, MTLTextureUsage wanted, const char* what) {
     if (!texture) {

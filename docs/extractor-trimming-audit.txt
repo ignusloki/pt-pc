@@ -1,0 +1,101 @@
+MAC EXTRACTOR TRIMMING AUDIT — 2026-11-06
+
+Branch: codex/remove-unneeded-dependencies
+HEAD: e743054bded22a63b6b257a895b34e11fac75387
+No commit, push, merge, Windows runtime change or SDL change was made in this task.
+The earlier cleanup and dependency work was preserved. Five existing source/documentation files changed in this task, plus this report.
+No source file was deleted. The size reduction is in generated .NET publish output.
+
+CHANGE
+installer/Extractor/Extractor.csproj enables PublishTrimmed=true and TrimMode=full only when RuntimeIdentifier is osx-arm64 or osx-x64. Linker warnings are errors; warnings are not suppressed. The same project is used by both Mac publishing routes.
+installer/Tests/Program.cs adds --extractor <executable> to run all existing PKG cases through a published process. It checks exit codes, exact diagnostics, output hashes and metadata; failed/invalid extraction must leave no output, and existing output must be preserved.
+It also verifies the unknown-title and Asia archive bytes and rechecks existing files after refusal.
+Failed subprocess startup, unexpected exit codes/stderr and a two-minute timeout fail the test. Shell command concatenation is not used for paths.
+For native builds, tools/macos/build.py runs these tests against both published helpers as well as the untrimmed project reference. --skip-tests continues to avoid running foreign-architecture helpers.
+docs/installer.md and the corresponding-source RUNTIME.txt explain trimming, rebuilding a modified library and the PublishTrimmed=false override.
+
+SIZE MEASUREMENTS
+Same .NET SDK 10.0.401, official Microsoft runtime packs 10.0.12, Release configuration and patched LibOrbis revision 643477263b2644e0803e0f58b8726ea4e3f3b7d4 on both sides.
+Baseline explicitly disables trimming. Final publishes use the project defaults, without passing trimming flags on the command line.
+Totals below are raw publish bytes before packaging/signing, excluding PDBs and redistribution notices. Both distributions retain their existing source/license notices. ZIP totals use the same helper-only ZIP/Deflate settings and filenames; they are not full release ZIP sizes.
+
+RID / layout             Before bytes   After bytes    Saved bytes    Reduction
+osx-arm64 / folder         86,921,564    21,351,320     65,570,244      75.44%
+osx-arm64 / single         80,200,750    13,846,654     66,354,096      82.74%
+osx-x64 / folder           80,001,614    22,124,730     57,876,884      72.34%
+osx-x64 / single           72,988,286    14,645,134     58,343,152      79.93%
+
+Controlled helper-only ZIP bytes:
+  osx-arm64 folder: 32,736,853 -> 8,246,484; saves 24,490,369.
+  osx-arm64 single: 30,199,440 -> 5,619,369; saves 24,580,071.
+  osx-x64 folder: 34,950,730 -> 9,026,050; saves 25,924,680.
+  osx-x64 single: 32,045,870 -> 6,118,595; saves 25,927,275.
+
+Each folder publish goes from 191 files to 32: 159 generated files omitted per architecture. Each single-file helper remains one executable.
+LibOrbisPkg.Core.dll goes from 170,496 to 65,536 bytes. Its complete source remains in the corresponding-source archive.
+Exact file manifests, hashes and omitted-file lists: build/extractor-trim-audit/sizes.json and osx-*-omitted-files.json.
+The signed ARM64 app helper is 13,766,656 bytes; signing can change the executable size, so it is not substituted into the unsigned comparison above.
+
+REACHABILITY AND INDIRECT USE
+The application entry point is PT.PkgExtract.Program.Main -> Extraction.Run -> PkgReader/PfsReader/PFSCReader. The published process accepts a package path and output directory; it does not load extractor plugins or invoke library methods by string name.
+Repo/library searches examined Reflection, GetType/GetMethod/GetFields/GetProperties, Activator, XmlSerializer, JsonSerializer, Marshal, typeof, MakeGeneric and Assembly usage.
+LibOrbis XML serializers appear in GP4/Gp4Project.cs and PlayGo/Manifest.cs, for project/manifest reading and writing. These paths are not called by the extraction entry point. The PKG builder is needed by the untrimmed test fixture generator, not by the extraction process.
+The exploratory publish passed PublishTrimmed globally and therefore enabled compiler analysis in the full referenced library. That emitted IL2026 warnings for those unused XML serializer paths. The linker removed those paths; no linker analysis failure occurred.
+The final project-scoped setting publishes with zero IL analysis warnings for all four Mac artifacts. No warning suppressions, blanket roots or linker descriptors were added.
+Marshalling and cryptography remain reachable; they were exercised through the trimmed executable with synthetic and full-size packages. No manual deletion of reflection-sensitive library source was attempted.
+The native JIT, diagnostics libraries and all other dependencies retained by the linker were left intact. No further manual native-library pruning was performed.
+
+PKG PROOF
+Real input: P.T. - [US] [EN] [1.00].pkg (1,478,164,480 bytes)
+Input SHA-256: 5aa60a4d8cbaa6a1b765d1d6a6347a4a7c433e912db7535da2fb667f8ea76cb5
+All baseline and exploratory/final trimmed helpers, in both layouts and architectures, extracted this package successfully. Output paths included spaces and Czech characters. Every archive matched the existing game/CUSA01127 reference by SHA-256 and size; source.txt matched content ID, title, region and source metadata.
+ARM64 execution was native; x64 execution used Rosetta on the same Mac, not physical Intel hardware.
+
+chunk1.psarc: 421,978,112 bytes
+  SHA-256 f3cf67ef215065df01619fb0b3fd03fba7f465752ac4107e485dd0ea9dda41ef
+texture.qar: 892,291,044 bytes
+  SHA-256 436bb79d9d47df685423a9afaed89a8be5e88a938347dd18e63e94398c6ed9b0
+pathid_list_ps4.bin: 93,248 bytes
+  SHA-256 6b4641bafe18f785229500454c5d44cba04cc1302fd8e187c53047a04d2633d0
+
+Eleven fixture cases: US exact bytes/no warnings; existing-output refusal/preservation; invalid PKG refusal; Europe metadata/warning; Japan metadata/warning; renamed/subdirectory archives; unknown title with P.T. content; Asia region; other-game refusal; full-size missing-data refusal; retail-key refusal.
+The suite passed directly and against all eight baseline/exploratory binaries, all four final default-config binaries, and all four signed helpers (including the helper inside the signed ARM64 app). A final direct suite passed after rebuilding the test harness against the final project settings.
+Also built and signed the complete ARM64 portable app and Setup app. Their Mach-O dependency/architecture/minimum-OS checks and code signature verification passed. Packaged voice smoke and sealed Setup self-tests passed.
+The signed Setup installed the real PKG into build/extractor-trim-audit/installed-from-real-pkg. It reported PASS installed. All three installed archive hashes matched again, and codesign --verify --deep --strict passed on the installed app.
+Packaged corresponding-source archive was checked against the current extractor source/project and trim rebuild instructions.
+Twelve redundant generated extraction copies were removed after validation; their hashes, metadata and logs were retained. The original PKG and existing game dump were not modified. The final test installation remains local under the ignored audit directory.
+
+REGRESSION AND BUILD RESULTS
+89 checks passed: 84 native test executables and five Python-driven checks, including the 20-case Mac packaging suite and the motion-blur harness.
+CMake targets pt, pt_release and pt_setup_macos built successfully, together with the tested executables.
+All four final extractor publishes succeeded. The final .NET test-harness rebuild succeeded with zero warnings/errors.
+git diff --check passed.
+Initial sandbox build attempts stalled .NET workers and could not fetch NuGet audit metadata; those logs are marked *-sandbox-attempt.log and are not counted as successful validation. The builds were rerun with required process/network access.
+
+KEPT AND SCOPE
+Windows (win-x64 and win-arm64), Linux and Android evaluated publish properties exactly match the pre-change snapshot. No Windows runtime binaries, versions, packaging logic, native source, CMake or SDL files were modified in this task.
+Non-Mac trim behavior remains unchanged. Windows/Android/Linux execution was not revalidated as part of this Mac-only trim change.
+The complete LibOrbis source, public library source APIs, license notices, self-contained runtime support and existing PKG diagnostics/validation remain available. Source archive and library replacement instructions are retained.
+An Intel Mac hardware run and a macOS 14 hardware run were not performed; x64 was tested under Rosetta and minimum OS load commands were audited.
+All previously completed dead-code/dependency changes remain in the worktree. The three cleanup branches currently reference the same HEAD; their work has not been committed. Commit the consolidated work before the later branch integration. No branch integration was attempted here.
+
+REPRODUCING
+Use tools/macos/build.py --arch arm64 (or x64 on a native Intel Mac) with a fresh --out and the pinned --liborbis checkout to run the build, publish, published-helper fixture tests and package smoke tests.
+For a direct comparison, publish installer/Extractor/Extractor.csproj with -c Release -r <osx RID> --self-contained true -p:LibOrbisSource=<patched source>, separate --artifacts-path/-o directories, and official Microsoft runtime packs. Add -p:PublishTrimmed=false only to the baseline.
+Obtain the SDK pack path using dotnet msbuild installer/Extractor/Extractor.csproj -getProperty:NetCoreTargetingPackRoot, then pass -p:NetCoreTargetingPackRoot=<empty directory> -p:PrunePackageTargetingPackRoots=<SDK packs path> to both publishes.
+For the single-file layout add -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true to both sides.
+Build installer/Tests/Tests.csproj with the same patched library. Run its Tests.dll with --extractor <published helper> <new fixture directory>. The optional dump argument is not needed for synthetic cases.
+Run each helper directly on the local real PKG into a fresh output directory and compare SHA-256 hashes to the reference above.
+Run the regression driver: python3 build/dependency-audit/validate.py <new-tag> (local audit driver; requires Metal access).
+
+LOCAL EVIDENCE (ignored build files)
+build/extractor-trim-audit/baseline-files.json, changed-files.json: source-scope snapshots.
+build/extractor-trim-audit/baseline-publish-properties.json, final-publish-properties.json: non-Mac policy comparison.
+build/extractor-trim-audit/publish-final.json and osx-*-final-*.log: final publish commands/results.
+build/extractor-trim-audit/fixtures-results*.json, fixtures-*.log: process tests.
+build/extractor-trim-audit/*-real-pkg.json and *-real-pkg.log: real extraction manifests/logs.
+build/extractor-trim-audit/packaging-results.json, packaging.log, installed-archive-hashes.json: signed package/installation proof.
+build/dead-code-audit/dependencies-extractor-trim-final/results.json: main regression suite/build.
+build/dependency-audit/extractor-trim-final/results.json: remaining native tests/build.
+build/extractor-trim-audit/tests-final-build.log and fixtures-final-direct.log: final harness rebuild/direct rerun.
+build/extractor-trim-audit/packaged/: local ARM64 app and Setup artifacts. No original game assets are in their archives.

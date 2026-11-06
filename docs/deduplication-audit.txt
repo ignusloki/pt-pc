@@ -1,0 +1,961 @@
+DEDUPLICATION AUDIT
+Verified: 2026-11-06T13:57:51.510406+00:00
+Repository: /Users/suporte/PT-Mac
+Branch: codex/consolidate-equivalent-code
+
+OUTCOME: 49 groups consolidated; 2346 net source lines saved.
+Accounting: 6190 removed lines minus 3844 added lines across 241 changed source/build files. New shared files and all forwarding adapters are included. Documentation and ignored audit artifacts are excluded.
+The starting snapshot already contained the earlier unused-code cleanup, Polish/Czech MetalFX translations and repaired motion-blur harness. Those inherited changes are preserved and excluded from these savings. The comparison uses baseline-files.json, not git HEAD.
+Changes remain uncommitted. No push or merge was performed.
+
+SCOPE AND METHOD
+Reviewed repo-owned engine/game, installer, shader, tooling, Android/iOS, test and example code. Used exact token/AST clone scans, identifier-normalized candidates, type-preserving alpha-equivalence checks, whole-file hashes, and manual checks of bindings, callers, data ownership and error policies. The Swift icon script, Lua example, shell scripts and CMake commands were also inspected. Generated build/dependency trees and game data were not refactored.
+Closing scan: no identical whole code files and no type/global-preserving alpha-equivalence candidates remain. The two exact-body matches left are typed vector adapters and local std::fill forwards; both are reviewed in remaining-clone-review.json.
+Every retained group/extension passed a build of pt, pt_release, pt_setup_macos and 77 native test targets, followed by 82 regression checks. There are 58 successful validation phases. The main test-helper queue also ran the separately built intercom test.
+Each phase changed one group, ran validation and recorded its source delta before proceeding. Final source bytes match the last validated snapshot. Native GPU checks ran with Metal access outside the sandbox.
+
+GROUPS (negative savings include the cost of shared-header/import scaffolding)
+
+01. ASCII lowercase copies — 19 net lines saved
+Keep: pt::AsciiLowerCopy in src/engine/core/ascii.h
+Why equivalent / why this version: Same string_view input, std::string copy, same AsciiLower on each char, same returned bytes. Extra static_cast<char> is identity because AsciiLower returns char. All local references redirected to existing canonical helper.
+Original copies: src/engine/assets/gltf_model.cpp::LowerCopy; src/engine/fs/mod_level.cpp::Lower
+Additional callers: Extend existing ASCII group to owned strings and in-place normalization. Same per-byte AsciiLower operation; no locale folding, separators or accent policies combined.
+Additional callers: Replace the literal-identical private char-lower lambda in controller speaker matching with AsciiLower. Preserve the existing nonempty-query requirement and substring loop; do not merge it with asset-browser or locale-aware matching policies.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/installer/Native/setup_core.h
+  /Users/suporte/PT-Mac/src/engine/assets/gltf_model.cpp
+  /Users/suporte/PT-Mac/src/engine/core/ascii.h
+  /Users/suporte/PT-Mac/src/engine/fs/mod_level.cpp
+  /Users/suporte/PT-Mac/src/engine/fs/pt_release.h
+  /Users/suporte/PT-Mac/src/engine/platform/controller_speaker_route.cpp
+  /Users/suporte/PT-Mac/src/engine/platform/http.cpp
+  /Users/suporte/PT-Mac/src/engine/platform/rendering_api.cpp
+  /Users/suporte/PT-Mac/src/engine/platform/settings.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale.cpp
+  /Users/suporte/PT-Mac/src/engine/voice/microphone.cpp
+  /Users/suporte/PT-Mac/src/game/game_sound.cpp
+  /Users/suporte/PT-Mac/src/game/input_script.cpp
+  /Users/suporte/PT-Mac/src/game/ui/game_ui.cpp
+  /Users/suporte/PT-Mac/src/game/ui/subtitle_player.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-1/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-3-1/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-1/results.json — build PASS; 82/82 checks PASS
+
+02. Checked binary value readers — 111 net lines saved
+Keep: pt::ReadBinary and pt::BinaryReader in src/engine/core/binary_read.h
+Why equivalent / why this version: All 13 bodies value-initialize T, use offset + sizeof(T) <= data.size(), memcpy native object bytes only when true, and return T. Vector inputs convert to a non-owning const span. Both class readers are the same aggregate containing only the span. Preserve the exact original arithmetic rather than adding overflow changes. Unchecked readers are excluded.
+Original copies: demo_file::At; gani::At; help_bones::At; motion_data::At; rig::At; skeleton::At; fmdl::Reader::At; ftex::Read; geom::Reader::At; fox2::Read; fpk::ReadLe; gimmick_animation::At; render_scene::ReadAt
+Additional callers: Extend checked readers to native bundle metadata, DSP parameters, sound sweeps and SFO scalar lambdas. Preserve zero fallback, unsigned bounds arithmetic and cursor advance on short input.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/anim/demo_file.cpp
+  /Users/suporte/PT-Mac/src/engine/anim/gani.cpp
+  /Users/suporte/PT-Mac/src/engine/anim/help_bones.cpp
+  /Users/suporte/PT-Mac/src/engine/anim/motion_data.cpp
+  /Users/suporte/PT-Mac/src/engine/anim/rig.cpp
+  /Users/suporte/PT-Mac/src/engine/anim/skeleton.cpp
+  /Users/suporte/PT-Mac/src/engine/assets/fmdl.cpp
+  /Users/suporte/PT-Mac/src/engine/assets/ftex.cpp
+  /Users/suporte/PT-Mac/src/engine/assets/geom.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/dsp.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/sound_engine.cpp
+  /Users/suporte/PT-Mac/src/engine/core/binary_read.h
+  /Users/suporte/PT-Mac/src/engine/data/fox2.cpp
+  /Users/suporte/PT-Mac/src/engine/fs/fpk.cpp
+  /Users/suporte/PT-Mac/src/engine/fs/pt_release.h
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_native.cpp
+  /Users/suporte/PT-Mac/src/game/gimmick_animation.cpp
+  /Users/suporte/PT-Mac/src/game/render_scene.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-2/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-4-2-qualified/results.json — build PASS; 82/82 checks PASS
+
+03. Localized menu lookup — 13 net lines saved
+Keep: pt::localized::FindMenuText in src/engine/core/menu_lookup.h
+Why equivalent / why this version: All 13 lookup bodies iterate their own immutable kMenu in order, return text from the first exact string_view key match, and return an empty view on a miss. Shared generic lookup receives the same table; public language Menu functions and distinct Text types remain intact.
+Original copies: src/engine/core/chinese_text.h::Menu; src/engine/core/czech_text.h::Menu; src/engine/core/ukrainian_text.h::Menu; src/engine/core/portuguese_text.h::Menu; src/engine/core/russian_text.h::Menu; src/engine/core/arabic_text.h::Menu; src/engine/core/polish_text.h::Menu; src/engine/core/turkish_text.h::Menu; src/engine/core/italian_text.h::Menu; src/engine/core/french_text.h::Menu; src/engine/core/german_text.h::Menu; src/engine/core/spanish_text.h::Menu; src/engine/core/japanese_text.h::Menu
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/core/arabic_text.h
+  /Users/suporte/PT-Mac/src/engine/core/chinese_text.h
+  /Users/suporte/PT-Mac/src/engine/core/czech_text.h
+  /Users/suporte/PT-Mac/src/engine/core/french_text.h
+  /Users/suporte/PT-Mac/src/engine/core/german_text.h
+  /Users/suporte/PT-Mac/src/engine/core/italian_text.h
+  /Users/suporte/PT-Mac/src/engine/core/japanese_text.h
+  /Users/suporte/PT-Mac/src/engine/core/menu_lookup.h
+  /Users/suporte/PT-Mac/src/engine/core/polish_text.h
+  /Users/suporte/PT-Mac/src/engine/core/portuguese_text.h
+  /Users/suporte/PT-Mac/src/engine/core/russian_text.h
+  /Users/suporte/PT-Mac/src/engine/core/spanish_text.h
+  /Users/suporte/PT-Mac/src/engine/core/turkish_text.h
+  /Users/suporte/PT-Mac/src/engine/core/ukrainian_text.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-3-final/results.json — build PASS; 82/82 checks PASS
+
+04. Unchecked scalar binary readers — 122 net lines saved
+Keep: pt::ReadBinaryUnchecked in src/engine/core/binary_read.h
+Why equivalent / why this version: All pointer readers copy exactly sizeof(T) native bytes with memcpy and return T, without validation or endian conversion. Width-specific 2/4/8 literals equal sizeof the existing integer/float types on the supported targets. Span readers preserve the same pointer arithmetic. No checked readers or byte-swapping readers are substituted.
+Original copies: audio/{sound_package,subtitles,wem,wwise_vorbis}; core/strcode; ui/{ffnt,lang_file,uif,uigb,uilb}
+Additional callers: Extend unchecked fixed-width readers to UIA uint32/int32 and glTF uint32. Full-width memcpy overwrites the entire scalar; bounds remain caller-owned.
+Additional callers: Extend unchecked scalar reads to motion-generator parameters, save-data Get and the VFX cursor adapter. Repo-wide explicit instantiations are closed to uint8/16/32/64 and float: value initialization is completely overwritten by sizeof(T) memcpy, with no constructors. Keep each existing cursor advance and bounds caller intact; no checked/unchecked policies are combined.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/assets/gltf_model.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/motion_generator.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/sound_package.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/subtitles.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/wem.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/wwise_vorbis.cpp
+  /Users/suporte/PT-Mac/src/engine/core/binary_read.h
+  /Users/suporte/PT-Mac/src/engine/core/strcode.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/ffnt.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/lang_file.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/uia.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/uif.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/uigb.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/uilb.cpp
+  /Users/suporte/PT-Mac/src/engine/vfx/vfx_file.cpp
+  /Users/suporte/PT-Mac/src/game/save_data.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-4/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-5-4-qualified/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-4/results.json — build PASS; 82/82 checks PASS
+
+05. Identical Original/Enhanced shader sections — 1816 net lines saved
+Keep: Original GLSL text extracted into 21 shared shader include modules
+Why equivalent / why this version: Extract only literal-identical complete global sections at balanced brace/parenthesis/preprocessor boundaries. Preserve expansion order and both variant-specific bodies. Compare all 579 fully preprocessed entry-point token streams against the pre-edit baseline under Vulkan, MoltenVK and D3D12 defines, then compile and run the full native GPU/CPU suite. The first include in original xr_copy.frag makes glslc emit GL_GOOGLE_include_directive metadata; all three flag profiles compile to byte-identical pre/post SPIR-V. Normalize only that specific enable directive; no operation tokens differ.
+Original copies: shaders/backdrop.frag + shaders/enhanced/backdrop.frag; shaders/banding.frag + shaders/enhanced/banding.frag; shaders/common.glsl + shaders/enhanced/common.glsl; shaders/compose.frag + shaders/enhanced/compose.frag; shaders/gbuffer_main.glsl + shaders/enhanced/gbuffer_main.glsl; shaders/pt_layer.comp + shaders/enhanced/pt_layer.comp; shaders/pt_path.glsl + shaders/enhanced/pt_path.glsl; shaders/pt_reference.comp + shaders/enhanced/pt_reference.comp; shaders/reflect_blend_main.glsl + shaders/enhanced/reflect_blend_main.glsl; shaders/reflect_make_rt.frag + shaders/enhanced/reflect_make_rt.frag; shaders/rt_glossy.comp + shaders/enhanced/rt_glossy.comp; shaders/subsurface.frag + shaders/enhanced/subsurface.frag; shaders/ui_sprite.frag + shaders/enhanced/ui_sprite.frag; shaders/upscale_resolve.frag + shaders/enhanced/upscale_resolve.frag; shaders/velocity.vert + shaders/enhanced/velocity.vert; shaders/vfx_particle.frag + shaders/enhanced/vfx_particle.frag; shaders/xr_copy.frag + shaders/enhanced/xr_copy.frag
+Additional callers: Extend literal-identical Original/Enhanced sections: TppShoulder, QuantizeDither, ShadeString, UI sprite vertex main, ScreenTonemap. Keep all differing HDR wrappers, layouts, transfer policies and push constants in their original files.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/backdrop.frag
+  /Users/suporte/PT-Mac/shaders/backdrop_covered_shared.glsl
+  /Users/suporte/PT-Mac/shaders/banding.frag
+  /Users/suporte/PT-Mac/shaders/banding_depth_linear_shared.glsl
+  /Users/suporte/PT-Mac/shaders/common.glsl
+  /Users/suporte/PT-Mac/shaders/common_functions.glsl
+  /Users/suporte/PT-Mac/shaders/compose.frag
+  /Users/suporte/PT-Mac/shaders/compose_bloom_alpha_shared.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/backdrop.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/banding.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/common.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/compose.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/gbuffer_main.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/pt_layer.comp
+  /Users/suporte/PT-Mac/shaders/enhanced/pt_path.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/pt_reference.comp
+  /Users/suporte/PT-Mac/shaders/enhanced/reflect_blend_main.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/reflect_make_rt.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/rt_glossy.comp
+  /Users/suporte/PT-Mac/shaders/enhanced/subsurface.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/tonemap.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/tonemap_curve.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/ui_sprite.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/ui_sprite.vert
+  /Users/suporte/PT-Mac/shaders/enhanced/upscale_resolve.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/velocity.vert
+  /Users/suporte/PT-Mac/shaders/enhanced/vfx_particle.frag
+  /Users/suporte/PT-Mac/shaders/enhanced/xr_copy.frag
+  /Users/suporte/PT-Mac/shaders/gbuffer_main.glsl
+  /Users/suporte/PT-Mac/shaders/gbuffer_main_tex_point_shared.glsl
+  /Users/suporte/PT-Mac/shaders/pt_layer.comp
+  /Users/suporte/PT-Mac/shaders/pt_layer_filter.glsl
+  /Users/suporte/PT-Mac/shaders/pt_layer_surfaces.glsl
+  /Users/suporte/PT-Mac/shaders/pt_path.glsl
+  /Users/suporte/PT-Mac/shaders/pt_path_lighting.glsl
+  /Users/suporte/PT-Mac/shaders/pt_path_trace.glsl
+  /Users/suporte/PT-Mac/shaders/pt_reference.comp
+  /Users/suporte/PT-Mac/shaders/pt_reference_output.glsl
+  /Users/suporte/PT-Mac/shaders/pt_reference_surface.glsl
+  /Users/suporte/PT-Mac/shaders/quantize_dither.glsl
+  /Users/suporte/PT-Mac/shaders/reflect_blend_main.glsl
+  /Users/suporte/PT-Mac/shaders/reflect_blend_main_rt_tap_shared.glsl
+  /Users/suporte/PT-Mac/shaders/reflect_make_rt.frag
+  /Users/suporte/PT-Mac/shaders/reflection_rt_resolve.glsl
+  /Users/suporte/PT-Mac/shaders/reflection_surface_helpers.glsl
+  /Users/suporte/PT-Mac/shaders/rt_glossy.comp
+  /Users/suporte/PT-Mac/shaders/rt_glossy_sample_visible_normal_shared.glsl
+  /Users/suporte/PT-Mac/shaders/screen_tonemap.glsl
+  /Users/suporte/PT-Mac/shaders/subsurface.frag
+  /Users/suporte/PT-Mac/shaders/subsurface_output_shared.glsl
+  /Users/suporte/PT-Mac/shaders/tonemap.frag
+  /Users/suporte/PT-Mac/shaders/tonemap_curve.glsl
+  /Users/suporte/PT-Mac/shaders/tpp_shoulder.glsl
+  /Users/suporte/PT-Mac/shaders/ui_sprite.frag
+  /Users/suporte/PT-Mac/shaders/ui_sprite.vert
+  /Users/suporte/PT-Mac/shaders/ui_sprite_sample_shared.glsl
+  /Users/suporte/PT-Mac/shaders/ui_sprite_vertex.glsl
+  /Users/suporte/PT-Mac/shaders/ui_string_shading.glsl
+  /Users/suporte/PT-Mac/shaders/upscale_resolve.frag
+  /Users/suporte/PT-Mac/shaders/upscale_resolve_reflection_shared.glsl
+  /Users/suporte/PT-Mac/shaders/velocity.vert
+  /Users/suporte/PT-Mac/shaders/velocity_skinned_shared.glsl
+  /Users/suporte/PT-Mac/shaders/vfx_particle.frag
+  /Users/suporte/PT-Mac/shaders/vfx_particle_lighting.glsl
+  /Users/suporte/PT-Mac/shaders/xr_copy.frag
+  /Users/suporte/PT-Mac/shaders/xr_copy_decode_shared.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-5/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-2-5/results.json — build PASS; 82/82 checks PASS
+
+06. Fox gameplay angle helpers — 14 net lines saved
+Keep: pt::game::WrapFoxAngle and FoxYawOf in src/game/fox_angles.h
+Why equivalent / why this version: The three Wrap bodies use the same float pi literal, signed fmod branches and arithmetic order; the three yaw bodies use the same 1e-6f dead zone and atan2(x,z). Share exact expressions, not other angle-wrapping conventions. All internal call sites redirect to the shared functions.
+Original copies: game_objects.cpp::Wrap/FoxYawOf; player.cpp::Wrap/FoxYawOf; trap_system.cpp::Wrap/FoxYawOf
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/game/fox_angles.h
+  /Users/suporte/PT-Mac/src/game/game_objects.cpp
+  /Users/suporte/PT-Mac/src/game/player.cpp
+  /Users/suporte/PT-Mac/src/game/trap_system.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-6/results.json — build PASS; 82/82 checks PASS
+
+07. Bloom extraction polynomial — 16 net lines saved
+Keep: SceneRenderer::BloomPolynomial in scene_post.cpp
+Why equivalent / why this version: Identical signature, std::clamp/floor operations, constants, vector initialization and index assignments. Convert the Original helper into a private static member and let both existing member call sites resolve to it.
+Original copies: scene_post.cpp::BloomPolynomial; scene_enhanced_post.cpp::BloomPolynomial
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/scene_enhanced_post.cpp
+  /Users/suporte/PT-Mac/src/engine/render/scene_post.cpp
+  /Users/suporte/PT-Mac/src/engine/render/scene_renderer.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-7/results.json — build PASS; 82/82 checks PASS
+
+08. Scene float environment overrides — 4 net lines saved
+Keep: SceneRenderer::EnvFloat from scene_path.cpp
+Why equivalent / why this version: Same getenv lookup, atof conversion, float cast, clamp bounds, absent-value fallback and call timing. Both copies are only called from SceneRenderer methods; a private static member preserves every call site and its static-cache timing.
+Original copies: scene_path.cpp::EnvFloat; scene_rt_full.cpp::EnvFloat
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/scene_path.cpp
+  /Users/suporte/PT-Mac/src/engine/render/scene_renderer.h
+  /Users/suporte/PT-Mac/src/engine/render/scene_rt_full.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-8/results.json — build PASS; 82/82 checks PASS
+
+09. Animation quaternion conversions — 6 net lines saved
+Keep: anim::ToQuat and anim::FromQuat in anim_codec.h
+Why equivalent / why this version: Same glm constructors and component order; reuse the existing codec helpers without changing normalization or interpolation.
+Original copies: player_animation.cpp::TrackQuat; player_animation.cpp::QuatTrack
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/game/player_animation.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-9/results.json — build PASS; 82/82 checks PASS
+
+10. UI units to canvas coordinates — 4 net lines saved
+Keep: dialog::UnitsToCanvas in dialog_view.cpp
+Why equivalent / why this version: Same UiCanvas constants, argument type, expressions and return type; dialog_view.h is already included by GameUi.
+Original copies: game_ui.cpp::VirtualPx; dialog_view.cpp::UnitsToCanvas
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/game/ui/game_ui.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-10/results.json — build PASS; 82/82 checks PASS
+
+11. Clamped smoothstep interpolation — 4 net lines saved
+Keep: SmoothStep01 in core/interpolation.h, copied from game_plus_arm.cpp
+Why equivalent / why this version: All four clamp float input to [0,1] and evaluate t*t*(3-2*t) in the same order. The hint copy differs only in the parameter name.
+Original copies: game_plus_arm.cpp::Smooth01; lisa_date.cpp::Smooth; lisa_date_hints.cpp::Smooth; lisa_date_selfie.cpp::Smooth
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/core/interpolation.h
+  /Users/suporte/PT-Mac/src/game/game_plus_arm.cpp
+  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date.cpp
+  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date_hints.cpp
+  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date_selfie.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-11/results.json — build PASS; 82/82 checks PASS
+
+12. Strong RTL codepoint classification — 2 net lines saved
+Keep: StrongRtl in ui/ffnt.h
+Why equivalent / why this version: Identical inclusive Unicode ranges and boolean short-circuit order, already used by both font/layout paths; both files already include ffnt.h.
+Original copies: text_layout.cpp::StrongRtl; unicode_font_harfbuzz.cpp::StrongRtl
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/ui/ffnt.h
+  /Users/suporte/PT-Mac/src/engine/ui/text_layout.cpp
+  /Users/suporte/PT-Mac/src/engine/ui/unicode_font_harfbuzz.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-12/results.json — build PASS; 82/82 checks PASS
+
+13. Camera projection and forward vectors — 17 net lines saved
+Keep: ReverseZPerspective and ViewForward in render/camera.h
+Why equivalent / why this version: Same float inputs, arithmetic order and glm operations. Member methods keep their APIs and delegate using the same fields; horizontal CameraForward and other angle conventions stay separate.
+Original copies: Camera::Projection; scene_frame.cpp::ReverseZPerspective; Camera::Forward; Player::LookDirection
+Additional callers: Light-cull fixture projection is identical to ReverseZPerspective. Reuse production math; geometric culling assertions retain independent expected outcomes.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/camera.h
+  /Users/suporte/PT-Mac/src/engine/render/scene_frame.cpp
+  /Users/suporte/PT-Mac/src/game/player.cpp
+  /Users/suporte/PT-Mac/tests/light_cull_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-13/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-7-13-qualified/results.json — build PASS; 82/82 checks PASS
+
+14. Default external frame synchronization — 0 net lines saved
+Keep: NoExternalSync in upscale.h
+Why equivalent / why this version: Identical ordered writes through the same four reference types and false return. Preserve both virtual methods and their overrides; only their default implementation is shared.
+Original copies: UpscaleBackend::ExternalSync; FrameGeneration::ExternalSync
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/upscale/frame_generation.h
+  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-14/results.json — build PASS; 82/82 checks PASS
+
+15. Release metadata scalar text access — 11 net lines saved
+Keep: metadata_json::StringMember, copied from fg_unlock::MemberText
+Why equivalent / why this version: All access the same Value layout, accepting scalar text only when object is false and items empty. Preserve this permissive scalar policy, not engine JSON String semantics. Header API wrappers remain.
+Original copies: fg_unlock::MemberText; neural_unlock::MemberText; route_win::JsonText; fg_route_win::JsonText
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/installer/Native/fg_route_win.h
+  /Users/suporte/PT-Mac/installer/Native/route_win.h
+  /Users/suporte/PT-Mac/src/engine/platform/json_value.h
+  /Users/suporte/PT-Mac/src/engine/render/upscale/fg_unlock.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_unlock.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-15/results.json — build PASS; 82/82 checks PASS
+
+16. SHA-256 file hashing and hex formatting — 26 net lines saved
+Keep: integrity::FileSha256 and Sha256Hex
+Why equivalent / why this version: Identical file open/read, size_out timing, digest call, failure return and lowercase 64-character encoding. Public fg/nr wrappers retain their signatures.
+Original copies: fg_unlock.cpp::FileSha256Impl/Hex; neural_unlock.cpp::FileSha256Impl/Hex
+Additional callers: Extend existing SHA formatting group to neural_rendering::HashFile: replace only its literal-identical fixed-length hex-format tail. Preserve file_size output timing, error paths and the Sha256 return check in the owning function.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/platform/self_integrity.h
+  /Users/suporte/PT-Mac/src/engine/render/upscale/fg_unlock.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_rendering.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_unlock.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-16/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-16/results.json — build PASS; 82/82 checks PASS
+
+17. Unlock request primitives — -3 net lines saved
+Keep: unlock_io::{EnvOr,FileUrlPath,FetchAllowedText}
+Why equivalent / why this version: Same UTF-8 environment lookup and file: conversion. Network request tails have identical URL policy, timeout, redirect, byte limit and status handling. Differing local-file reads and their check ordering remain in their own wrappers; native getenv helper stays separate.
+Original copies: fg_unlock.cpp request helpers; neural_unlock.cpp request helpers
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/upscale/fg_unlock.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_unlock.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/unlock_io.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-17/results.json — build PASS; 82/82 checks PASS
+
+18. Vulkan/D3D12 SDK quality mappings — 30 net lines saved
+Keep: D3D12 QualityValue and XessQuality in shared .inl definitions
+Why equivalent / why this version: Share literal function definitions inside the original backend namespaces/SDK guards. Expanded source tokens remain identical, normalizing only the private XeSS helper name; SDK types, tie order and fallback mappings do not change.
+Original copies: dlss_backend::QualityValue; d3d12_upscale::QualityValue; xess_backend::QualitySetting; d3d12_upscale::XessQuality
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/d3d12/backend/d3d12_upscale.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/dlss_backend.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/ngx_quality.inl
+  /Users/suporte/PT-Mac/src/engine/render/upscale/xess_backend.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/xess_quality.inl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-18/results.json — build PASS; 82/82 checks PASS
+
+19. NGX temporary directory initialization — 0 net lines saved
+Keep: CreateNgxTempPath in upscale_platform.cpp
+Why equivalent / why this version: Share only the identical uncached directory initializer. Keep three independent function-local static caches and their initialization timing. The Linux XDG/HOME fallback path is not merged.
+Original copies: Windows dlss_backend::DataPath initializer; neural_backend::DataPath initializer; d3d12_upscale::DataPath initializer
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/d3d12/backend/d3d12_upscale.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/dlss_backend.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_backend.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale_platform.cpp
+  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale_platform.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-19/results.json — build PASS; 82/82 checks PASS
+
+20. Generic UTF-8 path serialization — 3 net lines saved
+Keep: update_journal::ToUtf8 and FromUtf8
+Why equivalent / why this version: Same generic_u8string and char8 string construction. Keep public setup wrappers and native-separator os::PathToUtf8 separate. setup_core already includes update_journal.
+Original copies: setup_core::PathUtf8; setup_core::Utf8Path
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/installer/Native/setup_core.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-20/results.json — build PASS; 82/82 checks PASS
+
+21. ASCII binary tool strings — -9 net lines saved
+Keep: tools/binary_strings.py::cstring
+Why equivalent / why this version: Same bytes.index NUL search, ASCII replacement decoding, arguments, offsets and exceptions. Re-export the common function in each module; support normal CLI and package imports. Latin-1 policy is kept separate.
+Original copies: dynlib.py::cstring; fsm.py::cstring; pkginfo.py::cstring
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tools/binary_strings.py
+  /Users/suporte/PT-Mac/tools/dynlib.py
+  /Users/suporte/PT-Mac/tools/fsm.py
+  /Users/suporte/PT-Mac/tools/pkginfo.py
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-21/results.json — build PASS; 82/82 checks PASS
+
+22. Latin-1 binary tool strings — -7 net lines saved
+Keep: tools/binary_strings.py::latin1_cstring
+Why equivalent / why this version: Both use bytes.index and Latin-1 decoding, preserving byte values and keyword argument names. Do not merge these with the ASCII replacement routine.
+Original copies: fsop.py::cstring; lpsh.py::cstring
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tools/binary_strings.py
+  /Users/suporte/PT-Mac/tools/fsop.py
+  /Users/suporte/PT-Mac/tools/lpsh.py
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-22/results.json — build PASS; 82/82 checks PASS
+
+23. Reverb sample-delay buffers — 14 net lines saved
+Keep: SampleDelay in audio/dsp.cpp
+Why equivalent / why this version: Same vector<float>, size_t cursor, minimum length 4, zero fill, increment/wrap, and clear-without-cursor-reset. Add the existing Read/Write API to SampleDelay; Push delegates to it. Keep public DelayLine, whose minimum length is 1, separate.
+Original copies: SampleDelay; RoomVerb::Line
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/audio/dsp.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-23/results.json — build PASS; 82/82 checks PASS
+
+24. Ray-tracing allocation retry policy — -6 net lines saved
+Keep: RayTracingReady and RayTracingBackOff in raytracing_retry.h
+Why equivalent / why this version: Same ready predicate, ordered steady-clock reads, 1-second deadline and log text. Pass each backend's own retry deadline by reference; never combine their state or resource ownership.
+Original copies: VkRayTracing::Ready/BackOff; D3D12RayTracing::Ready/BackOff
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/render/d3d12/backend/d3d12_raytracing.cpp
+  /Users/suporte/PT-Mac/src/engine/render/raytracing.cpp
+  /Users/suporte/PT-Mac/src/engine/render/raytracing.h
+  /Users/suporte/PT-Mac/src/engine/render/raytracing_retry.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-24/results.json — build PASS; 82/82 checks PASS
+
+25. UI node lookup overloads — 0 net lines saved
+Keep: const UifModel::FindById
+Why equivalent / why this version: Same IndexOfId and node address/null result. The mutable overload delegates through as_const, then restores mutability only for its originally non-const object; public signatures and pointer identity stay unchanged.
+Original copies: const UifModel::FindById; mutable UifModel::FindById
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/ui/uif.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-25/results.json — build PASS; 82/82 checks PASS
+
+26. Failure-message assignment — 5 net lines saved
+Keep: FailWithError in core/error.h, copied from FFNT
+Why equivalent / why this version: Same move assignment and false result. Pointer-based callers preserve null-error handling; reference-based glTF callers pass the same non-null error address.
+Original copies: ffnt.cpp::Fail; vfx_file.cpp::Fail; GltfReader::Fail
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/assets/gltf_model.cpp
+  /Users/suporte/PT-Mac/src/engine/core/error.h
+  /Users/suporte/PT-Mac/src/engine/ui/ffnt.cpp
+  /Users/suporte/PT-Mac/src/engine/vfx/vfx_file.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-26/results.json — build PASS; 82/82 checks PASS
+
+27. CityHash 16-byte mixing — 7 net lines saved
+Keep: CityHashMix16 in strcode.cpp
+Why equivalent / why this version: Both constants are 0x9DDFEA08EB382D69ull; same uint64_t wrapping arithmetic, shifts, order and return. Keep the existing CityHash implementation in its translation unit.
+Original copies: pathcode.cpp::HashLen16; strcode.cpp::HashLen16
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/core/pathcode.cpp
+  /Users/suporte/PT-Mac/src/engine/core/strcode.cpp
+  /Users/suporte/PT-Mac/src/engine/core/strcode.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-0-27/results.json — build PASS; 82/82 checks PASS
+
+28. Stateless xorshift bit mixing — -2 net lines saved
+Keep: core/random_bits.h::XorShiftOnce
+Why equivalent / why this version: Identical uint32_t xor/shift sequence 13,7,5. Preserve every caller seed, counter and mutable RNG state separately.
+Original copies: vfx_system.cpp::XorShiftOnce; game_objects.cpp::Mix
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/core/random_bits.h
+  /Users/suporte/PT-Mac/src/engine/vfx/vfx_system.cpp
+  /Users/suporte/PT-Mac/src/game/game_objects.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-1-28/results.json — build PASS; 82/82 checks PASS
+
+29. Delay ring write primitive — 3 net lines saved
+Keep: audio/dsp.h::WriteDelaySample
+Why equivalent / why this version: Same float assignment followed by size_t cursor increment and equality wrap. Preserve different minimum lengths and read policies in their owning components.
+Original copies: SampleDelay::Write; DelayLine::Write
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/audio/dsp.cpp
+  /Users/suporte/PT-Mac/src/engine/audio/dsp.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-2-29/results.json — build PASS; 82/82 checks PASS
+
+30. Native UTF-8 filesystem text — 9 net lines saved
+Keep: os::PathToUtf8
+Why equivalent / why this version: Same path.u8string and byte-preserving char reinterpretation. Keep generic separator conversion separate.
+Original copies: user_data.cpp::PathText; user_data_test.cpp::U8
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/platform/user_data.cpp
+  /Users/suporte/PT-Mac/tests/user_data_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-cpp-6-30-qualified/results.json — build PASS; 82/82 checks PASS
+
+31. sRGB transfer functions — 8 net lines saved
+Keep: existing enhanced/srgb.glsl, promoted to shaders/srgb.glsl
+Why equivalent / why this version: Literal-identical piecewise transfer functions and thresholds. Root shader input is copied into both families by CMake; remove the redundant Enhanced override.
+Original copies: Original common::SrgbEncode/Decode; Enhanced srgb::SrgbEncode/Decode
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/common.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/srgb.glsl
+  /Users/suporte/PT-Mac/shaders/srgb.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-0-31/results.json — build PASS; 82/82 checks PASS
+
+32. PQ transfer function — 15 net lines saved
+Keep: PqEncode from composite.frag in pq_encode.glsl
+Why equivalent / why this version: Same constants, float operations, clamp, pow and ordering; include at the original definition positions.
+Original copies: composite.frag::PqEncode; Original composite_output::PqEncode; Enhanced composite_output::PqEncode
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/composite.frag
+  /Users/suporte/PT-Mac/shaders/composite_output.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/composite_output.glsl
+  /Users/suporte/PT-Mac/shaders/pq_encode.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-1-32/results.json — build PASS; 82/82 checks PASS
+
+33. Half-resolution lighting upsampling — 32 net lines saved
+Keep: Upsample from pt_resolve.frag in rt_upsample.glsl
+Why equivalent / why this version: Literal-identical sampling, depth/normal bilateral weights, nearest fallback and texture/image bindings; inserted at the same point after each caller image declarations.
+Original copies: pt_resolve.frag::Upsample; rt_full_resolve.frag::Upsample
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/pt_resolve.frag
+  /Users/suporte/PT-Mac/shaders/rt_full_resolve.frag
+  /Users/suporte/PT-Mac/shaders/rt_upsample.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-3-33/results.json — build PASS; 82/82 checks PASS
+
+34. Temporal filter reconstruction — 3 net lines saved
+Keep: PreviousDepth and WorldAt from pt_filter.comp in temporal_world.glsl
+Why equivalent / why this version: Two literal-identical adjacent coordinate reconstruction functions, using the same View layout and globals.
+Original copies: pt_filter.comp::PreviousDepth/WorldAt; rt_full_filter.comp::PreviousDepth/WorldAt
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/pt_filter.comp
+  /Users/suporte/PT-Mac/shaders/rt_full_filter.comp
+  /Users/suporte/PT-Mac/shaders/temporal_world.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-4-34/results.json — build PASS; 82/82 checks PASS
+
+35. Reflection screen projection — 1 net lines saved
+Keep: Outside and Project from reflect_make.frag in reflection_projection.glsl
+Why equivalent / why this version: Same inclusive/exclusive UV bounds and matrix projection operations, with identical View and builtin bindings.
+Original copies: reflect_make.frag::Outside/Project; reflection_surface_helpers.glsl::Outside/Project
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/reflect_make.frag
+  /Users/suporte/PT-Mac/shaders/reflection_projection.glsl
+  /Users/suporte/PT-Mac/shaders/reflection_surface_helpers.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-5-35/results.json — build PASS; 82/82 checks PASS
+
+36. Skinned velocity transform — 4 net lines saved
+Keep: Skinned from velocity_skinned_shared.glsl in skinning.glsl
+Why equivalent / why this version: Same weighted bone matrices and indices, retaining each shader input layout and declarations.
+Original copies: velocity_skinned_shared.glsl::Skinned; upscale_velocity.vert::Skinned
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/skinning.glsl
+  /Users/suporte/PT-Mac/shaders/upscale_velocity.vert
+  /Users/suporte/PT-Mac/shaders/velocity_skinned_shared.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-6-36/results.json — build PASS; 82/82 checks PASS
+
+37. Ray-traced triangle UV interpolation — 19 net lines saved
+Keep: PtCasterUV in rt_surface_uv.glsl
+Why equivalent / why this version: Function name and locals i0/i1/i2 versus a/b/c are the only differences. Same record/index/vertex macros, offset arithmetic and ordered barycentric expression.
+Original copies: pt_path_lighting.glsl::PtCasterUV; Original reflect_make_rt::HitUv; Enhanced reflect_make_rt::HitUv
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/enhanced/reflect_make_rt.frag
+  /Users/suporte/PT-Mac/shaders/pt_path_lighting.glsl
+  /Users/suporte/PT-Mac/shaders/reflect_make_rt.frag
+  /Users/suporte/PT-Mac/shaders/rt_surface_uv.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-7-37/results.json — build PASS; 82/82 checks PASS
+
+38. Ray-tracing hash mixer — 6 net lines saved
+Keep: RtHash in rt_hash.glsl
+Why equivalent / why this version: Same uint xor, shifts and multiplication constants. Only function name changes in AO; callers and independent RNG state are retained.
+Original copies: rt_full.glsl::RtHash; rt_ao.comp::Hash
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/rt_ao.comp
+  /Users/suporte/PT-Mac/shaders/rt_full.glsl
+  /Users/suporte/PT-Mac/shaders/rt_hash.glsl
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-8-38/results.json — build PASS; 82/82 checks PASS
+
+39. Path radiance clamps within each family — 10 net lines saved
+Keep: Original and Enhanced path_radiance_clamp.glsl
+Why equivalent / why this version: Each family has two identical definitions. Share inside each family only: Enhanced bypasses its SDR brightness ceiling when HDR is active, while Original always applies it.
+Original copies: Original pt_indirect_main/pt_layer Clamp; Enhanced pt_indirect_main/pt_layer Clamp
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/shaders/enhanced/path_radiance_clamp.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/pt_indirect_main.glsl
+  /Users/suporte/PT-Mac/shaders/enhanced/pt_layer.comp
+  /Users/suporte/PT-Mac/shaders/path_radiance_clamp.glsl
+  /Users/suporte/PT-Mac/shaders/pt_indirect_main.glsl
+  /Users/suporte/PT-Mac/shaders/pt_layer.comp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-final-shader-9-39/results.json — build PASS; 82/82 checks PASS
+
+40. Status-prefix test reporting — 18 net lines saved
+Keep: pt::test::Check in tests/check.h
+Why equivalent / why this version: Same printf status-prefix format then bool-to-int failure addition. Pass each fixture counter by reference; preserve std::string and C-string entry types. Extra logging and fflush variants stay separate.
+Original copies: 10 identical test Check/Expect helpers
+Additional callers: The closing scan found the same status-prefix Expect helper in the Objective-C++ macOS HDR fixture. Redirect it to pt::test::Check with its existing private counter and identical output order.
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tests/archive_unlock_test.cpp
+  /Users/suporte/PT-Mac/tests/check.h
+  /Users/suporte/PT-Mac/tests/device_start_test.cpp
+  /Users/suporte/PT-Mac/tests/dialog_nav_test.cpp
+  /Users/suporte/PT-Mac/tests/gyro_test.cpp
+  /Users/suporte/PT-Mac/tests/intercom_test.cpp
+  /Users/suporte/PT-Mac/tests/macos_hdr_test.mm
+  /Users/suporte/PT-Mac/tests/mods_test.cpp
+  /Users/suporte/PT-Mac/tests/notice_queue_test.cpp
+  /Users/suporte/PT-Mac/tests/pc_settings_refresh_test.cpp
+  /Users/suporte/PT-Mac/tests/rendering_api_test.cpp
+  /Users/suporte/PT-Mac/tests/sound_captions_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-40/results.json — build PASS; 82/82 checks PASS
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-closing-40/results.json — build PASS; 82/82 checks PASS
+
+41. Failure-only test reporting — 12 net lines saved
+Keep: pt::test::Expect in tests/check.h
+Why equivalent / why this version: Same failed-only branch, increment BEFORE printf, same format. Camera-blend increments after printing and stays separate.
+Original copies: queue_handoff; upscaler_gpu; fsr_provider_gate; microphone_async; d3d12_ngx_identity
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tests/check.h
+  /Users/suporte/PT-Mac/tests/d3d12_ngx_identity_test.cpp
+  /Users/suporte/PT-Mac/tests/fsr_provider_gate_test.cpp
+  /Users/suporte/PT-Mac/tests/microphone_async_test.cpp
+  /Users/suporte/PT-Mac/tests/queue_handoff_test.cpp
+  /Users/suporte/PT-Mac/tests/upscaler_gpu_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-41/results.json — build PASS; 82/82 checks PASS
+
+42. Status-suffix test reporting — 3 net lines saved
+Keep: pt::test::CheckNamed in tests/check.h
+Why equivalent / why this version: Same label-colon-status format then failure addition. Preserve public/local bool-first Check forwards where argument order differs; independent fixture counters remain.
+Original copies: parallel_for; vk_address_log; fast_walk; settings_roundtrip
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tests/check.h
+  /Users/suporte/PT-Mac/tests/fast_walk_test.cpp
+  /Users/suporte/PT-Mac/tests/parallel_for_test.cpp
+  /Users/suporte/PT-Mac/tests/settings_roundtrip_test.cpp
+  /Users/suporte/PT-Mac/tests/vk_address_log_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-42/results.json — build PASS; 82/82 checks PASS
+
+43. Test environment setup — -1 net lines saved
+Keep: pt::test::SetEnv in tests/environment.h
+Why equivalent / why this version: Identical platform branches, Windows _putenv_s, POSIX setenv overwrite=1, void return and ignored error handling.
+Original copies: device_start_test::SetEnv; rendering_api_test::SetEnv
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tests/device_start_test.cpp
+  /Users/suporte/PT-Mac/tests/environment.h
+  /Users/suporte/PT-Mac/tests/rendering_api_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-43/results.json — build PASS; 82/82 checks PASS
+
+44. Fmod angle normalization — 4 net lines saved
+Keep: WrapAngle from input_script.cpp in core/angles.h
+Why equivalent / why this version: Input-script, camera and XR use the same signed fmod/add/subtract sequence. Their differently spelled pi/two-pi constants round to identical binary32 values. Preserve XR public wrapper; keep Fox negative-boundary and remainder policies separate.
+Original copies: input_script.cpp::WrapAngle; BlendCameras local wrap; xr::WrapAngle
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/engine/core/angles.h
+  /Users/suporte/PT-Mac/src/engine/render/camera.h
+  /Users/suporte/PT-Mac/src/engine/xr/xr_view.h
+  /Users/suporte/PT-Mac/src/game/input_script.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-group-44/results.json — build PASS; 82/82 checks PASS
+
+45. Inclusive UI cell hit testing — -13 net lines saved
+Keep: CellContains from dialog::Cell in game/ui/cell.h
+Why equivalent / why this version: Same vec2 fields, comparison order and inclusive bounds. Share only the predicate; retain both distinct public struct types and layouts. Lisa-date bounds use a different comparison order and stay separate.
+Original copies: dialog::Cell::Contains; MuseumLayout::Cell::Contains
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/game/ui/cell.h
+  /Users/suporte/PT-Mac/src/game/ui/dialog_view.h
+  /Users/suporte/PT-Mac/src/game/ui/museum_layout.h
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-45/results.json — build PASS; 82/82 checks PASS
+
+46. Exponential easing formula — 3 net lines saved
+Keep: existing Ease expression as a local typed template
+Why equivalent / why this version: Same expression and float rate/dt operations. Type inference keeps float and vec3 arithmetic unchanged; every call uses matching current/target types and no function-pointer callers exist.
+Original copies: lisa_date.cpp::Ease(float); lisa_date.cpp::Ease(glm::vec3)
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-46/results.json — build PASS; 82/82 checks PASS
+
+47. Installer integrity guard — -7 net lines saved
+Keep: VerifyIntegrity from setup_linux.cpp in setup_integrity.h
+Why equivalent / why this version: Identical cancellation-before-integrity check and exception text. Both resolve CheckCancel to the same setup_core.h hooks and IntegrityOk to the same integrity namespace. Keep Mac payload verification separate.
+Original copies: Windows setup.cpp::VerifyIntegrity; Linux setup_linux.cpp::VerifyIntegrity
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/installer/Native/setup.cpp
+  /Users/suporte/PT-Mac/installer/Native/setup_integrity.h
+  /Users/suporte/PT-Mac/installer/Native/setup_linux.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-47/results.json — build PASS; 82/82 checks PASS
+
+48. Font-license packaging commands — 3 net lines saved
+Keep: pt_copy_font_licenses in CMakeLists.txt
+Why equivalent / why this version: Same glob, filenames, make-directory and copy-if-different commands. Parameterize only the target; preserve the Apple-only release call and original command order. Verify generated Ninja POST_BUILD commands byte-for-byte.
+Original copies: pt post-build license copy block; Apple pt_release post-build license copy block
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/CMakeLists.txt
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-test-helpers-48/results.json — build PASS; 82/82 checks PASS
+
+49. Windows test logging fixtures — -3 net lines saved
+Keep: LogWrite source in tests/log_write.inl
+Why equivalent / why this version: Share the literal-identical printf LogWrite body through log_write.inl. Keep an out-of-line definition in each separate test executable and preserve the expanded C++ tokens and symbol signature.
+Original copies: discord_presence_test.cpp::LogWrite; spatial_output_test.cpp::LogWrite
+Definitions/call-site files updated:
+  /Users/suporte/PT-Mac/tests/discord_presence_test.cpp
+  /Users/suporte/PT-Mac/tests/log_write.inl
+  /Users/suporte/PT-Mac/tests/spatial_output_test.cpp
+Validation: /Users/suporte/PT-Mac/build/dead-code-audit/dedup-closing-49/results.json — build PASS; 82/82 checks PASS
+
+DIFFERENCES KEPT
+
+HDR/SDR shader policies: Enhanced HDR radiance, scene/output mapping, ScreenTonemapHdr, layer lighting and color-gamut behavior differ from Original. Literal-equal sections share includes; the differing branches and layouts remain in their original families. The two path clamp policies remain distinct: Enhanced bypasses the SDR ceiling in HDR.
+
+Color transfer approximations: Piecewise sRGB, PQ, approximate gamma-2.2 VFX conversions and HDR-specific mapping are different functions. Only equal formulas were shared.
+
+Angle normalization: Fox wrapping, signed fmod normalization and std::remainder have different rounding/boundary behavior. The retained probe shows opposite signs at +pi for fmod/remainder and a concrete bitwise Fox/fmod difference. See kept-angle-probe.log.
+
+Direction and vector adapters: Unnormalized game look vectors differ from normalized camera directions. glm::vec4-to-vec3 extraction and XrVector3f-to-glm conversion accept different SDK types; their typed adapters remain.
+
+ASCII and language-aware matching: Asset-browser substring matching accepts an empty needle; controller matching rejects it; Vulkan layer matching also uses locale tolower. Voice recognition additionally folds accents and filters characters. Shared ASCII primitives do not replace these policies.
+
+Tool string decoding: ASCII replacement decoding and Latin-1 decoding differ on bytes >= 0x80. Copies were shared within each policy, with public cstring aliases retained.
+
+Binary-reader policies: Checked readers return a zero-initialized value for short input. Unchecked readers rely on caller bounds. The DSP U8 cursor uses pos < size rather than offset+1 <= size, which differs under size_t overflow; it stays separate. Cursor-owning adapters retain their own advancement. Private unchecked numeric instantiations were verified before redirecting them.
+
+JSON representations and scalar coercion: Metadata JSON stores scalar text for strings/numbers/bools/null; engine JSON has typed Value fields and strict string access. StringMember is shared only within the metadata representation. The parsers and strict engine accessor remain separate.
+
+Local-file request wrappers: FG ReadText loads the file through iterators then keeps its tail. NR ReadText seeks, reads a bounded tail and resizes to gcount. Stream-error, seeking and file-growth behavior differ. Their common network request primitive is shared; local-file wrappers remain.
+
+Hashing errors and output mutation: Neural-rendering HashFile writes size_out from file_size before opening, while the shared file hash updates it after a successful open. Installer hashing throws on read failure. These owning wrappers remain; only identical fixed-size hex formatting is shared. Append-based installer hex formatting retains its allocation behavior.
+
+Environment and path encodings: Native getenv bytes and UTF-8 os::GetEnv differ on Windows. Native u8string separators and generic_u8string separators also differ. Copies were shared only inside matching policies.
+
+Delay-buffer component contracts: Public DelayLine has minimum length 1 and delayed reads; SampleDelay has minimum length 4 and cursor reads. Their identical write primitive is shared, while those contracts and storage/cursors remain independent.
+
+Backend lifecycle and caches: DLSS ReleaseFeature resets ray_reconstruction_; neural Release resets error_logged_. Resources and state belong to different backend objects. The three Windows NGX DataPath caches keep independent first-use timing even though their directory initializer is shared. Typed FSR callbacks retain their own presenters and SDK contexts.
+
+Command and route wrappers: Audio event/media/dialogue commands use different command types, payload fields and ownership. NR/FG installer route arguments have different work directories and result types. Asset selection, pinning, download/error policies and platform lifecycles remain separate.
+
+Typed parsers and lookups: Settings integer/float parsers call stoi/stof; neural enum parsers use different tables and defaults. Typed finders search different collections/keys and return different types, indices or pointers. These are not interchangeable implementations.
+
+UI type identity and comparison order: Dialog and museum Cell types remain distinct; their equal predicate is shared. Lisa-date bounds test coordinates in a different short-circuit order and retain that expression.
+
+Diagnostic and fixture behavior: Test helpers with extra LogInfo, fflush, richer values, different punctuation or print-before-counter order stay separate. Windows test-local LogWrite symbols remain separate linker fixtures, with their identical source body shared through an include. One-line adapters already calling a common standard-library operation, such as std::fill, remain local interfaces.
+
+Platform packaging: Mac installer payload verification differs from the shared Win/Linux self-integrity guard. CMake platform/SDK compiler flags and lifecycle hooks remain separate. Font-license copy commands alone were parameterized, with identical generated post-build recipes.
+
+ADDITIONAL EVIDENCE AND FINAL VALIDATION
+Final automated result: 88/88 distinct regression checks PASS (82 standard checks plus six additional portable tests). All three application/installer build targets PASS.
+Additional tests: pt_intercom_test, pt_dominant_light_test, pt_vr_view_test, pt_route_queue_test, pt_intel_vulkan_driver_test, pt_d3d12_hdr_framegen_test.
+Shader gate: 579/579 preprocessed profiles match the starting shader operations across Original/Enhanced and Vulkan/MoltenVK/D3D12 macro profiles. 12 profiles differ only by the compiler include-extension marker. Normalization is limited to the audited private RtHash/Hash and PtCasterUV/HitUv/local-variable renames.
+Optimized SPIR-V before/after is byte-identical for the renamed UV/hash helpers, PQ extraction, UI vertex extraction and the earlier XR include extraction. See group-*-spirv-parity.json and xr-*-before/after.spv.
+Angle probe: 300,000 results compared against all three old implementations over 100,000 float bit patterns; pi/two-pi constants are compile-time equal.
+Python binary-string probe: 245 baseline/new value and exception comparisons passed. dynlib/fsm/pkginfo CLI and package imports plus fsop CLI passed.
+Audio probe: seven effect impulse energy/peak/tail result sets are identical before/after, including both affected reverbs. Fresh final probe matches fx-before-results.txt.
+Metadata/hash contract probe passed scalar coercion, absent members, abc/binary/empty SHA-256 and missing-file size_out preservation. SDK quality .inl expansion preserves C++ tokens and original guarded namespace positions.
+Installer guard probe compiled the shared header and verified cancellation-before-integrity and the damaged-file exception. Font-license post-build recipes are byte-identical for pt and pt_release.
+git diff --check: PASS.
+
+INTERMEDIATE FAILURES AND RESTORATION
+Two intermediate checked-reader builds failed because a broad Read rename collided with the public install Read overload. The four-file batch was restored to the last validated snapshot after each failure. The final change redirects only explicit numeric template calls with pt:: qualification; the public install API is unchanged. Final build and 82/82 checks passed.
+Preflight editing assertions and the early isolated Python probe import-path issue were corrected before retaining their affected phases. Failed and successful logs are preserved; no failed batch remains in the final source state.
+
+VALIDATION LIMITS
+This is a native macOS build/test result. Windows/D3D12, Linux and mobile device runtimes were not executed. Cross-platform shared SDK definitions have source/token equivalence evidence; the shared Win/Linux guard also has a compiled native contract probe.
+LPSH CLI was not run because its pre-existing NumPy dependency is unavailable. Its extracted baseline function and the new Latin-1 helper passed isolated value/exception parity. No dependency was installed.
+Manual/fixture/device-oriented tools are not counted as automated passing checks: for example unlock PrepareTool modes download third-party tools, texture-descriptor/VFX probes need explicit assets, and BC/iOS tests require their configurations. The full automated inventory and exact arguments are in each results.json.
+
+SOURCE LINE ACCOUNTING
+   12 removed     9 added  /Users/suporte/PT-Mac/CMakeLists.txt
+    4 removed     1 added  /Users/suporte/PT-Mac/installer/Native/fg_route_win.h
+    4 removed     1 added  /Users/suporte/PT-Mac/installer/Native/route_win.h
+    4 removed     1 added  /Users/suporte/PT-Mac/installer/Native/setup.cpp
+    9 removed     4 added  /Users/suporte/PT-Mac/installer/Native/setup_core.h
+    0 removed    13 added  /Users/suporte/PT-Mac/installer/Native/setup_integrity.h
+    4 removed     1 added  /Users/suporte/PT-Mac/installer/Native/setup_linux.cpp
+   20 removed     1 added  /Users/suporte/PT-Mac/shaders/backdrop.frag
+    0 removed    21 added  /Users/suporte/PT-Mac/shaders/backdrop_covered_shared.glsl
+   22 removed     1 added  /Users/suporte/PT-Mac/shaders/banding.frag
+    0 removed    23 added  /Users/suporte/PT-Mac/shaders/banding_depth_linear_shared.glsl
+  173 removed     2 added  /Users/suporte/PT-Mac/shaders/common.glsl
+    0 removed   165 added  /Users/suporte/PT-Mac/shaders/common_functions.glsl
+   24 removed     2 added  /Users/suporte/PT-Mac/shaders/compose.frag
+    0 removed    18 added  /Users/suporte/PT-Mac/shaders/compose_bloom_alpha_shared.glsl
+    9 removed     1 added  /Users/suporte/PT-Mac/shaders/composite.frag
+    9 removed     1 added  /Users/suporte/PT-Mac/shaders/composite_output.glsl
+   20 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/backdrop.frag
+   22 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/banding.frag
+  164 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/common.glsl
+   24 removed     2 added  /Users/suporte/PT-Mac/shaders/enhanced/compose.frag
+    9 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/composite_output.glsl
+   68 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/gbuffer_main.glsl
+    0 removed     7 added  /Users/suporte/PT-Mac/shaders/enhanced/path_radiance_clamp.glsl
+    7 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/pt_indirect_main.glsl
+  270 removed     3 added  /Users/suporte/PT-Mac/shaders/enhanced/pt_layer.comp
+  515 removed     2 added  /Users/suporte/PT-Mac/shaders/enhanced/pt_path.glsl
+  109 removed     2 added  /Users/suporte/PT-Mac/shaders/enhanced/pt_reference.comp
+   88 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/reflect_blend_main.glsl
+  263 removed     4 added  /Users/suporte/PT-Mac/shaders/enhanced/reflect_make_rt.frag
+   35 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/rt_glossy.comp
+   16 removed     0 added  /Users/suporte/PT-Mac/shaders/enhanced/srgb.glsl
+   52 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/subsurface.frag
+    5 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/tonemap.frag
+    5 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/tonemap_curve.glsl
+   48 removed     2 added  /Users/suporte/PT-Mac/shaders/enhanced/ui_sprite.frag
+    6 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/ui_sprite.vert
+   34 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/upscale_resolve.frag
+   32 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/velocity.vert
+  131 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/vfx_particle.frag
+   17 removed     1 added  /Users/suporte/PT-Mac/shaders/enhanced/xr_copy.frag
+   68 removed     1 added  /Users/suporte/PT-Mac/shaders/gbuffer_main.glsl
+    0 removed    69 added  /Users/suporte/PT-Mac/shaders/gbuffer_main_tex_point_shared.glsl
+    0 removed     7 added  /Users/suporte/PT-Mac/shaders/path_radiance_clamp.glsl
+    0 removed     9 added  /Users/suporte/PT-Mac/shaders/pq_encode.glsl
+    8 removed     2 added  /Users/suporte/PT-Mac/shaders/pt_filter.comp
+    7 removed     1 added  /Users/suporte/PT-Mac/shaders/pt_indirect_main.glsl
+  270 removed     3 added  /Users/suporte/PT-Mac/shaders/pt_layer.comp
+    0 removed   210 added  /Users/suporte/PT-Mac/shaders/pt_layer_filter.glsl
+    0 removed    55 added  /Users/suporte/PT-Mac/shaders/pt_layer_surfaces.glsl
+  515 removed     2 added  /Users/suporte/PT-Mac/shaders/pt_path.glsl
+    0 removed   379 added  /Users/suporte/PT-Mac/shaders/pt_path_lighting.glsl
+    0 removed   128 added  /Users/suporte/PT-Mac/shaders/pt_path_trace.glsl
+  109 removed     2 added  /Users/suporte/PT-Mac/shaders/pt_reference.comp
+    0 removed    20 added  /Users/suporte/PT-Mac/shaders/pt_reference_output.glsl
+    0 removed    91 added  /Users/suporte/PT-Mac/shaders/pt_reference_surface.glsl
+   34 removed     1 added  /Users/suporte/PT-Mac/shaders/pt_resolve.frag
+    0 removed     5 added  /Users/suporte/PT-Mac/shaders/quantize_dither.glsl
+   88 removed     1 added  /Users/suporte/PT-Mac/shaders/reflect_blend_main.glsl
+    0 removed    89 added  /Users/suporte/PT-Mac/shaders/reflect_blend_main_rt_tap_shared.glsl
+    6 removed     2 added  /Users/suporte/PT-Mac/shaders/reflect_make.frag
+  263 removed     4 added  /Users/suporte/PT-Mac/shaders/reflect_make_rt.frag
+    0 removed     7 added  /Users/suporte/PT-Mac/shaders/reflection_projection.glsl
+    0 removed   202 added  /Users/suporte/PT-Mac/shaders/reflection_rt_resolve.glsl
+    0 removed    47 added  /Users/suporte/PT-Mac/shaders/reflection_surface_helpers.glsl
+    9 removed     2 added  /Users/suporte/PT-Mac/shaders/rt_ao.comp
+    8 removed     1 added  /Users/suporte/PT-Mac/shaders/rt_full.glsl
+    8 removed     2 added  /Users/suporte/PT-Mac/shaders/rt_full_filter.comp
+   34 removed     1 added  /Users/suporte/PT-Mac/shaders/rt_full_resolve.frag
+   35 removed     1 added  /Users/suporte/PT-Mac/shaders/rt_glossy.comp
+    0 removed    36 added  /Users/suporte/PT-Mac/shaders/rt_glossy_sample_visible_normal_shared.glsl
+    0 removed     8 added  /Users/suporte/PT-Mac/shaders/rt_hash.glsl
+    0 removed    11 added  /Users/suporte/PT-Mac/shaders/rt_surface_uv.glsl
+    0 removed    34 added  /Users/suporte/PT-Mac/shaders/rt_upsample.glsl
+    0 removed     5 added  /Users/suporte/PT-Mac/shaders/screen_tonemap.glsl
+    0 removed     6 added  /Users/suporte/PT-Mac/shaders/skinning.glsl
+    0 removed    16 added  /Users/suporte/PT-Mac/shaders/srgb.glsl
+   52 removed     1 added  /Users/suporte/PT-Mac/shaders/subsurface.frag
+    0 removed    53 added  /Users/suporte/PT-Mac/shaders/subsurface_output_shared.glsl
+    0 removed     9 added  /Users/suporte/PT-Mac/shaders/temporal_world.glsl
+    5 removed     1 added  /Users/suporte/PT-Mac/shaders/tonemap.frag
+    5 removed     1 added  /Users/suporte/PT-Mac/shaders/tonemap_curve.glsl
+    0 removed     7 added  /Users/suporte/PT-Mac/shaders/tpp_shoulder.glsl
+   48 removed     2 added  /Users/suporte/PT-Mac/shaders/ui_sprite.frag
+    6 removed     1 added  /Users/suporte/PT-Mac/shaders/ui_sprite.vert
+    0 removed    43 added  /Users/suporte/PT-Mac/shaders/ui_sprite_sample_shared.glsl
+    0 removed     6 added  /Users/suporte/PT-Mac/shaders/ui_sprite_vertex.glsl
+    0 removed     6 added  /Users/suporte/PT-Mac/shaders/ui_string_shading.glsl
+   34 removed     1 added  /Users/suporte/PT-Mac/shaders/upscale_resolve.frag
+    0 removed    35 added  /Users/suporte/PT-Mac/shaders/upscale_resolve_reflection_shared.glsl
+    6 removed     1 added  /Users/suporte/PT-Mac/shaders/upscale_velocity.vert
+   32 removed     1 added  /Users/suporte/PT-Mac/shaders/velocity.vert
+    0 removed    28 added  /Users/suporte/PT-Mac/shaders/velocity_skinned_shared.glsl
+  131 removed     1 added  /Users/suporte/PT-Mac/shaders/vfx_particle.frag
+    0 removed   132 added  /Users/suporte/PT-Mac/shaders/vfx_particle_lighting.glsl
+   17 removed     1 added  /Users/suporte/PT-Mac/shaders/xr_copy.frag
+    0 removed    18 added  /Users/suporte/PT-Mac/shaders/xr_copy_decode_shared.glsl
+   22 removed    14 added  /Users/suporte/PT-Mac/src/engine/anim/demo_file.cpp
+   19 removed    11 added  /Users/suporte/PT-Mac/src/engine/anim/gani.cpp
+   26 removed    18 added  /Users/suporte/PT-Mac/src/engine/anim/help_bones.cpp
+   58 removed    50 added  /Users/suporte/PT-Mac/src/engine/anim/motion_data.cpp
+   30 removed    22 added  /Users/suporte/PT-Mac/src/engine/anim/rig.cpp
+   23 removed    15 added  /Users/suporte/PT-Mac/src/engine/anim/skeleton.cpp
+   13 removed     2 added  /Users/suporte/PT-Mac/src/engine/assets/fmdl.cpp
+   24 removed    16 added  /Users/suporte/PT-Mac/src/engine/assets/ftex.cpp
+   13 removed     2 added  /Users/suporte/PT-Mac/src/engine/assets/geom.cpp
+   34 removed    19 added  /Users/suporte/PT-Mac/src/engine/assets/gltf_model.cpp
+   32 removed     8 added  /Users/suporte/PT-Mac/src/engine/audio/dsp.cpp
+    6 removed     8 added  /Users/suporte/PT-Mac/src/engine/audio/dsp.h
+   21 removed    15 added  /Users/suporte/PT-Mac/src/engine/audio/motion_generator.cpp
+   14 removed     3 added  /Users/suporte/PT-Mac/src/engine/audio/sound_engine.cpp
+   28 removed    11 added  /Users/suporte/PT-Mac/src/engine/audio/sound_package.cpp
+   19 removed     8 added  /Users/suporte/PT-Mac/src/engine/audio/subtitles.cpp
+   28 removed    17 added  /Users/suporte/PT-Mac/src/engine/audio/wem.cpp
+   20 removed     9 added  /Users/suporte/PT-Mac/src/engine/audio/wwise_vorbis.cpp
+    0 removed    16 added  /Users/suporte/PT-Mac/src/engine/core/angles.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/arabic_text.h
+    1 removed    10 added  /Users/suporte/PT-Mac/src/engine/core/ascii.h
+    0 removed    38 added  /Users/suporte/PT-Mac/src/engine/core/binary_read.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/chinese_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/czech_text.h
+    0 removed    15 added  /Users/suporte/PT-Mac/src/engine/core/error.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/french_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/german_text.h
+    0 removed    12 added  /Users/suporte/PT-Mac/src/engine/core/interpolation.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/italian_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/japanese_text.h
+    0 removed    13 added  /Users/suporte/PT-Mac/src/engine/core/menu_lookup.h
+   10 removed     1 added  /Users/suporte/PT-Mac/src/engine/core/pathcode.cpp
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/polish_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/portuguese_text.h
+    0 removed    14 added  /Users/suporte/PT-Mac/src/engine/core/random_bits.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/russian_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/spanish_text.h
+   50 removed    40 added  /Users/suporte/PT-Mac/src/engine/core/strcode.cpp
+    0 removed     1 added  /Users/suporte/PT-Mac/src/engine/core/strcode.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/turkish_text.h
+    4 removed     2 added  /Users/suporte/PT-Mac/src/engine/core/ukrainian_text.h
+   32 removed    24 added  /Users/suporte/PT-Mac/src/engine/data/fox2.cpp
+   15 removed     7 added  /Users/suporte/PT-Mac/src/engine/fs/fpk.cpp
+   10 removed     4 added  /Users/suporte/PT-Mac/src/engine/fs/mod_level.cpp
+   11 removed     7 added  /Users/suporte/PT-Mac/src/engine/fs/pt_release.h
+    2 removed     2 added  /Users/suporte/PT-Mac/src/engine/platform/controller_speaker_route.cpp
+    4 removed     4 added  /Users/suporte/PT-Mac/src/engine/platform/http.cpp
+    0 removed     5 added  /Users/suporte/PT-Mac/src/engine/platform/json_value.h
+    1 removed     1 added  /Users/suporte/PT-Mac/src/engine/platform/rendering_api.cpp
+    0 removed    20 added  /Users/suporte/PT-Mac/src/engine/platform/self_integrity.h
+    1 removed     1 added  /Users/suporte/PT-Mac/src/engine/platform/settings.cpp
+   47 removed    42 added  /Users/suporte/PT-Mac/src/engine/platform/user_data.cpp
+   22 removed    19 added  /Users/suporte/PT-Mac/src/engine/render/camera.h
+   14 removed     8 added  /Users/suporte/PT-Mac/src/engine/render/d3d12/backend/d3d12_raytracing.cpp
+   42 removed     3 added  /Users/suporte/PT-Mac/src/engine/render/d3d12/backend/d3d12_upscale.cpp
+   11 removed     6 added  /Users/suporte/PT-Mac/src/engine/render/raytracing.cpp
+    1 removed     0 added  /Users/suporte/PT-Mac/src/engine/render/raytracing.h
+    0 removed    18 added  /Users/suporte/PT-Mac/src/engine/render/raytracing_retry.h
+   13 removed     0 added  /Users/suporte/PT-Mac/src/engine/render/scene_enhanced_post.cpp
+   10 removed     0 added  /Users/suporte/PT-Mac/src/engine/render/scene_frame.cpp
+    3 removed     3 added  /Users/suporte/PT-Mac/src/engine/render/scene_path.cpp
+    5 removed     1 added  /Users/suporte/PT-Mac/src/engine/render/scene_post.cpp
+    0 removed     2 added  /Users/suporte/PT-Mac/src/engine/render/scene_renderer.h
+    5 removed     0 added  /Users/suporte/PT-Mac/src/engine/render/scene_rt_full.cpp
+   16 removed     2 added  /Users/suporte/PT-Mac/src/engine/render/upscale/dlss_backend.cpp
+   68 removed    27 added  /Users/suporte/PT-Mac/src/engine/render/upscale/fg_unlock.cpp
+    5 removed     1 added  /Users/suporte/PT-Mac/src/engine/render/upscale/frame_generation.h
+    6 removed     2 added  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_backend.cpp
+   13 removed     7 added  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_native.cpp
+    7 removed     1 added  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_rendering.cpp
+   61 removed    20 added  /Users/suporte/PT-Mac/src/engine/render/upscale/neural_unlock.cpp
+    0 removed    11 added  /Users/suporte/PT-Mac/src/engine/render/upscale/ngx_quality.inl
+    0 removed    35 added  /Users/suporte/PT-Mac/src/engine/render/upscale/unlock_io.h
+    9 removed     4 added  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale.cpp
+    5 removed     9 added  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale.h
+    0 removed    12 added  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale_platform.cpp
+    0 removed     2 added  /Users/suporte/PT-Mac/src/engine/render/upscale/upscale_platform.h
+   27 removed     2 added  /Users/suporte/PT-Mac/src/engine/render/upscale/xess_backend.cpp
+    0 removed    27 added  /Users/suporte/PT-Mac/src/engine/render/upscale/xess_quality.inl
+   36 removed    15 added  /Users/suporte/PT-Mac/src/engine/ui/ffnt.cpp
+    0 removed     5 added  /Users/suporte/PT-Mac/src/engine/ui/ffnt.h
+   12 removed     7 added  /Users/suporte/PT-Mac/src/engine/ui/lang_file.cpp
+    4 removed     0 added  /Users/suporte/PT-Mac/src/engine/ui/text_layout.cpp
+   24 removed    13 added  /Users/suporte/PT-Mac/src/engine/ui/uia.cpp
+   67 removed    50 added  /Users/suporte/PT-Mac/src/engine/ui/uif.cpp
+   31 removed    25 added  /Users/suporte/PT-Mac/src/engine/ui/uigb.cpp
+   30 removed    24 added  /Users/suporte/PT-Mac/src/engine/ui/uilb.cpp
+    3 removed     0 added  /Users/suporte/PT-Mac/src/engine/ui/unicode_font_harfbuzz.cpp
+   23 removed    17 added  /Users/suporte/PT-Mac/src/engine/vfx/vfx_file.cpp
+    7 removed     1 added  /Users/suporte/PT-Mac/src/engine/vfx/vfx_system.cpp
+    6 removed     2 added  /Users/suporte/PT-Mac/src/engine/voice/microphone.cpp
+    6 removed     1 added  /Users/suporte/PT-Mac/src/engine/xr/xr_view.h
+    0 removed    21 added  /Users/suporte/PT-Mac/src/game/fox_angles.h
+   25 removed     8 added  /Users/suporte/PT-Mac/src/game/game_objects.cpp
+    9 removed     5 added  /Users/suporte/PT-Mac/src/game/game_plus_arm.cpp
+    1 removed     1 added  /Users/suporte/PT-Mac/src/game/game_sound.cpp
+   18 removed    10 added  /Users/suporte/PT-Mac/src/game/gimmick_animation.cpp
+   10 removed     2 added  /Users/suporte/PT-Mac/src/game/input_script.cpp
+   17 removed    10 added  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date.cpp
+    7 removed     3 added  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date_hints.cpp
+    6 removed     2 added  /Users/suporte/PT-Mac/src/game/lisa_date/lisa_date_selfie.cpp
+   32 removed    19 added  /Users/suporte/PT-Mac/src/game/player.cpp
+    8 removed     2 added  /Users/suporte/PT-Mac/src/game/player_animation.cpp
+   15 removed     7 added  /Users/suporte/PT-Mac/src/game/render_scene.cpp
+   14 removed     8 added  /Users/suporte/PT-Mac/src/game/save_data.cpp
+   18 removed     5 added  /Users/suporte/PT-Mac/src/game/trap_system.cpp
+    0 removed    11 added  /Users/suporte/PT-Mac/src/game/ui/cell.h
+    1 removed     2 added  /Users/suporte/PT-Mac/src/game/ui/dialog_view.h
+   14 removed     4 added  /Users/suporte/PT-Mac/src/game/ui/game_ui.cpp
+    1 removed     2 added  /Users/suporte/PT-Mac/src/game/ui/museum_layout.h
+    2 removed     2 added  /Users/suporte/PT-Mac/src/game/ui/subtitle_player.cpp
+   62 removed    59 added  /Users/suporte/PT-Mac/tests/archive_unlock_test.cpp
+    0 removed    29 added  /Users/suporte/PT-Mac/tests/check.h
+   12 removed    10 added  /Users/suporte/PT-Mac/tests/d3d12_ngx_identity_test.cpp
+   40 removed    30 added  /Users/suporte/PT-Mac/tests/device_start_test.cpp
+   29 removed    26 added  /Users/suporte/PT-Mac/tests/dialog_nav_test.cpp
+    1 removed     1 added  /Users/suporte/PT-Mac/tests/discord_presence_test.cpp
+    0 removed    15 added  /Users/suporte/PT-Mac/tests/environment.h
+   35 removed    32 added  /Users/suporte/PT-Mac/tests/fast_walk_test.cpp
+   30 removed    25 added  /Users/suporte/PT-Mac/tests/fsr_provider_gate_test.cpp
+   48 removed    45 added  /Users/suporte/PT-Mac/tests/gyro_test.cpp
+   16 removed    13 added  /Users/suporte/PT-Mac/tests/intercom_test.cpp
+   11 removed     2 added  /Users/suporte/PT-Mac/tests/light_cull_test.cpp
+    0 removed     3 added  /Users/suporte/PT-Mac/tests/log_write.inl
+   21 removed    18 added  /Users/suporte/PT-Mac/tests/macos_hdr_test.mm
+    9 removed     7 added  /Users/suporte/PT-Mac/tests/microphone_async_test.cpp
+   64 removed    61 added  /Users/suporte/PT-Mac/tests/mods_test.cpp
+   22 removed    19 added  /Users/suporte/PT-Mac/tests/notice_queue_test.cpp
+    4 removed     2 added  /Users/suporte/PT-Mac/tests/parallel_for_test.cpp
+   24 removed    21 added  /Users/suporte/PT-Mac/tests/pc_settings_refresh_test.cpp
+   16 removed    11 added  /Users/suporte/PT-Mac/tests/queue_handoff_test.cpp
+   41 removed    31 added  /Users/suporte/PT-Mac/tests/rendering_api_test.cpp
+   68 removed    65 added  /Users/suporte/PT-Mac/tests/settings_roundtrip_test.cpp
+   29 removed    26 added  /Users/suporte/PT-Mac/tests/sound_captions_test.cpp
+    1 removed     1 added  /Users/suporte/PT-Mac/tests/spatial_output_test.cpp
+   84 removed    79 added  /Users/suporte/PT-Mac/tests/upscaler_gpu_test.cpp
+    6 removed     2 added  /Users/suporte/PT-Mac/tests/user_data_test.cpp
+    4 removed     2 added  /Users/suporte/PT-Mac/tests/vk_address_log_test.cpp
+    0 removed    11 added  /Users/suporte/PT-Mac/tools/binary_strings.py
+    5 removed     6 added  /Users/suporte/PT-Mac/tools/dynlib.py
+    5 removed     6 added  /Users/suporte/PT-Mac/tools/fsm.py
+    5 removed     6 added  /Users/suporte/PT-Mac/tools/fsop.py
+    5 removed     6 added  /Users/suporte/PT-Mac/tools/lpsh.py
+    5 removed     6 added  /Users/suporte/PT-Mac/tools/pkginfo.py
+
+PRIMARY EVIDENCE DIRECTORY: /Users/suporte/PT-Mac/build/dedup-audit
+Per-phase build/test logs: /Users/suporte/PT-Mac/build/dead-code-audit

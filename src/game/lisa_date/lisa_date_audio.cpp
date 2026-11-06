@@ -8,22 +8,10 @@
 #include <iterator>
 #include <utility>
 
+#include "engine/audio/ogg_vorbis.h"
 #include "engine/audio/wem.h"
 #include "engine/core/log.h"
 #include "game/lisa_date/lisa_date_script.h"
-
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define STB_VORBIS_NO_PUSHDATA_API
-#define STB_VORBIS_NO_STDIO
-#include "stb_vorbis.c"
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-#undef L
-#undef C
-#undef R
 
 namespace pt::game {
 namespace {
@@ -80,18 +68,7 @@ bool ReadWav(const std::vector<uint8_t>& bytes, LisaDatePcm& pcm) {
 }
 
 bool LisaDateDecodeOgg(std::span<const uint8_t> ogg, LisaDatePcm& pcm) {
-    pcm = {};
-    if (ogg.empty() || ogg.size() > 0x7FFFFFFFu) return false;
-    int channels = 0, rate = 0;
-    short* out = nullptr;
-    const int frames = stb_vorbis_decode_memory(ogg.data(), static_cast<int>(ogg.size()), &channels, &rate, &out);
-    if (frames > 0 && out && channels > 0 && rate > 0) {
-        pcm.channels = static_cast<uint32_t>(channels);
-        pcm.rate = static_cast<uint32_t>(rate);
-        pcm.samples.assign(out, out + static_cast<size_t>(frames) * static_cast<size_t>(channels));
-    }
-    if (out) std::free(out);
-    return !pcm.samples.empty();
+    return audio::DecodeOggVorbis(ogg, pcm.samples, pcm.channels, pcm.rate);
 }
 
 namespace {
@@ -100,39 +77,16 @@ template <typename Read>
 bool DecodeMusic(const Read& read, const std::string& where, const std::string& name, LisaDatePcm& pcm, float max_seconds) {
     pcm = {};
     const std::vector<uint8_t> ogg = read(name + ".ogg");
-    if (!ogg.empty() && max_seconds > 0.0f && ogg.size() <= 0x7FFFFFFFu) {
-        int error = 0;
-        if (stb_vorbis* v = stb_vorbis_open_memory(ogg.data(), static_cast<int>(ogg.size()), &error, nullptr)) {
-            const stb_vorbis_info info = stb_vorbis_get_info(v);
-            if (info.channels > 0 && info.sample_rate > 0) {
-                const size_t frames = static_cast<size_t>(std::ceil(max_seconds * static_cast<float>(info.sample_rate)));
-                pcm.channels = static_cast<uint32_t>(info.channels);
-                pcm.rate = info.sample_rate;
-                pcm.samples.resize(frames * pcm.channels);
-                const int got = stb_vorbis_get_samples_short_interleaved(v, info.channels, pcm.samples.data(), static_cast<int>(pcm.samples.size()));
-                pcm.samples.resize(static_cast<size_t>(std::max(got, 0)) * pcm.channels);
-            }
-            stb_vorbis_close(v);
-            if (!pcm.samples.empty()) {
-                LogInfo("lisa date: music {}.ogg, its first {:.2f} s", name, static_cast<float>(pcm.samples.size() / pcm.channels) / static_cast<float>(pcm.rate));
-                return true;
-            }
-            pcm = {};
-        }
+    if (!ogg.empty() && max_seconds > 0.0f && audio::DecodeOggVorbis(ogg, pcm.samples, pcm.channels, pcm.rate, max_seconds)) {
+        LogInfo("lisa date: music {}.ogg, its first {:.2f} s", name, static_cast<float>(pcm.samples.size() / pcm.channels) / static_cast<float>(pcm.rate));
+        return true;
     }
     if (!ogg.empty()) {
-        int channels = 0, rate = 0;
-        short* out = nullptr;
-        const int frames = stb_vorbis_decode_memory(ogg.data(), static_cast<int>(ogg.size()), &channels, &rate, &out);
-        if (frames > 0 && out && channels > 0) {
-            pcm.channels = static_cast<uint32_t>(channels);
-            pcm.rate = static_cast<uint32_t>(rate);
-            pcm.samples.assign(out, out + static_cast<size_t>(frames) * static_cast<size_t>(channels));
-            std::free(out);
-            LogInfo("lisa date: music {}.ogg, {} Hz, {} channels, {:.1f} s", name, rate, channels, static_cast<float>(frames) / static_cast<float>(rate));
+        if (LisaDateDecodeOgg(ogg, pcm)) {
+            LogInfo("lisa date: music {}.ogg, {} Hz, {} channels, {:.1f} s", name, pcm.rate, pcm.channels,
+                    static_cast<float>(pcm.samples.size() / pcm.channels) / static_cast<float>(pcm.rate));
             return true;
         }
-        if (out) std::free(out);
         LogWarn("lisa date: {}.ogg did not decode", name);
     }
     if (ReadWav(read(name + ".wav"), pcm)) {

@@ -24,14 +24,7 @@ vec3 ViewAt(View v, ivec2 pixel) {
     return ViewPosition(v, PixelNdc(v, vec2(pixel) + 0.5), depth);
 }
 
-uint Hash(uint x) {
-    x ^= x >> 16u;
-    x *= 0x7feb352du;
-    x ^= x >> 15u;
-    x *= 0x846ca68bu;
-    x ^= x >> 16u;
-    return x;
-}
+#include "rt_hash.glsl"
 
 void main() {
     View v = frame.views[pass.ids.x];
@@ -69,7 +62,7 @@ void main() {
     float reach = pass.f0.x;
     vec3 origin = world + ng * max(0.003, 0.0015 * c.z);
     uint rays = max(pass.ids.z, 1u);
-    uint seed = Hash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u);
+    uint seed = RtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u);
     vec2 start = vec2(float(seed & 0xFFFFu), float(seed >> 16u)) / 65536.0;
     float occlusion = 0.0;
     for (uint i = 0u; i < rays; ++i) {

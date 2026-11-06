@@ -1,3 +1,4 @@
+#include "engine/core/random_bits.h"
 #include "engine/vfx/vfx_system.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -81,13 +82,6 @@ glm::vec4 WrapUnorm8(const glm::vec4& c) {
 
 float Saturate(float v) {
     return std::clamp(v, 0.0f, 1.0f);
-}
-
-uint32_t XorShiftOnce(uint32_t x) {
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 5;
-    return x;
 }
 
 float HalfTrunc(float f) {

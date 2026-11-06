@@ -22,6 +22,14 @@ class Device;
 
 class FrameGeneration;
 
+inline bool NoExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) {
+    signal_semaphore = VK_NULL_HANDLE;
+    signal_value = 0;
+    wait_semaphore = VK_NULL_HANDLE;
+    wait_value = 0;
+    return false;
+}
+
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
 enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Xess = 4, Count = 5 };
@@ -179,11 +187,7 @@ public:
     }
     virtual bool ExternalSubmit() const { return false; }
     virtual bool ExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) {
-        signal_semaphore = VK_NULL_HANDLE;
-        signal_value = 0;
-        wait_semaphore = VK_NULL_HANDLE;
-        wait_value = 0;
-        return false;
+        return NoExternalSync(signal_semaphore, signal_value, wait_semaphore, wait_value);
     }
     virtual bool ExternalRun(const UpscaleDispatch& dispatch) {
         (void)dispatch;

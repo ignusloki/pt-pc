@@ -39,18 +39,13 @@ constexpr const char* kDeclinedHere = ".pt-user-data-declined";
 constexpr const char* kSaveSlotPrefix = "PT_Save_Data";
 std::atomic<unsigned long long> g_temp_counter{0};
 
-std::string PathText(const fs::path& path) {
-    const auto value = path.u8string();
-    return {reinterpret_cast<const char*>(value.data()), value.size()};
-}
-
 void AddError(UserDataReport& report, const std::string& action,
               const fs::path& path, const std::error_code& ec) {
-    report.errors.push_back(action + " '" + PathText(path) + "': " + ec.message());
+    report.errors.push_back(action + " '" + pt::os::PathToUtf8(path) + "': " + ec.message());
 }
 
 void AddLegacyError(UserDataReport& report, const std::string& action, const fs::path& path, const std::error_code& ec) {
-    report.legacy_errors.push_back(action + " '" + PathText(path) + "': " + ec.message());
+    report.legacy_errors.push_back(action + " '" + pt::os::PathToUtf8(path) + "': " + ec.message());
 }
 
 class Sha256 {
@@ -241,17 +236,17 @@ bool IsValidMarker(const fs::path& marker, bool& exists,
     if (status.type() == fs::file_type::not_found) return true;
     exists = true;
     if (fs::is_symlink(status) || IsReparsePoint(marker) || !fs::is_regular_file(status)) {
-        report.errors.push_back("Migration marker must be a regular file: '" + PathText(marker) + "'");
+        report.errors.push_back("Migration marker must be a regular file: '" + pt::os::PathToUtf8(marker) + "'");
         return false;
     }
     std::ifstream input(marker, std::ios::binary);
     if (!input) {
-        report.errors.push_back("Cannot read migration marker: '" + PathText(marker) + "'");
+        report.errors.push_back("Cannot read migration marker: '" + pt::os::PathToUtf8(marker) + "'");
         return false;
     }
     const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     if (input.bad() || contents != "1\n") {
-        report.errors.push_back("Migration marker is invalid: '" + PathText(marker) + "'");
+        report.errors.push_back("Migration marker is invalid: '" + pt::os::PathToUtf8(marker) + "'");
         return false;
     }
     return true;
@@ -331,22 +326,22 @@ bool EnsureDestinationDirectories(const fs::path& root,
         auto status = fs::symlink_status(current, ec);
         if (ec == std::errc::no_such_file_or_directory) ec.clear();
         if (ec) {
-            errors.push_back("Cannot inspect destination directory '" + PathText(current) + "': " + ec.message());
+            errors.push_back("Cannot inspect destination directory '" + pt::os::PathToUtf8(current) + "': " + ec.message());
             return false;
         }
         if (!fs::exists(status)) {
             if (!fs::create_directory(current, ec) && ec != std::errc::file_exists) {
-                errors.push_back("Cannot create user data directory '" + PathText(current) + "': " + ec.message());
+                errors.push_back("Cannot create user data directory '" + pt::os::PathToUtf8(current) + "': " + ec.message());
                 return false;
             }
             status = fs::symlink_status(current, ec);
             if (ec) {
-                errors.push_back("Cannot inspect destination directory '" + PathText(current) + "': " + ec.message());
+                errors.push_back("Cannot inspect destination directory '" + pt::os::PathToUtf8(current) + "': " + ec.message());
                 return false;
             }
         }
         if (fs::is_symlink(status) || IsReparsePoint(current) || !fs::is_directory(status)) {
-            errors.push_back("Destination path is not a real directory: '" + PathText(current) + "'");
+            errors.push_back("Destination path is not a real directory: '" + pt::os::PathToUtf8(current) + "'");
             return false;
         }
     }
@@ -368,7 +363,7 @@ std::string UtcNow() {
 
 bool IsSaveSlot(const fs::path& relative) {
     if (!relative.parent_path().empty()) return false;
-    const std::string name = PathText(relative.filename());
+    const std::string name = pt::os::PathToUtf8(relative.filename());
     const std::string prefix = kSaveSlotPrefix;
     if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0) return false;
     return std::all_of(name.begin() + static_cast<std::ptrdiff_t>(prefix.size()), name.end(),
@@ -377,7 +372,7 @@ bool IsSaveSlot(const fs::path& relative) {
 
 bool IsCacheDir(const fs::path& relative) {
     if (!relative.parent_path().empty()) return false;
-    const std::string name = PathText(relative.filename());
+    const std::string name = pt::os::PathToUtf8(relative.filename());
     const auto family = [&](const std::string& base) {
         return name == base || (name.size() > base.size() && name.compare(0, base.size(), base) == 0 && name[base.size()] == '-');
     };
@@ -420,7 +415,7 @@ bool ScanLegacy(const fs::path& legacy, LegacyScan& scan, bool with_facts, UserD
             return false;
         }
         if (fs::is_symlink(status) || IsReparsePoint(from)) {
-            report.warnings.push_back("Skipped linked old path (left in place): '" + PathText(from) + "'");
+            report.warnings.push_back("Skipped linked old path (left in place): '" + pt::os::PathToUtf8(from) + "'");
             scan.linked_entries = true;
             it.disable_recursion_pending();
             continue;
@@ -435,7 +430,7 @@ bool ScanLegacy(const fs::path& legacy, LegacyScan& scan, bool with_facts, UserD
             continue;
         }
         if (!fs::is_regular_file(status)) {
-            report.warnings.push_back("Skipped special old entry (left in place): '" + PathText(from) + "'");
+            report.warnings.push_back("Skipped special old entry (left in place): '" + pt::os::PathToUtf8(from) + "'");
             scan.linked_entries = true;
             continue;
         }
@@ -445,7 +440,7 @@ bool ScanLegacy(const fs::path& legacy, LegacyScan& scan, bool with_facts, UserD
                 AddLegacyError(report, "Cannot read old file", from, ec);
                 return false;
             }
-            report.warnings.push_back("Cannot read the old file '" + PathText(from) + "' (in use?); it stays in the old folder for now");
+            report.warnings.push_back("Cannot read the old file '" + pt::os::PathToUtf8(from) + "' (in use?); it stays in the old folder for now");
             ++scan.left_behind;
             ec.clear();
             continue;
@@ -513,18 +508,18 @@ bool PickBak(const fs::path& path, const FileFacts* content, Plan& plan, fs::pat
     return false;
 }
 
-std::string Rel(const fs::path& relative) { return PathText(relative.generic_u8string()); }
+std::string Rel(const fs::path& relative) { return pt::os::PathToUtf8(relative.generic_u8string()); }
 
 bool AddBakStep(const LegacyFile& file, const fs::path& target, Plan& plan, UserDataReport& report) {
     fs::path bak;
     bool identical = false;
     if (!PickBak(target, &file.facts, plan, bak, identical)) {
-        report.legacy_errors.push_back("No free .bak name beside '" + PathText(target) + "'");
+        report.legacy_errors.push_back("No free .bak name beside '" + pt::os::PathToUtf8(target) + "'");
         return false;
     }
     plan.steps.push_back({identical ? StepKind::Identical : StepKind::CopyBak, file, bak});
     report.notes.push_back(Rel(file.relative) + ": the destination's copy is newer and stays; the old one " +
-                           (identical ? "is already there as " : "is kept as ") + PathText(bak.filename()));
+                           (identical ? "is already there as " : "is kept as ") + pt::os::PathToUtf8(bak.filename()));
     return true;
 }
 
@@ -532,11 +527,11 @@ bool AddAside(const fs::path& target, const fs::path& relative, Plan& plan, User
     fs::path bak;
     bool identical = false;
     if (!PickBak(target, nullptr, plan, bak, identical)) {
-        report.legacy_errors.push_back("No free .bak name beside '" + PathText(target) + "'");
+        report.legacy_errors.push_back("No free .bak name beside '" + pt::os::PathToUtf8(target) + "'");
         return false;
     }
     plan.asides.push_back({target, bak});
-    report.notes.push_back(Rel(relative) + ": the old folder's copy is newer; the destination's one is kept as " + PathText(bak.filename()));
+    report.notes.push_back(Rel(relative) + ": the old folder's copy is newer; the destination's one is kept as " + pt::os::PathToUtf8(bak.filename()));
     return true;
 }
 
@@ -628,7 +623,7 @@ bool BuildPlan(const fs::path& destination, const LegacyScan& scan, Plan& plan, 
             return false;
         }
         if (!fs::is_regular_file(status) || fs::is_symlink(status) || IsReparsePoint(target)) {
-            report.legacy_errors.push_back("Destination entry blocks the old file: '" + PathText(target) + "'");
+            report.legacy_errors.push_back("Destination entry blocks the old file: '" + pt::os::PathToUtf8(target) + "'");
             return false;
         }
         FileFacts destFacts;
@@ -654,7 +649,7 @@ bool StageCopy(Step& step, const UserDataHooks& hooks, std::string& error) {
     std::error_code ec;
     fs::path temp;
     if (!MakeTempFile(step.target.parent_path(), temp, ec)) {
-        error = "Cannot create a temporary file in '" + PathText(step.target.parent_path()) + "': " + ec.message();
+        error = "Cannot create a temporary file in '" + pt::os::PathToUtf8(step.target.parent_path()) + "': " + ec.message();
         return false;
     }
     step.staged = temp;
@@ -662,7 +657,7 @@ bool StageCopy(Step& step, const UserDataHooks& hooks, std::string& error) {
         std::ifstream in(step.file.path, std::ios::binary);
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
         if (!in || !out) {
-            error = "Cannot open '" + PathText(in ? temp : step.file.path) + "'";
+            error = "Cannot open '" + pt::os::PathToUtf8(in ? temp : step.file.path) + "'";
             return false;
         }
         Sha256 sha;
@@ -681,24 +676,24 @@ bool StageCopy(Step& step, const UserDataHooks& hooks, std::string& error) {
         const bool written = !in.bad() && static_cast<bool>(out);
         out.close();
         if (!written || !out) {
-            error = "Cannot copy '" + PathText(step.file.path) + "' to '" + PathText(temp) + "'";
+            error = "Cannot copy '" + pt::os::PathToUtf8(step.file.path) + "' to '" + pt::os::PathToUtf8(temp) + "'";
             return false;
         }
         FileFacts read{size, sha.Finish(), {}};
         if (!read.Same(step.file.facts)) {
-            error = "The old file changed during the move: '" + PathText(step.file.path) + "'";
+            error = "The old file changed during the move: '" + pt::os::PathToUtf8(step.file.path) + "'";
             return false;
         }
     }
     fs::last_write_time(temp, step.file.facts.mtime, ec);
     if (ec) {
-        error = "Cannot set the time of '" + PathText(temp) + "': " + ec.message();
+        error = "Cannot set the time of '" + pt::os::PathToUtf8(temp) + "': " + ec.message();
         return false;
     }
     if (hooks.after_stage) hooks.after_stage(temp);
     FileFacts copy;
     if (!ReadFacts(temp, copy, ec) || !copy.Same(step.file.facts)) {
-        error = "The copy of '" + PathText(step.file.path) + "' does not match it (size " + std::to_string(copy.size) + " of " +
+        error = "The copy of '" + pt::os::PathToUtf8(step.file.path) + "' does not match it (size " + std::to_string(copy.size) + " of " +
                 std::to_string(step.file.facts.size) + ", or SHA-256 differs)";
         return false;
     }
@@ -737,7 +732,7 @@ bool WriteLegacyMarker(const fs::path& legacy, const char* name, const std::stri
     std::error_code ec;
     if (WriteNewTextFile(parent / name, text, ec)) return true;
     if (IsPlainFile(parent / name)) return true;
-    report.warnings.push_back("Cannot write '" + PathText(parent / name) + "': " + ec.message());
+    report.warnings.push_back("Cannot write '" + pt::os::PathToUtf8(parent / name) + "': " + ec.message());
     return false;
 }
 
@@ -777,7 +772,7 @@ void RemoveCaches(const std::vector<fs::path>& caches, UserDataReport& report) {
         RemoveEmptyFolders(std::move(directories));
     }
     std::string names;
-    for (const auto& cache : caches) names += (names.empty() ? "" : ", ") + PathText(cache.filename());
+    for (const auto& cache : caches) names += (names.empty() ? "" : ", ") + pt::os::PathToUtf8(cache.filename());
     report.notes.push_back("old caches (" + names + ") are not moved, the game rebuilds them: " + std::to_string(removed) +
                            " files deleted" + (kept ? ", " + std::to_string(kept) + " in use and left in place" : std::string()));
 }
@@ -830,7 +825,7 @@ bool ExecutePlan(const fs::path& destination, const fs::path& legacy, const Lega
         step.published = true;
         FileFacts published;
         if (!ReadFacts(step.target, published, ec) || !published.Same(step.file.facts)) {
-            report.legacy_errors.push_back("The published copy does not match its original: '" + PathText(step.target) + "'");
+            report.legacy_errors.push_back("The published copy does not match its original: '" + pt::os::PathToUtf8(step.target) + "'");
             Undo(plan, report);
             return false;
         }
@@ -853,16 +848,16 @@ bool ExecutePlan(const fs::path& destination, const fs::path& legacy, const Lega
         std::error_code ec;
         FileFacts now, twin;
         if (!ReadFacts(step.file.path, now, ec) || !now.Same(step.file.facts)) {
-            problem("The old file changed during the move and was kept: '" + PathText(step.file.path) + "'");
+            problem("The old file changed during the move and was kept: '" + pt::os::PathToUtf8(step.file.path) + "'");
             continue;
         }
         if (!ReadFacts(step.target, twin, ec) || !twin.Same(step.file.facts)) {
-            problem("No verified copy of '" + PathText(step.file.path) + "'; it was kept");
+            problem("No verified copy of '" + pt::os::PathToUtf8(step.file.path) + "'; it was kept");
             continue;
         }
         fs::remove(step.file.path, ec);
         if (ec) {
-            problem("Cannot delete the old file (its copy is verified) '" + PathText(step.file.path) + "': " + ec.message());
+            problem("Cannot delete the old file (its copy is verified) '" + pt::os::PathToUtf8(step.file.path) + "': " + ec.message());
             continue;
         }
         ++report.files_removed;
@@ -882,7 +877,7 @@ bool ExecutePlan(const fs::path& destination, const fs::path& legacy, const Lega
         return true;
     }
     WriteLegacyMarker(legacy, kLegacyMovedMarker,
-                      "Moved to: " + PathText(destination) + "\nDate: " + UtcNow() + "\n", report);
+                      "Moved to: " + pt::os::PathToUtf8(destination) + "\nDate: " + UtcNow() + "\n", report);
     return true;
 }
 
@@ -903,7 +898,7 @@ std::string LockKey(const fs::path& legacy) {
     std::error_code ec;
     fs::path full = fs::absolute(legacy, ec);
     if (ec) full = legacy;
-    std::string text = PathText(full.lexically_normal().generic_u8string());
+    std::string text = pt::os::PathToUtf8(full.lexically_normal().generic_u8string());
     while (text.size() > 1 && text.back() == '/') text.pop_back();
 #ifdef _WIN32
     for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -958,14 +953,14 @@ public:
         const fs::path file = fs::path(dir) / ("pt-port-old-saves-" + std::to_string(::getuid()) + "-" + key + ".lock");
         fd_ = ::open(file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         if (fd_ < 0) {
-            detail = PathText(file) + ": " + std::error_code(errno, std::generic_category()).message();
+            detail = pt::os::PathToUtf8(file) + ": " + std::error_code(errno, std::generic_category()).message();
             return LockResult::Unavailable;
         }
         const auto deadline = std::chrono::steady_clock::now() + wait;
         for (;;) {
             if (::flock(fd_, LOCK_EX | LOCK_NB) == 0) return LockResult::Held;
             if (errno != EWOULDBLOCK && errno != EINTR) {
-                detail = PathText(file) + ": " + std::error_code(errno, std::generic_category()).message();
+                detail = pt::os::PathToUtf8(file) + ": " + std::error_code(errno, std::generic_category()).message();
                 return LockResult::Unavailable;
             }
             if (std::chrono::steady_clock::now() >= deadline) return LockResult::Busy;
@@ -1009,7 +1004,7 @@ UserDataReport PrepareUserDataDirectory(const fs::path& destination,
     if (ec || fs::is_symlink(dest_status) || IsReparsePoint(destination) ||
         !fs::is_directory(dest_status)) {
         if (ec) AddError(report, "Cannot inspect user data directory", destination, ec);
-        else report.errors.push_back("User data destination must be a real directory: '" + PathText(destination) + "'");
+        else report.errors.push_back("User data destination must be a real directory: '" + pt::os::PathToUtf8(destination) + "'");
         return report;
     }
     if (!ProbeWritable(destination, ec)) {
@@ -1062,13 +1057,13 @@ UserDataReport PrepareUserDataDirectory(const fs::path& destination,
         if (!ec && fs::is_directory(legacy_status) && !fs::is_symlink(legacy_status) && !IsReparsePoint(legacy)) {
             legacy_exists = true;
         } else if (!ec && (fs::is_symlink(legacy_status) || IsReparsePoint(legacy))) {
-            report.warnings.push_back("Skipped linked legacy data directory: '" + PathText(legacy) + "'");
+            report.warnings.push_back("Skipped linked legacy data directory: '" + pt::os::PathToUtf8(legacy) + "'");
         } else if (ec == std::errc::no_such_file_or_directory) {
             ec.clear();
         } else if (ec) {
-            report.warnings.push_back("Cannot inspect legacy data directory '" + PathText(legacy) + "': " + ec.message());
+            report.warnings.push_back("Cannot inspect legacy data directory '" + pt::os::PathToUtf8(legacy) + "': " + ec.message());
         } else if (fs::exists(legacy_status)) {
-            report.warnings.push_back("Legacy data path is not a real directory: '" + PathText(legacy) + "'");
+            report.warnings.push_back("Legacy data path is not a real directory: '" + pt::os::PathToUtf8(legacy) + "'");
         }
     }
     if (legacy_exists) {
@@ -1086,7 +1081,7 @@ UserDataReport PrepareUserDataDirectory(const fs::path& destination,
         const bool moved = IsPlainFile(parent / kLegacyMovedMarker), declined = IsPlainFile(parent / kLegacyDeclinedMarker);
         if (moved || declined) {
             report.notes.push_back("the old folder was already moved or kept by choice (" +
-                                   PathText(parent / (moved ? kLegacyMovedMarker : kLegacyDeclinedMarker)) + ")");
+                                   pt::os::PathToUtf8(parent / (moved ? kLegacyMovedMarker : kLegacyDeclinedMarker)) + ")");
             if (moved && !declined) RemoveLeftoverCaches(legacy, report);
             legacy_exists = false;
         }
@@ -1114,7 +1109,7 @@ UserDataReport PrepareUserDataDirectory(const fs::path& destination,
     const auto decline = [&] {
         report.declined_legacy = true;
         WriteLegacyMarker(legacy, kLegacyDeclinedMarker,
-                          "Kept here by the player's choice, not moved to: " + PathText(destination) + "\nDate: " + UtcNow() + "\n",
+                          "Kept here by the player's choice, not moved to: " + pt::os::PathToUtf8(destination) + "\nDate: " + UtcNow() + "\n",
                           report);
         std::error_code ignored;
         WriteNewTextFile(destination / kDeclinedHere, "1\n", ignored);

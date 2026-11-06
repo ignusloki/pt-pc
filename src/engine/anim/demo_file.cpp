@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/demo_file.h"
 
 #include <algorithm>
@@ -7,15 +8,6 @@
 
 namespace pt::anim {
 namespace {
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 size_t CoveringBlock(const std::vector<TrackBlock>& blocks, double frame) {
     auto it = std::lower_bound(blocks.begin(), blocks.end(), frame,
@@ -69,8 +61,8 @@ bool DemoStreamFile::Parse(std::vector<uint8_t> bytes, std::string* error) {
     bool has_header = false;
     while (pos + 8 <= data.size()) {
         StreamChunk chunk;
-        chunk.tag = At<uint32_t>(data, pos);
-        chunk.size = At<uint32_t>(data, pos + 4);
+        chunk.tag = ReadBinary<uint32_t>(data, pos);
+        chunk.size = ReadBinary<uint32_t>(data, pos + 4);
         chunk.offset = pos;
         if (chunk.size == 0) {
             break;
@@ -82,7 +74,7 @@ bool DemoStreamFile::Parse(std::vector<uint8_t> bytes, std::string* error) {
             return false;
         }
         if (chunk.tag != kTagSys && chunk.size >= 0x10) {
-            chunk.time = At<double>(data, pos + 8);
+            chunk.time = ReadBinary<double>(data, pos + 8);
         }
         chunks_.push_back(chunk);
         if (chunk.tag == kTagSound) {
@@ -91,31 +83,31 @@ bool DemoStreamFile::Parse(std::vector<uint8_t> bytes, std::string* error) {
             end_time_ = chunk.time;
         } else if (chunk.tag == kTagDemo && chunk.size >= 0x20) {
             const size_t o = pos + 16;
-            const uint32_t kind = At<uint32_t>(data, o);
+            const uint32_t kind = ReadBinary<uint32_t>(data, o);
             if (kind == 1 && !has_header) {
                 header = pos;
                 has_header = true;
             } else if (kind == 0) {
                 MotionBlock block;
                 block.time = chunk.time;
-                block.flags = At<uint32_t>(data, o + 4);
-                block.start = At<uint32_t>(data, o + 8);
-                block.count = At<uint32_t>(data, o + 12);
-                block.track_count = At<uint32_t>(data, o + 16);
-                block.size = At<uint32_t>(data, o + 20);
-                block.prefetch = At<uint32_t>(data, o + 24);
+                block.flags = ReadBinary<uint32_t>(data, o + 4);
+                block.start = ReadBinary<uint32_t>(data, o + 8);
+                block.count = ReadBinary<uint32_t>(data, o + 12);
+                block.track_count = ReadBinary<uint32_t>(data, o + 16);
+                block.size = ReadBinary<uint32_t>(data, o + 20);
+                block.prefetch = ReadBinary<uint32_t>(data, o + 24);
                 size_t p = o + 0x1C;
                 if (p + 4 * static_cast<size_t>(block.track_count) > pos + chunk.size) {
                     continue;
                 }
                 block.offsets.resize(block.track_count);
                 for (uint32_t t = 0; t < block.track_count; ++t) {
-                    block.offsets[t] = At<uint32_t>(data, p + 4 * static_cast<size_t>(t));
+                    block.offsets[t] = ReadBinary<uint32_t>(data, p + 4 * static_cast<size_t>(t));
                 }
                 p += 4 * static_cast<size_t>(block.track_count);
                 if (block.flags & 4) {
                     block.has_offset_vector = true;
-                    block.offset_vector = glm::vec3(At<float>(data, p), At<float>(data, p + 4), At<float>(data, p + 8));
+                    block.offset_vector = glm::vec3(ReadBinary<float>(data, p), ReadBinary<float>(data, p + 4), ReadBinary<float>(data, p + 8));
                     p += 12;
                 }
                 if (block.has_offset_vector) {
@@ -128,7 +120,7 @@ bool DemoStreamFile::Parse(std::vector<uint8_t> bytes, std::string* error) {
                 if (block.flags & 2) {
                     block.track_flags.resize(block.track_count);
                     for (uint32_t t = 0; t < block.track_count; ++t) {
-                        block.track_flags[t] = At<uint16_t>(data, p + 2 * static_cast<size_t>(t));
+                        block.track_flags[t] = ReadBinary<uint16_t>(data, p + 2 * static_cast<size_t>(t));
                     }
                 }
                 block.payload = o;

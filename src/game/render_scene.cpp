@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "game/render_scene.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -110,15 +111,6 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
 
 namespace {
 
-template <typename T>
-T ReadAt(const std::vector<uint8_t>& data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
-
 std::string ShortName(const std::string& name) {
     const size_t bar = name.find_last_of('|');
     return bar == std::string::npos ? name : name.substr(bar + 1);
@@ -198,15 +190,15 @@ const RenderSceneBuilder::ProbeFile* RenderSceneBuilder::LoadProbes(Vfs& vfs, co
     }
     ProbeFile file;
     auto bytes = vfs.ReadFile(path);
-    if (bytes && bytes->size() > 0xB0 && ReadAt<uint32_t>(*bytes, 0) == 3) {
+    if (bytes && bytes->size() > 0xB0 && ReadBinary<uint32_t>(*bytes, 0) == 3) {
         const std::vector<uint8_t>& d = *bytes;
-        const uint32_t count = ReadAt<uint32_t>(d, 0x7C);
-        const uint32_t divisions = ReadAt<uint32_t>(d, 0x8C);
+        const uint32_t count = ReadBinary<uint32_t>(d, 0x7C);
+        const uint32_t divisions = ReadBinary<uint32_t>(d, 0x8C);
         const size_t table = 0xB0 + size_t(divisions) * 4;
         for (uint32_t i = 0; i < count; ++i) {
             const size_t entry = table + size_t(i) * 12;
-            const uint32_t name_offset = ReadAt<uint32_t>(d, entry);
-            const uint32_t data_offset = ReadAt<uint32_t>(d, entry + 4);
+            const uint32_t name_offset = ReadBinary<uint32_t>(d, entry);
+            const uint32_t data_offset = ReadBinary<uint32_t>(d, entry + 4);
             if (name_offset >= d.size() || data_offset + 72 > d.size()) {
                 continue;
             }
@@ -217,7 +209,7 @@ const RenderSceneBuilder::ProbeFile* RenderSceneBuilder::LoadProbes(Vfs& vfs, co
             std::array<glm::vec3, 9> sh{};
             for (int c = 0; c < 9; ++c) {
                 for (int ch = 0; ch < 3; ++ch) {
-                    sh[c][ch] = glm::unpackHalf1x16(ReadAt<uint16_t>(d, data_offset + size_t(c) * 8 + size_t(ch) * 2));
+                    sh[c][ch] = glm::unpackHalf1x16(ReadBinary<uint16_t>(d, data_offset + size_t(c) * 8 + size_t(ch) * 2));
                 }
             }
             file.probes[name] = sh;

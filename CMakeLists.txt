@@ -682,21 +682,18 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets/lisa_date/script.txt" OR EXISTS "${CMAKE_S
 endif()
 # the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
 file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
-foreach(license ${PT_FONT_LICENSES})
-  get_filename_component(license_name "${license}" NAME)
-  add_custom_command(TARGET pt POST_BUILD COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/licenses"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt>/licenses/${license_name}" VERBATIM)
-endforeach()
+function(pt_copy_font_licenses target)
+  foreach(license ${PT_FONT_LICENSES})
+    get_filename_component(license_name "${license}" NAME)
+    add_custom_command(TARGET ${target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/licenses"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:${target}>/licenses/${license_name}" VERBATIM)
+  endforeach()
+endfunction()
+pt_copy_font_licenses(pt)
 
 if(APPLE)
 add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/fonts" "$<TARGET_FILE_DIR:pt_release>/fonts")
-# the bundled fonts' SIL OFL notices also go to licenses/, beside the SDK notices
-file(GLOB PT_FONT_LICENSES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/fonts/OFL-*.txt")
-foreach(license ${PT_FONT_LICENSES})
-  get_filename_component(license_name "${license}" NAME)
-  add_custom_command(TARGET pt_release POST_BUILD COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt_release>/licenses"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${license}" "$<TARGET_FILE_DIR:pt_release>/licenses/${license_name}" VERBATIM)
-endforeach()
+pt_copy_font_licenses(pt_release)
 
 endif()
 
@@ -728,6 +725,9 @@ target_link_libraries(pt_mods_test PRIVATE pt_engine)
 
 add_executable(pt_lisa_date_test tests/lisa_date_test.cpp)
 target_link_libraries(pt_lisa_date_test PRIVATE pt_engine)
+add_executable(pt_ogg_vorbis_test tests/ogg_vorbis_test.cpp)
+target_link_libraries(pt_ogg_vorbis_test PRIVATE pt_engine)
+target_compile_definitions(pt_ogg_vorbis_test PRIVATE PT_AUDIO_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures/vorbis")
 if(TARGET pt_data_pack)
   add_dependencies(pt_lisa_date_test pt_data_pack)
 endif()

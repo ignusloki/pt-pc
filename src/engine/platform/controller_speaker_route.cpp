@@ -1,3 +1,4 @@
+#include "engine/core/ascii.h"
 #include "engine/platform/controller_speaker.h"
 
 #include <algorithm>
@@ -11,10 +12,9 @@ constexpr uint16_t kSonyVendor = 0x054C;
 
 bool ContainsNoCase(std::string_view text, std::string_view wanted) {
     if (wanted.empty() || wanted.size() > text.size()) return false;
-    auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
     for (size_t i = 0; i + wanted.size() <= text.size(); ++i) {
         size_t k = 0;
-        while (k < wanted.size() && lower(text[i + k]) == lower(wanted[k])) ++k;
+        while (k < wanted.size() && AsciiLower(text[i + k]) == AsciiLower(wanted[k])) ++k;
         if (k == wanted.size()) return true;
     }
     return false;

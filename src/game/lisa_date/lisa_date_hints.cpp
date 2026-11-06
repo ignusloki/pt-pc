@@ -1,3 +1,4 @@
+#include "engine/core/interpolation.h"
 #include "game/game.h"
 
 #include "engine/core/log.h"
@@ -26,11 +27,6 @@ constexpr uint32_t kCaptionSadNote = 0x735D8E0Du;
 enum HintSound { kSting = 0, kBeat = 1, kSad = 2 };
 constexpr int kSadPending = -1;
 constexpr float kVignetteMax = 0.62f;
-
-float Smooth(float x) {
-    x = std::clamp(x, 0.0f, 1.0f);
-    return x * x * (3.0f - 2.0f * x);
-}
 
 glm::vec3 PinkColour() {
     static const glm::vec3 pink = [] {
@@ -141,7 +137,7 @@ bool Game::LisaHintGlint(glm::vec3& position, glm::vec3& normal, float& strength
             const float c = glm::dot(to / distance, glm::normalize(handy_direction_));
             const float umbra = std::cos(glm::radians(p.umbra_angle * 0.5f));
             const float penumbra = std::cos(glm::radians(p.penumbra_angle * 0.5f));
-            lit = Smooth((c - umbra) / std::max(penumbra - umbra, 1.0e-3f));
+            lit = SmoothStep01((c - umbra) / std::max(penumbra - umbra, 1.0e-3f));
         }
     }
     const float shimmer = 0.85f + 0.15f * std::sin(lisa_glint_time_ * 2.6f);
@@ -210,7 +206,7 @@ void Game::UpdateLisaHints(float dt) {
         if (lisa_heart_wait_ <= 0.0f) {
             ++lisa_heart_beats_;
             PlayLisaHint(kBeat, 0);
-            lisa_heart_wait_ += 1.05f - 0.6f * Smooth(t / kPortraitSeconds);
+            lisa_heart_wait_ += 1.05f - 0.6f * SmoothStep01(t / kPortraitSeconds);
             lisa_heart_pulse_ = 1.0f;
         }
         const float x = std::clamp(t / kPortraitSeconds, 0.0f, 1.0f);

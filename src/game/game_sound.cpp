@@ -110,7 +110,7 @@ bool GameSound::Init(bool open_device, std::string_view language, bool surround)
         if (!id.empty()) {
             game_.QueueSubtitle(id, 0.0f, playing);
             std::string key = "voice:" + id;
-            std::transform(key.begin(), key.end(), key.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
+            pt::AsciiLowerInPlace(key);
             game_.NoteArchive(key);
         }
     });

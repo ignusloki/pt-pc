@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/fs/fpk.h"
 
 #include <cstring>
@@ -10,18 +11,9 @@
 namespace pt {
 namespace {
 
-template <typename T>
-T ReadLe(const std::vector<uint8_t>& data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
-
 std::string ReadString(const std::vector<uint8_t>& data, size_t offset) {
-    const uint32_t string_offset = ReadLe<uint32_t>(data, offset);
-    const uint32_t string_length = ReadLe<uint32_t>(data, offset + 8);
+    const uint32_t string_offset = ReadBinary<uint32_t>(data, offset);
+    const uint32_t string_length = ReadBinary<uint32_t>(data, offset + 8);
     if (string_offset + size_t(string_length) > data.size()) {
         return {};
     }
@@ -39,15 +31,15 @@ bool FoxPackage::Load(std::string name, std::vector<uint8_t> data) {
     }
     is_data_package_ = data_[6] == 'd';
     platform_.assign(reinterpret_cast<const char*>(data_.data() + 7), 3);
-    const uint32_t file_count = ReadLe<uint32_t>(data_, 0x24);
-    const uint32_t reference_count = ReadLe<uint32_t>(data_, 0x28);
+    const uint32_t file_count = ReadBinary<uint32_t>(data_, 0x24);
+    const uint32_t reference_count = ReadBinary<uint32_t>(data_, 0x28);
     size_t pos = 48;
     entries_.clear();
     entries_.reserve(file_count);
     for (uint32_t i = 0; i < file_count; ++i, pos += 48) {
         Entry entry;
-        entry.offset = ReadLe<uint32_t>(data_, pos);
-        entry.size = ReadLe<uint32_t>(data_, pos + 8);
+        entry.offset = ReadBinary<uint32_t>(data_, pos);
+        entry.size = ReadBinary<uint32_t>(data_, pos + 8);
         entry.path = ReadString(data_, pos + 16);
         if (size_t(entry.offset) + entry.size > data_.size()) {
             LogError("fpk: {} entry {} at {} + {} bytes exceeds package size {}", name_, entry.path, entry.offset, entry.size,

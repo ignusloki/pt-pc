@@ -9,12 +9,6 @@
 namespace pt::mods {
 namespace {
 
-std::string Lower(std::string_view text) {
-    std::string out(text);
-    for (char& c : out) c = static_cast<char>(pt::AsciiLower(c));
-    return out;
-}
-
 bool Vec3(const json::Value& entry, const char* key, std::array<float, 3>& out, std::string& warning) {
     const json::Value* v = entry.Find(key);
     if (!v) return true;
@@ -33,13 +27,13 @@ bool Vec3(const json::Value& entry, const char* key, std::array<float, 3>& out, 
 }
 
 bool LevelStageMatches(std::string_view pattern, std::string_view package_path) {
-    return pattern.empty() || Lower(package_path).find(Lower(pattern)) != std::string::npos;
+    return pattern.empty() || AsciiLowerCopy(package_path).find(AsciiLowerCopy(pattern)) != std::string::npos;
 }
 
 bool LevelNameMatches(std::string_view pattern, std::string_view name) {
     if (pattern.empty()) return false;
-    const std::string p = Lower(pattern);
-    std::string n = Lower(name);
+    const std::string p = AsciiLowerCopy(pattern);
+    std::string n = AsciiLowerCopy(name);
     if (p.find('|') == std::string::npos) {
         if (const size_t bar = n.find_last_of('|'); bar != std::string::npos) n = n.substr(bar + 1);
     }
@@ -106,7 +100,7 @@ bool ParseLevel(std::string_view text, const std::string& mod, std::vector<Level
             add.stage = e.String("stage");
             add.model = e.String("model");
             add.name = e.String("name", std::format("{}_add{}", mod, i));
-            add.collision = Lower(e.String("collision", "box"));
+            add.collision = AsciiLowerCopy(e.String("collision", "box"));
             if (add.model.empty()) {
                 warn("add", i, "\"model\" (a /Assets/... path) is missing");
                 continue;

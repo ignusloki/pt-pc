@@ -179,6 +179,8 @@ line, the game in the PC settings corner line and at the top of pt.log).
   of an invalid file, EU and JP content IDs installed with a note, archives renamed into a subfolder found by content, an
   unknown title with P.T.'s content installed, another game refused, and a store PKG (entry keys that the fake keyset
   cannot open) refused with the dump message.
+  Add `--extractor <published PT.PkgExtract>` before `<new dir>` to run the same checks through the actual helper process,
+  including its exit codes, diagnostic messages and output hashes. Without this option the tests use the project reference.
 
 ## Linux
 
@@ -204,6 +206,12 @@ The payload is appended to the executable (payload, `PTPAYLD1`, u64 offset, u64 
 `pt_setup_macos`, included only on Apple hosts. `tools/macos/build.py --arch arm64` or `--arch x64` builds the game,
 selected regression tests and native installer, publishes the matching self-contained .NET 10 extractor, and packages
 `P.T. PC Port Setup.app`. Use a native Mac of the target CPU for execution tests, or `--skip-tests` for cross-building.
+
+The extractor project enables full .NET trimming only for `osx-arm64` and `osx-x64`; other runtime settings are unchanged.
+Mac builds test both the folder-based Setup extractor and the app's single-file helper against synthetic PKGs after
+publishing, in addition to the project-reference tests. Linker analysis warnings fail the publish. Trimming keeps the
+complete corresponding source archive and a replaceable LibOrbisPkg DLL in Setup. When modifying the library, republish
+the wrapper with it so the linker sees newly used framework APIs; `-p:PublishTrimmed=false` opts out of trimming.
 
 The canonical runtime comes from `tools/macos/make_app.py`; `make_setup.py` consumes its ZIP, so portable and installer
 resources stay consistent. Both apps use `assets/macos/pt.icns`. The payload includes the extractor's matching patched

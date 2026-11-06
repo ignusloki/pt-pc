@@ -1,3 +1,4 @@
+#include "engine/render/camera.h"
 #include <cmath>
 #include <cstdio>
 
@@ -9,16 +10,6 @@ namespace {
 
 using namespace pt;
 using namespace pt::lightcull;
-
-glm::mat4 Projection(float fov_y, float aspect, float near_plane) {
-    const float f = 1.0f / std::tan(fov_y * 0.5f);
-    glm::mat4 p(0.0f);
-    p[0][0] = f / aspect;
-    p[1][1] = -f;
-    p[2][3] = -1.0f;
-    p[3][2] = near_plane;
-    return p;
-}
 
 SceneOccluder Quad(glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, bool one_sided = false) {
     SceneOccluder o;
@@ -40,7 +31,7 @@ int main() {
         failures += !ok;
     };
     const glm::vec3 eye(0.0f);
-    const glm::mat4 vp = Projection(glm::radians(60.0f), 1.0f, 0.1f) * glm::lookAt(eye, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4 vp = ReverseZPerspective(glm::radians(60.0f), 1.0f, 0.1f) * glm::lookAt(eye, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     OccluderLimits limits;
     limits.min_fan_area = 0.0f;
     limits.max_distance = 1.0e30f;

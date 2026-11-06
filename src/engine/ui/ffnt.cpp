@@ -1,3 +1,5 @@
+#include "engine/core/error.h"
+#include "engine/core/binary_read.h"
 #include "engine/ui/ffnt.h"
 
 #include <algorithm>
@@ -5,29 +7,6 @@
 #include <format>
 
 namespace pt::ui {
-namespace {
-
-uint16_t U16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
-bool Fail(std::string* error, std::string text) {
-    if (error) {
-        *error = std::move(text);
-    }
-    return false;
-}
-
-}
-
 std::vector<uint32_t> DecodeUtf8(std::string_view text) {
     std::vector<uint32_t> out;
     out.reserve(text.size());
@@ -65,7 +44,7 @@ bool FfntFont::Parse(std::span<const uint8_t> data, std::string* error) {
     bitmap_.clear();
     composed_.clear();
     if (data.size() < 0x10 || std::memcmp(data.data(), "FXFT", 4) != 0) {
-        return Fail(error, "not an FFNT file");
+        return FailWithError(error, "not an FFNT file");
     }
     const uint8_t entry_count = data[6];
     const uint8_t* glyp = nullptr;
@@ -73,11 +52,11 @@ bool FfntFont::Parse(std::span<const uint8_t> data, std::string* error) {
     for (uint8_t i = 0; i < entry_count; ++i) {
         const size_t at = 0x10 + static_cast<size_t>(i) * 12;
         if (at + 12 > data.size()) {
-            return Fail(error, "FFNT entry table truncated");
+            return FailWithError(error, "FFNT entry table truncated");
         }
-        const uint32_t offset = U32(data.data() + at + 4);
+        const uint32_t offset = ReadBinaryUnchecked<uint32_t>(data.data() + at + 4);
         if (offset + 16 > data.size()) {
-            return Fail(error, "FFNT entry offset out of range");
+            return FailWithError(error, "FFNT entry offset out of range");
         }
         if (std::memcmp(data.data() + at, "GLYP", 4) == 0) {
             glyp = data.data() + offset;
@@ -86,36 +65,36 @@ bool FfntFont::Parse(std::span<const uint8_t> data, std::string* error) {
         }
     }
     if (!glyp || !ftdt) {
-        return Fail(error, "FFNT without GLYP or FTDT");
+        return FailWithError(error, "FFNT without GLYP or FTDT");
     }
     em_size_ = glyp[2];
     pad_ = glyp[12];
-    const uint16_t count = U16(glyp + 6);
+    const uint16_t count = ReadBinaryUnchecked<uint16_t>(glyp + 6);
     const uint8_t* end = data.data() + data.size();
     if (glyp + 16 + static_cast<size_t>(count) * 20 > end || em_size_ == 0) {
-        return Fail(error, "FFNT glyph table truncated");
+        return FailWithError(error, "FFNT glyph table truncated");
     }
     glyphs_.resize(count);
     for (uint16_t i = 0; i < count; ++i) {
         const uint8_t* g = glyp + 16 + static_cast<size_t>(i) * 20;
         FfntGlyph& glyph = glyphs_[i];
-        glyph.code = U32(g) & 0xFFFFFFF;
-        glyph.x = U16(g + 4);
-        glyph.y = U16(g + 6);
+        glyph.code = ReadBinaryUnchecked<uint32_t>(g) & 0xFFFFFFF;
+        glyph.x = ReadBinaryUnchecked<uint16_t>(g + 4);
+        glyph.y = ReadBinaryUnchecked<uint16_t>(g + 6);
         glyph.width = g[8];
         glyph.height = g[9];
         glyph.layer = g[10];
         glyph.advance = g[11];
         glyph.bearing = g[12];
         glyph.top = static_cast<int8_t>(g[13]);
-        glyph.flags = U16(g + 14);
+        glyph.flags = ReadBinaryUnchecked<uint16_t>(g + 14);
     }
     std::sort(glyphs_.begin(), glyphs_.end(), [](const FfntGlyph& a, const FfntGlyph& b) { return a.code < b.code; });
     bitmap_width_ = 1u << ftdt[1];
     bitmap_height_ = 1u << ftdt[2];
-    const uint32_t size = U32(ftdt + 4);
+    const uint32_t size = ReadBinaryUnchecked<uint32_t>(ftdt + 4);
     if (ftdt + 16 + size > end || size < bitmap_width_ * bitmap_height_) {
-        return Fail(error, std::format("FFNT bitmap {}x{} does not fit {} bytes", bitmap_width_, bitmap_height_, size));
+        return FailWithError(error, std::format("FFNT bitmap {}x{} does not fit {} bytes", bitmap_width_, bitmap_height_, size));
     }
     bitmap_.assign(ftdt + 16, ftdt + 16 + static_cast<size_t>(bitmap_width_) * bitmap_height_);
     return true;

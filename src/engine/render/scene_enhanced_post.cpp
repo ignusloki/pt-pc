@@ -6,19 +6,6 @@
 #include <cstdlib>
 #include <string>
 namespace pt {
-namespace {
-glm::vec4 BloomPolynomial(float extraction) {
-    glm::vec4 p(0.0f);
-    const float e = std::clamp(extraction, 1.0f, 3.99999f);
-    const int i = static_cast<int>(std::floor(e));
-    const float f = e - static_cast<float>(i);
-    p[i - 1] = 1.0f - f;
-    p[i] = f;
-    return p;
-}
-
-}
-
 void SceneRenderer::RecordEnhancedPost(gpu::CommandList& cmd, const SceneLighting& lighting, float dt) {
     const ScreenSettings& screen = lighting.screen;
     const ExposureSettings& exposure = lighting.exposure;

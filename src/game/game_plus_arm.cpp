@@ -1,3 +1,4 @@
+#include "engine/core/interpolation.h"
 #include "game/game_plus_arm.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -89,17 +90,12 @@ glm::vec3 Retarget(const glm::vec3& v, float scale) {
     return scale * (v - glm::vec3(0.131f * t, 0.0f, 0.015f * t));
 }
 
-float Smooth01(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
 float CreatureSide(const glm::vec3& p) {
-    const float front = Smooth01((p.z + 0.02f) / 0.06f);
+    const float front = SmoothStep01((p.z + 0.02f) / 0.06f);
     const float phase = 1.7f * (1.0f - front);
     const float middle = 0.07f - 0.035f * front + 0.045f * std::sin(p.y * 17.0f + 1.0f + phase) +
                          0.02f * std::sin(p.y * 43.0f + 2.0f + phase) + 0.01f * std::sin(p.y * 97.0f);
-    const float bottom = 0.02f - 0.08f * front + (0.13f - 0.03f * front) * Smooth01((0.20f - p.x) / 0.16f) +
+    const float bottom = 0.02f - 0.08f * front + (0.13f - 0.03f * front) * SmoothStep01((0.20f - p.x) / 0.16f) +
                          0.025f * std::sin(p.x * 55.0f + p.z * 9.0f) + 0.012f * std::sin(p.x * 131.0f);
     return std::min(std::min(p.x - middle, p.y - bottom), 0.47f - p.y);
 }
@@ -256,9 +252,9 @@ bool GamePlusArm::Prepare(ModelCache& models) {
             const std::string_view part = d < static_cast<int>(side_parts.size()) ? side_parts[static_cast<size_t>(d)] : std::string_view();
             const bool arm = ArmChain(part);
             v.position = Retarget(v.position, scale);
-            const float moved = arm ? 1.0f : 1.0f - Smooth01((glm::distance(v.position, side_shoulder) - kShiftInner) / (kShiftOuter - kShiftInner));
+            const float moved = arm ? 1.0f : 1.0f - SmoothStep01((glm::distance(v.position, side_shoulder) - kShiftInner) / (kShiftOuter - kShiftInner));
             v.position += shift * moved;
-            const float t = arm ? Smooth01((v.position.x - shoulder.x) / kShoulderBand) : 0.0f;
+            const float t = arm ? SmoothStep01((v.position.x - shoulder.x) / kShoulderBand) : 0.0f;
             if (t >= 1.0f) return;
             std::array<const Donor*, kDonors> nearest{};
             std::array<float, kDonors> nearest_d;

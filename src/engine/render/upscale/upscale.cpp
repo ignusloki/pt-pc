@@ -52,11 +52,6 @@ constexpr QualityInfo kQualities[] = {{"Native AA", "native", 1.0f},       {"Qua
                                       {"Balanced", "balanced", 1.7f},      {"Performance", "performance", 2.0f},
                                       {"Ultra performance", "ultra_performance", 3.0f}, {"Custom", "custom", 1.0f}};
 
-std::string Lower(std::string text) {
-    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(pt::AsciiLower(static_cast<char>(c))); });
-    return text;
-}
-
 float Halton(int32_t index, int32_t base) {
     float f = 1.0f;
     float result = 0.0f;
@@ -91,7 +86,7 @@ const char* UpscaleQualityKey(UpscaleQuality quality) {
 }
 
 bool ParseUpscaler(const std::string& text, UpscalerKind& out) {
-    const std::string key = Lower(text);
+    const std::string key = AsciiLowerOwned(text);
     for (int i = 0; i < static_cast<int>(UpscalerKind::Count); ++i) {
         if (key == kKinds[i].key) {
             out = static_cast<UpscalerKind>(i);
@@ -115,7 +110,7 @@ const char* DlssModelKey(DlssModel model) {
 }
 
 bool ParseDlssModel(const std::string& text, DlssModel& out) {
-    std::string key = Lower(text);
+    std::string key = AsciiLowerOwned(text);
     if (key.starts_with("preset_")) {
         key = key.substr(7);
     }
@@ -138,7 +133,7 @@ const char* FrameGenKey(FrameGenKind kind) {
 }
 
 bool ParseFrameGen(const std::string& text, FrameGenKind& out) {
-    const std::string key = Lower(text);
+    const std::string key = AsciiLowerOwned(text);
     for (int i = 0; i < static_cast<int>(FrameGenKind::Count); ++i) {
         if (key == kFrameGens[i]) {
             out = static_cast<FrameGenKind>(i);
@@ -161,7 +156,7 @@ bool ParseFrameGen(const std::string& text, FrameGenKind& out) {
 }
 
 bool ParseUpscaleQuality(const std::string& text, UpscaleQuality& out) {
-    const std::string key = Lower(text);
+    const std::string key = AsciiLowerOwned(text);
     for (int i = 0; i < static_cast<int>(UpscaleQuality::Count); ++i) {
         if (key == kQualities[i].key) {
             out = static_cast<UpscaleQuality>(i);

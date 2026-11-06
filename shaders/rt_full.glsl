@@ -24,14 +24,7 @@ layout(std430, set = 2, binding = 8) readonly buffer RtLightStates {
 };
 #endif
 
-uint RtHash(uint x) {
-    x ^= x >> 16u;
-    x *= 0x7feb352du;
-    x ^= x >> 15u;
-    x *= 0x846ca68bu;
-    x ^= x >> 16u;
-    return x;
-}
+#include "rt_hash.glsl"
 
 float RtRandom(inout uint state) {
     state = RtHash(state + 0x9e3779b9u);

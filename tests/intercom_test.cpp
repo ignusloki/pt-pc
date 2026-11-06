@@ -1,3 +1,4 @@
+#include "check.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -9,10 +10,6 @@ namespace {
 
 int failures = 0;
 
-void Check(bool ok, const std::string& label) {
-    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label.c_str());
-    failures += ok ? 0 : 1;
-}
 
 }
 
@@ -41,11 +38,11 @@ int main() {
             ramps = ramps && (dv < 0.02f || dv / dt <= 20.0f);
         }
     }
-    Check(most_swings <= 4, "ring flicker: at most 4 swings in any second over 400 seeds (" + std::to_string(most_swings) + ")");
-    Check(shortest >= kLitMin && longest <= kLitMax, "ring lit for 6 to 10 s (" + std::to_string(shortest) + " to " + std::to_string(longest) + ")");
-    Check(false_light, "ring: a false full light that cuts out before the lit stretch");
-    Check(ends_dark, "ring: starts and ends dark");
-    Check(ramps, "ring: every change of level ramps over 50 ms or more");
+    pt::test::Check(failures, most_swings <= 4, "ring flicker: at most 4 swings in any second over 400 seeds (" + std::to_string(most_swings) + ")");
+    pt::test::Check(failures, shortest >= kLitMin && longest <= kLitMax, "ring lit for 6 to 10 s (" + std::to_string(shortest) + " to " + std::to_string(longest) + ")");
+    pt::test::Check(failures, false_light, "ring: a false full light that cuts out before the lit stretch");
+    pt::test::Check(failures, ends_dark, "ring: starts and ends dark");
+    pt::test::Check(failures, ramps, "ring: every change of level ramps over 50 ms or more");
     int crackle_swings = 0;
     float crackle_length = 0.0f;
     for (uint32_t seed = 1; seed <= 100; ++seed) {
@@ -53,7 +50,7 @@ int main() {
         crackle_swings = std::max(crackle_swings, MaxSwingsPerSecond(c));
         crackle_length = std::max(crackle_length, c.Duration());
     }
-    Check(crackle_swings <= 4 && crackle_length < 1.0f, "tell: under a second, at most 4 swings");
+    pt::test::Check(failures, crackle_swings <= 4 && crackle_length < 1.0f, "tell: under a second, at most 4 swings");
 
     const auto chime = ChimePcm(0.30f);
     const auto curve = RingCurve(7);
@@ -62,10 +59,10 @@ int main() {
     std::printf("levels: chime peak %.1f rms %.1f dBFS, hum peak %.1f rms %.1f, crackle peak %.1f rms %.1f (%u, %u, %u samples)\n", PeakDb(chime),
                 RmsDb(chime), PeakDb(hum), RmsDb(hum), PeakDb(crackle), RmsDb(crackle), static_cast<unsigned>(chime.samples.size()),
                 static_cast<unsigned>(hum.samples.size()), static_cast<unsigned>(crackle.samples.size()));
-    Check(std::abs(PeakDb(chime) - (-10.46f)) < 0.2f && std::abs(PeakDb(hum) - (-15.92f)) < 0.2f && std::abs(PeakDb(crackle) - (-11.06f)) < 0.2f,
+    pt::test::Check(failures, std::abs(PeakDb(chime) - (-10.46f)) < 0.2f && std::abs(PeakDb(hum) - (-15.92f)) < 0.2f && std::abs(PeakDb(crackle) - (-11.06f)) < 0.2f,
           "sounds peak at their gains");
-    Check(chime.rate == 48000 && chime.channels == 1 && chime.samples.size() > 48000 * 2, "chime: 48 kHz mono, over 2 s");
-    Check(hum.samples.size() >= static_cast<size_t>(curve.Duration() * 48000), "hum: as long as the curve");
+    pt::test::Check(failures, chime.rate == 48000 && chime.channels == 1 && chime.samples.size() > 48000 * 2, "chime: 48 kHz mono, over 2 s");
+    pt::test::Check(failures, hum.samples.size() >= static_cast<size_t>(curve.Duration() * 48000), "hum: as long as the curve");
 
     bool same = true;
     int rings = 0, haunted = 0;
@@ -76,9 +73,9 @@ int main() {
         haunted += RingRoll(1234u + pass * 7u, "f160", pass, RingChance("f160")) ? 1 : 0;
     }
     std::printf("roll: %d of %d loops ring on f030, %d on f160\n", rings, loops, haunted);
-    Check(same, "roll: the same for the same seed and loop");
-    Check(rings > loops * 0.07 && rings < loops * 0.13, "roll: about one loop in ten");
-    Check(haunted > loops * 0.16 && haunted < loops * 0.24, "roll: about one in five on f160");
+    pt::test::Check(failures, same, "roll: the same for the same seed and loop");
+    pt::test::Check(failures, rings > loops * 0.07 && rings < loops * 0.13, "roll: about one loop in ten");
+    pt::test::Check(failures, haunted > loops * 0.16 && haunted < loops * 0.24, "roll: about one in five on f160");
     std::printf("%s (%d failed)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

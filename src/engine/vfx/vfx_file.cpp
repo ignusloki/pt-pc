@@ -1,3 +1,5 @@
+#include "engine/core/binary_read.h"
+#include "engine/core/error.h"
 #include "engine/vfx/vfx_file.h"
 
 #include <cstring>
@@ -20,8 +22,7 @@ public:
 
     template <typename T>
     T Read() {
-        T v{};
-        std::memcpy(&v, data_.data() + pos_, sizeof(T));
+        T v = ReadBinaryUnchecked<T>(data_, pos_);
         pos_ += sizeof(T);
         return v;
     }
@@ -36,13 +37,6 @@ private:
     std::span<const uint8_t> data_;
     size_t pos_ = 0;
 };
-
-bool Fail(std::string* error, std::string text) {
-    if (error) {
-        *error = std::move(text);
-    }
-    return false;
-}
 
 }
 
@@ -127,7 +121,7 @@ const Node* File::Input(uint32_t node, uint8_t port) const {
 bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
     out = File{};
     if (data.size() < kHeaderSize + 1 || std::memcmp(data.data(), "vfx", 3) != 0) {
-        return Fail(error, "not a vfx file");
+        return FailWithError(error, "not a vfx file");
     }
     Reader r(data);
     r.ReadString(3);
@@ -138,12 +132,12 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
     out.nodes.reserve(node_count);
     for (uint16_t n = 0; n < node_count; ++n) {
         if (!r.Has(8)) {
-            return Fail(error, std::format("node {} truncated", n));
+            return FailWithError(error, std::format("node {} truncated", n));
         }
         const uint64_t code = r.Read<uint64_t>();
         const ClassDef* def = FindClass(static_cast<uint32_t>(code));
         if (!def) {
-            return Fail(error, std::format("node {} at {:#x}: unknown class {:#x}", n, r.Pos() - 8, code));
+            return FailWithError(error, std::format("node {} at {:#x}: unknown class {:#x}", n, r.Pos() - 8, code));
         }
         Node node;
         node.def = def;
@@ -151,7 +145,7 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
         node.props.reserve(def->props.size());
         for (const PropDef& pd : def->props) {
             if (!r.Has(1)) {
-                return Fail(error, std::format("{} truncated", def->name));
+                return FailWithError(error, std::format("{} truncated", def->name));
             }
             Prop prop;
             prop.hash = pd.hash;
@@ -161,25 +155,25 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
                 switch (prop.type) {
                 case PropType::Bool:
                     if (!r.Has(1)) {
-                        return Fail(error, "bool truncated");
+                        return FailWithError(error, "bool truncated");
                     }
                     prop.ints.push_back(r.Read<uint8_t>());
                     break;
                 case PropType::UInt32:
                     if (!r.Has(4)) {
-                        return Fail(error, "uint truncated");
+                        return FailWithError(error, "uint truncated");
                     }
                     prop.ints.push_back(r.Read<uint32_t>());
                     break;
                 case PropType::Float:
                     if (!r.Has(4)) {
-                        return Fail(error, "float truncated");
+                        return FailWithError(error, "float truncated");
                     }
                     prop.vectors.emplace_back(r.Read<float>(), 0.0f, 0.0f, 0.0f);
                     break;
                 case PropType::Vector4: {
                     if (!r.Has(16)) {
-                        return Fail(error, "vector truncated");
+                        return FailWithError(error, "vector truncated");
                     }
                     glm::vec4 v;
                     v.x = r.Read<float>();
@@ -191,11 +185,11 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
                 }
                 case PropType::String: {
                     if (!r.Has(2)) {
-                        return Fail(error, "string truncated");
+                        return FailWithError(error, "string truncated");
                     }
                     const uint16_t length = r.Read<uint16_t>();
                     if (!r.Has(size_t(length) + 1)) {
-                        return Fail(error, "string truncated");
+                        return FailWithError(error, "string truncated");
                     }
                     prop.strings.push_back(r.ReadString(length));
                     r.Read<uint8_t>();
@@ -204,7 +198,7 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
                 case PropType::StrCode:
                 case PropType::PathCode:
                     if (!r.Has(8)) {
-                        return Fail(error, "code truncated");
+                        return FailWithError(error, "code truncated");
                     }
                     prop.ints.push_back(r.Read<uint64_t>());
                     break;
@@ -217,7 +211,7 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
     const bool wide = node_count >= 0xFF;
     for (uint16_t i = 0; i < edge_count; ++i) {
         if (!r.Has(wide ? 8 : 6)) {
-            return Fail(error, "edges truncated");
+            return FailWithError(error, "edges truncated");
         }
         Edge e;
         if (wide) {
@@ -232,12 +226,12 @@ bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
         e.to_type = r.Read<uint8_t>();
         e.to_port = r.Read<uint8_t>();
         if (e.from >= node_count || e.to >= node_count) {
-            return Fail(error, "edge node index out of range");
+            return FailWithError(error, "edge node index out of range");
         }
         out.edges.push_back(e);
     }
     if (r.Pos() != data.size()) {
-        return Fail(error, std::format("{} trailing bytes", data.size() - r.Pos()));
+        return FailWithError(error, std::format("{} trailing bytes", data.size() - r.Pos()));
     }
     return true;
 }

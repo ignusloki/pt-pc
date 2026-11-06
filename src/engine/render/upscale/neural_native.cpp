@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/render/upscale/neural_native.h"
 
 #include <algorithm>
@@ -47,13 +48,6 @@ uint64_t SizeOf(const std::filesystem::path& p) {
     std::error_code ec;
     const auto n = std::filesystem::file_size(p, ec);
     return ec ? 0 : n;
-}
-
-template <typename T>
-T Read(std::span<const uint8_t> bytes, size_t at) {
-    T v{};
-    if (at + sizeof(T) <= bytes.size()) std::memcpy(&v, bytes.data() + at, sizeof(T));
-    return v;
 }
 
 std::vector<std::pair<std::string, uint64_t>> ReadBundleList(const std::filesystem::path& code) {
@@ -199,12 +193,12 @@ std::filesystem::path CodePath() {
 std::vector<Bundle> FindBundles(std::span<const uint8_t> dll) {
     std::vector<Bundle> out;
     for (size_t at = 0; at + 16 <= dll.size();) {
-        if (Read<uint32_t>(dll, at) != kBundleMagic) {
+        if (pt::ReadBinary<uint32_t>(dll, at) != kBundleMagic) {
             at += 4;
             continue;
         }
-        const uint16_t version = Read<uint16_t>(dll, at + 4), header = Read<uint16_t>(dll, at + 6);
-        const uint64_t size = Read<uint64_t>(dll, at + 8);
+        const uint16_t version = pt::ReadBinary<uint16_t>(dll, at + 4), header = pt::ReadBinary<uint16_t>(dll, at + 6);
+        const uint64_t size = pt::ReadBinary<uint64_t>(dll, at + 8);
         if (version != 1 || header != 16 || size == 0 || size > 200'000'000 || at + header + size > dll.size()) {
             at += 4;
             continue;
@@ -214,12 +208,12 @@ std::vector<Bundle> FindBundles(std::span<const uint8_t> dll) {
         b.size = header + static_cast<size_t>(size);
         bool whole = true;
         for (size_t e = at + header; e < at + b.size;) {
-            const uint32_t entry_header = Read<uint32_t>(dll, e + 4), payload = Read<uint32_t>(dll, e + 8);
+            const uint32_t entry_header = pt::ReadBinary<uint32_t>(dll, e + 4), payload = pt::ReadBinary<uint32_t>(dll, e + 8);
             if (entry_header < 64 || entry_header > 1024 || e + entry_header + payload > at + b.size) {
                 whole = false;
                 break;
             }
-            b.entries.push_back({Read<uint16_t>(dll, e), Read<uint32_t>(dll, e + 28), e + entry_header, payload, Read<uint64_t>(dll, e + 56)});
+            b.entries.push_back({pt::ReadBinary<uint16_t>(dll, e), pt::ReadBinary<uint32_t>(dll, e + 28), e + entry_header, payload, pt::ReadBinary<uint64_t>(dll, e + 56)});
             e += entry_header + payload;
         }
         if (!whole || b.entries.empty()) {
@@ -258,7 +252,7 @@ bool ExtractCode(std::span<const uint8_t> runtime_dll, std::span<const uint8_t> 
         if (it == entries.end()) return fail(std::format("bundle {} has no sm_{} code", i, arch));
         const std::span<const uint8_t> packed = code_dll.subspan(it->offset, it->size);
         std::vector<uint8_t> code;
-        if (packed.size() >= 4 && Read<uint32_t>(packed, 0) == 0xFD2FB528u) {
+        if (packed.size() >= 4 && pt::ReadBinary<uint32_t>(packed, 0) == 0xFD2FB528u) {
             if (it->unpacked == 0 || it->unpacked > 64ull * 1024 * 1024) return fail(std::format("bundle {} records no size to unpack", i));
             code.resize(static_cast<size_t>(it->unpacked));
             const size_t frame = ZSTD_findFrameCompressedSize(packed.data(), packed.size());

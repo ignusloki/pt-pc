@@ -67,12 +67,7 @@ constexpr const char* kEngineVersion = "1.0";
 constexpr uint32_t kNvidiaVendor = 0x10DE;
 
 const std::wstring& DataPath() {
-    static const std::wstring path = [] {
-        std::error_code ec;
-        std::filesystem::path dir = std::filesystem::temp_directory_path(ec) / "pt-port-ngx";
-        std::filesystem::create_directories(dir, ec);
-        return dir.wstring();
-    }();
+    static const std::wstring path = CreateNgxTempPath();
     return path;
 }
 
@@ -91,16 +86,7 @@ NVSDK_NGX_FeatureCommonInfo FeatureInfo() {
     return info;
 }
 
-NVSDK_NGX_PerfQuality_Value QualityValue(UpscaleQuality quality) {
-    switch (quality) {
-    case UpscaleQuality::NativeAA: return NVSDK_NGX_PerfQuality_Value_DLAA;
-    case UpscaleQuality::Quality: return NVSDK_NGX_PerfQuality_Value_MaxQuality;
-    case UpscaleQuality::Balanced: return NVSDK_NGX_PerfQuality_Value_Balanced;
-    case UpscaleQuality::Performance: return NVSDK_NGX_PerfQuality_Value_MaxPerf;
-    case UpscaleQuality::UltraPerformance: return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
-    default: return NVSDK_NGX_PerfQuality_Value_MaxQuality;
-    }
-}
+#include "engine/render/upscale/ngx_quality.inl"
 
 class DlssD3D12 final : public UpscaleBackend {
 public:
@@ -451,32 +437,7 @@ void XessLog(const char* message, xess_logging_level_t level) {
     }
 }
 
-xess_quality_settings_t XessQuality(UpscaleQuality quality, VkExtent2D render, VkExtent2D display) {
-    switch (quality) {
-    case UpscaleQuality::NativeAA: return XESS_QUALITY_SETTING_AA;
-    case UpscaleQuality::Quality: return XESS_QUALITY_SETTING_ULTRA_QUALITY;
-    case UpscaleQuality::Balanced: return XESS_QUALITY_SETTING_QUALITY;
-    case UpscaleQuality::Performance: return XESS_QUALITY_SETTING_BALANCED;
-    case UpscaleQuality::UltraPerformance: return XESS_QUALITY_SETTING_ULTRA_PERFORMANCE;
-    default: break;
-    }
-    struct Preset {
-        float ratio;
-        xess_quality_settings_t setting;
-    };
-    constexpr Preset presets[] = {{1.0f, XESS_QUALITY_SETTING_AA},          {1.3f, XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS},
-                                  {1.5f, XESS_QUALITY_SETTING_ULTRA_QUALITY}, {1.7f, XESS_QUALITY_SETTING_QUALITY},
-                                  {2.0f, XESS_QUALITY_SETTING_BALANCED},     {2.3f, XESS_QUALITY_SETTING_PERFORMANCE},
-                                  {3.0f, XESS_QUALITY_SETTING_ULTRA_PERFORMANCE}};
-    const float ratio = static_cast<float>(display.width) / static_cast<float>(std::max(render.width, 1u));
-    const Preset* best = &presets[0];
-    for (const Preset& p : presets) {
-        if (std::abs(p.ratio - ratio) < std::abs(best->ratio - ratio)) {
-            best = &p;
-        }
-    }
-    return best->setting;
-}
+#include "engine/render/upscale/xess_quality.inl"
 
 class XessD3D12 final : public UpscaleBackend {
 public:

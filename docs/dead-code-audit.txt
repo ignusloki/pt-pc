@@ -1,0 +1,715 @@
+P.T. DEAD CODE AUDIT — 2026-11-05
+Branch: codex/remove-proven-unused-code
+Baseline: e743054bded22a63b6b257a895b34e11fac75387
+
+FOLLOW-UP REGRESSION FIXES
+Added pc_note_frame_generation_metalfx and pc_note_vsync_metalfx_fg in Polish and Czech, preserving the English help text's requirements and experimental limitations.
+Updated the motion-blur fixture with the renderer's EnhancedRendering setting. The production UpdateMotion method is still extracted by tools/motion_blur_check.py, rather than duplicated in the test.
+The harness now runs 24 assertions across Original and Enhanced modes, including camera cuts, missing temporal history, frame timing and explicit tick references.
+Rebuilt pt, pt_release, pt_setup_macos and all 77 native test targets; the build passed.
+Reran all 82 regression checks (77 native test binaries and 5 Python/script checks): 82 PASS, 0 FAIL.
+Both previously failing checks, pt_multilingual_test and motion-blur, now pass. The original cleanup results below remain as historical evidence.
+Full commands, exit codes, timings and logs: build/dead-code-audit/regression-fixes/results.json and build/dead-code-audit/regression-fixes/*.log.
+The branch remains codex/remove-proven-unused-code. Changes remain uncommitted; no push or merge was performed.
+
+OUTCOME
+Two batches retained. No batch introduced a regression; no restoration was needed.
+Removed 7 unused function bodies, 1 private declaration, 4 unused constants and 1 constant-false branch/ternary path.
+Cleanup-only source diff: 9 modified files, 63 lines removed, 1 replacement line added (62 net lines removed).
+Whole files/directories deleted: 0. Whole-file unreachability was not sufficiently established.
+This audit report is a new evidence artifact, not part of the source-deletion count.
+No public API signatures or object layouts changed. No push or merge was performed.
+Changes are left uncommitted for review on the new branch.
+
+VALIDATION OF CLEANUP BATCHES (before follow-up fixes)
+The build and 82 regression checks ran on the baseline and after EACH deletion batch.
+Build: cmake --build build/macos-local-validation --parallel 4 --target pt pt_release pt_setup_macos <77 native test targets>.
+Native tests: the 52 TESTS entries from tools/macos/build.py plus 25 additional targets; see the inventory below.
+Required arguments were supplied in isolated build/dead-code-audit/<run>/fixtures directories. Asset-dependent tests used game/CUSA01127.
+Python checks: tools/macos/test_packaging.py, tests/payload_index_test.py, tests/macos_publish_test.py, tests/android_device_test.py and tools/motion_blur_check.py --glm build/macos-local-validation/_deps/glm-src.
+Execution used native Metal access outside the sandbox after sandbox GPU access failed.
+Each completed run: build PASS; 80/82 regression checks PASS; 2 unchanged baseline failures.
+Existing failure 1: pt_multilingual_test — missing pc_note_frame_generation_metalfx and pc_note_vsync_metalfx_fg in languages 12 and 13 (Polish/Czech).
+Existing failure 2: motion-blur — tests/blur_motion_test.cpp harness lacks renderer_; production UpdateMotion now references it, causing 3 compiler errors.
+Neither existing failure was modified or hidden. Exit codes and failure signatures were compared after both batches.
+The bare pt_setup_macos --self-test needs a packaged sealed payload and cannot run from this unbundled build; native installer core and packaging regressions passed.
+Windows/Linux/mobile device runtimes were not executed on this Mac.
+git diff --check: PASS.
+
+COMPLETE CHECK INVENTORY (exit code: baseline / batch 1 / batch 2)
+build: 0 / 0 / 0
+pt_tests: 0 / 0 / 0
+pt_platform_test: 0 / 0 / 0
+pt_settings_roundtrip_test: 0 / 0 / 0
+pt_save_status_test: 0 / 0 / 0
+pt_save_reset_test: 0 / 0 / 0
+pt_language_default_test: 0 / 0 / 0
+pt_graphics_preset_test: 0 / 0 / 0
+pt_voice_match_test: 0 / 0 / 0
+pt_installer_update_test: 0 / 0 / 0
+pt_unicode_paths_test: 0 / 0 / 0
+pt_user_data_test: 0 / 0 / 0
+pt_fast_walk_test: 0 / 0 / 0
+pt_display_modes_test: 0 / 0 / 0
+pt_pipeline_cache_store_test: 0 / 0 / 0
+pt_blur_sway_test: 0 / 0 / 0
+pt_microphone_async_test: 0 / 0 / 0
+pt_archive_model_camera_test: 0 / 0 / 0
+pt_audio_channel_layout_test: 0 / 0 / 0
+pt_controller_feedback_test: 0 / 0 / 0
+pt_controller_speaker_route_test: 0 / 0 / 0
+pt_dualshock_audio_test: 0 / 0 / 0
+pt_upscaler_gpu_test: 0 / 0 / 0
+pt_archive_unlock_test: 0 / 0 / 0
+pt_device_start_test: 0 / 0 / 0
+pt_dialog_nav_test: 0 / 0 / 0
+pt_notice_queue_test: 0 / 0 / 0
+pt_gyro_test: 0 / 0 / 0
+pt_sound_captions_test: 0 / 0 / 0
+pt_lisa_date_test: 0 / 0 / 0
+pt_camera_blend_test: 0 / 0 / 0
+pt_rendering_api_test: 0 / 0 / 0
+pt_mouse_render_test: 0 / 0 / 0
+pt_pc_prompt_note_test: 0 / 0 / 0
+pt_prompt_hint_test: 0 / 0 / 0
+pt_pc_settings_refresh_test: 0 / 0 / 0
+pt_key_layout_test: 0 / 0 / 0
+pt_hdr_output_test: 0 / 0 / 0
+pt_exposure_test: 0 / 0 / 0
+pt_rendering_pipeline_test: 0 / 0 / 0
+pt_enhanced_hdr_pipeline_test: 0 / 0 / 0
+pt_rendering_pipeline_gpu_test: 0 / 0 / 0
+pt_composite_output_test: 0 / 0 / 0
+pt_point_shadow_projection_test: 0 / 0 / 0
+pt_game_folder_test: 0 / 0 / 0
+pt_display_policy_test: 0 / 0 / 0
+pt_output_device_test: 0 / 0 / 0
+pt_photo_panel_test: 0 / 0 / 0
+pt_vk_address_log_test: 0 / 0 / 0
+pt_vk_layers_test: 0 / 0 / 0
+pt_macos_data_path_test: 0 / 0 / 0
+pt_macos_hdr_test: 0 / 0 / 0
+pt_metalfx_hdr_test: 0 / 0 / 0
+pt_collision_test: 0 / 0 / 0
+pt_parallel_for_test: 0 / 0 / 0
+pt_mods_test: 0 / 0 / 0
+pt_reflection_mix_test: 0 / 0 / 0
+pt_native_projection_test: 0 / 0 / 0
+pt_rt_fitting_policy_test: 0 / 0 / 0
+pt_skin_render_test: 0 / 0 / 0
+pt_rt_record_flags_test: 0 / 0 / 0
+pt_foliage_shadow_test: 0 / 0 / 0
+pt_skin_shadow_receiver_test: 0 / 0 / 0
+pt_light_cull_test: 0 / 0 / 0
+pt_peephole_look_test: 0 / 0 / 0
+pt_photo_preset_test: 0 / 0 / 0
+pt_controller_bus_routing_test: 0 / 0 / 0
+pt_nr_toggle_policy_test: 0 / 0 / 0
+pt_fsr_provider_gate_test: 0 / 0 / 0
+pt_ios_lifecycle_test: 0 / 0 / 0
+pt_ios_scene_state_test: 0 / 0 / 0
+pt_touch_controls_test: 0 / 0 / 0
+pt_player_publish_test: 0 / 0 / 0
+pt_queue_handoff_test: 0 / 0 / 0
+pt_gouge_input_test: 0 / 0 / 0
+pt_outro_input_test: 0 / 0 / 0
+pt_localization_test: 0 / 0 / 0
+pt_multilingual_test: 1 / 1 / 1
+packaging: 0 / 0 / 0
+payload-index: 0 / 0 / 0
+macos-publish: 0 / 0 / 0
+android-device: 0 / 0 / 0
+motion-blur: 1 / 1 / 1
+
+SOURCE DELETION COUNTS (added / removed / path)
+0	2	src/engine/assets/gltf_model.cpp
+0	35	src/engine/render/scene_renderer.cpp
+0	11	src/engine/render/upscale/metalfx_backend.mm
+0	1	src/game/archive_theater.h
+0	7	src/game/ui/game_ui.cpp
+0	1	src/game/ui/game_ui.h
+0	2	src/game/ui/options_menu.cpp
+1	3	src/game/ui/pc_settings_page.cpp
+0	1	src/main.cpp
+
+PRE-DELETION SEARCH AND REACHABILITY EVIDENCE (captured before edits)
+DEAD CODE AUDIT — PRE-DELETION EVIDENCE
+Baseline commit: e743054bded22a63b6b257a895b34e11fac75387
+Branch: codex/remove-proven-unused-code
+
+Scope: all tracked files, including .github, tests, tools, platforms, bindings and docs.
+Search commands below use every tracked path (git ls-files -z, batched into rg).
+Test search covers tests/, tools/*test*.py, installer/Tests and documented walkthroughs.
+Source locations refer to the unmodified baseline.
+
+ENTRY POINTS AND REACHABILITY
+CMakeLists.txt builds pt/pt_release from src/main.cpp and globs src/engine, src/game and src/decomp into static pt_engine.
+Windows, Linux and macOS installers have separate platform entry points; Android has Java/C# SDL launchers; iOS uses SDL scene setup.
+Tests are explicit executable targets and Python/script entry points, not registered with CTest.
+Tools and examples are independent command-line/module entry points; absence from the game executable does not make them dead.
+Lua callbacks and dynamically loaded native symbols are roots through registration/string lookup.
+The removed helper definitions are internal to their translation unit or private nonvirtual members, never registered.
+Their containing translation units are built; no call/address edge reaches these specific definitions from any root.
+This is symbol-specific reachability proof, not an assertion that the entire file is unreferenced.
+
+BATCH 1: INTERNAL HELPERS / UNUSED CONSTANTS AND DECLARATION
+
+ReverseZPerspective — src/engine/render/scene_renderer.cpp
+Search: rg -n -w ReverseZPerspective -- <all git ls-files paths>
+Exit: 0
+src/engine/render/scene_frame.cpp:29:glm::mat4 ReverseZPerspective(float fov_y, float aspect, float near_plane) {
+src/engine/render/scene_frame.cpp:40:    glm::mat4 p = ReverseZPerspective(fov_y, 1.0f, near_plane);
+src/engine/render/scene_frame.cpp:887:            g.mask = flip * ReverseZPerspective(std::max(l.mask_fov, 0.01f), 1.0f, 0.005f) * glm::lookAt(l.position, l.position + dir, up);
+src/engine/render/scene_renderer.cpp:47:glm::mat4 ReverseZPerspective(float fov_y, float aspect, float near_plane) {
+Test/tool/example/CI search: rg -n -w ReverseZPerspective tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace; live same-named helper in scene_frame.cpp is a separate entity.
+Test use of removed entity: none.
+Same-named definitions in other files have independent C++ linkage; their callers do not reach this anonymous-namespace copy.
+
+FoxView — src/engine/render/scene_renderer.cpp
+Search: rg -n -w FoxView -- <all git ls-files paths>
+Exit: 0
+src/engine/render/scene_renderer.cpp:57:glm::mat4 FoxView(const glm::mat4& gl_view) {
+src/engine/render/scene_frame.cpp:46:glm::mat4 FoxView(const glm::mat4& gl_view) {
+src/engine/render/scene_frame.cpp:371:        v.view = FoxView(gview);
+Test/tool/example/CI search: rg -n -w FoxView tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace; live same-named helper in scene_frame.cpp is a separate entity.
+Test use of removed entity: none.
+Same-named definitions in other files have independent C++ linkage; their callers do not reach this anonymous-namespace copy.
+
+ExtractPlanes — src/engine/render/scene_renderer.cpp
+Search: rg -n -w ExtractPlanes -- <all git ls-files paths>
+Exit: 0
+src/engine/render/scene_frame.cpp:76:void ExtractPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
+src/engine/render/scene_frame.cpp:394:    ExtractPlanes(frame_->views[main_view_.index].view_projection, main_view_.planes);
+src/engine/render/scene_frame.cpp:650:            ExtractPlanes(frame_->views[mirror_view_.index].view_projection, mirror_view_.planes);
+src/engine/render/scene_frame.cpp:1159:            ExtractPlanes(v.view_projection, sv.planes);
+src/engine/render/scene_renderer.cpp:61:void ExtractPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
+Test/tool/example/CI search: rg -n -w ExtractPlanes tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace; live same-named helper in scene_frame.cpp is a separate entity.
+Test use of removed entity: none.
+Same-named definitions in other files have independent C++ linkage; their callers do not reach this anonymous-namespace copy.
+
+AnyPerpendicular — src/engine/render/scene_renderer.cpp
+Search: rg -n -w AnyPerpendicular -- <all git ls-files paths>
+Exit: 0
+src/engine/render/scene_frame.cpp:179:glm::vec3 AnyPerpendicular(const glm::vec3& d) {
+src/engine/render/scene_frame.cpp:884:            const glm::vec3 up = std::abs(glm::dot(dir, glm::normalize(l.up))) < 0.95f ? glm::normalize(l.up) : AnyPerpendicular(dir);
+src/engine/render/scene_frame.cpp:1139:            const glm::vec3 up = std::abs(glm::dot(dir, glm::normalize(src->up))) < 0.95f ? glm::normalize(src->up) : AnyPerpendicular(dir);
+src/engine/render/scene_frame.cpp:1642:    const glm::vec3 u = glm::normalize(glm::cross(axis, AnyPerpendicular(axis)));
+src/engine/render/scene_renderer.cpp:77:glm::vec3 AnyPerpendicular(const glm::vec3& d) {
+src/engine/anim/rig.cpp:52:glm::vec3 AnyPerpendicular(const glm::vec3& v) {
+src/engine/anim/rig.cpp:75:    e = glm::dot(e, e) > 1e-20f ? glm::normalize(e) : AnyPerpendicular(dn);
+Test/tool/example/CI search: rg -n -w AnyPerpendicular tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace; live helpers in scene_frame.cpp and rig.cpp are separate entities.
+Test use of removed entity: none.
+Same-named definitions in other files have independent C++ linkage; their callers do not reach this anonymous-namespace copy.
+
+kShadowAtlasSize — src/engine/render/scene_renderer.cpp
+Search: rg -n -w kShadowAtlasSize -- <all git ls-files paths>
+Exit: 0
+src/engine/render/scene_renderer.cpp:41:constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
+src/engine/render/scene_frame.cpp:25:constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
+src/engine/render/scene_frame.cpp:27:constexpr uint32_t kShadowTiles = kShadowAtlasSize / kShadowTile;
+src/engine/render/scene_renderer.h:214:    static constexpr uint32_t kShadowAtlasSize = 8192;
+Test/tool/example/CI search: rg -n -w kShadowAtlasSize tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: unused anonymous-namespace alias; public SceneRenderer constant and active scene_frame alias stay.
+Test use of removed entity: none.
+Same-named definitions in other files have independent C++ linkage; their callers do not reach this anonymous-namespace copy.
+
+MetalFormatName — src/engine/render/upscale/metalfx_backend.mm
+Search: rg -n -w MetalFormatName -- <all git ls-files paths>
+Exit: 0
+src/engine/render/upscale/metalfx_backend.mm:46:const char* MetalFormatName(MTLPixelFormat format) {
+Test/tool/example/CI search: rg -n -w MetalFormatName tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace function; no callers, address references, registrations or exports.
+Test use of removed entity: none.
+
+ExtraString — src/engine/assets/gltf_model.cpp
+Search: rg -n -w ExtraString -- <all git ls-files paths>
+Exit: 0
+src/engine/assets/gltf_model.cpp:293:    static std::string ExtraString(const json::Value& extras, const char* key) { return extras.String(key); }
+Test/tool/example/CI search: rg -n -w ExtraString tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: private static member of GltfReader in an anonymous namespace; no callers or address references.
+Test use of removed entity: none.
+
+PointerUnits — src/game/ui/game_ui.cpp
+Search: rg -n -w PointerUnits -- <all git ls-files paths>
+Exit: 0
+src/game/ui/game_ui.h:131:    bool PointerUnits(const InputState& input, glm::vec2* units) const;
+src/game/ui/game_ui.cpp:749:bool GameUi::PointerUnits(const InputState& input, glm::vec2* units) const {
+Test/tool/example/CI search: rg -n -w PointerUnits tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: private nonvirtual GameUi method; declaration and definition only; no friends or string registration.
+Test use of removed entity: none.
+
+StartWalk — src/game/archive_theater.h
+Search: rg -n -w StartWalk -- <all git ls-files paths>
+Exit: 0
+src/game/archive_theater.h:65:    void StartWalk();
+Test/tool/example/CI search: rg -n -w StartWalk tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: private nonvirtual ArchiveTheater declaration only; no implementation, callers or registration.
+Test use of removed entity: none.
+
+kSubtitleTexts — src/game/ui/options_menu.cpp
+Search: rg -n -w kSubtitleTexts -- <all git ls-files paths>
+Exit: 0
+src/game/ui/options_menu.cpp:33:constexpr uint16_t kSubtitleTexts[8] = {121, 123, 125, 127, 129, 131, 133, 135};
+Test/tool/example/CI search: rg -n -w kSubtitleTexts tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace constant; definition only.
+Test use of removed entity: none.
+
+kSubtitleList — src/game/ui/options_menu.cpp
+Search: rg -n -w kSubtitleList -- <all git ls-files paths>
+Exit: 0
+src/game/ui/options_menu.cpp:54:constexpr uint16_t kSubtitleList = 118;
+Test/tool/example/CI search: rg -n -w kSubtitleList tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: anonymous namespace constant; definition only.
+Test use of removed entity: none.
+
+kMainPage — src/main.cpp
+Search: rg -n -w kMainPage -- <all git ls-files paths>
+Exit: 0
+src/main.cpp:4872:    static constexpr int kMainPage = 0;
+Test/tool/example/CI search: rg -n -w kMainPage tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: private unused static constexpr member of PcSettings; definition only.
+Test use of removed entity: none.
+
+BATCH 2: UNREACHABLE LOCAL QUIT-SELECTION BRANCH
+
+quit_selected — src/game/ui/pc_settings_page.cpp
+Search: rg -n -w quit_selected -- <all git ls-files paths>
+Exit: 0
+src/game/ui/pc_settings_page.cpp:1023:    const bool quit_selected = false;
+src/game/ui/pc_settings_page.cpp:1059:    view.State(quit_text_).color = glm::vec4(1.0f, 1.0f, 1.0f, quit_selected ? 1.0f : 0.55f);
+src/game/ui/pc_settings_page.cpp:1207:    if (quit_selected) note = "pc_note_quit";
+Test/tool/example/CI search: rg -n -w quit_selected tests tools installer/Tests examples .github
+Exit: 1
+(no matches)
+Reachability: local const bool initialized false unconditionally; no writes; if body and true ternary arm impossible.
+Test use of removed entity: none.
+PcSettingsPage::Apply is reachable, but quit_selected is false on every path; remove only the impossible help-note assignment and true ternary arm. Hidden named UI node and public QuitAt remain.
+
+COMPILER CORROBORATION
+217 first-party translation units checked with their CMake compile_commands.json flags plus -fsyntax-only -Wunused-function -Wunused-const-variable -Wunreachable-code -Wunused-private-field; all exited 0.
+See build/dead-code-audit/clang-scan.json for full diagnostics; first-party-warnings.txt contains the filtered findings.
+Compiler warnings supplement the source and linkage checks; platform-only warnings are not deletion evidence.
+
+DELETION GATE
+No deletion has occurred at the time this evidence file was generated. Baseline build of pt, pt_release and pt_setup_macos passed.
+The expanded baseline test build/run is in progress. A failing baseline does not authorize deleting a batch without validation.
+After each batch: build pt/pt_release/pt_setup_macos and 77 host test targets, run host tests and Python regressions; restore exactly that batch if a change breaks them.
+Windows/Linux/Android/iOS runtime validation is unavailable on this macOS host.
+
+BASELINE COMPLETED BEFORE DELETION
+The corrected baseline build passed. Of 82 runtime/script checks, 80 passed.
+Existing failures: pt_multilingual_test (four missing Polish/Czech MetalFX translations) and motion-blur (test harness lacks renderer_).
+After each batch these exact failures are compared with the baseline; any added failure triggers restoration of that batch.
+Unbundled installer --self-test requires sealed payload resources and is not valid for the bare executable; core installer tests pass.
+
+SEPARATE KEEP / UNCERTAIN LIST (baseline source locations)
+KEPT / UNCERTAIN CANDIDATES
+Public C++ interfaces are retained even with no repository caller. The repo cannot prove absence of external callers or downstream integrations.
+These are candidate findings, not declarations that the APIs are dead. No public API signatures or object layouts changed.
+
+wWinMain — installer/Native/setup.cpp:239
+  installer/Native/setup.cpp:240: int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
+  Kept: OS entry point.
+  Test references: none found for this spelling.
+IconFromFolder — installer/Native/setup_core.h:266
+  installer/Native/setup_core.h:266: inline std::optional<std::string> IconFromFolder(const fs::path& dir) { return SystemPngFromFolder(dir, "icon0.png"); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+IconFromPackage — installer/Native/setup_core.h:296
+  installer/Native/setup_core.h:296: inline std::optional<std::string> IconFromPackage(const fs::path& pkg) { return SystemPngFromPackage(pkg, "icon0.png"); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Blocks — src/engine/anim/demo_file.h:106
+  src/engine/anim/demo_file.h:106: const std::vector<MotionBlock>& Blocks() const { return blocks_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+EndTime — src/engine/anim/demo_file.h:114
+  src/engine/anim/demo_file.h:114: double EndTime() const { return end_time_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+HasSound — src/engine/anim/demo_file.h:115
+  src/engine/anim/demo_file.h:115: bool HasSound() const { return sound_chunks_ > 0; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+SoundChunks — src/engine/anim/demo_file.h:116
+  src/engine/anim/demo_file.h:116: uint32_t SoundChunks() const { return sound_chunks_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Constraints — src/engine/anim/sim_physics.h:71
+  src/engine/anim/sim_physics.h:71: const std::vector<SimConstraint>& Constraints() const { return constraints_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+NormalMap — src/engine/assets/ftex.h:28
+  src/engine/assets/ftex.h:28: bool NormalMap() const { return (flags & 8) != 0; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+PreferredDevice — src/engine/audio/audio_engine.h:21
+  src/engine/audio/audio_engine.h:21: static const std::string& PreferredDevice() { return preferred_device_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ChannelCount — src/engine/audio/channel_layout.h:17
+  src/engine/audio/channel_layout.h:18: constexpr uint32_t ChannelCount(OutputLayout layout) { return static_cast<uint32_t>(layout); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+LanguageId — src/engine/audio/wwise_bank.h:667
+  src/engine/audio/wwise_bank.h:667: uint32_t LanguageId() const { return language_id_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+StorageOffset — src/engine/audio/wwise_bank.h:675
+  src/engine/audio/wwise_bank.h:675: size_t StorageOffset() const { return offset_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ModifiedPackets — src/engine/audio/wwise_vorbis.h:35
+  src/engine/audio/wwise_vorbis.h:35: bool ModifiedPackets() const { return modified_packets_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ModeBits — src/engine/audio/wwise_vorbis.h:36
+  src/engine/audio/wwise_vorbis.h:36: int ModeBits() const { return mode_bits_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+IsDataPackage — src/engine/fs/fpk.h:24
+  src/engine/fs/fpk.h:24: bool IsDataPackage() const { return is_data_package_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+GameDir — src/engine/fs/vfs.h:22
+  src/engine/fs/vfs.h:23: const std::filesystem::path& GameDir() const { return game_dir_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+RumblePad — src/engine/platform/input.h:203
+  src/engine/platform/input.h:203: uint32_t RumblePad() const { return rumble_pad_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+BackupHoldsFiles — src/engine/platform/update_journal.h:180
+  src/engine/platform/update_journal.h:181: inline bool BackupHoldsFiles(const Journal& journal) {
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DredEnabled — src/engine/render/d3d12/present/d3d12_device.h:58
+  src/engine/render/d3d12/present/d3d12_device.h:58: bool DredEnabled() const { return dred_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+BackBuffer — src/engine/render/d3d12/present/dxgi_presenter.h:30
+  src/engine/render/d3d12/present/dxgi_presenter.h:31: ID3D12Resource* BackBuffer(uint32_t index) const { return index < buffers_.size() ? buffers_[index].Get() : nullptr; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DisplayPeak — src/engine/render/renderer.h:101
+  src/engine/render/renderer.h:101: float DisplayPeak() const { return d3d12_ ? d3d12_display_peak_ : ctx_.display_peak_nits; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Cmd — src/engine/render/renderer.h:109
+  src/engine/render/renderer.h:109: VkCommandBuffer Cmd() const { return active_cmd_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FreeSlots — src/engine/render/texture_manager.h:76
+  src/engine/render/texture_manager.h:76: uint32_t FreeSlots() const { return static_cast<uint32_t>(free_.size()); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Anisotropy — src/engine/render/texture_manager.h:93
+  src/engine/render/texture_manager.h:93: int Anisotropy() const { return anisotropy_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+AllocationCount — src/engine/render/vk_context.h:108
+  src/engine/render/vk_context.h:108: uint64_t AllocationCount() const { return alloc_calls_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ModName — src/engine/script/mod_lua.h:47
+  src/engine/script/mod_lua.h:47: const std::string& ModName(size_t mod) const { return mods_[mod].name; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+CameraDistance — src/engine/ui/uilb.h:32
+  src/engine/ui/uilb.h:32: float CameraDistance() const { return camera_distance_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ForEachKey — src/engine/vfx/vfx_system.h:193
+  src/engine/vfx/vfx_system.h:194: void ForEachKey(F&& f) const {
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Utterances — src/engine/voice/voice_recognizer.h:79
+  src/engine/voice/voice_recognizer.h:79: uint32_t Utterances() const { return utterances_.load(); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+RuntimeName — src/engine/xr/xr_host.h:78
+  src/engine/xr/xr_host.h:78: const std::string& RuntimeName() const { return runtime_name_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DisplayTime — src/engine/xr/xr_host.h:100
+  src/engine/xr/xr_host.h:100: int64_t DisplayTime() const { return display_time_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DisplayPeriod — src/engine/xr/xr_host.h:101
+  src/engine/xr/xr_host.h:101: double DisplayPeriod() const { return display_period_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FramesSubmitted — src/engine/xr/xr_host.h:118
+  src/engine/xr/xr_host.h:119: uint64_t FramesSubmitted() const { return frames_submitted_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ToLocal — src/engine/xr/xr_view.h:99
+  src/engine/xr/xr_view.h:99: glm::quat ToLocal(const glm::quat& world) const { return glm::normalize(glm::inverse(Rotation()) * world); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ShowBody — src/game/game.h:152
+  src/game/game.h:152: bool ShowBody() const { return show_body_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Traps — src/game/game.h:221
+  src/game/game.h:221: TrapSystem& Traps() { return traps_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+LastInput — src/game/game.h:228
+  src/game/game.h:228: const InputState& LastInput() const { return last_input_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FrameDelta — src/game/game.h:241
+  src/game/game.h:241: float FrameDelta() const { return frame_delta_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+OriginalFrames — src/game/game.h:246
+  src/game/game.h:246: float OriginalFrames() const { return frame_delta_ * kOriginalFrameRate; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+BrowseLocksOn — src/game/game.h:321
+  src/game/game.h:321: bool BrowseLocksOn() const { return config_.release_locks; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+GamePlusSetting — src/game/game.h:363
+  src/game/game.h:363: bool GamePlusSetting() const { return game_plus_setting_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+RequestObjectsReset — src/game/game_controller.h:25
+  src/game/game_controller.h:25: void RequestObjectsReset() { restart_objects_pending_ = true; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DialoguePosition — src/game/game_objects.h:193
+  src/game/game_objects.h:193: const glm::vec3& DialoguePosition() const { return dialogue_position_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DialogueForward — src/game/game_objects.h:194
+  src/game/game_objects.h:194: const glm::vec3& DialogueForward() const { return dialogue_forward_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+IsRegistered — src/game/message_system.h:33
+  src/game/message_system.h:33: bool IsRegistered(uint32_t stage_id, const fox2::Entity* entity) const { return registered_.contains({stage_id, entity}); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+PeepholeEye — src/game/nazo.h:59
+  src/game/nazo.h:59: bool PeepholeEye(glm::vec3& out) const {
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+VoiceRecognitionActive — src/game/nazo.h:70
+  src/game/nazo.h:70: bool VoiceRecognitionActive() const { return voice_active_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+TrueEndSteps — src/game/nazo.h:73
+  src/game/nazo.h:73: int TrueEndSteps() const { return true_end_steps_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+TrueEndTimer — src/game/nazo.h:74
+  src/game/nazo.h:74: float TrueEndTimer() const { return true_end_timer_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+DrawPose — src/game/player.h:97
+  src/game/player.h:97: bool DrawPose() const { return draw_pose_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FoxYaw — src/game/player.h:118
+  src/game/player.h:118: float FoxYaw() const { return CameraFoxYaw(); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+PressedButtons — src/game/player.h:132
+  src/game/player.h:132: uint32_t PressedButtons() const { return pressed_ & ~locks.Mask('A'); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Posted — src/game/sound_captions.h:47
+  src/game/sound_captions.h:47: uint64_t Posted() const { return posted_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+IsLoaded — src/game/stage_manager.h:133
+  src/game/stage_manager.h:133: bool IsLoaded(const std::string& label) const { return stages_.contains(label); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ShowCaptionKey — src/game/ui/game_ui.h:91
+  src/game/ui/game_ui.h:91: void ShowCaptionKey(uint32_t key, float offset_seconds) { subtitles_.PlayKey(key, offset_seconds); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+CurrentState — src/game/ui/options_menu.h:77
+  src/game/ui/options_menu.h:78: State CurrentState() const { return state_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Instances — src/game/vfx_scene.h:46
+  src/game/vfx_scene.h:46: size_t Instances() const { return system_.InstanceCount(); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Particles — src/game/vfx_scene.h:48
+  src/game/vfx_scene.h:48: size_t Particles() const { return system_.ParticleCount(); }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FrameWaited — src/game/vr_play.h:65
+  src/game/vr_play.h:65: bool FrameWaited() const { return waited_; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+EyeRenderSize — src/game/vr_play.h:86
+  src/game/vr_play.h:86: VkExtent2D EyeRenderSize() const { return {render_size_.x, render_size_.y}; }
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+BoneName — src/engine/anim/gani.cpp:32
+  src/engine/anim/gani.cpp:33: std::string GaniMotion::BoneName(uint32_t hash) const {
+  src/engine/anim/gani.h:55: std::string BoneName(uint32_t hash) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+HasDialogueEvent — src/engine/audio/sound_engine.cpp:528
+  src/engine/audio/sound_engine.cpp:529: bool SoundEngine::HasDialogueEvent(uint32_t id) const {
+  src/engine/audio/sound_engine.h:102: bool HasDialogueEvent(uint32_t id) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FindBank — src/engine/audio/sound_package.cpp:242
+  src/engine/audio/sound_package.cpp:243: const Bank* SoundBankSet::FindBank(std::string_view name) const {
+  src/engine/audio/sound_package.h:55: const Bank* FindBank(std::string_view name) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+PostDialogueEvent — src/engine/audio/sound_system.cpp:114
+  src/engine/audio/sound_system.cpp:115: PlayingId SoundSystem::PostDialogueEvent(std::string_view dialogue_event, std::span<const std::string_view> arguments, GameObjectId object) {
+  src/engine/audio/sound_system.h:62: PlayingId PostDialogueEvent(std::string_view dialogue_event, std::span<const std::string_view> arguments, GameObjectId object = 0);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+FindByMarker — src/engine/audio/subtitles.cpp:207
+  src/engine/audio/subtitles.cpp:208: const SubtitleEntry* SubtitleTable::FindByMarker(std::string_view label) const {
+  src/engine/audio/subtitles.h:45: const SubtitleEntry* FindByMarker(std::string_view label) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+MaxDistance — src/engine/audio/wwise_bank.cpp:1012
+  src/engine/audio/wwise_bank.cpp:1013: float AttenuationObject::MaxDistance() const {
+  src/engine/audio/wwise_bank.h:565: float MaxDistance() const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+MediaBytes — src/engine/audio/wwise_bank.cpp:1147
+  src/engine/audio/wwise_bank.cpp:1148: std::span<const uint8_t> Bank::MediaBytes(const MediaEntry& entry) const {
+  src/engine/audio/wwise_bank.h:673: std::span<const uint8_t> MediaBytes(const MediaEntry& entry) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+Luid — src/engine/render/d3d12/present/d3d12_device.cpp:199
+  src/engine/render/d3d12/present/d3d12_device.cpp:200: void Device::Luid(uint8_t (&out)[8]) const {
+  src/engine/render/d3d12/present/d3d12_device.h:56: void Luid(uint8_t (&out)[8]) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+UpdateMaterial — src/engine/render/texture_manager.cpp:777
+  src/engine/render/texture_manager.cpp:778: void TextureManager::UpdateMaterial(uint32_t index, const MaterialGpu& material) {
+  src/engine/render/texture_manager.h:88: void UpdateMaterial(uint32_t index, const MaterialGpu& material);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+HasTableFunction — src/engine/script/lua_vm.cpp:89
+  src/engine/script/lua_vm.cpp:90: bool LuaVm::HasTableFunction(std::string_view table, std::string_view function) {
+  src/engine/script/lua_vm.h:30: bool HasTableFunction(std::string_view table, std::string_view function);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+SetModuleString — src/engine/script/lua_vm.cpp:142
+  src/engine/script/lua_vm.cpp:143: void LuaVm::SetModuleString(const char* module, const char* name, const char* value) {
+  src/engine/script/lua_vm.h:34: void SetModuleString(const char* module, const char* name, const char* value);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ClearCache — src/engine/vfx/vfx_system.cpp:233
+  src/engine/vfx/vfx_system.cpp:234: void System::ClearCache() {
+  src/engine/vfx/vfx_system.h:171: void ClearCache();
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+SetParameter — src/engine/vfx/vfx_system.cpp:309
+  src/engine/vfx/vfx_system.cpp:310: void System::SetParameter(const InstanceKey& key, uint32_t name, const glm::vec4& value) {
+  src/engine/vfx/vfx_system.h:186: void SetParameter(const InstanceKey& key, uint32_t name, const glm::vec4& value);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+ResetOcho — src/game/floor_level.cpp:149
+  src/game/floor_level.cpp:150: void FloorLevel::ResetOcho() {
+  src/game/floor_level.h:35: void ResetOcho();
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+SetIndex — src/game/floor_level.cpp:258
+  src/game/floor_level.cpp:259: void FloorLevel::SetIndex(int index) {
+  src/game/floor_level.h:41: void SetIndex(int index);
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+PlayerHeightAboveStageRoot — src/game/game.cpp:1398
+  src/game/game.cpp:1399: float Game::PlayerHeightAboveStageRoot() const {
+  src/game/game.h:277: float PlayerHeightAboveStageRoot() const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+BoneWorld — src/game/gimmick_animation.cpp:467
+  src/game/gimmick_animation.cpp:468: bool GimmickAnimation::BoneWorld(GimmickType type, std::string_view bone, glm::vec3& out) const {
+  src/game/gimmick_animation.h:56: bool BoneWorld(GimmickType type, std::string_view bone, glm::vec3& out) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+UsesPads — src/game/input_script.cpp:1004
+  src/game/input_script.cpp:1005: bool InputScript::UsesPads() const {
+  src/game/input_script.h:29: bool UsesPads() const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+LookDirection — src/game/player.cpp:227
+  src/game/player.cpp:228: glm::vec3 Player::LookDirection() const {
+  src/game/player.h:115: glm::vec3 LookDirection() const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+CollectLights — src/game/stage_manager.cpp:738
+  src/game/stage_manager.cpp:739: void StageManager::CollectLights(std::vector<std::pair<const Stage*, const LightPlacement*>>& out) const {
+  src/game/stage_manager.h:150: void CollectLights(std::vector<std::pair<const Stage*, const LightPlacement*>>& out) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+QuitAt — src/game/ui/pc_settings_page.cpp:533
+  src/game/ui/pc_settings_page.cpp:534: bool PcSettingsPage::QuitAt(glm::vec2 units) const {
+  src/game/ui/pc_settings_page.h:53: bool QuitAt(glm::vec2 units) const;
+  Kept: public interface or callback contract; no closed-world external-use proof.
+  Test references: none found for this spelling.
+
+ADDITIONAL KEPT CASES
+PcSettingsPage::QuitAt: public method, declaration and definition only. Hidden named quit_text UI node retained because node/asset consumers may use string lookup.
+NativeBridgeDevice: public Windows backend interface; declaration and definition only. Windows runtime unavailable for validation.
+Windows-only helpers (SetDone, EnvOr, HttpGetText, ShaFromSums, AssetUrl, ReadD3D12Marker, D3D12CrashReason, FolderWriteProblem, PortableFileList): source references behind _WIN32 reach them; macOS warnings do not prove them dead.
+vk::Context::hdr_off_logged_: referenced in vk_context.cpp:887/889 under platform conditions; retain despite a macOS unused-private-field warning.
+PT_GAMEPLUS, PT_OPENXR, PT_METALFX, PT_UPSCALERS, PT_BC_DECODE_TESTS and D3D12 options are configurable or platform-gated. Disabled in one configuration is not globally unreachable.
+kReleaseLocks, Android hdr_available, non-Windows background and renderer generate are platform/build alternatives. Retain their shared branches.
+Lua tables, luaL_Reg, ModLua callbacks, Lua entity methods, native loader symbols and XR runtime exports: registration/string lookup are entry-point edges.
+Tools, examples, installers, shaders and platform launchers: independent CLI/build/runtime roots. All src headers had at least one literal repository reference; source globs cover cpp files. No entire source file/directory had sufficient closed-world unreachability evidence.
+All shader files had another literal repository reference; keep platform and enhanced variants and include libraries.
+Tests are roots even when not CMake targets. Example: tests/blur_motion_test.cpp is compiled by tools/motion_blur_check.py.
+image_decode.cpp only defines STB_IMAGE_IMPLEMENTATION and includes stb_image.h; it contributes generated decoder functions and is not empty dead code.
+No removable #if 0 blocks, unconditional false if/while blocks, or contiguous commented-out statement blocks were found by the lexical scans. Explanatory comments, format documentation and code inside test strings stay.
+
+COVERAGE LIMITS
+Lexical scans nominate candidates; symbol linkage, access, build configuration and test checks decide removals. This is not a formal whole-program proof for all C++/Lua/native/plugin combinations.
+Third-party implementations and original game data are excluded from deletion.
+Cross-platform runtimes, controller hardware, downstream API consumers and externally supplied Lua/assets are not fully observable on this Mac.
+
+RAW LOCAL ARTIFACTS
+build/dead-code-audit/clang-scan.json — compiler diagnostics for 217 translation units, all syntax checks exit 0.
+build/dead-code-audit/first-party-warnings.txt — filtered first-party findings, including platform false positives.
+build/dead-code-audit/{baseline-corrected,batch-1,batch-2}/results.json — complete commands, exit codes and durations.
+build/dead-code-audit/{baseline-corrected,batch-1,batch-2}/*.log — full build and test output.
+build/dead-code-audit/{batch-1,batch-2}-comparison.json — exact baseline comparison results.
+build/dead-code-audit/{batch-1,batch-2}-backup.json — exact pre-batch source bytes for restoration.
+build/dead-code-audit/validate.py and compare.py — local validation runner and baseline comparison script.
+Raw build artifacts are intentionally ignored by Git; this evidence summary stays in docs/dead-code-audit.txt.

@@ -413,13 +413,7 @@ const LegUnits& FindLegUnits() {
     return units;
 }
 
-glm::quat TrackQuat(const glm::vec4& v) {
-    return glm::quat(v.w, v.x, v.y, v.z);
-}
 
-glm::vec4 QuatTrack(const glm::quat& q) {
-    return glm::vec4(q.x, q.y, q.z, q.w);
-}
 }
 
 bool PlayerBody::ApplyFootPlant(const FootPlant& plant, const anim::RigOutput& evaluated, anim::RigPose& pose) const {
@@ -447,14 +441,14 @@ bool PlayerBody::ApplyFootPlant(const FootPlant& plant, const anim::RigOutput& e
             glm::vec4& target = pose.tracks[static_cast<size_t>(leg.tracks[0])];
             target = glm::vec4(plant.target[side] - pp, 0.0f);
             glm::vec4& swivel = pose.tracks[static_cast<size_t>(leg.tracks[1])];
-            swivel = QuatTrack(glm::normalize(glm::conjugate(pr) * turn * pr * TrackQuat(swivel)));
+            swivel = anim::FromQuat(glm::normalize(glm::conjugate(pr) * turn * pr * anim::ToQuat(swivel)));
             changed = true;
         }
         if (units.foot[side] >= 0) {
             const anim::RigUnit& foot = g_rig.Units()[static_cast<size_t>(units.foot[side])];
             if (foot.Is(anim::RigUnitType::Rotation) && !foot.tracks.empty() && static_cast<size_t>(foot.tracks[0]) < pose.tracks.size()) {
                 glm::vec4& q = pose.tracks[static_cast<size_t>(foot.tracks[0])];
-                q = QuatTrack(glm::normalize(turn * TrackQuat(q)));
+                q = anim::FromQuat(glm::normalize(turn * anim::ToQuat(q)));
             }
         }
     }

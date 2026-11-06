@@ -8,9 +8,7 @@
 #include "engine/render/scene_renderer.h"
 
 namespace pt {
-namespace {
-
-glm::vec4 BloomPolynomial(float extraction) {
+glm::vec4 SceneRenderer::BloomPolynomial(float extraction) {
     glm::vec4 p(0.0f);
     const float e = std::clamp(extraction, 1.0f, 3.99999f);
     const int i = static_cast<int>(std::floor(e));
@@ -18,8 +16,6 @@ glm::vec4 BloomPolynomial(float extraction) {
     p[i - 1] = 1.0f - f;
     p[i] = f;
     return p;
-}
-
 }
 
 void SceneRenderer::CopyToHistory(gpu::CommandList& cmd, const RenderTarget& source) {

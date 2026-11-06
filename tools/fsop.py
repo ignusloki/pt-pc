@@ -8,6 +8,12 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:
+    from .binary_strings import latin1_cstring as cstring
+except ImportError:
+    from binary_strings import latin1_cstring as cstring
+
+
 import gcn
 import gcnexpr
 
@@ -65,11 +71,6 @@ PS_INPUT_VGPRS = (("persp_sample", ("i", "j")), ("persp_center", ("i", "j")), ("
 
 def xor(data):
     return bytes(b ^ XOR_KEY for b in data)
-
-
-def cstring(data, offset):
-    end = data.index(b"\0", offset)
-    return data[offset:end].decode("latin-1")
 
 
 @dataclass

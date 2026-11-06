@@ -41,6 +41,13 @@ struct Biquad {
     void Reset() { z1 = z2 = 0.0f; }
 };
 
+inline void WriteDelaySample(std::vector<float>& buffer, size_t& pos, float value) {
+    buffer[pos] = value;
+    if (++pos == buffer.size()) {
+        pos = 0;
+    }
+}
+
 class DelayLine {
 public:
     void Resize(size_t length);
@@ -52,12 +59,7 @@ public:
         }
         return buffer_[index];
     }
-    void Write(float value) {
-        buffer_[pos_] = value;
-        if (++pos_ == buffer_.size()) {
-            pos_ = 0;
-        }
-    }
+    void Write(float value) { WriteDelaySample(buffer_, pos_, value); }
     void Clear();
 
 private:

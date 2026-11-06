@@ -1,3 +1,4 @@
+#include "check.h"
 #include "engine/render/model_cache.h"
 #include "game/game.h"
 #include "game/ui/options_menu.h"
@@ -10,10 +11,6 @@ namespace {
 using namespace pt::game;
 int failed = 0;
 
-void Check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    failed += !ok;
-}
 
 PcSettingRow Row(int id, const char* label, bool action = false) {
     PcSettingRow row;
@@ -64,16 +61,16 @@ int main() {
         Source source;
         PcSettingsPage page;
         page.Open(&source);
-        Check(page.Focus("focused"), "focus existing setting");
+        pt::test::Check(failed, page.Focus("focused"), "focus existing setting");
         source.Insert();
         Tick(page);
-        Check(Is(page, 20), "async insertion before focused row preserves its ID");
+        pt::test::Check(failed, Is(page, 20), "async insertion before focused row preserves its ID");
         source.rows.erase(source.rows.begin());
         Tick(page);
-        Check(Is(page, 20), "removal before focused row preserves its ID");
+        pt::test::Check(failed, Is(page, 20), "removal before focused row preserves its ID");
         source.rows = {Row(20, "renamed", true), Row(10, "first")};
         Tick(page);
-        Check(Is(page, 20), "reordered and relabelled setting preserves its ID");
+        pt::test::Check(failed, Is(page, 20), "reordered and relabelled setting preserves its ID");
     }
     {
         Source source;
@@ -83,10 +80,10 @@ int main() {
         MenuInput up;
         up.held_dirs = pt::kRawUp;
         page.Update(game, up, 1.0f / 30.0f);
-        Check(page.StripFocused(), "up from first row focuses tab strip");
+        pt::test::Check(failed, page.StripFocused(), "up from first row focuses tab strip");
         source.Insert();
         Tick(page);
-        Check(page.StripFocused(), "async insertion preserves tab strip focus");
+        pt::test::Check(failed, page.StripFocused(), "async insertion preserves tab strip focus");
     }
     {
         Source source;
@@ -96,10 +93,10 @@ int main() {
         MenuInput down;
         down.held_dirs = pt::kRawDown;
         page.Update(game, down, 1.0f / 30.0f);
-        Check(page.Cursor() == page.RowCount(), "down from last row focuses Back");
+        pt::test::Check(failed, page.Cursor() == page.RowCount(), "down from last row focuses Back");
         source.Insert();
         Tick(page);
-        Check(!page.CurrentRow() && page.Cursor() == page.RowCount(), "async insertion preserves Back focus");
+        pt::test::Check(failed, !page.CurrentRow() && page.Cursor() == page.RowCount(), "async insertion preserves Back focus");
     }
     {
         Source source;
@@ -109,24 +106,24 @@ int main() {
         MenuInput accept;
         accept.accept = true;
         page.Update(game, accept, 1.0f / 30.0f);
-        Check(page.Confirming(), "action opens confirmation");
+        pt::test::Check(failed, page.Confirming(), "action opens confirmation");
         source.Insert();
         Tick(page);
-        Check(page.Confirming() && Is(page, 20) && page.DialogFocus() == 0, "refresh keeps confirmation attached to same action");
+        pt::test::Check(failed, page.Confirming() && Is(page, 20) && page.DialogFocus() == 0, "refresh keeps confirmation attached to same action");
         source.rows = {Row(1, "updater", true), Row(10, "first"), Row(30, "replacement", true)};
         Tick(page);
-        Check(!page.Confirming(), "removing confirmed action cancels rather than retargets dialog");
-        Check(source.activated == -1, "refresh never activates an action");
+        pt::test::Check(failed, !page.Confirming(), "removing confirmed action cancels rather than retargets dialog");
+        pt::test::Check(failed, source.activated == -1, "refresh never activates an action");
     }
     {
         Source source;
         PcSettingsPage page;
         page.Open(&source);
         page.Focus("focused");
-        Check(page.ShowRowPage("new_first") && Is(page, 99), "page change starts on its first row despite shared IDs");
+        pt::test::Check(failed, page.ShowRowPage("new_first") && Is(page, 99), "page change starts on its first row despite shared IDs");
         page.Focus("focused");
         page.Open(&source);
-        Check(Is(page, 99), "reopening starts on first row despite previous focus");
+        pt::test::Check(failed, Is(page, 99), "reopening starts on first row despite previous focus");
     }
     {
         Source source;
@@ -139,21 +136,21 @@ int main() {
         page.Update(game, up, 1.0f / 30.0f);
         page.Update(game, {}, 1.0f / 30.0f);
         page.Update(game, up, 1.0f / 30.0f);
-        Check(!page.CurrentRow() && page.Cursor() == page.RowCount(), "wrap from strip reaches Back; the Update button is not a row");
+        pt::test::Check(failed, !page.CurrentRow() && page.Cursor() == page.RowCount(), "wrap from strip reaches Back; the Update button is not a row");
         page.Update(game, {}, 1.0f / 30.0f);
         page.Update(game, up, 1.0f / 30.0f);
-        Check(Is(page, 20), "Up from Back reaches the last row, not the Update button");
+        pt::test::Check(failed, Is(page, 20), "Up from Back reaches the last row, not the Update button");
         MenuInput update;
         update.update = true;
         page.Update(game, update, 1.0f / 30.0f);
-        Check(page.Confirming() && Is(page, 80), "U or Triangle opens the Update confirmation from any row");
+        pt::test::Check(failed, page.Confirming() && Is(page, 80), "U or Triangle opens the Update confirmation from any row");
         source.Insert();
         Tick(page);
-        Check(page.Confirming() && Is(page, 80), "Update confirmation survives a refresh that inserts a row");
+        pt::test::Check(failed, page.Confirming() && Is(page, 80), "Update confirmation survives a refresh that inserts a row");
         source.footer.reset();
         Tick(page);
-        Check(!page.Confirming() && !page.FindRow("update"), "withdrawn update cancels its confirmation");
-        Check(source.activated == -1, "withdrawn footer never activates another action");
+        pt::test::Check(failed, !page.Confirming() && !page.FindRow("update"), "withdrawn update cancels its confirmation");
+        pt::test::Check(failed, source.activated == -1, "withdrawn footer never activates another action");
     }
     std::printf("%d failures\n", failed);
     return failed ? 1 : 0;

@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/ui/uigb.h"
 
 #include <cstring>
@@ -10,13 +11,6 @@ namespace pt::ui {
 namespace {
 
 constexpr uint32_t kNone = 0xFFFFFFFFu;
-
-template <typename T>
-T Read(std::span<const uint8_t> d, size_t at) {
-    T v;
-    std::memcpy(&v, d.data() + at, sizeof(T));
-    return v;
-}
 
 struct Record {
     size_t at = 0;
@@ -45,24 +39,24 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
     if (d.size() < 0x30 || std::memcmp(d.data(), "UIGB", 4) != 0) {
         return fail("not a UIGB file");
     }
-    const uint16_t node_count = Read<uint16_t>(d, 0x08);
-    const uint16_t name_count = Read<uint16_t>(d, 0x10);
-    const uint16_t string_count = Read<uint16_t>(d, 0x12);
-    const uint32_t nodes = Read<uint32_t>(d, 0x14);
-    const uint32_t data_size = Read<uint32_t>(d, 0x24);
-    const uint32_t strings = Read<uint32_t>(d, 0x28);
-    const uint32_t base = Read<uint32_t>(d, 0x2C);
+    const uint16_t node_count = ReadBinaryUnchecked<uint16_t>(d, 0x08);
+    const uint16_t name_count = ReadBinaryUnchecked<uint16_t>(d, 0x10);
+    const uint16_t string_count = ReadBinaryUnchecked<uint16_t>(d, 0x12);
+    const uint32_t nodes = ReadBinaryUnchecked<uint32_t>(d, 0x14);
+    const uint32_t data_size = ReadBinaryUnchecked<uint32_t>(d, 0x24);
+    const uint32_t strings = ReadBinaryUnchecked<uint32_t>(d, 0x28);
+    const uint32_t base = ReadBinaryUnchecked<uint32_t>(d, 0x2C);
     auto in_range = [&](size_t at, size_t bytes) { return at + bytes <= d.size(); };
     if (!in_range(static_cast<size_t>(base) + data_size, name_count * 8ull) || !in_range(strings, string_count * 8ull)) {
         return fail("UIGB tables out of range");
     }
     std::vector<uint64_t> names;
     for (uint16_t i = 0; i < name_count; ++i) {
-        names.push_back(Read<uint64_t>(d, base + data_size + i * 8ull) & kStrCode64Mask);
+        names.push_back(ReadBinaryUnchecked<uint64_t>(d, base + data_size + i * 8ull) & kStrCode64Mask);
     }
     for (uint16_t i = 0; i < string_count; ++i) {
-        const uint32_t length = Read<uint32_t>(d, strings + i * 8ull);
-        const uint32_t offset = Read<uint32_t>(d, strings + i * 8ull + 4);
+        const uint32_t length = ReadBinaryUnchecked<uint32_t>(d, strings + i * 8ull);
+        const uint32_t offset = ReadBinaryUnchecked<uint32_t>(d, strings + i * 8ull + 4);
         if (!in_range(static_cast<size_t>(base) + offset, length)) {
             return fail("UIGB string out of range");
         }
@@ -82,24 +76,24 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
         }
         Record r;
         r.at = at;
-        r.type = name_at(Read<uint16_t>(d, at));
-        r.name = Read<uint16_t>(d, at + 2);
+        r.type = name_at(ReadBinaryUnchecked<uint16_t>(d, at));
+        r.name = ReadBinaryUnchecked<uint16_t>(d, at + 2);
         r.size = d[at + 4];
         r.input_count = d[at + 7];
         if (r.size < 8 || !in_range(at, r.size)) {
             return fail("UIGB node out of range");
         }
         if (r.size >= 0x0C) {
-            r.inputs = Read<uint32_t>(d, at + 0x08);
+            r.inputs = ReadBinaryUnchecked<uint32_t>(d, at + 0x08);
         }
         if (r.size >= 0x10) {
             r.param_size = d[at + 0x0D];
         }
         if (r.size >= 0x14) {
-            r.properties = Read<uint32_t>(d, at + 0x10);
+            r.properties = ReadBinaryUnchecked<uint32_t>(d, at + 0x10);
         }
         if (r.size >= 0x18) {
-            r.params = Read<uint32_t>(d, at + 0x14);
+            r.params = ReadBinaryUnchecked<uint32_t>(d, at + 0x14);
         }
         by_name[r.name] = records.size();
         records.push_back(r);
@@ -112,7 +106,7 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
             continue;
         }
         for (uint8_t k = 0; k < r.input_count; ++k) {
-            auto it = by_name.find(Read<uint16_t>(d, r.inputs + k * 8ull));
+            auto it = by_name.find(ReadBinaryUnchecked<uint16_t>(d, r.inputs + k * 8ull));
             if (it != by_name.end()) {
                 consumers[it->second].push_back(i);
             }
@@ -125,7 +119,7 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
         return static_cast<size_t>(base) + r.params + offset;
     };
     auto property_name = [&](const Record& r) -> uint64_t {
-        return r.properties != kNone && in_range(r.properties, 8) ? name_at(Read<uint16_t>(d, r.properties)) : 0;
+        return r.properties != kNone && in_range(r.properties, 8) ? name_at(ReadBinaryUnchecked<uint16_t>(d, r.properties)) : 0;
     };
     auto action_of = [&](const Record& r) -> std::optional<UigbAction> {
         UigbAction action;
@@ -133,16 +127,16 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
             action.kind = UigbActionKind::PlayAnimation;
             action.animation = property_name(r);
             if (r.properties != kNone && in_range(r.properties, 8)) {
-                const uint32_t model = Read<uint32_t>(d, r.properties + 4);
+                const uint32_t model = ReadBinaryUnchecked<uint32_t>(d, r.properties + 4);
                 if (model + 2ull <= data_size) {
-                    action.model = name_at(Read<uint16_t>(d, base + model));
+                    action.model = name_at(ReadBinaryUnchecked<uint16_t>(d, base + model));
                 }
             }
             if (auto speed = param_at(r, 0x0C, 4)) {
-                action.speed = Read<float>(d, *speed);
+                action.speed = ReadBinaryUnchecked<float>(d, *speed);
             }
             if (auto loop = param_at(r, 0x14, 4)) {
-                action.loop = Read<uint32_t>(d, *loop) != 0;
+                action.loop = ReadBinaryUnchecked<uint32_t>(d, *loop) != 0;
             }
             return action.animation ? std::optional<UigbAction>(action) : std::nullopt;
         }
@@ -154,8 +148,8 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
             if (!target || !value) {
                 return std::nullopt;
             }
-            action.target = Read<uint64_t>(d, *target) & kStrCode64Mask;
-            action.visible = Read<uint32_t>(d, *value) != 0;
+            action.target = ReadBinaryUnchecked<uint64_t>(d, *target) & kStrCode64Mask;
+            action.visible = ReadBinaryUnchecked<uint32_t>(d, *value) != 0;
             return action;
         }
         return std::nullopt;
@@ -174,7 +168,7 @@ bool UigbGraph::Parse(std::span<const uint8_t> d, std::string* error) {
         if (r.type == kNodeStart) {
             start_.insert(start_.end(), actions.begin(), actions.end());
         } else if (auto hash = param_at(r, 0, 8)) {
-            events_.push_back({Read<uint64_t>(d, *hash) & kStrCode64Mask, std::move(actions)});
+            events_.push_back({ReadBinaryUnchecked<uint64_t>(d, *hash) & kStrCode64Mask, std::move(actions)});
         }
     }
     return true;

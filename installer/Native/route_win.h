@@ -87,10 +87,7 @@ inline int RunInstaller(const Args& a, const fs::path& tool, bool remove, const 
     return run.started && !run.timed_out ? run.exit_code : -1;
 }
 
-inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) {
-    const auto it = v.members.find(name);
-    return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
-}
+inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) { return pt::metadata_json::StringMember(v, name); }
 
 inline std::string InstallOwnReShade(const Args& a, std::string& detail) {
     const std::wstring dir(nr_unlock::kOwnReShadeDir.begin(), nr_unlock::kOwnReShadeDir.end());

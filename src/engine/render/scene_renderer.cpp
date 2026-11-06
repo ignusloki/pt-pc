@@ -38,45 +38,10 @@ constexpr gpu::Format kHdrFormat = SceneRenderer::kHdrTargetFormat;
 constexpr gpu::Format kAoFormat = gpu::Format::R8Unorm;
 constexpr gpu::Format kRefMapFormat = gpu::Format::R16G16B16A16Sfloat;
 constexpr gpu::Format kPostFormat = SceneRenderer::kPostTargetFormat;
-constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 
 const char* const kDebugViewNames =
     "lit\0normals\0uv0\0vertex color\0albedo\0roughness\0specular\0material index\0depth\0translucency\0light diffuse\0light specular\0ambient "
     "(probes)\0reflection amount\0occlusion\0unlit albedo\0mirror capture\0";
-
-glm::mat4 ReverseZPerspective(float fov_y, float aspect, float near_plane) {
-    const float f = 1.0f / std::tan(fov_y * 0.5f);
-    glm::mat4 p(0.0f);
-    p[0][0] = f / aspect;
-    p[1][1] = -f;
-    p[2][3] = -1.0f;
-    p[3][2] = near_plane;
-    return p;
-}
-
-glm::mat4 FoxView(const glm::mat4& gl_view) {
-    return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f)) * gl_view;
-}
-
-void ExtractPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
-    const glm::mat4 m = glm::transpose(vp);
-    planes[0] = m[3] + m[0];
-    planes[1] = m[3] - m[0];
-    planes[2] = m[3] + m[1];
-    planes[3] = m[3] - m[1];
-    planes[4] = m[2];
-    planes[5] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    for (int i = 0; i < 5; ++i) {
-        const float len = glm::length(glm::vec3(planes[i]));
-        if (len > 0.0f) {
-            planes[i] /= len;
-        }
-    }
-}
-
-glm::vec3 AnyPerpendicular(const glm::vec3& d) {
-    return std::abs(d.y) < 0.95f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
-}
 
 uint8_t ToByte(float v) {
     return static_cast<uint8_t>(std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));

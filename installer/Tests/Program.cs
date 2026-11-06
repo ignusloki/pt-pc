@@ -5,7 +5,29 @@ using LibOrbisPkg.GP4;
 using System.IO.MemoryMappedFiles;
 using System.Security.Cryptography;
 using System.Text;
+using System.Diagnostics;
 using PT.PkgExtract;
+// Exercise the published process as well as the untrimmed project reference.
+string? helper=null;
+if(args.Length>=2 && args[0]=="--extractor") { helper=Path.GetFullPath(args[1]);args=args.Skip(2).ToArray(); }
+if(args.Length is <1 or >2)throw new ArgumentException("Usage: Tests [--extractor <published helper>] <new test directory> [<dump folder>]");
+List<string> Run(string package,string output,Action<string> report) {
+    if(helper==null)return Extraction.Run(package,output,report);
+    var start=new ProcessStartInfo(helper){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
+    start.ArgumentList.Add(package);start.ArgumentList.Add(output);
+    using var process=Process.Start(start)??throw new Exception("Could not start published extractor");
+    var stdout=process.StandardOutput.ReadToEndAsync();var stderr=process.StandardError.ReadToEndAsync();
+    if(!process.WaitForExit(120000)){process.Kill(entireProcessTree:true);process.WaitForExit();throw new TimeoutException("Published extractor timed out");}
+    string text=stdout.GetAwaiter().GetResult(),error=stderr.GetAwaiter().GetResult().Trim();
+    if(process.ExitCode==1 && error.Length>0)throw new IOException(error);
+    if(process.ExitCode!=0 || error.Length>0)throw new Exception($"Published extractor failed ({process.ExitCode}): {error}");
+    var warnings=new List<string>();
+    foreach(string line in text.Split('\n',StringSplitOptions.RemoveEmptyEntries)) {
+        string message=line.TrimEnd('\r');report(message);
+        if(message.StartsWith("warning: ",StringComparison.Ordinal))warnings.Add(message[9..]);
+    }
+    return warnings;
+}
 string root=Path.GetFullPath(args[0]);
 if(Directory.Exists(root))throw new IOException("Use a new test directory.");Directory.CreateDirectory(root);
 string? dump=args.Length>1?args[1]:null;
@@ -30,28 +52,34 @@ string Build(string file,string contentId,Func<string,string> place,bool pt=true
 }
 string Expected(string name){if(dump!=null){using var o=File.OpenRead(Path.Combine(dump,name));return Convert.ToHexString(SHA256.HashData(o));}return Convert.ToHexString(SHA256.HashData(Synthetic(name)));}
 void Exact(string folder){foreach(string name in Extraction.Required){using var a=File.OpenRead(Path.Combine(folder,name));if(Convert.ToHexString(SHA256.HashData(a))!=Expected(name))throw new Exception("Extraction differs: "+name);}}
-string Refusal(string pkg,string output){try{Extraction.Run(pkg,output,_=>{});}catch(IOException e){return e.Message;}return "";}
+string Refusal(string pkg,string output){try{Run(pkg,output,_=>{});}catch(IOException e){return e.Message;}return "";}
 
 string pkg=Build("fixture.pkg","UP0000-CUSA01127_00-0000000000000000",n=>n);
-string extracted=Path.Combine(root,"extracted");var warnings=Extraction.Run(pkg,extracted,Console.WriteLine);
+string extracted=Path.Combine(root,"extracted");var warnings=Run(pkg,extracted,Console.WriteLine);
 Exact(extracted);if(warnings.Count!=0)throw new Exception("US release warned: "+string.Join("; ",warnings));Console.WriteLine("PASS exact bytes, no warnings (US)");
-if(Refusal(pkg,extracted)=="")throw new Exception("Existing output overwritten");Console.WriteLine("PASS preserves existing directory");
+string originalMetadata=File.ReadAllText(Path.Combine(extracted,"source.txt"));
+if(Refusal(pkg,extracted)!="Extraction directory must be empty.")throw new Exception("Existing output not refused");
+Exact(extracted);if(File.ReadAllText(Path.Combine(extracted,"source.txt"))!=originalMetadata)throw new Exception("Existing metadata overwritten");
+Console.WriteLine("PASS preserves existing directory");
 string invalid=Path.Combine(root,"invalid.pkg");File.WriteAllText(invalid,"not a package");
-if(Refusal(invalid,Path.Combine(root,"bad"))=="")throw new Exception("Invalid PKG accepted");Console.WriteLine("PASS invalid package rejected");
+if(Refusal(invalid,Path.Combine(root,"bad"))!="This is not a PS4 PKG.")throw new Exception("Invalid PKG not refused correctly");
+if(Directory.Exists(Path.Combine(root,"bad")))throw new Exception("Invalid PKG left output");Console.WriteLine("PASS invalid package rejected");
 
 foreach(var (id,region) in new[]{("EP0101-CUSA01114_00-0000000000000000","Europe"),("JP0101-CUSA01098_00-0000000000000000","Japan")}) {
-    string out1=Path.Combine(root,region);var w=Extraction.Run(Build(region+".pkg",id,n=>n),out1,_=>{});Exact(out1);
+    string out1=Path.Combine(root,region);var w=Run(Build(region+".pkg",id,n=>n),out1,_=>{});Exact(out1);
     if(!w.Any(x=>x.Contains(region)) || !File.ReadAllText(Path.Combine(out1,"source.txt")).Contains("region="+region))throw new Exception(region+" not recorded");
     Console.WriteLine($"PASS {region} release installs with a warning");
 }
-string moved=Path.Combine(root,"moved");var mw=Extraction.Run(Build("moved.pkg","UP0000-CUSA01127_00-0000000000000000",n=>"data/v2_"+n),moved,_=>{});
+string moved=Path.Combine(root,"moved");var mw=Run(Build("moved.pkg","UP0000-CUSA01127_00-0000000000000000",n=>"data/v2_"+n),moved,_=>{});
 Exact(moved);if(mw.Count(x=>x.Contains("not at the package root"))!=3)throw new Exception("Renames not reported");Console.WriteLine("PASS renamed archives found by content");
 if(dump==null){
-    var uw=Extraction.Run(Build("unknown.pkg","UP9999-CUSA99999_00-0000000000000000",n=>n),Path.Combine(root,"unknown"),_=>{});
+    string unknown=Path.Combine(root,"unknown");
+    var uw=Run(Build("unknown.pkg","UP9999-CUSA99999_00-0000000000000000",n=>n),unknown,_=>{});Exact(unknown);
     if(!uw.Any(x=>x.Contains("not a known P.T. release")))throw new Exception("Unknown ID not warned");Console.WriteLine("PASS unknown title with P.T. content installs");
-    string asia=Path.Combine(root,"asia");Extraction.Run(Build("asia.pkg","HP0101-CUSA99997_00-0000000000000000",n=>n),asia,_=>{});
+    string asia=Path.Combine(root,"asia");Run(Build("asia.pkg","HP0101-CUSA99997_00-0000000000000000",n=>n),asia,_=>{});Exact(asia);
     if(!File.ReadAllText(Path.Combine(asia,"source.txt")).Contains("region=Asia"))throw new Exception("Asia prefix not recorded");Console.WriteLine("PASS content ID prefix names the region");
     if(Refusal(Build("other.pkg","UP9999-CUSA99998_00-0000000000000000",n=>n,pt:false),Path.Combine(root,"other"))!=Extraction.NotPtMessage)throw new Exception("Other game accepted");
+    if(Directory.Exists(Path.Combine(root,"other")))throw new Exception("Other game left output");
     Console.WriteLine("PASS other game refused as not P.T.");
 }
 using var parsedStream=File.OpenRead(pkg);

@@ -1,3 +1,4 @@
+#include "game/fox_angles.h"
 #include "game/trap_system.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,20 +12,6 @@
 
 namespace pt::game {
 namespace {
-
-constexpr float kPi = 3.14159265f;
-
-float Wrap(float a) {
-    const float t = a + kPi;
-    return t >= 0.0f ? std::fmod(t, 2.0f * kPi) - kPi : kPi - std::fmod(-t, 2.0f * kPi);
-}
-
-float FoxYawOf(const glm::vec3& v) {
-    if (std::abs(v.x) + std::abs(v.z) < 1e-6f) {
-        return 0.0f;
-    }
-    return std::atan2(v.x, v.z);
-}
 
 }
 
@@ -113,7 +100,7 @@ bool TrapSystem::Check(const Context& ctx, const TrapCallback& callback) {
         const float limit = glm::radians(f.GetFloat(e, "degreeLimit", 0, 45.0f));
         bool dir_ok = true;
         if (f.GetBool(e, "isCheckPlayerDir")) {
-            dir_ok = std::abs(Wrap(player.PublishedBodyFoxYaw() - ref_yaw)) <= limit;
+            dir_ok = std::abs(WrapFoxAngle(player.PublishedBodyFoxYaw() - ref_yaw)) <= limit;
         }
         bool button_ok = true;
         if (f.GetBool(e, "isCheckButton", 0, true)) {
@@ -124,7 +111,7 @@ bool TrapSystem::Check(const Context& ctx, const TrapCallback& callback) {
                 if (player.LeftStickLocked() || player.StickMagnitude() <= 0.0f) {
                     button_ok = false;
                 } else {
-                    button_ok = std::abs(Wrap(player.StickHeading() - ref_yaw)) <= limit;
+                    button_ok = std::abs(WrapFoxAngle(player.StickHeading() - ref_yaw)) <= limit;
                 }
             }
         }
@@ -244,7 +231,7 @@ int TrapSystem::ExecDoor(const Context& ctx, const fox2::Entity& e) {
             return 1;
         }
         const bool pushing = !player.LeftStickLocked() && player.StickMagnitude() > 0.2f &&
-                             std::abs(Wrap(player.StickHeading() - trap_yaw)) < glm::radians(45.0f);
+                             std::abs(WrapFoxAngle(player.StickHeading() - trap_yaw)) < glm::radians(45.0f);
         if (!pushing) {
             state.timer = 0.0f;
             return 0;
@@ -263,7 +250,7 @@ int TrapSystem::ExecDoor(const Context& ctx, const fox2::Entity& e) {
             return 1;
         }
         if (ctx.flag == TrapFlag::Inside) {
-            big_zoom = target_visible && std::abs(Wrap(player.CameraFoxYaw() - trap_yaw)) < glm::radians(15.0f);
+            big_zoom = target_visible && std::abs(WrapFoxAngle(player.CameraFoxYaw() - trap_yaw)) < glm::radians(15.0f);
             return 1;
         }
     }

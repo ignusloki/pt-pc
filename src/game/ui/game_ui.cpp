@@ -30,12 +30,6 @@ constexpr const char* kSubtitleModel = "/Assets/sh/ui/ModelAsset/sys_subtitle/Sc
 constexpr uint16_t kSubtitleTextNode = 2;
 constexpr const char* kSubtitleFont = "sbt-sys-M";
 
-std::string Lower(std::string_view text) {
-    std::string out(text);
-    std::transform(out.begin(), out.end(), out.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
-    return out;
-}
-
 ui::TextAlign Align(int value) {
     return value == 0 ? ui::TextAlign::Start : value == 2 ? ui::TextAlign::End : ui::TextAlign::Center;
 }
@@ -500,7 +494,7 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
 
     subtitles_on_ = game.Options().subtitles;
     strong_subtitles_ = fx.subtitles_enabled;
-    std::string hidden = fx.subtitles_visible ? std::string() : Lower(fx.subtitle_message_id);
+    std::string hidden = fx.subtitles_visible ? std::string() : AsciiLowerCopy(fx.subtitle_message_id);
     if (hidden != hidden_subtitle_) {
         LogInfo("ui: subtitle area control {}", hidden.empty() ? std::format("shows {}", hidden_subtitle_) : std::format("hides {}", hidden));
         hidden_subtitle_ = std::move(hidden);
@@ -744,13 +738,6 @@ std::string GameUi::DialogKind(int* focus) const {
     *focus = 0;
     if (!save_dialog_text_.empty()) return "save";
     return menu_.DialogKind(focus);
-}
-
-bool GameUi::PointerUnits(const InputState& input, glm::vec2* units) const {
-    if (!input.pointer_valid || !canvas_ready_ || canvas_.scale <= 0.0f) return false;
-    const glm::vec2 virtual_px = (input.pointer - canvas_.origin) / canvas_.scale;
-    *units = glm::vec2(virtual_px.x - UiCanvas::kWidth * 0.5f, UiCanvas::kHeight * 0.5f - virtual_px.y) / UiCanvas::kUnit;
-    return true;
 }
 
 void GameUi::SwapTracked() {
@@ -1257,10 +1244,6 @@ constexpr float kPhotoSectionGap = 3.5f * kPhotoScale;
 constexpr float kPhotoPanelRight = -14.0f;
 constexpr float kPhotoFade = 8.0f;
 
-glm::vec2 VirtualPx(glm::vec2 units) {
-    return {UiCanvas::kWidth * 0.5f + units.x * UiCanvas::kUnit, UiCanvas::kHeight * 0.5f - units.y * UiCanvas::kUnit};
-}
-
 glm::vec2 OwnScale(const ui::UifNode& node) {
     return node.type == ui::UifNodeType::Root ? glm::vec2(1.0f) : glm::abs(node.scale);
 }
@@ -1332,8 +1315,8 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
         ui::TextStyle text_style = NodeTextStyle(*font, assets_.FontStyleByHash(node->font_name, language), scale);
         const float y0 = node->box_min.y * node->size.y * scale.y;
         const float y1 = node->box_max.y * node->size.y * scale.y;
-        const glm::vec2 a = VirtualPx({x0, y + std::max(y0, y1)});
-        const glm::vec2 b = VirtualPx({x1, y + std::min(y0, y1)});
+        const glm::vec2 a = dialog::UnitsToCanvas({x0, y + std::max(y0, y1)});
+        const glm::vec2 b = dialog::UnitsToCanvas({x1, y + std::min(y0, y1)});
         ui::TextLayout layout = ui::LayoutText(value, text_style, 0.0f);
         const float room = b.x - a.x;
         if (layout.width > room && layout.width > 0.0f) {
@@ -1355,7 +1338,7 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
         const PromptLine line = ExpandPromptHint(value, prompts_);
         text_style.inline_advances = PromptAdvances(assets_, line, prompts_, text_style.font_height);
         text_style.inline_advance = text_style.inline_advances.empty() ? 0.0f : text_style.inline_advances.front();
-        const ui::TextLayout layout = ui::LayoutTextInBox(line.text, text_style, VirtualPx({lo.x, hi.y}), VirtualPx({hi.x, lo.y}), true);
+        const ui::TextLayout layout = ui::LayoutTextInBox(line.text, text_style, dialog::UnitsToCanvas({lo.x, hi.y}), dialog::UnitsToCanvas({hi.x, lo.y}), true);
         DrawText(batch, canvas, *font, layout, color, ui::UiBlend::Alpha);
         DrawPromptPictures(batch, canvas, assets_, *font, layout, line, prompts_, color.a);
     };

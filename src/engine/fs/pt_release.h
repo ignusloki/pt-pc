@@ -1,3 +1,5 @@
+#include "engine/core/binary_read.h"
+#include "engine/core/ascii.h"
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -24,7 +26,7 @@ inline constexpr KnownTitle kKnownTitles[] = {
 };
 
 inline bool IsDigit(char c) { return c >= '0' && c <= '9'; }
-inline char Upper(char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; }
+inline char Upper(char c) { return pt::AsciiUpper(c); }
 inline bool IsAlnum(char c) { return IsDigit(c) || (Upper(c) >= 'A' && Upper(c) <= 'Z'); }
 
 inline bool IsTitleId(std::string_view text) {
@@ -74,17 +76,11 @@ struct Identity {
 };
 
 inline std::string ParamSfoValue(const std::string& data, const char* wanted) {
-    auto u32 = [&](size_t at) -> uint32_t {
-        if (at + 4 > data.size()) return 0;
-        uint32_t v;
-        std::memcpy(&v, data.data() + at, 4);
-        return v;
+    auto u32 = [&](size_t at) {
+        return pt::ReadBinary<uint32_t>(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size()), at);
     };
-    auto u16 = [&](size_t at) -> uint16_t {
-        if (at + 2 > data.size()) return 0;
-        uint16_t v;
-        std::memcpy(&v, data.data() + at, 2);
-        return v;
+    auto u16 = [&](size_t at) {
+        return pt::ReadBinary<uint16_t>(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size()), at);
     };
     if (data.size() < 0x14 || data.compare(0, 4, std::string("\0PSF", 4)) != 0) return {};
     const uint32_t keys = u32(8), values = u32(12), count = u32(16);

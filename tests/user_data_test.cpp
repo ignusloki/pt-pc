@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "engine/platform/user_data.h"
 #include "engine/platform/settings.h"
 #include "game/save_data.h"
@@ -38,11 +39,6 @@ std::string Read(const fs::path& path) {
 
 void Age(const fs::path& path, int hours) {
     fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(hours));
-}
-
-std::string U8(const fs::path& path) {
-    const auto text = path.u8string();
-    return {reinterpret_cast<const char*>(text.data()), text.size()};
 }
 
 size_t CountFiles(const fs::path& dir) {
@@ -146,7 +142,7 @@ int main(int argc, char** argv) {
         check(fs::last_write_time(dest / "PT_Save_Data1") == saveTime, "fresh move: copies keep the original write time");
         check(!fs::exists(m.Legacy()) && report.removed_legacy && report.files_removed == 5, "fresh move: originals and old folders are gone");
         const auto moved = Read(m.PtPort() / "MOVED_TO.txt");
-        check(OnlyMarkerLeft(m.PtPort(), "MOVED_TO.txt") && moved.find(U8(dest)) != std::string::npos &&
+        check(OnlyMarkerLeft(m.PtPort(), "MOVED_TO.txt") && moved.find(pt::os::PathToUtf8(dest)) != std::string::npos &&
                   moved.find("Moved to: ") == 0 && moved.find("Date: ") != std::string::npos,
               "fresh move: only MOVED_TO.txt (destination and date) is left in the old pt-port folder");
         check(fs::exists(dest / ".pt-user-data-migration-v1"), "fresh move: destination marker written");

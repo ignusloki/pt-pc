@@ -107,16 +107,12 @@ SDL_AudioStream* Microphone::OpenStream(int sample_rate, const std::string& devi
     SDL_AudioDeviceID device = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
     const std::string& desired_device = device_name;
     if (!desired_device.empty()) {
-        auto lower = [](std::string text) {
-            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(pt::AsciiLower(static_cast<char>(c))); });
-            return text;
-        };
-        const std::string wanted = lower(desired_device);
+        const std::string wanted = AsciiLowerOwned(desired_device);
         int count = 0;
         SDL_AudioDeviceID* devices = SDL_GetAudioRecordingDevices(&count);
         for (int i = 0; devices && i < count; ++i) {
             const char* name = SDL_GetAudioDeviceName(devices[i]);
-            if (name && lower(name).find(wanted) != std::string::npos) {
+            if (name && AsciiLowerOwned(name).find(wanted) != std::string::npos) {
                 device = devices[i];
                 LogInfo("microphone: using {}", name);
                 break;

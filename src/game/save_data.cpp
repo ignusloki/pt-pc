@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/core/ascii.h"
 #include "engine/platform/os.h"
 #include "game/save_data.h"
@@ -24,13 +25,6 @@ constexpr size_t kBufferSize = 0x78;
 template <typename T>
 void Put(std::vector<uint8_t>& buffer, size_t offset, T value) {
     std::memcpy(buffer.data() + offset, &value, sizeof(T));
-}
-
-template <typename T>
-T Get(const std::vector<uint8_t>& buffer, size_t offset) {
-    T value{};
-    std::memcpy(&value, buffer.data() + offset, sizeof(T));
-    return value;
 }
 
 }
@@ -139,9 +133,9 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
         slot.status = SaveLoadStatus::Broken;
         return slot;
     }
-    const uint32_t version = Get<uint32_t>(buffer, 0x08);
-    if (Get<uint64_t>(buffer, 0x00) != kMagic || version > kVersion) {
-        LogWarn("save: {} has a bad header (magic {:#x}, version {})", pt::os::PathToUtf8(path), Get<uint64_t>(buffer, 0x00), version);
+    const uint32_t version = pt::ReadBinaryUnchecked<uint32_t>(buffer, 0x08);
+    if (pt::ReadBinaryUnchecked<uint64_t>(buffer, 0x00) != kMagic || version > kVersion) {
+        LogWarn("save: {} has a bad header (magic {:#x}, version {})", pt::os::PathToUtf8(path), pt::ReadBinaryUnchecked<uint64_t>(buffer, 0x00), version);
         slot.status = SaveLoadStatus::Unreadable;
         return slot;
     }
@@ -160,16 +154,16 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     char floor[8] = {};
     std::memcpy(floor, buffer.data() + 0x40, 7);
     file.progress.floor = floor;
-    file.progress.photo_word = Get<uint32_t>(buffer, 0x5C);
+    file.progress.photo_word = pt::ReadBinaryUnchecked<uint32_t>(buffer, 0x5C);
     /* 'NGP1' at 0x70, bytes the original always leaves zero, so a save from the PS4 never reads as finished. */
-    file.progress.game_plus = Get<uint32_t>(buffer, 0x70) == 0x3150474E;
-    const uint32_t finish_word = Get<uint32_t>(buffer, 0x74);
+    file.progress.game_plus = pt::ReadBinaryUnchecked<uint32_t>(buffer, 0x70) == 0x3150474E;
+    const uint32_t finish_word = pt::ReadBinaryUnchecked<uint32_t>(buffer, 0x74);
     file.progress.finishes = file.progress.game_plus ? std::max<uint32_t>(1, finish_word & 0xFFFFu) : 0;
     file.progress.gameplus_announced = file.progress.game_plus ? (finish_word >> 16) & 0xFFu : 0;
     for (size_t i = 0; i < 5; ++i) {
         file.progress.cleared[i] = buffer[0x68 + i];
     }
-    slot.sequence = Get<uint32_t>(buffer, kBufferSize);
+    slot.sequence = pt::ReadBinaryUnchecked<uint32_t>(buffer, kBufferSize);
     return slot;
 }
 

@@ -135,7 +135,6 @@ private:
     VkDeviceAddress Address(const gpu::BufferResource& buffer) const { return Address(gpu::vk::FromGpu(buffer)); }
     VkAccelerationStructureGeometryKHR Triangles(VkDeviceAddress vertices, VkDeviceSize stride, uint32_t vertex_count, VkDeviceAddress indices) const;
     bool RunJobs(VkCommandBuffer cmd, Slot& slot, std::vector<BuildJob>& jobs);
-    void BackOff(const char* what);
     const Blas* StaticBlas(const GpuMesh& mesh, uint32_t submesh, std::vector<BuildJob>& jobs);
     void WriteSet(Slot& slot);
 

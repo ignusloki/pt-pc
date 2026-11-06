@@ -1,3 +1,5 @@
+#include "engine/core/random_bits.h"
+#include "game/fox_angles.h"
 #include "game/game_objects.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -38,25 +40,6 @@ constexpr SpawnDef kSpawns[9] = {
     {1.29f, -0.39f, -19.4f, 4.712389f, 4.0f, false, false},
 };
 
-float Wrap(float a) {
-    const float t = a + kPi;
-    return t >= 0.0f ? std::fmod(t, 2.0f * kPi) - kPi : kPi - std::fmod(-t, 2.0f * kPi);
-}
-
-float FoxYawOf(const glm::vec3& v) {
-    if (std::abs(v.x) + std::abs(v.z) < 1e-6f) {
-        return 0.0f;
-    }
-    return std::atan2(v.x, v.z);
-}
-
-uint32_t Mix(uint32_t x) {
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 5;
-    return x;
-}
-
 uint32_t g_fixed_seed = 0;
 uint32_t g_seed_counter = 0;
 
@@ -69,7 +52,7 @@ void SetFixedRandomSeed(uint32_t seed) {
 
 uint32_t ReadTsc() {
     if (g_fixed_seed) {
-        return Mix(g_fixed_seed + ++g_seed_counter * 0x9E3779B9u);
+        return XorShiftOnce(g_fixed_seed + ++g_seed_counter * 0x9E3779B9u);
     }
     return static_cast<uint32_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
 }
@@ -133,7 +116,7 @@ std::string GameCommand::Describe() const {
 }
 
 uint32_t OchoLogic::Random() {
-    rng_ = Mix(rng_ ^ ReadTsc());
+    rng_ = XorShiftOnce(rng_ ^ ReadTsc());
     return rng_;
 }
 
@@ -162,7 +145,7 @@ void OchoLogic::Sense(float dt) {
     ocho_pos_ = glm::vec3(world_[3]);
     const glm::vec3 d = player_pos_ - ocho_pos_;
     distance2_ = glm::dot(d, d);
-    facing_ = std::abs(Wrap(FoxYawOf(d) - player_yaw_));
+    facing_ = std::abs(WrapFoxAngle(FoxYawOf(d) - player_yaw_));
 }
 
 void OchoLogic::ApplyRootMotion(const glm::vec3& translation, const glm::quat& rotation) {
@@ -282,7 +265,7 @@ int OchoLogic::ChooseSpawn() {
         }
         const glm::vec3 d = spawns_[i].world - player_pos_;
         const float d2 = glm::dot(d, d);
-        if (d2 > 30.25f && (d2 > 289.0f || std::abs(Wrap(player_yaw_ - FoxYawOf(d))) > kPi / 2 || spawns_[i].variant)) {
+        if (d2 > 30.25f && (d2 > 289.0f || std::abs(WrapFoxAngle(player_yaw_ - FoxYawOf(d))) > kPi / 2 || spawns_[i].variant)) {
             candidates.push_back(i);
         }
     }
@@ -378,7 +361,7 @@ bool OchoLogic::UpdateLookBack() {
     for (float v : ring_) {
         sum += v;
     }
-    const float deviation = std::abs(Wrap(player_yaw_ - sum / static_cast<float>(ring_.size())));
+    const float deviation = std::abs(WrapFoxAngle(player_yaw_ - sum / static_cast<float>(ring_.size())));
     if (deviation <= 1.8325957f) {
         if (look_phase_ != 0 && timer_a_ > 5.0f) {
             timer_a_ = 0.0f;
@@ -481,7 +464,7 @@ GameObjects::GameObjects(Game& game) : game_(game), ocho_(game) {
 }
 
 uint32_t GameObjects::Random() {
-    rng_ = Mix(rng_ ^ ReadTsc());
+    rng_ = XorShiftOnce(rng_ ^ ReadTsc());
     return rng_;
 }
 

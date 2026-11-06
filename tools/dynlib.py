@@ -6,6 +6,12 @@ import struct
 from collections import Counter, defaultdict
 from pathlib import Path
 
+try:
+    from .binary_strings import cstring
+except ImportError:
+    from binary_strings import cstring
+
+
 PT_DYNAMIC = 2
 PT_SCE_DYNLIBDATA = 0x61000000
 
@@ -51,11 +57,6 @@ def load_nid_db(paths):
         for nid, sym in re.findall(r'LIB_FUNCTION\(\s*"([A-Za-z0-9+\-]{11})"\s*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,\s*([A-Za-z_][\w:]*)\s*\)', text):
             names.setdefault(nid, sym.split("::")[-1])
     return names
-
-
-def cstring(buf, offset):
-    end = buf.index(b"\x00", offset)
-    return buf[offset:end].decode("ascii", "replace")
 
 
 def parse(elf):

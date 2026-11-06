@@ -9,20 +9,11 @@ namespace pt {
 namespace {
 
 constexpr uint64_t kSeed0 = 0x9AE16A3B2F90404Full;
-constexpr uint64_t kKMul = 0x9DDFEA08EB382D69ull;
 constexpr uint64_t kPathMask = 0x3FFFFFFFFFFFFull;
 constexpr uint64_t kMetaFlag = 1ull << 50;
 constexpr int kTypeShift = 51;
 constexpr std::string_view kAssetsPrefix = "/Assets/";
 constexpr std::array<std::string_view, 4> kKnownRoots = {"fox", "tpp", "sh", "mgo"};
-
-uint64_t HashLen16(uint64_t u, uint64_t v) {
-    uint64_t a = (u ^ v) * kKMul;
-    a ^= a >> 47;
-    uint64_t b = (v ^ a) * kKMul;
-    b ^= b >> 47;
-    return b * kKMul;
-}
 
 }
 
@@ -31,7 +22,7 @@ uint64_t SeededHash(std::string_view text) {
     for (size_t i = 0; i < 8 && i < text.size(); ++i) {
         seed1 |= static_cast<uint64_t>(static_cast<uint8_t>(text[text.size() - 1 - i])) << (8 * i);
     }
-    return HashLen16(CityHash64(text.data(), text.size()) - kSeed0, seed1);
+    return CityHashMix16(CityHash64(text.data(), text.size()) - kSeed0, seed1);
 }
 
 uint32_t ExtensionType(std::string_view extension) {

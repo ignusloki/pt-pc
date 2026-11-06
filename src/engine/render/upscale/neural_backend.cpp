@@ -1,3 +1,4 @@
+#include "engine/render/upscale/upscale_platform.h"
 #include "engine/render/upscale/neural_rendering.h"
 
 #include <algorithm>
@@ -50,12 +51,7 @@ constexpr const char* kIntensity = "DLSSNR.Intensity";
 constexpr const char* kStyle = "DLSSNR.Style";
 
 const std::wstring& DataPath() {
-    static const std::wstring path = [] {
-        std::error_code ec;
-        std::filesystem::path dir = std::filesystem::temp_directory_path(ec) / "pt-port-ngx";
-        std::filesystem::create_directories(dir, ec);
-        return dir.wstring();
-    }();
+    static const std::wstring path = CreateNgxTempPath();
     return path;
 }
 

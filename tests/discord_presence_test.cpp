@@ -14,7 +14,7 @@ static HANDLE TestCreateFileW(LPCWSTR, DWORD access, DWORD share, LPSECURITY_ATT
 #define CreateFileW TestCreateFileW
 #include "engine/platform/discord_presence.cpp"
 #undef CreateFileW
-namespace pt { void LogWrite(LogLevel, std::string_view text) { std::printf("%.*s\n", static_cast<int>(text.size()), text.data()); } }
+#include "log_write.inl"
 static bool ReceiveFrame(HANDLE pipe) {
     char header[8]; DWORD got=0;
     if (!ReadFile(pipe,header,8,&got,nullptr) || got!=8) return false;

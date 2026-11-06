@@ -21,15 +21,7 @@ vec3 HdrSceneBrightness(vec3 code, float brightness) {
     return sign(code) * min(pow(abs(code), vec3(1.0 / max(brightness, 0.1))), vec3(65504.0));
 }
 
-float PqEncode(float nits) {
-    const float m1 = 2610.0 / 16384.0;
-    const float m2 = 2523.0 / 32.0;
-    const float c1 = 3424.0 / 4096.0;
-    const float c2 = 2413.0 / 128.0;
-    const float c3 = 2392.0 / 128.0;
-    float y = pow(clamp(nits / 10000.0, 0.0, 1.0), m1);
-    return pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
-}
+#include "pq_encode.glsl"
 
 vec3 CompositeDisplayColor(vec3 color, float brightness, float output_mode, vec2 hdr, float sdr_eotf, float wide) {
     if (output_mode <= 0.5) {

@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/gani.h"
 
 #include <algorithm>
@@ -9,15 +10,6 @@ namespace pt::anim {
 namespace {
 
 constexpr uint32_t kGaniMagic = 0x0BFCA2D2;
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 }
 
@@ -60,15 +52,15 @@ glm::vec4 GaniMotion::Sample(const GaniUnit& unit, int track, double frame) cons
 }
 
 bool ParseGani(std::span<const uint8_t> data, size_t offset, GaniMotion& out, std::string* error) {
-    if (At<uint32_t>(data, offset) != kGaniMagic) {
+    if (ReadBinary<uint32_t>(data, offset) != kGaniMagic) {
         if (error) {
             *error = std::format("no gani at {:#x}", offset);
         }
         return false;
     }
-    const uint32_t header = At<uint32_t>(data, offset + 4);
+    const uint32_t header = ReadBinary<uint32_t>(data, offset + 4);
     out.offset = offset;
-    out.size = At<uint32_t>(data, offset + 8);
+    out.size = ReadBinary<uint32_t>(data, offset + 8);
     std::vector<MotionNode> nodes;
     if (!ParseMotionTree(data, offset + header, nodes)) {
         if (error) {
@@ -112,10 +104,10 @@ bool ParseGani(std::span<const uint8_t> data, size_t offset, GaniMotion& out, st
             }
         } else if (n.hash == kHashGaniEvents && n.raw_data) {
             const size_t top = n.raw_data;
-            const uint32_t set_hash = At<uint32_t>(data, top);
-            const uint32_t set_count = At<uint16_t>(data, top + 4);
+            const uint32_t set_hash = ReadBinary<uint32_t>(data, top);
+            const uint32_t set_count = ReadBinary<uint16_t>(data, top + 4);
             for (uint32_t i = 0; i < set_count; ++i) {
-                const int32_t table_offset = At<int32_t>(data, top + 8 + 4 * static_cast<size_t>(i));
+                const int32_t table_offset = ReadBinary<int32_t>(data, top + 8 + 4 * static_cast<size_t>(i));
                 std::vector<StreamEvent> events;
                 uint32_t table_hash = 0;
                 ParseEventTable(data.subspan(0, limit), top + static_cast<size_t>(static_cast<int64_t>(table_offset)), table_hash, events);
@@ -139,18 +131,18 @@ bool MotionArchive::Parse(std::vector<uint8_t> bytes, std::string* error) {
     bytes_ = std::move(bytes);
     motions_.clear();
     const std::span<const uint8_t> data(bytes_);
-    if (At<uint32_t>(data, 0) != kMagic) {
+    if (ReadBinary<uint32_t>(data, 0) != kMagic) {
         if (error) {
             *error = "not a motion archive";
         }
         return false;
     }
-    const uint32_t count = At<uint32_t>(data, 4);
+    const uint32_t count = ReadBinary<uint32_t>(data, 4);
     for (uint32_t i = 0; i < count; ++i) {
         const size_t e = 0x20 + 16 * static_cast<size_t>(i);
         GaniMotion motion;
-        motion.path_code = At<uint64_t>(data, e);
-        const uint32_t offset = At<uint32_t>(data, e + 8);
+        motion.path_code = ReadBinary<uint64_t>(data, e);
+        const uint32_t offset = ReadBinary<uint32_t>(data, e + 8);
         if (!ParseGani(data, offset, motion, error)) {
             return false;
         }

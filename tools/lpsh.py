@@ -3,6 +3,12 @@ import json
 import struct
 from pathlib import Path
 
+try:
+    from .binary_strings import latin1_cstring as cstring
+except ImportError:
+    from binary_strings import latin1_cstring as cstring
+
+
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
@@ -18,11 +24,6 @@ COEFFICIENTS = 9
 CHANNELS = 4
 PROBE_BYTES = COEFFICIENTS * CHANNELS * 2
 BASIS = ("L00", "L1-1", "L10", "L11", "L2-2", "L2-1", "L20", "L21", "L22")
-
-
-def cstring(data, offset):
-    end = data.index(b"\0", offset)
-    return data[offset:end].decode("latin-1")
 
 
 def read_lpsh(path):

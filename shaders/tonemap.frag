@@ -22,11 +22,7 @@ vec3 Lut16(uint lut, vec3 c) {
     return mix(a, b, 15.0 * c.b - slice);
 }
 
-vec3 QuantizeDither(vec3 c, float salt) {
-    vec3 seed = fract((vec3(gl_FragCoord.xyx) + salt) * vec3(0.1031, 0.1030, 0.0973));
-    seed += dot(seed, seed.yxz + 33.33);
-    return c + (fract((seed.x + seed.y) * seed.z) - 0.5) / 255.0;
-}
+#include "quantize_dither.glsl"
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);

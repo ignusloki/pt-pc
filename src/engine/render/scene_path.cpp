@@ -24,11 +24,11 @@ constexpr float kLuminanceSigma = 4.0f;
 constexpr gpu::Format kRrGuideFormat = gpu::Format::R16G16B16A16Sfloat;
 constexpr gpu::Format kRrHitFormat = gpu::Format::R16Sfloat;
 
-float EnvFloat(const char* name, float fallback, float lo, float hi) {
-    const char* value = std::getenv(name);
-    return value ? std::clamp(static_cast<float>(std::atof(value)), lo, hi) : fallback;
 }
 
+float SceneRenderer::EnvFloat(const char* name, float fallback, float lo, float hi) {
+    const char* value = std::getenv(name);
+    return value ? std::clamp(static_cast<float>(std::atof(value)), lo, hi) : fallback;
 }
 
 void SceneRenderer::CreatePathPipelines(gpu::Format light_format) {

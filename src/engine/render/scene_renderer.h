@@ -355,6 +355,8 @@ private:
     bool BuildEnhancedColorLut(const std::string& path, const ScreenSettings& screen, std::vector<float>& out);
     void UpdateEnhancedColorLut(const ScreenSettings& screen);
     void ReadEnhancedMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings);
+    static glm::vec4 BloomPolynomial(float extraction);
+    static float EnvFloat(const char* name, float fallback, float lo, float hi);
     void RecordEnhancedPost(gpu::CommandList& cmd, const SceneLighting& lighting, float dt);
     bool RecordEnhancedDepthOfField(gpu::CommandList& cmd, const ScreenSettings& screen, int& current);
     bool RecordEnhancedMotionBlur(gpu::CommandList& cmd, const ScreenSettings& screen, int& current);

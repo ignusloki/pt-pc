@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/core/menu_lookup.h"
 #include <cstdint>
 #include <initializer_list>
 #include <string_view>
@@ -501,6 +502,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_dlssg_multiplier", "2x, 3x nebo 4x: celkový počet zobrazených snímků na jeden vykreslený snímek. Vyšší násobiče vyžadují podporu běhové knihovny. V nabídkách se generování snímků pozastaví."},
     {"pc_note_dlssg_multiplier_limit", "Tento násobič není s aktuální grafickou kartou a běhovou knihovnou generování snímků dostupný."},
     {"pc_note_frame_generation_dlss", "Experimentální. NVIDIA DLSS Frame Generation vkládá generované snímky mezi vykreslené snímky."},
+    {"pc_note_frame_generation_metalfx","Experimentální. Apple MetalFX interpoluje jeden snímek mezi vykreslenými snímky. Vyžaduje Mac s čipem Apple silicon, macOS 26 nebo novější a upscaler MetalFX; vynucuje vertikální synchronizaci. Velmi jasná pohybující se světla mohou blikat. Generování snímků funguje nejlépe, když hra vykresluje alespoň 30 FPS."},
     {"pc_note_dlssg_gpu","DLSS Frame Generation vyžaduje grafickou kartu NVIDIA GeForce RTX 40 nebo novější."},
     {"pc_note_fsr_fg_gpu","Generování snímků FSR 3 vyžaduje grafickou kartu AMD Radeon RX 5000 nebo novější."},
     {"pc_note_dlssg_driver","DLSS Frame Generation vyžaduje novější ovladač NVIDIA."},
@@ -511,6 +513,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_d3d12_crashed_retry","DirectX 12 ukončil hru při jednom z dřívějších spuštění. Přesto ho můžete zvolit: při příštím spuštění se zkusí znovu."},
     {"pc_note_dlssg_restart","Restartujte hru, aby se zapnulo DLSS Frame Generation."},
     {"pc_note_vsync_dlssg","Na Vulkanu DLSS Frame Generation běží bez vertikální synchronizace; nastavení opět platí, když je generování snímků vypnuto."},
+    {"pc_note_vsync_metalfx_fg","Generování snímků MetalFX vždy běží s vertikální synchronizací; nastavení opět platí, když je generování snímků vypnuto."},
     {"pc_note_fsr_fg_restart","Restartujte hru, aby se přešlo z DLSS Frame Generation na FSR 3."},
     {"pc_note_frame_generation_xess","Experimentální. Intel XeSS Frame Generation vloží vygenerovaný snímek mezi dva vykreslené. Obraz jde přes DirectX 12, jen v SDR."},
     {"pc_note_xefg_gpu","XeSS Frame Generation vyžaduje grafickou kartu s DirectX 12 a Shader Model 6.4."},
@@ -873,10 +876,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_patreon","Otevře v prohlížeči stránku vývojáře na Patreon, kde můžete přispět."},
     {"pc_notice_patreon_failed","Prohlížeč se nepodařilo otevřít. Stránka je patreon.com/loreanxavier."},
 };
-inline std::string_view Menu(std::string_view key) {
-    for (const auto& e : kMenu) if(e.key==key) return e.text;
-    return {};
-}
+inline std::string_view Menu(std::string_view key) { return localized::FindMenuText(kMenu, key); }
 struct Subtitle { uint32_t key; std::initializer_list<std::string_view> lines; };
 inline const Subtitle kSubtitles[] = {
     {0x54E4EFDE,{

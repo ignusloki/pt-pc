@@ -1,3 +1,4 @@
+#include "setup_integrity.h"
 #include "engine/platform/os.h"
 #include "engine/platform/self_integrity.h"
 #include "engine/platform/update_check.h"
@@ -80,10 +81,6 @@ void CheckParents(const fs::path& destination) {
         if (parent == p) break;
         p = parent;
     }
-}
-void VerifyIntegrity() {
-    CheckCancel();
-    if (!pt::integrity::IntegrityOk()) throw std::runtime_error("This setup file is damaged or was modified. Please download it again.");
 }
 void MarkExecutables(const fs::path& root) {
     for (const char* name : {"pt", "pt-updater", "extractor/PT.PkgExtract", "texture-tools/realesrgan-ncnn-vulkan"}) {

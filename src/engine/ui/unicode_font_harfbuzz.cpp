@@ -48,9 +48,6 @@ bool WinMetrics(const UnicodeFontState& s, int& ascent, int& descent) {
     descent = Be16(&s.data[os2 + 76]);
     return true;
 }
-bool StrongRtl(uint32_t c) {
-    return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF);
-}
 bool StrongLtr(uint32_t c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= 0xC0 && c < 0x0590 && c != 0xD7 && c != 0xF7);
 }

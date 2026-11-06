@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "game/gimmick_animation.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -37,15 +38,6 @@ constexpr DialogueCondition kDialogueConditions[] = {
     {0x749ED06C, "TRIA1000_121010_0_baby"},
 };
 
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
-
 std::string CString(std::span<const uint8_t> data, size_t offset) {
     std::string out;
     while (offset < data.size() && data[offset] != 0 && out.size() < 128) {
@@ -64,23 +56,23 @@ std::string ModelPrefix(const std::string& model) {
 
 bool ReadConnectPoints(std::span<const uint8_t> data, std::vector<ConnectPoint>& out) {
     out.clear();
-    size_t node = At<uint32_t>(data, 4);
+    size_t node = ReadBinary<uint32_t>(data, 4);
     for (int guard = 0; guard < 256 && node && node + 0x30 <= data.size(); ++guard) {
         ConnectPoint cnp;
-        const uint32_t name_offset = At<uint32_t>(data, node + 4);
-        const int32_t data_offset = At<int32_t>(data, node + 0x0C);
-        const int32_t next = At<int32_t>(data, node + 0x20);
-        const uint32_t params = At<uint32_t>(data, node + 0x24);
+        const uint32_t name_offset = ReadBinary<uint32_t>(data, node + 4);
+        const int32_t data_offset = ReadBinary<int32_t>(data, node + 0x0C);
+        const int32_t next = ReadBinary<int32_t>(data, node + 0x20);
+        const uint32_t params = ReadBinary<uint32_t>(data, node + 0x24);
         cnp.name = name_offset ? CString(data, node + name_offset) : std::string();
         if (data_offset) {
             const size_t d = node + static_cast<size_t>(data_offset);
-            cnp.translation = glm::vec3(At<float>(data, d), At<float>(data, d + 4), At<float>(data, d + 8));
-            cnp.rotation = glm::quat(At<float>(data, d + 28), At<float>(data, d + 16), At<float>(data, d + 20), At<float>(data, d + 24));
+            cnp.translation = glm::vec3(ReadBinary<float>(data, d), ReadBinary<float>(data, d + 4), ReadBinary<float>(data, d + 8));
+            cnp.rotation = glm::quat(ReadBinary<float>(data, d + 28), ReadBinary<float>(data, d + 16), ReadBinary<float>(data, d + 20), ReadBinary<float>(data, d + 24));
         }
         if (params) {
             const size_t p = node + params;
-            if (At<uint16_t>(data, p) == 1) {
-                const uint32_t value_offset = At<uint32_t>(data, p + 16);
+            if (ReadBinary<uint16_t>(data, p) == 1) {
+                const uint32_t value_offset = ReadBinary<uint32_t>(data, p + 16);
                 cnp.parent = value_offset ? CString(data, p + 12 + value_offset) : std::string();
             }
         }

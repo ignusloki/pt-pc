@@ -1,0 +1,395 @@
+DEPENDENCY AUDIT
+Verified 2026-11-06T15:16:54.153888+00:00
+Repository: /Users/suporte/PT-Mac
+Branch: codex/remove-unneeded-dependencies
+All changes remain uncommitted. HEAD is unchanged; nothing was pushed or merged.
+Prior dead-code, deduplication, Polish/Czech MetalFX and motion-harness changes were preserved.
+All measurements compare the worktree at the START of this dependency task, not Git HEAD.
+
+OUTCOME
+Five dependency/component cleanups. No complete dependency that is used on another supported platform was deleted globally.
+All 20 FetchContent declarations, 43 library/tool/data families, all three C# projects, CI installation commands,
+and the 36 explicit Linux sysroot packages were inspected. Python tools have no pip/Poetry/npm lock or install manifest;
+their six external Python dependency families were audited from imports and call sites.
+
+1. zstd: removed from macOS, Linux, Android and iOS configuration, compilation and non-Windows packaging.
+   Its only project calls are ZSTD_findFrameCompressedSize, ZSTD_isError, ZSTD_decompress and ZSTD_getErrorName
+   inside the _WIN32 branch of nr_native::ExtractCode in src/engine/render/upscale/neural_native.cpp.
+   The non-Windows branch returns "Windows only". Windows keeps the pinned decompressor for DLSS GPU bundles.
+   Evidence before edit: /Users/suporte/PT-Mac/build/dependency-audit/zstd-uses-before.txt
+   Current compile_commands.json for both Apple builds has zero zstd sources. Fresh configuration needs no zstd cache.
+   Removed stale generated notices as well, so reusing a build does not keep packaging the retired non-Windows license.
+
+2. macOS vulkan-loader: removed from the Homebrew CI recipe and build documentation.
+   CMake now discovers headers and the host glslc directly on both Apple platforms. The engine loads MoltenVK directly.
+   No Apple target links Vulkan::Vulkan. glslc links only system libraries; the installed shaderc formula has no runtime dependencies.
+   Evidence: /Users/suporte/PT-Mac/build/dependency-audit/pt-baseline-link.txt
+   Fresh configuration with CMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON and no Vulkan_LIBRARY cache entry passed:
+   /Users/suporte/PT-Mac/build/dependency-audit/mac-no-loader/configure.log
+   Windows/Linux loader requirements are retained: Linux FFX links Vulkan::Vulkan; Windows discovery still uses FindVulkan.
+
+3. ImGui demo component: removed imgui_demo.cpp from pt_thirdparty.
+   Searches for ShowDemoWindow, ShowStyleEditor, ShowUserGuide, ShowStyleSelector and ShowFontSelector found no project callers.
+   The only demo-path match was its CMake source list. Both game executables and every test linked successfully without it.
+   Evidence: /Users/suporte/PT-Mac/build/dependency-audit/imgui-demo-uses-before.txt
+   The real ImGui UI/backends and their source download remain needed. The demo was already omitted from executable code by the linker.
+
+4. stb_vorbis: removed its only implementation include and redirected ALL three decoding paths to libvorbis.
+   Canonical choice: libvorbis already decodes the game's Wwise audio. Added its bundled vorbisfile.c container reader,
+   with a memory callback adapter; this introduces no new downloaded dependency. stb image/font components remain.
+   New code: src/engine/audio/ogg_vorbis.cpp, 59 physical lines; declaration header, 11 lines.
+   This is codec integration code, not a new homegrown codec. None of the remaining libraries is a safe few-dozen-line substitute.
+   Tests were added and passed WHILE the old stb decoder still existed, then callers were migrated and tested again.
+   tests/ogg_vorbis_test.cpp checks synthetic mono/stereo/surround data, rate/channel/count/content, limited prefixes,
+   complete decoding, chaining, malformed/truncated input, output reset and the actual Lisa music entry points.
+   The three small Ogg fixtures are generated sine waves, with source and provenance in tests/fixtures/vorbis/.
+   No codec, FFmpeg or encoder installation is needed to run the tests.
+   Before/after parity: complete 6,510,643-frame game music track and five prefixes have identical frame counts, channels
+   and rate, with at most ONE 16-bit PCM unit difference. Synthetic mono matches exactly; stereo differs by at most one unit.
+   This is not a bit-identical decoder change. The six-channel fixture exposed severe clipping/distortion in the old stb decoder.
+   The canonical decoder matches FFmpeg within one PCM unit over their common output after channel-order mapping;
+   FFmpeg emits 128 fewer frames for that fixture. The test independently checks encoded tone content and full input duration.
+   Evidence: /Users/suporte/PT-Mac/build/dependency-audit/vorbis-parity-game.log
+   /Users/suporte/PT-Mac/build/dependency-audit/vorbis-parity-fixtures.log (includes the old surround-decoder failure)
+   /Users/suporte/PT-Mac/build/dependency-audit/vorbis-ffmpeg-surround.json
+   Final repo search finds zero stb_vorbis references in code/build/tests/tools; nm finds ov_read and no stb_vorbis symbols in pt.
+
+5. iOS small.en model download: skipped ggml-small.en-q5_1.bin during iOS configuration.
+   cmake/Mobile.cmake and tools/ios/package.py already package only base.en and Silero VAD. The 190 MB model never entered the app.
+   The clean iOS build was seeded ONLY with those two required models and cached sources; it configured and linked successfully.
+   No file operation on the omitted model occurred in the CMake trace; no model or zstd source appeared in the new build tree.
+   Evidence: /Users/suporte/PT-Mac/build/dependency-audit/ios-model-trace-proof.json
+   /Users/suporte/PT-Mac/build/dependency-audit/ios-validation/results.json
+   Desktop and Android keep the second-opinion model because their voice recognizer actually loads it.
+
+MEASURED FOOTPRINT (bytes, not allocated filesystem blocks)
+macOS release executable: 15,930,200 -> 15,917,560; 12,640 bytes smaller.
+Removed packaged zstd notice: 1,549 bytes. Packaged README/macOS instructions: 26 bytes smaller.
+Total reduction in changed files copied into the Mac app: 14,215 bytes (13.88 KiB). Native setup binary is unchanged.
+The final signed/compressed distribution archive was not rebuilt; no compressed ZIP saving is claimed.
+Build/developer footprint is separate from installed-game size:
+- Non-Windows zstd: avoids a 2,434,947-byte source archive download and 8,355,130-byte extracted source tree.
+- zstd removal reduced libpt_thirdparty.a by 649,816 bytes; removing the demo reduced it by another 1,463,024 bytes.
+- Adding vorbisfile grows libpt_vorbis.a by 105,264 bytes. These static archives do not ship in the app.
+- Mac vulkan-loader formula: 1,396,256 bytes in the currently installed 1.4.363.0 keg, excluding symlink duplicates.
+  Future developer/CI installs avoid that formula. The existing host installation was not uninstalled.
+- iOS: avoids a 190,098,681-byte model download and build file (181.29 MiB); installed iOS app model savings are zero,
+  since the model was never packaged. Existing unrelated caches were not purged.
+- stb and ImGui source archives remain fetched for their other live components; no source-download saving claimed for them.
+Machine-readable measurements: /Users/suporte/PT-Mac/build/dependency-audit/footprint.json
+
+TESTS AND BUILDS
+Each row includes pt, pt_release and pt_setup_macos plus all named native regression targets, GPU-backed tests,
+packaging/payload/publish/Android collector scripts and the extracted production motion-blur harness.
+- baseline: 88/88 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/baseline/results.json
+- zstd-platform-scope: 88/88 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/zstd-platform-scope/results.json
+- macos-vulkan-loader: 88/88 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/macos-vulkan-loader/results.json
+- imgui-demo: 88/88 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/imgui-demo/results.json
+- vorbis-adapter-tests-first: 89/89 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/vorbis-adapter-tests-first/results.json
+- vorbis-consolidation: 89/89 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/vorbis-consolidation/results.json
+- vorbis-caller-regressions: 89/89 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/vorbis-caller-regressions/results.json
+- ios-unused-voice-model: 89/89 checks passed; build passed. /Users/suporte/PT-Mac/build/dependency-audit/ios-unused-voice-model/results.json
+The primary per-test logs live under build/dead-code-audit/dependencies-<row-name>/results.json.
+The new Ogg test is in tools/macos/build.py TESTS, also consumed by desktop CI.
+Additional clean iOS Release configure/build: passed (687 build actions). Not installed, signed for distribution or run on a device.
+Additional fresh Mac configuration without a loader library: passed.
+No source batch failed validation, so no production batch needed restoration. Exploratory encoder/parity probes are kept in the audit directory.
+Native execution was on macOS ARM64. Windows/Linux/Android runtime behavior was not executed here; their dependency evidence is
+source/configuration and transitive build analysis. No new third-party libraries were installed or downloaded for this audit.
+
+KEPT DEPENDENCIES AND WHY (search evidence is lexical; the reason identifies the live role)
+
+sdl3: Windowing, events, audio, input and mobile lifecycle; broad platform layer.
+  rg -n 'SDL_(CreateWindow|PollEvent|CreateAudioStream|OpenGamepad)' src tools cmake CMakeLists.txt installer android ios tests: 26 matching lines.
+  src/main.cpp:5343:    while (SDL_PollEvent(&event)) {
+  src/main.cpp:6391:            while (SDL_PollEvent(&event)) {
+  src/main.cpp:8804:        pt::start_watch::Step("window", vulkan_start ? "SDL_CreateWindow; with Vulkan, SDL loads the Vulkan loader here and asks it for "
+
+zlib: Game archives, textures, data packs and native installer; DEFLATE and CRC formats are not interchangeable with zstd.
+  rg -n '\b(uncompress|inflate|crc32|deflate)\(' src tools cmake CMakeLists.txt installer android ios tests: 11 matching lines.
+  installer/Native/updater_core.h:119:            const int result = inflate(&z_, Z_NO_FLUSH);
+  installer/Native/setup_core.h:560:                    result = inflate(&z, Z_NO_FLUSH);
+  tools/make_example_glb.py:18:        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+volk: Runtime Vulkan dispatch; a required complement to the Vulkan headers and platform driver.
+  rg -n 'volkInitialize|volkLoad' src tools cmake CMakeLists.txt installer android ios tests: 4 matching lines.
+  src/engine/render/vk_context.cpp:190:        volkInitializeCustom(loader);
+  src/engine/render/vk_context.cpp:191:    } else if (!Check(volkInitialize(), "volkInitialize")) {
+  src/engine/render/vk_context.cpp:262:    volkLoadInstance(instance);
+
+vma: Vulkan GPU allocation and synchronization; not interchangeable with the D3D12 allocator.
+  rg -n 'vmaCreateAllocator|vmaCreateBuffer|vmaCreateImage' src tools cmake CMakeLists.txt installer android ios tests: 7 matching lines.
+  src/engine/render/vk_context.cpp:714:    if (!Check(vmaCreateAllocator(&allocator_info, &allocator), "vmaCreateAllocator")) {
+  src/engine/render/vk_context.cpp:1201:    if (InjectFailure("vmaCreateImage")) {
+  src/engine/render/vk_context.cpp:1205:    if (const VkResult r = vmaCreateImage(allocator, &info, &alloc, &out.image, &out.allocation, nullptr); r != VK_SUCCESS) {
+
+glm: Vector, matrix, quaternion and projection math throughout game and renderer.
+  rg -n 'glm::(mat4|quat|inverse|perspective|normalize)' src tools cmake CMakeLists.txt installer android ios tests: 947 matching lines.
+  src/game/demo_system.cpp:189:glm::mat4 Compose(const glm::quat& rotation, const glm::vec3& translation) {
+  src/game/demo_system.cpp:190:    return glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation);
+  src/game/demo_system.cpp:214:void YawPitch(const glm::quat& rotation, float& yaw, float& pitch) {
+
+imgui: Developer panels, input overlay and platform render backends. Removed only the demo component with no callers.
+  rg -n 'ImGui::(Begin|Text|GetIO)|ImGui_Impl' src tools cmake CMakeLists.txt installer android ios tests: 90 matching lines.
+  src/main.cpp:2026:    if (ImGui::BeginCombo("Upscaler", pt::UpscalerName(u.kind))) {
+  src/main.cpp:2030:            ImGui::BeginDisabled(!available);
+  src/main.cpp:2038:                ImGui::TextDisabled("(%s)", reason.c_str());
+
+stb: Image decoding, screenshots and font rasterization remain. Vorbis decoding is consolidated separately.
+  rg -n 'stbi_load|stbi_write|stbtt_' src tools cmake CMakeLists.txt installer android ios tests: 18 matching lines.
+  tools/xr_test_runtime/xr_test_runtime.cpp:862:        written = stbi_write_png(path.c_str(), rw, rh, 4, rgba.data(), rw * 4) != 0;
+  tests/unicode_paths_test.cpp:157:    const bool png_written = stbi_write_png(pt::os::PathToUtf8(png).c_str(), 2, 2, 4, pixels, 8) != 0;
+  tests/d3d12_backend_test.cpp:1532:    stbi_write_png(path.string().c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(), static_cast<int>(w * 4));
+
+lua51: Game logic, events and public mod scripting API.
+  rg -n 'luaL_newstate|lua_pcall|luaL_load' src tools cmake CMakeLists.txt installer android ios tests: 6 matching lines.
+  tests/android_lua_test.c:8:  lua_State *state = luaL_newstate();
+  src/engine/script/lua_vm.cpp:41:    state_ = luaL_newstate();
+  src/engine/script/lua_vm.cpp:70:    const int status = lua_pcall(state_, arg_count, result_count, base);
+
+google_sbc: Bluetooth DualShock speaker SBC encoder, used by controller routing and audio tests.
+  rg -n 'sbc_encode|sbc_reset' src tools cmake CMakeLists.txt installer android ios tests: 2 matching lines.
+  src/engine/platform/dualshock_audio.cpp:55:    sbc_reset(&s.encoder);
+  src/engine/platform/dualshock_audio.cpp:75:        if (sbc_encode(&s.encoder, pcm.data(), 2, pcm.data() + 1, 2, &s.format,
+
+whisper: Voice keyword recognition and VAD, with dynamic ggml backend loading and architecture variants.
+  rg -n 'whisper_init|whisper_full|whisper_vad' src tools cmake CMakeLists.txt installer android ios tests: 20 matching lines.
+  src/engine/voice/voice_recognizer.h:16:struct whisper_vad_context;
+  src/engine/voice/voice_recognizer.h:124:    whisper_vad_context* vad_ = nullptr;
+  src/engine/voice/voice_recognizer.cpp:114:    X(whisper_context_default_params) X(whisper_free) X(whisper_full) X(whisper_full_default_params)     \
+
+zstd: Windows GPU bundle extraction only; removed from all other platform builds.
+  rg -n 'ZSTD_findFrameCompressedSize|ZSTD_decompress' src tools cmake CMakeLists.txt installer android ios tests: 2 matching lines.
+  src/engine/render/upscale/neural_native.cpp:258:            const size_t frame = ZSTD_findFrameCompressedSize(packed.data(), packed.size());
+  src/engine/render/upscale/neural_native.cpp:260:            const size_t got = ZSTD_decompress(code.data(), code.size(), packed.data(), frame);
+
+harfbuzz: Complex-script shaping on non-Windows; Windows uses Uniscribe. stb rasterization does a different job.
+  rg -n 'hb_shape|hb_buffer_' src tools cmake CMakeLists.txt installer android ios tests: 8 matching lines.
+  src/engine/ui/unicode_font_harfbuzz.cpp:80:    hb_buffer_t* buffer = hb_buffer_create();
+  src/engine/ui/unicode_font_harfbuzz.cpp:81:    hb_buffer_add_utf32(buffer, codes.data(), int(codes.size()), 0, int(codes.size()));
+  src/engine/ui/unicode_font_harfbuzz.cpp:82:    hb_buffer_guess_segment_properties(buffer);
+
+ogg: Wwise bit-packed headers and Ogg framing; libvorbis requires libogg.
+  rg -n 'oggpack_|ogg_stream_|ov_open_callbacks' src tools cmake CMakeLists.txt installer android ios tests: 8 matching lines.
+  tests/fixtures/vorbis/generate.cpp:21:    ogg_stream_state stream;
+  tests/fixtures/vorbis/generate.cpp:22:    ogg_stream_init(&stream, 42);
+  tests/fixtures/vorbis/generate.cpp:25:    for (auto& h : headers) ogg_stream_packetin(&stream, &h);
+
+vorbis: Wwise audio decoding and now ordinary Ogg decoding. Canonical decoder for both paths.
+  rg -n 'vorbis_synthesis|vorbis_info_init|ov_read' src tools cmake CMakeLists.txt installer android ios tests: 15 matching lines.
+  src/engine/audio/wwise_vorbis.cpp:487:    vorbis_info_init(vi);
+  src/engine/audio/wwise_vorbis.cpp:495:    if (vorbis_synthesis_headerin(vi, vc, &op) != 0) {
+  src/engine/audio/wwise_vorbis.cpp:502:    if (vorbis_synthesis_headerin(vi, vc, &op) != 0) {
+
+bcdecode: iOS texture fallback where GPU BC sampling is unavailable; host decoder tests are optional.
+  rg -n 'bc7decomp|rgbcx::' src tools cmake CMakeLists.txt installer android ios tests: 7 matching lines.
+  cmake/Dependencies.cmake:343:  add_library(pt_bcdecode STATIC ${bcdecode_SOURCE_DIR}/rgbcx.cpp ${bcdecode_SOURCE_DIR}/bc7decomp.cpp)
+  src/engine/render/bc_decode.cpp:4:#include <bc7decomp.h>
+  src/engine/render/bc_decode.cpp:68:                    rgbcx::unpack_bc1(block, px);
+
+d3d12_agility: Windows graphics backend and exported SDK version, loaded by D3D12 at runtime.
+  rg -n 'D3D12SDKVersion|D3D12CreateDevice' src tools cmake CMakeLists.txt installer android ios tests: 5 matching lines.
+  tools/package.py:33:# DirectX 12 (docs/rhi.md): an executable that exports D3D12SDKVersion (the Agility SDK's, agility_exports.h) loads the D3D12
+  tools/package.py:35:D3D12_EXPORT_MARK = b"D3D12SDKVersion"
+  cmake/D3D12Backend.cmake:67:# ships D3D12/D3D12Core.dll and the DXIL shaders with an executable that exports D3D12SDKVersion (agility_exports.h).
+
+d3d12ma: D3D12 device memory ownership; Vulkan VMA cannot allocate D3D12 resources.
+  rg -n 'D3D12MA::CreateAllocator|D3D12MA::Allocation' src tools cmake CMakeLists.txt installer android ios tests: 23 matching lines.
+  src/engine/render/d3d12/backend/d3d12_raytracing.cpp:81:        D3D12MA::Allocation* allocation = nullptr;
+  src/engine/render/d3d12/backend/d3d12_device_impl.cpp:329:    if (FAILED(D3D12MA::CreateAllocator(&alloc, &allocator_))) {
+  src/engine/render/d3d12/backend/d3d12_device_impl.cpp:620:void DeviceImpl::Release(ComPtr<ID3D12Resource> resource, D3D12MA::Allocation* allocation, DescriptorHeap* heap, uint32_t index, uint32_t count) {
+
+spirv_cross: Build-time SPIR-V to HLSL translation and reflection for D3D12 shaders.
+  rg -n 'SPIRV_CROSS_NAMESPACE|CompilerHLSL' src tools cmake CMakeLists.txt installer android ios tests: 2 matching lines.
+  tools/dx12/spirv_to_hlsl.cpp:74:        CompilerHLSL hlsl(ReadWords(argv[1]));
+  tools/dx12/spirv_to_hlsl.cpp:78:        CompilerHLSL::Options opts = hlsl.get_hlsl_options();
+
+dxc: HLSL to DXIL compilation and validation; glslc and SPIRV-Cross produce different intermediates.
+  rg -n 'dxc.exe|dxv.exe' src tools cmake CMakeLists.txt installer android ios tests: 5 matching lines.
+  cmake/D3D12Shaders.cmake:10:#   DXC          microsoft/DirectXShaderCompiler v1.9.2609, dxc_2026_09_29.zip: dxc.exe, dxcompiler.dll, dxil.dll, dxv.exe
+  cmake/D3D12Shaders.cmake:29:foreach(tool dxc.exe dxv.exe dxcompiler.dll dxil.dll)
+  cmake/D3D12Shaders.cmake:77:    COMMAND ${PT_DXC_BIN_DIR}/dxc.exe -nologo -T ${stage}_6_${PT_D3D12_SM_MINOR} -E main -Fo ${dxil} ${hlsl}
+
+minhook: Windows neural-runtime compatibility companion; executable trampolines are not a safe few-line substitute.
+  rg -n 'MH_CreateHook|MH_Initialize|MH_EnableHook' src tools cmake CMakeLists.txt installer android ios tests: 3 matching lines.
+  tools/nr_native_hooks.h:44:        const MH_STATUS status = MH_Initialize();
+  tools/nr_native_hooks.h:48:    MH_STATUS status = MH_CreateHook(target, detour, original);
+  tools/nr_native_hooks.h:51:    status = MH_EnableHook(target);
+
+Vulkan headers / glslc / SPIRV-Tools: Shader toolchain and API declarations. Desktop Linux FFX also links Vulkan::Vulkan.
+  rg -n 'Vulkan_GLSLC_EXECUTABLE|spirv-opt|#include <vulkan/' src tools cmake CMakeLists.txt installer android ios tests: 20 matching lines.
+  CMakeLists.txt:287:    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${PT_GLSLC_DEFINES} -MD -MF ${out}.d ${shader} -o ${out}
+  CMakeLists.txt:310:      COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${PT_GLSLC_DEFINES} -MD -MF "${out}.d" "${shader}" -o "${out}"
+  CMakeLists.txt:378:  COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O "${CMAKE_SOURCE_DIR}/tests/texture_descriptor.comp" -o "${PT_TEXTURE_DESCRIPTOR_SHADER}"
+
+MoltenVK: Vulkan implementation on Metal, dynamically loaded and bundled on Apple platforms.
+  rg -n 'libMoltenVK|MoltenVK.framework' src tools cmake CMakeLists.txt installer android ios tests: 25 matching lines.
+  cmake/MacOS.cmake:1:# macOS (docs/macos.md): Vulkan there is MoltenVK, Vulkan 1.4 on Metal (Apache-2.0). The official release's libMoltenVK.dylib,
+  cmake/MacOS.cmake:15:set(PT_MOLTENVK_LIBRARY "" CACHE FILEPATH "libMoltenVK.dylib to ship instead of the pinned MoltenVK release")
+  cmake/MacOS.cmake:18:set(pt_moltenvk_dylib "${PT_MOLTENVK_DIR}/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib")
+
+MetalFX and Apple frameworks: System SDK frameworks for upscaling, HDR, microphone, UI and platform integration; not downloaded third-party packages.
+  rg -n 'MetalFX|AVFoundation|CoreFoundation|QuartzCore|AppKit' src tools cmake CMakeLists.txt installer android ios tests: 98 matching lines.
+  CMakeLists.txt:7:# OBJCXX on macOS for the Apple MetalFX upscaler (cmake/MacOS.cmake, metalfx_backend.mm); the language is set here so its
+  CMakeLists.txt:539:  target_link_libraries(pt_macos_data_path_test PRIVATE "-framework CoreFoundation")
+  tests/ios_diagnostics_smoke.mm:3:#include <CoreFoundation/CoreFoundation.h>
+
+FidelityFX 1.1.4: FSR 3.1 Vulkan and frame generation; Linux compiles its Vulkan provider from SDK sources.
+  rg -n 'ffxDispatch|ffxCreateContext|ffxLoadFunctions' src tools cmake CMakeLists.txt installer android ios tests: 39 matching lines.
+  tools/linux/upscaler_abi_check.py:23:FFX_EXPORTS = {"ffxCreateContext", "ffxDestroyContext", "ffxConfigure", "ffxQuery", "ffxDispatch"}
+  src/engine/render/d3d12/backend/d3d12_upscale.cpp:666:        ffxCreateContextDescUpscale desc{};
+  src/engine/render/d3d12/backend/d3d12_upscale.cpp:670:        ffxCreateContextDescUpscaleVersion api_version{};
+
+FidelityFX 2.3.0: FSR 4 upscaling and ray regeneration, while 1.1.4 supplies the older frame-generation API.
+  rg -n 'ffx_denoiser|FFX_DENOISER|amd_fidelityfx_loader_dx12' src tools cmake CMakeLists.txt installer android ios tests: 14 matching lines.
+  cmake/Upscalers.cmake:63:# to FSR 3.1.5 on other GPUs). amd_fidelityfx_loader_dx12.dll is the interface-compatible successor of amd_fidelityfx_dx12.dll and
+  cmake/Upscalers.cmake:73:  "Kits/FidelityFX/denoisers/include/ffx_denoiser.h|bdfde56568543abe5fef75debc141f0199bc84e8733a8e151b40b4b5cda3008c"
+  cmake/Upscalers.cmake:76:  "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll|e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa"
+
+NVIDIA DLSS / NGX: Super resolution, ray reconstruction and neural-rendering integrations on NVIDIA GPUs.
+  rg -n 'NVSDK_NGX_|nvsdk_ngx' src tools cmake CMakeLists.txt installer android ios tests: 296 matching lines.
+  cmake/D3D12Backend.cmake:94:  target_link_libraries(pt_gpu_d3d12 PRIVATE "${PT_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
+  cmake/UpscalersLinux.cmake:4:# NVIDIA DLSS: the DLSS SDK 310.9.1 ships Linux x86-64 files beside the Windows ones: libnvsdk_ngx.a (linked, the NGX
+  cmake/UpscalersLinux.cmake:19:  "lib/Linux_x86_64/libnvsdk_ngx.a|3321c4ca9adf71f345550d10bf2148ed38003151b03ec5f81c99d00949ab8202"
+
+Intel XeSS / XeSS-FG / XeLL: Intel upscaling, frame generation and low-latency dependencies; not equivalent to NVIDIA or AMD hardware support.
+  rg -n 'xefgSwapChain|xell|xessVK|xessD3D12' src tools cmake CMakeLists.txt installer android ios tests: 108 matching lines.
+  cmake/Upscalers.cmake:2:# FSR (amd_fidelityfx_vk.dll), XeSS (libxess.dll, libxess_fg.dll, libxell.dll) and the DLSS link library used here are Windows binaries;
+  cmake/Upscalers.cmake:117:  "inc/xell/xell.h|0a65a677001edf473156e6ed1d6cf97150fa12ff9930811bbaf4613b080c11b2"
+  cmake/Upscalers.cmake:118:  "inc/xell/xell_d3d12.h|e3b07f2f3adc317416a6aaa2343ae9b56c7707a34bb0e56fbefea14463a76bce"
+
+NVIDIA Streamline plugins: Runtime-selected DLSS/FG/RR, Reflex and PCL plugins. API overlap with NGX serves different active rendering paths.
+  rg -n 'sl::kFeature(DLSS|DLSS_G|Reflex|PCL|DLSS_RR)' src tools cmake CMakeLists.txt installer android ios tests: 33 matching lines.
+  src/engine/render/upscale/streamline.cpp:184:    static sl::Feature features[5] = {sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_RR};
+  src/engine/render/upscale/streamline.cpp:185:    static sl::Feature features_d3d12[3] = {sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL};
+  src/engine/render/upscale/streamline.cpp:243:    const sl::Result dlss = g_api.is_supported(sl::kFeatureDLSS, adapter);
+
+OpenXR loader: Optional VR runtime bridge, dynamically loaded; headless runtime tests are separate and not shipped.
+  rg -n 'xrCreateInstance|xrGetInstanceProcAddr' src tools cmake CMakeLists.txt installer android ios tests: 16 matching lines.
+  tools/xr_test_runtime/xr_test_runtime.cpp:977:    if (!out) return Violation(XR_ERROR_VALIDATION_FAILURE, "xrCreateInstance: null instance");
+  tools/xr_test_runtime/xr_test_runtime.cpp:981:    if (!info->applicationInfo.applicationName[0]) return Violation(XR_ERROR_NAME_INVALID, "xrCreateInstance: empty application name");
+  tools/xr_test_runtime/xr_test_runtime.cpp:989:            Log("xrCreateInstance: extension %s not supported", name.c_str());
+
+ww2ogg codebook data: Pinned codebooks are required to rebuild Wwise Vorbis setup packets.
+  rg -n 'pt_wwise_codebooks' src tools cmake CMakeLists.txt installer android ios tests: 5 matching lines.
+  cmake/Dependencies.cmake:317:    "#include <stddef.h>\nconst unsigned char pt_wwise_codebooks[] = {${pt_codebooks_bytes}};\nconst size_t pt_wwise_codebooks_size = ${pt_codebooks_size};\n")
+  src/engine/audio/wwise_vorbis.cpp:12:extern "C" const unsigned char pt_wwise_codebooks[];
+  src/engine/audio/wwise_vorbis.cpp:13:extern "C" const size_t pt_wwise_codebooks_size;
+
+Whisper base.en / small.en / Silero VAD model data: Base speech model, second-opinion model, and VAD serve distinct roles. iOS packages only base and VAD.
+  rg -n 'kDefaultWhisperModel|kDefaultRescueModel|kVadModel' src tools cmake CMakeLists.txt installer android ios tests: 9 matching lines.
+  src/engine/voice/voice_recognizer.cpp:51:constexpr const char* kDefaultWhisperModel = "ggml-base.en-q5_1.bin";
+  src/engine/voice/voice_recognizer.cpp:52:constexpr const char* kDefaultRescueModel = "ggml-small.en-q5_1.bin";
+  src/engine/voice/voice_recognizer.cpp:53:constexpr const char* kVadModel = "ggml-silero-v6.2.0.bin";
+
+Noto fonts: Font files supply language glyphs; the runtime selects the family by script.
+  rg -n 'NotoSans|NotoKufi|NotoNaskh' src tools cmake CMakeLists.txt installer android ios tests: 33 matching lines.
+  installer/Native/shipped_history.h:211:    "fonts/NotoKufiArabic.ttf",
+  installer/Native/shipped_history.h:212:    "fonts/NotoNaskhArabic.ttf",
+  installer/Native/shipped_history.h:213:    "fonts/NotoSans.ttf",
+
+LibOrbisPkg: C# fake-PKG reader/decryptor/extractor; third-party project is patched for .NET 10. No NuGet PackageReference entries.
+  rg -n 'LibOrbisPkg|PkgReader|PfsReader' src tools cmake CMakeLists.txt installer android ios tests: 84 matching lines.
+  installer/Extractor/Program.cs:3:using LibOrbisPkg.PKG;
+  installer/Extractor/Program.cs:4:using LibOrbisPkg.PFS;
+  installer/Extractor/Program.cs:21:    static byte[] Head(PfsReader.File file,long offset,int count) {
+
+.NET 10 runtime / Android SDK workload: C# extractor and Android launcher. Reflection, runtime and platform callbacks prevent deleting assemblies on a textual search alone.
+  rg -n 'net10.0|self-contained|RuntimeIdentifier' src tools cmake CMakeLists.txt installer android ios tests: 22 matching lines.
+  installer/Extractor/Extractor.csproj:2:  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AssemblyName>PT.PkgExtract</AssemblyName></PropertyGroup>
+  installer/Tests/Tests.csproj:2: <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  installer/Native/setup_macos.mm:75:        // The self-contained .NET runtime also includes Mach-O tools such as
+
+Brotli runtime fallback: Only copied for custom/Homebrew .NET binaries that actually link it; official Microsoft packs do not need the fallback.
+  rg -n 'bundle_extractor_brotli|libbrotli' src tools cmake CMakeLists.txt installer android ios tests: 4 matching lines.
+  tools/macos/bundle.py:26:def bundle_extractor_brotli(root, arch):
+  tools/macos/bundle.py:46:            if name == file.name or not re.fullmatch(r"libbrotli(?:dec|enc|common)(?:\.\d+)*\.dylib", name):
+  tools/macos/make_setup.py:9:from bundle import ICON_FILE, REPO, bundle_extractor_brotli, copy_icon, is_mach, run, sign_tree
+
+NumPy: Eight analysis tools use arrays, FFTs, linear algebra, vectorized parsing and searches; not a one-feature dependency.
+  rg -n 'np\.(fft|linalg|frombuffer|argsort|array|asarray)' src tools cmake CMakeLists.txt installer android ios tests: 68 matching lines.
+  tools/ftex.py:66:    blocks = np.frombuffer(data, dtype=np.uint8, count=bx * by * 16).reshape(by, bx, 16)
+  tools/ftex.py:165:        values = np.frombuffer(data, dtype="<f4").reshape(h, w)
+  tools/ftex.py:189:    top = np.asarray(top_image, dtype=np.float32)
+
+Pillow: Texture/mesh previews and font sheets in four tools; image codec and raster operations.
+  rg -n 'Image\.(open|new|fromarray)|ImageDraw' src tools cmake CMakeLists.txt installer android ios tests: 12 matching lines.
+  tools/ftex.py:166:        return Image.fromarray((np.clip(values, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "L")
+  tools/ftex.py:182:    strip = Image.new(tiles[0].mode, (w * len(tiles), h))
+  tools/ffnt.py:41:    img = Image.new("L", (int(pen) + 10, int(line) + 20))
+
+SoundFile / libsndfile: Audio corpus IO with float/multichannel handling in two analysis tools.
+  rg -n 'sf\.(read|write|blocks|info)' src tools cmake CMakeLists.txt installer android ios tests: 4 matching lines.
+  tools/voice_check.py:102:    audio, rate = sf.read(path, always_2d=True, dtype='float32')
+  tools/voice_check.py:174:    sf.write(path, np.clip(x, -1, 1), RATE, subtype='PCM_16')
+  tools/audio_dump.py:146:    info = sf.info(str(path))
+
+SciPy: Resampling, IIR filter design/application and FFT convolution used by voice validation.
+  rg -n 'sps\.(resample_poly|lfilter|butter|fftconvolve)' src tools cmake CMakeLists.txt installer android ios tests: 12 matching lines.
+  tools/voice_check.py:105:        audio = sps.resample_poly(audio, RATE, rate).astype(np.float32)
+  tools/voice_check.py:127:        return sps.lfilter(b, a, white)
+  tools/voice_check.py:130:        b, a = sps.butter(2, 800 / (RATE / 2))
+
+texture2ddecoder: BC texture decoding; bitstream codecs are not a few-line replacement.
+  rg -n 'texture2ddecoder\.' src tools cmake CMakeLists.txt installer android ios tests: 2 matching lines.
+  tools/ftex.py:80:BC_DECODERS = {2: texture2ddecoder.decode_bc1, 3: decode_bc2,
+  tools/ftex.py:81:               4: texture2ddecoder.decode_bc3, 5: texture2ddecoder.decode_bc5}
+
+Capstone: x86-64 instruction decoding to find embedded audio IDs. A small call count still invokes a complex decoder.
+  rg -n 'capstone\.Cs|disassembler\.disasm' src tools cmake CMakeLists.txt installer android ios tests: 2 matching lines.
+  tools/audio_dump.py:553:        for instruction in disassembler.disasm(data[origin:hit + 16], base + origin - start):
+  tools/audio_dump.py:575:    disassembler = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+
+vgmstream-cli / Windows speech synthesis: Offline audio decoding and voice-test corpus generation, not game runtime dependencies.
+  rg -n 'run_vgmstream|SpeakSsml' src tools cmake CMakeLists.txt installer android ios tests: 3 matching lines.
+  tools/voice_check.py:84:  $s.SpeakSsml("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" + $p[3] + "</speak>")
+  tools/audio_dump.py:118:def run_vgmstream(vgmstream: Path, source: Path, target: Path):
+  tools/audio_dump.py:207:        item.update(run_vgmstream(vgmstream, layout.out / item["wem"], layout.out / item["wav"]))
+
+Optional community DLSS tools and ReShade: Only installed by explicit runtime routes or pre-staged builds; keeps public features and external plugin behavior. Not downloaded during audit.
+  rg -n 'kToolUrl|kRuntimeUrl|kCodeUrl|PT_RESHADE_PT_DIR' src tools cmake CMakeLists.txt installer android ios tests: 16 matching lines.
+  cmake/Upscalers.cmake:353:set(PT_RESHADE_PT_DIR "${PT_UPSCALER_SDK_DIR}/../reshade-pt-6.8.0" CACHE PATH "Folder with the port's own ReShade build (tools/build_reshade.py)")
+  cmake/Upscalers.cmake:355:  if(EXISTS "${PT_RESHADE_PT_DIR}/dxgi.dll" AND EXISTS "${PT_RESHADE_PT_DIR}/LICENSE.md")
+  cmake/Upscalers.cmake:356:    pt_add_staged_file(pt_upscaler_runtime_outputs "${PT_RESHADE_PT_DIR}/dxgi.dll" "${pt_upscaler_runtime_dir}/reshade/dxgi.dll")
+
+BUILD TOOLS AND TRANSITIVE DEPENDENCIES
+CMake/Ninja, Clang/LLVM/MSVC/Xcode tools, Python and Git are used by configure, compile, shader, packaging and pinned-source steps.
+Shaderc/glslc and SPIRV-Tools compile/optimize shaders; SPIRV-Cross translates to HLSL; DXC/dxv compile/validate DXIL.
+These tools perform consecutive transformations, not interchangeable implementations of the same output.
+.NET 10/Android workload, Android SDK/NDK/build-tools, Java tooling and Xcode SDKs build their platform launchers and native modules.
+The cached extractor restore graph contains only the LibOrbisPkg.Core project reference; no third-party NuGet PackageReferences.
+Whisper embeds ggml. Its KleidiAI, CUDA, Vulkan, OpenMP, Metal and curl download paths are OFF in both audited Apple caches.
+Upstream example/research requirements and disabled backends were not treated as installed project dependencies.
+Vendored implementation pieces (SDL hidapi and platform backends, zstd xxhash on Windows, ggml CPU kernels, SPIR-V headers)
+are consumed inside their parent libraries. They are not redundant independently installed packages.
+
+All 36 Linux sysroot roots were checked against compiler/runtime requirements and SDL platform probes:
+  libc6-dev, linux-libc-dev, libgcc-14-dev, libstdc++-14-dev, libgcc-s1, libstdc++6, libc6, libx11-dev, libxext-dev, libxrandr-dev, libxrender-dev, libxcursor-dev, libxi-dev, libxfixes-dev, libxss-dev, libxtst-dev, libxkbcommon-dev, libxcb1-dev, libasound2-dev, libpulse-dev, libpipewire-0.3-dev, libdbus-1-dev, libudev-dev, libdrm-dev, libgbm-dev, libegl-dev, libgl-dev, libgles-dev, libwayland-dev, libdecor-0-dev, libvulkan-dev, libusb-1.0-0-dev, libpulse0, libwayland-client0, libwayland-cursor0, libwayland-egl1
+- libc/kernel/GCC/libstdc++ packages provide the target ABI, compiler headers and static C++ runtime.
+- X11/XCB/Xrandr/Xrender/Xcursor/Xi/Xfixes/Xss/Xtst/xkbcommon are SDL window/input/clipboard/display integrations.
+- ALSA/Pulse/PipeWire provide SDL audio routes; dbus/udev/libusb support desktop and controller/device discovery.
+- Wayland client/cursor/EGL, libdecor and xkbcommon provide Wayland windows, input and decorations.
+- DRM/GBM/EGL/GL/GLES are SDL platform/backend dependencies; Vulkan supplies the Linux renderer/FFX interface.
+The cross toolchain explicitly binds runtime sonames for SDL dlopen. Direct application #include searches alone would miss them.
+See cmake/toolchains/linux-x86_64-clang-cross.cmake and the pinned SDL cmake/sdlchecks.cmake / cmake/FindLibUSB.cmake.
+CI apt/vcpkg recipes select subsets of these plus Ninja, glslc and Vulkan headers/loader. No system package was uninstalled.
+
+UNCERTAIN / FEATURE-SIZE DECISIONS LEFT FOR YOU
+1. .NET runtime trimming for LibOrbisPkg/Android: the cached single-file Mac extractor is 80,200,750 bytes.
+   The library is required, but individual framework assemblies may be removable with a separate trim/reflection/JNI audit.
+   Kept the runtime intact; a file-name search cannot prove that dynamically reached framework code is unnecessary.
+2. Windows GPU SDK/runtime pruning (Streamline plugins, NGX/DLSS, XeSS/XeLL, both FidelityFX generations, OpenXR, optional ReShade):
+   live calls and dynamic loads exist. Driver/plugin transitive dependencies and the hardware matrix were not exercised here.
+   Removing any provider also removes a supported feature or hardware path; no package-size saving is asserted without local binaries.
+3. Optional SDL Linux system backends (especially DRM/GBM/EGL/GL/GLES) and Windows build-time Vulkan loader discovery:
+   they remain part of the configured dependency graph. Deciding to disable backends or alter Windows SDK discovery needs native
+   validation; textual application calls do not establish that every SDL window-system/driver fallback is unreachable.
+4. The desktop second-opinion Whisper model is 190,098,681 bytes and is actually loaded by the default rescue path.
+   Kept for recognition behavior. Dropping that feature is a product choice, not an unused-dependency removal.
+
+REVIEW / REPRODUCTION
+Audit state and exact baseline: /Users/suporte/PT-Mac/build/dependency-audit
+Run: python3 build/dependency-audit/validate.py <new-unique-tag> (native GPU access required).
+Clean iOS evidence: /Users/suporte/PT-Mac/build/dependency-audit/ios-validation
+All 7 changes are listed in /Users/suporte/PT-Mac/build/dependency-audit/changes.json.
+The worktree contains earlier tasks too. Compare this task against baseline-files.json, not against HEAD, to isolate these changes.

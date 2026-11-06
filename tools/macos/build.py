@@ -26,7 +26,7 @@ TESTS = ("pt_tests", "pt_platform_test", "pt_settings_roundtrip_test", "pt_save_
          "pt_microphone_async_test", "pt_archive_model_camera_test", "pt_audio_channel_layout_test",
          "pt_controller_feedback_test", "pt_controller_speaker_route_test", "pt_dualshock_audio_test", "pt_upscaler_gpu_test",
          "pt_archive_unlock_test", "pt_device_start_test", "pt_dialog_nav_test", "pt_notice_queue_test", "pt_gyro_test",
-         "pt_sound_captions_test", "pt_lisa_date_test", "pt_camera_blend_test", "pt_rendering_api_test",
+         "pt_sound_captions_test", "pt_lisa_date_test", "pt_ogg_vorbis_test", "pt_camera_blend_test", "pt_rendering_api_test",
          "pt_mouse_render_test", "pt_pc_prompt_note_test", "pt_prompt_hint_test", "pt_pc_settings_refresh_test",
          "pt_key_layout_test", "pt_hdr_output_test", "pt_exposure_test", "pt_rendering_pipeline_test",
          "pt_enhanced_hdr_pipeline_test", "pt_rendering_pipeline_gpu_test", "pt_composite_output_test", "pt_point_shadow_projection_test",
@@ -173,6 +173,11 @@ def main():
     run("dotnet", "build", REPO / "installer/Tests/Tests.csproj", "-c", "Release",
         f"-p:LibOrbisSource={source}", "--artifacts-path", dotnet_artifacts)
     run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll", build / f"extractor-tests-{uuid.uuid4().hex}")
+    if not args.skip_tests:
+        # Project-reference tests cannot detect code removed from a published helper.
+        for published in (extractor, app_extractor):
+            run("dotnet", dotnet_artifacts / "bin/Tests/release/Tests.dll",
+                "--extractor", published / "PT.PkgExtract", build / f"extractor-tests-{uuid.uuid4().hex}")
     game_args = ["--game", args.game.resolve()] if args.game else []
     run(sys.executable, REPO / "tools/macos/make_app.py", "--build", build, "--exe", build / "pt_release",
         "--out", output, "--identity", args.identity, "--extractor", app_extractor, *game_args)

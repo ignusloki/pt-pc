@@ -128,7 +128,6 @@ private:
     static void DrawLetterbox(ui::UiBatch& batch, glm::vec2 full, float aspect);
     static void DrawLisaVignette(ui::UiBatch& batch, glm::vec2 full, float strength);
     void DrawSaveDialog(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
-    bool PointerUnits(const InputState& input, glm::vec2* units) const;
     void DrawTheaterHint(ui::UiBatch& batch, const UiCanvas& canvas);
     void DrawPortCredits(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full);
     void DrawEndingSkip(ui::UiBatch& batch, const UiCanvas& canvas);

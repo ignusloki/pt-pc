@@ -6,6 +6,7 @@
 
 namespace pt {
 
+uint64_t CityHashMix16(uint64_t u, uint64_t v);
 uint64_t CityHash64(const void* data, size_t length);
 uint64_t CityHash64WithSeeds(const void* data, size_t length, uint64_t seed0, uint64_t seed1);
 

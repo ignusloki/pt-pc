@@ -1,3 +1,5 @@
+#include "engine/core/binary_read.h"
+#include "engine/core/error.h"
 #include "engine/core/ascii.h"
 #include "engine/assets/gltf_model.h"
 
@@ -36,12 +38,6 @@ std::string Stem(const std::string& path) {
     const size_t dot = path.find_last_of('.');
     const size_t slash = path.find_last_of('/');
     return dot != std::string::npos && (slash == std::string::npos || dot > slash) ? path.substr(0, dot) : path;
-}
-
-std::string LowerCopy(std::string_view text) {
-    std::string out(text);
-    for (char& c : out) c = static_cast<char>(pt::AsciiLower(c));
-    return out;
 }
 
 std::string Unescape(std::string_view uri) {
@@ -90,12 +86,12 @@ public:
 
     bool Read(std::span<const uint8_t> data, FmdlModel& out, std::string& error) {
         std::string_view json_text;
-        if (data.size() >= 12 && Get32(data, 0) == kGlbMagic) {
+        if (data.size() >= 12 && ReadBinaryUnchecked<uint32_t>(data, 0) == kGlbMagic) {
             size_t at = 12;
             while (at + 8 <= data.size()) {
-                const uint32_t length = Get32(data, at);
-                const uint32_t type = Get32(data, at + 4);
-                if (at + 8 + length > data.size()) return Fail(error, "the .glb is cut short");
+                const uint32_t length = ReadBinaryUnchecked<uint32_t>(data, at);
+                const uint32_t type = ReadBinaryUnchecked<uint32_t>(data, at + 4);
+                if (at + 8 + length > data.size()) return FailWithError(&error, "the .glb is cut short");
                 if (type == kChunkJson) {
                     json_text = std::string_view(reinterpret_cast<const char*>(data.data() + at + 8), length);
                 } else if (type == kChunkBin && glb_bin_.empty()) {
@@ -103,37 +99,26 @@ public:
                 }
                 at += 8 + ((length + 3) & ~3u);
             }
-            if (json_text.empty()) return Fail(error, "the .glb has no JSON chunk");
+            if (json_text.empty()) return FailWithError(&error, "the .glb has no JSON chunk");
         } else {
             json_text = std::string_view(reinterpret_cast<const char*>(data.data()), data.size());
         }
         std::string parse_error;
-        if (!json::Parse(json_text, doc_, &parse_error)) return Fail(error, "the glTF JSON is invalid: " + parse_error);
-        if (!doc_.IsObject()) return Fail(error, "the glTF is not a JSON object");
+        if (!json::Parse(json_text, doc_, &parse_error)) return FailWithError(&error, "the glTF JSON is invalid: " + parse_error);
+        if (!doc_.IsObject()) return FailWithError(&error, "the glTF is not a JSON object");
         if (const json::Value* asset = doc_.Find("asset"); !asset || asset->String("version").substr(0, 1) != "2") {
-            return Fail(error, "only glTF 2.0 is read");
+            return FailWithError(&error, "only glTF 2.0 is read");
         }
         if (!LoadBuffers(error)) return false;
         Materials(out);
         if (!Skeleton(out, error)) return false;
         if (!Nodes(out, error)) return false;
-        if (out.mesh.submeshes.empty()) return Fail(error, "the glTF has no triangle meshes");
+        if (out.mesh.submeshes.empty()) return FailWithError(&error, "the glTF has no triangle meshes");
         Finish(out);
         return true;
     }
 
 private:
-    static uint32_t Get32(std::span<const uint8_t> data, size_t at) {
-        uint32_t v = 0;
-        std::memcpy(&v, data.data() + at, 4);
-        return v;
-    }
-
-    static bool Fail(std::string& error, std::string what) {
-        error = std::move(what);
-        return false;
-    }
-
     std::optional<std::vector<uint8_t>> ReadUri(const std::string& uri) const {
         if (uri.starts_with("data:")) {
             const size_t comma = uri.find(',');
@@ -149,12 +134,12 @@ private:
             const json::Value& b = *buffers->At(i);
             const std::string uri = b.String("uri");
             if (uri.empty()) {
-                if (glb_bin_.empty()) return Fail(error, std::format("buffer {} has no data", i));
+                if (glb_bin_.empty()) return FailWithError(&error, std::format("buffer {} has no data", i));
                 buffers_.push_back(glb_bin_);
                 continue;
             }
             auto bytes = ReadUri(uri);
-            if (!bytes) return Fail(error, std::format("buffer {} ({}) was not found beside the model", i, uri.starts_with("data:") ? "embedded" : uri));
+            if (!bytes) return FailWithError(&error, std::format("buffer {} ({}) was not found beside the model", i, uri.starts_with("data:") ? "embedded" : uri));
             buffers_.push_back(std::move(*bytes));
         }
         return true;
@@ -290,8 +275,6 @@ private:
         return images_[key];
     }
 
-    static std::string ExtraString(const json::Value& extras, const char* key) { return extras.String(key); }
-
     void Materials(FmdlModel& out) {
         const json::Value* materials = doc_.Find("materials");
         for (size_t i = 0; materials && i < materials->Size(); ++i) {
@@ -392,7 +375,7 @@ private:
             }
             if (!missing.empty()) {
                 if (out.bone_names.empty()) {
-                    return Fail(error, "a skinned glTF replaces a game model that has bones (a character); this path has none");
+                    return FailWithError(&error, "a skinned glTF replaces a game model that has bones (a character); this path has none");
                 }
                 std::string list;
                 for (size_t i = 0; i < missing.size() && i < 8; ++i) list += (i ? ", " : "") + missing[i];
@@ -487,7 +470,7 @@ private:
     bool Mesh(int index, const glm::mat4& transform, int skin, const std::string& node_name, FmdlModel& out, std::string& error) {
         const json::Value* meshes = doc_.Find("meshes");
         const json::Value* mesh = meshes ? meshes->At(static_cast<size_t>(index)) : nullptr;
-        if (!mesh) return Fail(error, std::format("mesh {} is missing", index));
+        if (!mesh) return FailWithError(&error, std::format("mesh {} is missing", index));
         mesh_group_names_ = out.mesh_group_names;
         const glm::mat3 normal_matrix = glm::transpose(glm::inverse(glm::mat3(transform)));
         const bool mirrored = glm::determinant(glm::mat3(transform)) < 0.0f;
@@ -504,7 +487,7 @@ private:
             std::vector<float> positions, normals, tangents, uv0, uv1, colours, joints, weights, indices;
             int n = 0;
             if (!Accessor(static_cast<int>(position_index->number), positions, n) || n != 3) {
-                return Fail(error, std::format("mesh {} primitive {}: unreadable positions", index, p));
+                return FailWithError(&error, std::format("mesh {} primitive {}: unreadable positions", index, p));
             }
             const size_t count = positions.size() / 3;
             auto optional = [&](const char* name, std::vector<float>& values, int want) {
@@ -528,7 +511,7 @@ private:
             if (const json::Value* i = prim.Find("indices")) {
                 int c = 0;
                 if (!Accessor(static_cast<int>(i->number), indices, c) || c != 1) {
-                    return Fail(error, std::format("mesh {} primitive {}: unreadable indices", index, p));
+                    return FailWithError(&error, std::format("mesh {} primitive {}: unreadable indices", index, p));
                 }
             } else {
                 indices.resize(count);
@@ -573,7 +556,7 @@ private:
             sub.vertex_offset = static_cast<int32_t>(base);
             for (size_t k = 0; k + 2 < indices.size(); k += 3) {
                 const uint32_t a = static_cast<uint32_t>(indices[k]), b = static_cast<uint32_t>(indices[k + 1]), c = static_cast<uint32_t>(indices[k + 2]);
-                if (a >= count || b >= count || c >= count) return Fail(error, std::format("mesh {} primitive {}: index out of range", index, p));
+                if (a >= count || b >= count || c >= count) return FailWithError(&error, std::format("mesh {} primitive {}: index out of range", index, p));
                 out.mesh.indices.push_back(a);
                 out.mesh.indices.push_back(mirrored ? c : b);
                 out.mesh.indices.push_back(mirrored ? b : c);
@@ -692,7 +675,7 @@ bool LoadModelFile(const Vfs& vfs, const std::string& path, FmdlModel& out) {
 
 bool LoadModelFile(const Vfs& vfs, const std::string& path, const std::vector<uint8_t>* game_bytes, FmdlModel& out) {
     if (mods::Active()) {
-        const std::string lower = LowerCopy(path);
+        const std::string lower = AsciiLowerCopy(path);
         const bool direct = lower.ends_with(".glb") || lower.ends_with(".gltf");
         for (const char* extension : {".glb", ".gltf"}) {
             const std::string candidate = direct ? path : Stem(path) + extension;

@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/wem.h"
 
 #include <algorithm>
@@ -8,18 +9,6 @@
 
 namespace pt::audio {
 namespace {
-
-uint16_t U16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
 
 constexpr int kImaSteps[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
@@ -108,7 +97,7 @@ private:
         const uint32_t samples = static_cast<uint32_t>(std::min<size_t>((sub_block - 4) * 2, kImaBlockFrames));
         for (uint32_t c = 0; c < channels_; ++c) {
             const uint8_t* header = data_.data() + frame_offset + c * sub_block;
-            int hist = static_cast<int16_t>(U16(header));
+            int hist = static_cast<int16_t>(ReadBinaryUnchecked<uint16_t>(header));
             int index = std::clamp<int>(header[2], 0, 88);
             float* dst = block_.data() + c;
             dst[0] = static_cast<float>(hist) * (1.0f / 32768.0f);
@@ -179,19 +168,19 @@ bool ParseWem(std::span<const uint8_t> blob, WemInfo& info, std::string* error) 
     size_t pos = 12;
     while (pos + 8 <= blob.size()) {
         const uint8_t* chunk = blob.data() + pos;
-        const uint32_t size = U32(chunk + 4);
+        const uint32_t size = ReadBinaryUnchecked<uint32_t>(chunk + 4);
         const size_t start = pos + 8;
         const size_t available = std::min<size_t>(size, blob.size() - start);
         if (std::memcmp(chunk, "fmt ", 4) == 0 && available >= 16) {
             const uint8_t* f = blob.data() + start;
-            info.codec_tag = U16(f);
-            info.channels = U16(f + 2);
-            info.sample_rate = U32(f + 4);
-            info.avg_bytes_per_second = U32(f + 8);
-            info.block_align = U16(f + 12);
-            info.bits_per_sample = U16(f + 14);
+            info.codec_tag = ReadBinaryUnchecked<uint16_t>(f);
+            info.channels = ReadBinaryUnchecked<uint16_t>(f + 2);
+            info.sample_rate = ReadBinaryUnchecked<uint32_t>(f + 4);
+            info.avg_bytes_per_second = ReadBinaryUnchecked<uint32_t>(f + 8);
+            info.block_align = ReadBinaryUnchecked<uint16_t>(f + 12);
+            info.bits_per_sample = ReadBinaryUnchecked<uint16_t>(f + 14);
             if (available >= 0x18) {
-                info.channel_mask = U32(f + 0x14);
+                info.channel_mask = ReadBinaryUnchecked<uint32_t>(f + 0x14);
             }
             info.fmt_offset = start;
             info.fmt_size = available;
@@ -201,25 +190,25 @@ bool ParseWem(std::span<const uint8_t> blob, WemInfo& info, std::string* error) 
             info.data_size = available;
             have_data = true;
         } else if (std::memcmp(chunk, "smpl", 4) == 0 && available >= 36) {
-            const uint32_t loops = U32(blob.data() + start + 28);
+            const uint32_t loops = ReadBinaryUnchecked<uint32_t>(blob.data() + start + 28);
             if (loops > 0 && available >= 36 + 24) {
                 const uint8_t* loop = blob.data() + start + 36;
                 info.looping = true;
-                info.loop_start = U32(loop + 8);
-                info.loop_end = U32(loop + 12) + 1;
+                info.loop_start = ReadBinaryUnchecked<uint32_t>(loop + 8);
+                info.loop_end = ReadBinaryUnchecked<uint32_t>(loop + 12) + 1;
             }
         } else if (std::memcmp(chunk, "cue ", 4) == 0 && available >= 4) {
-            const uint32_t count = U32(blob.data() + start);
+            const uint32_t count = ReadBinaryUnchecked<uint32_t>(blob.data() + start);
             for (uint32_t i = 0; i < count && 4 + (i + 1) * 24 <= available; ++i) {
                 const uint8_t* cue = blob.data() + start + 4 + i * 24;
-                cue_positions.push_back({U32(cue), U32(cue + 20)});
+                cue_positions.push_back({ReadBinaryUnchecked<uint32_t>(cue), ReadBinaryUnchecked<uint32_t>(cue + 20)});
             }
         } else if (std::memcmp(chunk, "LIST", 4) == 0 && available >= 4 && std::memcmp(blob.data() + start, "adtl", 4) == 0) {
             size_t sub = start + 4;
             while (sub + 8 <= start + available) {
-                const uint32_t sub_size = U32(blob.data() + sub + 4);
+                const uint32_t sub_size = ReadBinaryUnchecked<uint32_t>(blob.data() + sub + 4);
                 if (std::memcmp(blob.data() + sub, "labl", 4) == 0 && sub_size >= 4 && sub + 8 + sub_size <= start + available) {
-                    const uint32_t cue_id = U32(blob.data() + sub + 8);
+                    const uint32_t cue_id = ReadBinaryUnchecked<uint32_t>(blob.data() + sub + 8);
                     const char* text = reinterpret_cast<const char*>(blob.data() + sub + 12);
                     const size_t max_length = sub_size - 4;
                     labels.push_back({cue_id, std::string(text, strnlen(text, max_length))});

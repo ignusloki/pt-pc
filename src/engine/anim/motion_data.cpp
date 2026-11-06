@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/motion_data.h"
 
 #include <algorithm>
@@ -7,15 +8,6 @@
 
 namespace pt::anim {
 namespace {
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 std::string CString(std::span<const uint8_t> data, size_t offset) {
     std::string out;
@@ -28,21 +20,21 @@ std::string CString(std::span<const uint8_t> data, size_t offset) {
 void ParseParams(std::span<const uint8_t> data, size_t offset, std::vector<NodeParam>& out) {
     for (int guard = 0; guard < 64 && offset + 16 <= data.size(); ++guard) {
         NodeParam p;
-        p.type = At<uint16_t>(data, offset);
-        const uint16_t next = At<uint16_t>(data, offset + 2);
-        p.key = At<uint32_t>(data, offset + 4);
-        const uint32_t key_offset = At<uint32_t>(data, offset + 8);
+        p.type = ReadBinary<uint16_t>(data, offset);
+        const uint16_t next = ReadBinary<uint16_t>(data, offset + 2);
+        p.key = ReadBinary<uint32_t>(data, offset + 4);
+        const uint32_t key_offset = ReadBinary<uint32_t>(data, offset + 8);
         if (key_offset) {
             p.key_name = CString(data, offset + 4 + key_offset);
         }
         if (p.type == 1) {
-            p.value_hash = At<uint32_t>(data, offset + 12);
-            const uint32_t value_offset = At<uint32_t>(data, offset + 16);
+            p.value_hash = ReadBinary<uint32_t>(data, offset + 12);
+            const uint32_t value_offset = ReadBinary<uint32_t>(data, offset + 16);
             if (value_offset) {
                 p.text = CString(data, offset + 12 + value_offset);
             }
         } else if (p.type == 2) {
-            p.number = At<float>(data, offset + 12);
+            p.number = ReadBinary<float>(data, offset + 12);
         }
         out.push_back(std::move(p));
         if (!next) {
@@ -53,12 +45,12 @@ void ParseParams(std::span<const uint8_t> data, size_t offset, std::vector<NodeP
 }
 
 void ParseNameTable(std::span<const uint8_t> data, size_t offset, std::vector<NameEntry>& out) {
-    const uint32_t count = At<uint32_t>(data, offset);
+    const uint32_t count = ReadBinary<uint32_t>(data, offset);
     for (uint32_t i = 0; i < count && i < 4096; ++i) {
         const size_t e = offset + 4 + 8 * static_cast<size_t>(i);
         NameEntry entry;
-        entry.hash = At<uint32_t>(data, e);
-        const uint32_t text = At<uint32_t>(data, e + 4);
+        entry.hash = ReadBinary<uint32_t>(data, e);
+        const uint32_t text = ReadBinary<uint32_t>(data, e + 4);
         if (text) {
             entry.name = CString(data, e + text);
         }
@@ -73,21 +65,21 @@ bool VisitNodes(std::span<const uint8_t> data, size_t offset, int depth, int par
         }
         MotionNode node;
         node.offset = offset;
-        node.hash = At<uint32_t>(data, offset);
-        const uint32_t name_offset = At<uint32_t>(data, offset + 4);
-        node.data_type = At<uint32_t>(data, offset + 8);
-        node.data_offset = At<int32_t>(data, offset + 0x0C);
-        node.data_size = At<uint32_t>(data, offset + 0x10);
-        const int32_t child = At<int32_t>(data, offset + 0x18);
-        const int32_t next = At<int32_t>(data, offset + 0x20);
-        const uint32_t extra_size = At<uint32_t>(data, offset + 0x24);
+        node.hash = ReadBinary<uint32_t>(data, offset);
+        const uint32_t name_offset = ReadBinary<uint32_t>(data, offset + 4);
+        node.data_type = ReadBinary<uint32_t>(data, offset + 8);
+        node.data_offset = ReadBinary<int32_t>(data, offset + 0x0C);
+        node.data_size = ReadBinary<uint32_t>(data, offset + 0x10);
+        const int32_t child = ReadBinary<int32_t>(data, offset + 0x18);
+        const int32_t next = ReadBinary<int32_t>(data, offset + 0x20);
+        const uint32_t extra_size = ReadBinary<uint32_t>(data, offset + 0x24);
         node.name = name_offset ? CString(data, offset + name_offset) : std::string(KnownNodeName(node.hash));
         node.depth = depth;
         node.parent = parent;
         const size_t body = offset + (name_offset ? 0x40 : 0x30);
         size_t params_at = body;
         const size_t data_at = offset + static_cast<size_t>(static_cast<int64_t>(node.data_offset));
-        const uint32_t unit_count = node.data_type && node.data_offset ? At<uint32_t>(data, data_at) : 0;
+        const uint32_t unit_count = node.data_type && node.data_offset ? ReadBinary<uint32_t>(data, data_at) : 0;
         if (node.data_type && unit_count > 0 && unit_count < 4096 && data_at + 20 + 4 * static_cast<size_t>(unit_count) <= data.size()) {
             UnitsTable table;
             if (ParseUnitsTable(data, data_at, table)) {
@@ -227,33 +219,33 @@ std::string MotionNode::TargetName() const {
 }
 
 bool ParseUnitsTable(std::span<const uint8_t> data, size_t offset, UnitsTable& out) {
-    out.unit_count = At<uint32_t>(data, offset);
-    out.track_count = At<uint32_t>(data, offset + 4);
-    out.rig_word = At<uint32_t>(data, offset + 8);
-    out.frames = At<uint32_t>(data, offset + 12);
-    out.ticks_per_frame = At<uint32_t>(data, offset + 16);
+    out.unit_count = ReadBinary<uint32_t>(data, offset);
+    out.track_count = ReadBinary<uint32_t>(data, offset + 4);
+    out.rig_word = ReadBinary<uint32_t>(data, offset + 8);
+    out.frames = ReadBinary<uint32_t>(data, offset + 12);
+    out.ticks_per_frame = ReadBinary<uint32_t>(data, offset + 16);
     out.end = offset + 20 + 4 * static_cast<size_t>(out.unit_count);
     if (out.end > data.size()) {
         return false;
     }
     for (uint32_t i = 0; i < out.unit_count; ++i) {
-        const size_t u = offset + At<uint32_t>(data, offset + 20 + 4 * static_cast<size_t>(i));
+        const size_t u = offset + ReadBinary<uint32_t>(data, offset + 20 + 4 * static_cast<size_t>(i));
         if (u + 8 > data.size()) {
             return false;
         }
         UnitDesc unit;
-        unit.hash = At<uint32_t>(data, u);
-        const uint8_t count = At<uint8_t>(data, u + 4);
-        unit.flags = At<uint8_t>(data, u + 5);
+        unit.hash = ReadBinary<uint32_t>(data, u);
+        const uint8_t count = ReadBinary<uint8_t>(data, u + 4);
+        unit.flags = ReadBinary<uint8_t>(data, u + 5);
         for (uint8_t t = 0; t < count; ++t) {
             const size_t e = u + 8 + 8 * static_cast<size_t>(t);
             TrackDesc track;
-            const int32_t data_offset = At<int32_t>(data, e);
-            track.index = At<uint16_t>(data, e + 4);
-            const uint8_t kind_byte = At<uint8_t>(data, e + 6);
+            const int32_t data_offset = ReadBinary<int32_t>(data, e);
+            track.index = ReadBinary<uint16_t>(data, e + 4);
+            const uint8_t kind_byte = ReadBinary<uint8_t>(data, e + 6);
             track.kind = kind_byte & 0x0F;
             track.more = (kind_byte & 0x80) != 0;
-            track.bits = At<uint8_t>(data, e + 7);
+            track.bits = ReadBinary<uint8_t>(data, e + 7);
             track.data_offset = data_offset ? static_cast<int64_t>(e) + data_offset : -1;
             unit.tracks.push_back(track);
         }
@@ -331,11 +323,11 @@ bool DecodeEvent(std::span<const uint8_t> data, size_t offset, StreamEvent& out)
         return false;
     }
     out = StreamEvent{};
-    out.type = At<uint32_t>(data, offset);
-    const uint8_t info = At<uint8_t>(data, offset + 4);
-    const uint32_t n_ints = At<uint8_t>(data, offset + 5);
-    const uint32_t n_floats = At<uint8_t>(data, offset + 6);
-    const uint32_t n_strings = At<uint8_t>(data, offset + 7);
+    out.type = ReadBinary<uint32_t>(data, offset);
+    const uint8_t info = ReadBinary<uint8_t>(data, offset + 4);
+    const uint32_t n_ints = ReadBinary<uint8_t>(data, offset + 5);
+    const uint32_t n_floats = ReadBinary<uint8_t>(data, offset + 6);
+    const uint32_t n_strings = ReadBinary<uint8_t>(data, offset + 7);
     const uint32_t n_sections = info & 0x3F;
     const uint32_t size_class = info >> 6;
     static constexpr uint32_t kElement[4] = {8, 4, 2, 0};
@@ -343,14 +335,14 @@ bool DecodeEvent(std::span<const uint8_t> data, size_t offset, StreamEvent& out)
         int32_t s = -1;
         int32_t e = -1;
         if (size_class == 0) {
-            s = At<int32_t>(data, offset + 8 + 8 * i);
-            e = At<int32_t>(data, offset + 12 + 8 * i);
+            s = ReadBinary<int32_t>(data, offset + 8 + 8 * i);
+            e = ReadBinary<int32_t>(data, offset + 12 + 8 * i);
         } else if (size_class == 1) {
-            s = At<int16_t>(data, offset + 8 + 4 * i);
-            e = At<int16_t>(data, offset + 10 + 4 * i);
+            s = ReadBinary<int16_t>(data, offset + 8 + 4 * i);
+            e = ReadBinary<int16_t>(data, offset + 10 + 4 * i);
         } else if (size_class == 2) {
-            s = At<int8_t>(data, offset + 8 + 2 * i);
-            e = At<int8_t>(data, offset + 9 + 2 * i);
+            s = ReadBinary<int8_t>(data, offset + 8 + 2 * i);
+            e = ReadBinary<int8_t>(data, offset + 9 + 2 * i);
         }
         EventSection section;
         section.start = s < 0 ? s : (s & ~0x40000000);
@@ -361,13 +353,13 @@ bool DecodeEvent(std::span<const uint8_t> data, size_t offset, StreamEvent& out)
     }
     const size_t p = offset + ((n_sections * kElement[size_class] + 0xB) & 0x7FC);
     for (uint32_t i = 0; i < n_ints; ++i) {
-        out.ints.push_back(At<int32_t>(data, p + 4 * i));
+        out.ints.push_back(ReadBinary<int32_t>(data, p + 4 * i));
     }
     for (uint32_t i = 0; i < n_floats; ++i) {
-        out.floats.push_back(At<float>(data, p + 4 * (n_ints + i)));
+        out.floats.push_back(ReadBinary<float>(data, p + 4 * (n_ints + i)));
     }
     for (uint32_t i = 0; i < n_strings; ++i) {
-        out.strings.push_back(At<uint64_t>(data, p + 4 * (n_ints + n_floats) + 8 * i) & 0xFFFFFFFFFFFFull);
+        out.strings.push_back(ReadBinary<uint64_t>(data, p + 4 * (n_ints + n_floats) + 8 * i) & 0xFFFFFFFFFFFFull);
     }
     out.raw_int_count = n_ints;
     if (out.type == kEventExecCommand) {
@@ -424,10 +416,10 @@ bool ParseEventTable(std::span<const uint8_t> data, size_t table, uint32_t& tabl
     if (table + 8 > data.size()) {
         return false;
     }
-    table_hash = At<uint32_t>(data, table);
-    const uint32_t count = At<uint16_t>(data, table + 4);
+    table_hash = ReadBinary<uint32_t>(data, table);
+    const uint32_t count = ReadBinary<uint16_t>(data, table + 4);
     for (uint32_t i = 0; i < count; ++i) {
-        const int32_t record = At<int32_t>(data, table + 8 + 4 * static_cast<size_t>(i));
+        const int32_t record = ReadBinary<int32_t>(data, table + 8 + 4 * static_cast<size_t>(i));
         StreamEvent event;
         if (DecodeEvent(data, table + static_cast<size_t>(static_cast<int64_t>(record)), event)) {
             out.push_back(std::move(event));

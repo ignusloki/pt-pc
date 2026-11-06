@@ -26,11 +26,6 @@ enum FullImage : uint32_t {
     kGlossyPong = 16,
 };
 
-float EnvFloat(const char* name, float fallback, float lo, float hi) {
-    const char* value = std::getenv(name);
-    return value ? std::clamp(static_cast<float>(std::atof(value)), lo, hi) : fallback;
-}
-
 constexpr float kGiReach = 8.0f;
 constexpr float kGlossyReach = 30.0f;
 constexpr float kGlossyFade = 12.0f;

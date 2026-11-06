@@ -37,10 +37,7 @@ inline void WriteResult(const Args& a, int code, const std::string& detail) {
     out << "kind " << KindName(a) << "\nexit " << code << "\ndetail " << detail << "\n";
 }
 
-inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) {
-    const auto it = v.members.find(name);
-    return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
-}
+inline std::string JsonText(const pt::metadata_json::Value& v, const char* name) { return pt::metadata_json::StringMember(v, name); }
 
 inline std::string FileSha(const fs::path& p) {
     try {

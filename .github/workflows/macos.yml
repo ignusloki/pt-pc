@@ -50,7 +50,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Tools
-        run: brew install ninja shaderc vulkan-headers vulkan-loader
+        run: brew install ninja shaderc vulkan-headers
 
       - name: Version
         id: version

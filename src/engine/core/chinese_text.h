@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/core/menu_lookup.h"
 #include <cstdint>
 #include <initializer_list>
 #include <string_view>
@@ -875,10 +876,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_patreon","在浏览器中打开开发者的 Patreon 页面进行捐助。"},
     {"pc_notice_patreon_failed","无法打开浏览器。页面地址为 patreon.com/loreanxavier。"},
 };
-inline std::string_view Menu(std::string_view key) {
-    for (const auto& e : kMenu) if(e.key==key) return e.text;
-    return {};
-}
+inline std::string_view Menu(std::string_view key) { return localized::FindMenuText(kMenu, key); }
 struct Subtitle { uint32_t key; std::initializer_list<std::string_view> lines; };
 inline const Subtitle kSubtitles[] = {
     {0x54E4EFDE,{

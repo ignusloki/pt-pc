@@ -1,3 +1,4 @@
+#include "engine/render/upscale/unlock_io.h"
 #include "engine/render/upscale/neural_unlock.h"
 
 #include <algorithm>
@@ -52,21 +53,6 @@ const metadata_json::Value* Member(const metadata_json::Value& v, const char* na
     return it == v.members.end() ? nullptr : &it->second;
 }
 
-std::string MemberText(const metadata_json::Value& v, const char* name) {
-    const metadata_json::Value* m = Member(v, name);
-    return m && !m->object && m->items.empty() ? m->text : std::string();
-}
-
-std::string Hex(const unsigned char* digest) {
-    static const char* hex = "0123456789abcdef";
-    std::string out(64, '0');
-    for (int i = 0; i < 32; ++i) {
-        out[i * 2] = hex[digest[i] >> 4];
-        out[i * 2 + 1] = hex[digest[i] & 0xF];
-    }
-    return out;
-}
-
 std::string_view SectionOf(std::string_view line) {
     size_t a = 0;
     while (a < line.size() && (line[a] == ' ' || line[a] == '\t')) ++a;
@@ -94,39 +80,12 @@ std::string HexCodeAfter(std::string_view line, std::string_view marker) {
     return code.size() > 2 ? code : std::string();
 }
 
-std::string EnvOr(const char* name, std::string_view fallback) {
-    const std::string value = os::GetEnv(name);
-    return value.empty() ? std::string(fallback) : value;
-}
-
-std::string FileSha256Impl(const std::filesystem::path& path, uint64_t* size_out) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return {};
-    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (size_out) *size_out = bytes.size();
-    unsigned char digest[32];
-    if (!integrity::Sha256(bytes.data(), bytes.size(), digest)) return {};
-    return Hex(digest);
-}
-
-std::filesystem::path FileUrlPath(const std::string& url) {
-    return url.compare(0, 5, "file:") == 0 ? os::PathFromUtf8(url.substr(5)) : std::filesystem::path();
-}
-
 std::optional<std::string> HttpGetText(const std::string& url, bool metadata) {
-    if (const std::filesystem::path f = FileUrlPath(url); !f.empty()) {
+    if (const std::filesystem::path f = unlock_io::FileUrlPath(url); !f.empty()) {
         const std::string text = ReadText(f, 256 * 1024);
         return std::filesystem::exists(f) ? std::optional<std::string>(text) : std::nullopt;
     }
-    if (!(metadata ? update::AllowedMetadataUrl(url) : update::AllowedAssetUrl(url))) return std::nullopt;
-    http::Request request;
-    request.url = url;
-    request.timeout_ms = 8000;
-    request.follow_redirects = true;
-    request.max_body = 256 * 1024;
-    const auto response = http::Get(request);
-    if (!response || response->status != 200) return std::nullopt;
-    return response->body;
+    return unlock_io::FetchAllowedText(url, metadata);
 }
 
 std::string ShaFromSums(std::string_view sums, std::string_view suffix) {
@@ -157,10 +116,10 @@ std::string AssetUrl(const metadata_json::Value& release, std::string_view suffi
     const auto it = release.members.find("assets");
     if (it == release.members.end()) return {};
     for (const metadata_json::Value& a : it->second.items) {
-        const std::string name = MemberText(a, "name");
+        const std::string name = metadata_json::StringMember(a, "name");
         const std::string low = AsciiLowerCopy(name);
         if (low.size() >= suffix.size() && low.compare(low.size() - suffix.size(), suffix.size(), AsciiLowerCopy(std::string(suffix))) == 0) {
-            return MemberText(a, "browser_download_url");
+            return metadata_json::StringMember(a, "browser_download_url");
         }
     }
     return {};
@@ -169,7 +128,7 @@ std::string AssetUrl(const metadata_json::Value& release, std::string_view suffi
 std::string Download(const std::string& url, const std::filesystem::path& dest, uint64_t max_bytes, const std::function<void(int)>& percent,
                      const std::function<bool()>& cancelled, std::string* error) {
     (void)max_bytes;
-    if (const std::filesystem::path f = FileUrlPath(url); !f.empty()) {
+    if (const std::filesystem::path f = unlock_io::FileUrlPath(url); !f.empty()) {
         std::error_code ec;
         if (!std::filesystem::exists(f, ec)) {
             if (error) *error = "404 (fixture not found)";
@@ -182,7 +141,7 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
             return {};
         }
         if (percent) percent(100);
-        return FileSha256Impl(dest, nullptr);
+        return integrity::FileSha256(dest, nullptr);
     }
     std::filesystem::path part = dest;
     part += ".part";
@@ -217,7 +176,7 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
         std::filesystem::remove(part, ec);
         return {};
     }
-    return FileSha256Impl(dest, nullptr);
+    return integrity::FileSha256(dest, nullptr);
 }
 
 }
@@ -246,13 +205,13 @@ std::optional<Install> ParseInstall(std::string_view text) {
     metadata_json::Value root;
     if (!metadata_json::Reader(text).Parse(root) || !root.object) return std::nullopt;
     Install install;
-    install.complete = MemberText(root, "complete") == "true";
-    install.route = MemberText(root, "path");
-    install.tool = MemberText(root, "tool");
+    install.complete = metadata_json::StringMember(root, "complete") == "true";
+    install.route = metadata_json::StringMember(root, "path");
+    install.tool = metadata_json::StringMember(root, "tool");
     if (const metadata_json::Value* components = Member(root, "components"); components && components->object) {
-        install.reshade = MemberText(*components, "reshade");
-        install.addon = MemberText(*components, "renodx");
-        install.runtime = MemberText(*components, "dlssnr");
+        install.reshade = metadata_json::StringMember(*components, "reshade");
+        install.addon = metadata_json::StringMember(*components, "renodx");
+        install.runtime = metadata_json::StringMember(*components, "dlssnr");
     }
     if (const metadata_json::Value* files = Member(root, "files")) {
         for (const metadata_json::Value& f : files->items) {
@@ -551,7 +510,7 @@ std::string FileSha256(const std::filesystem::path& path) {
     std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     unsigned char digest[32];
     if (!integrity::Sha256(bytes.data(), bytes.size(), digest)) return {};
-    return Hex(digest);
+    return integrity::Sha256Hex(digest);
 }
 
 std::string DownloadFile(const std::string& url, const std::filesystem::path& dest, uint64_t max_bytes, const std::function<void(int)>& percent,
@@ -583,17 +542,17 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
     std::string exe_sha = std::string(kToolExeSha256);
     std::filesystem::path zip;
     {
-        const std::string pinned_url = EnvOr("PT_NR_TOOL_URL", kToolUrl);
+        const std::string pinned_url = unlock_io::EnvOr("PT_NR_TOOL_URL", kToolUrl);
         zip = work_dir / std::string(std::string_view(pinned_url).substr(pinned_url.rfind('/') + 1));
         std::string pinned_fail;
         uint64_t zip_size = 0;
-        std::string zip_sha = FileSha256Impl(zip, &zip_size);
+        std::string zip_sha = integrity::FileSha256(zip, &zip_size);
         if (zip_sha != kToolZipSha256 || zip_size != kToolZipSize) {
             std::string err;
             LogInfo("dlss5 unlock: fetching the pinned {} {} from {}", kToolName, kToolVersion, pinned_url);
             zip_sha = Download(pinned_url, zip, kToolZipSize + 1024 * 1024, percent, cancelled, &err);
             zip_size = 0;
-            if (!zip_sha.empty()) zip_sha = FileSha256Impl(zip, &zip_size);
+            if (!zip_sha.empty()) zip_sha = integrity::FileSha256(zip, &zip_size);
             if (zip_sha != kToolZipSha256 || zip_size != kToolZipSize) {
                 pinned_fail = err.empty() ? std::format("the pinned asset's SHA-256 {} ({} bytes) is not {} ({} bytes)", zip_sha.empty() ? "unreadable" : zip_sha,
                                                         zip_size, kToolZipSha256, kToolZipSize)
@@ -604,14 +563,14 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
             source = {ToolSource::Which::Pinned, "v" + std::string(kToolVersion), zip_sha, std::format("pinned {} {}", kToolName, kToolVersion)};
         } else {
             LogWarn("dlss5 unlock: {}; trying the latest release", pinned_fail);
-            const std::string api = EnvOr("PT_NR_TOOL_API", kToolLatestApi);
+            const std::string api = unlock_io::EnvOr("PT_NR_TOOL_API", kToolLatestApi);
             const auto meta = HttpGetText(api, true);
             metadata_json::Value release;
             if (!meta || !metadata_json::Reader(*meta).Parse(release) || !release.object) {
                 return fail("pc_note_nr_unlock_download", std::format("neither the pinned asset nor the latest release could be read ({}; the release metadata at {} failed)",
                                                                       pinned_fail, api));
             }
-            const std::string tag = MemberText(release, "tag_name");
+            const std::string tag = metadata_json::StringMember(release, "tag_name");
             const std::string zip_url = AssetUrl(release, "-win64.zip");
             const std::string sums_url = AssetUrl(release, "SHA256SUMS.txt");
             if (zip_url.empty() || sums_url.empty()) {

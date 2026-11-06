@@ -1,5 +1,17 @@
 #include "engine/render/upscale/upscale_platform.h"
 
+#include <filesystem>
+#include <system_error>
+
+namespace pt {
+std::wstring CreateNgxTempPath() {
+    std::error_code ec;
+    std::filesystem::path dir = std::filesystem::temp_directory_path(ec) / "pt-port-ngx";
+    std::filesystem::create_directories(dir, ec);
+    return dir.wstring();
+}
+}
+
 #ifdef _WIN32
 
 #include <windows.h>

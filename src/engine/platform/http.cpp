@@ -44,7 +44,7 @@ std::string UrlScheme(std::string_view url) {
     const auto colon = url.find("://");
     if (colon == std::string_view::npos) return {};
     std::string scheme(url.substr(0, colon));
-    std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    pt::AsciiLowerInPlace(scheme);
     return scheme == "https" || scheme == "http" ? scheme : std::string();
 }
 
@@ -56,7 +56,7 @@ std::string UrlHost(std::string_view url) {
     if (!rest.empty() && rest.front() == '[') return {};
     rest = rest.substr(0, rest.find(':'));
     std::string host(rest);
-    std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    pt::AsciiLowerInPlace(host);
     return host;
 }
 
@@ -394,7 +394,7 @@ size_t OnHeader(char* data, size_t size, size_t count, void* user) {
     auto* response = static_cast<Response*>(user);
     std::string line(data, size * count);
     std::string lower = line;
-    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    pt::AsciiLowerInPlace(lower);
     if (lower.starts_with("http/")) {
         response->date.reset();
         response->aged = false;
@@ -452,7 +452,7 @@ size_t OnFetchHeader(char* data, size_t size, size_t count, void* user) {
     auto* sink = static_cast<FetchSink*>(user);
     std::string line(data, size * count);
     std::string lower = line;
-    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(pt::AsciiLower(static_cast<char>(c))); });
+    pt::AsciiLowerInPlace(lower);
     if (lower.starts_with("http/")) {
         const auto space = line.find(' ');
         sink->status = space == std::string::npos ? 0 : std::atoi(line.c_str() + space + 1);

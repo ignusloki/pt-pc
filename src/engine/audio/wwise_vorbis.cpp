@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/wwise_vorbis.h"
 
 #include <vorbis/codec.h>
@@ -102,18 +103,6 @@ uint32_t BookMaptype1Quantvals(uint32_t entries, uint32_t dimensions) {
     return 0;
 }
 
-uint32_t ReadU32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
-uint16_t ReadU16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-
 bool RebuildCodebook(uint32_t id, BitWriter& w, std::string* error) {
     const uint8_t* lib = pt_wwise_codebooks;
     const size_t lib_size = pt_wwise_codebooks_size;
@@ -121,7 +110,7 @@ bool RebuildCodebook(uint32_t id, BitWriter& w, std::string* error) {
         *error = "codebook library missing";
         return false;
     }
-    const uint32_t offset_offset = ReadU32(lib + lib_size - 4);
+    const uint32_t offset_offset = ReadBinaryUnchecked<uint32_t>(lib + lib_size - 4);
     if (offset_offset >= lib_size) {
         *error = "bad codebook library";
         return false;
@@ -131,8 +120,8 @@ bool RebuildCodebook(uint32_t id, BitWriter& w, std::string* error) {
         *error = std::format("invalid codebook id {}", id);
         return false;
     }
-    const uint32_t begin = ReadU32(lib + offset_offset + id * 4);
-    const uint32_t end = ReadU32(lib + offset_offset + (id + 1) * 4);
+    const uint32_t begin = ReadBinaryUnchecked<uint32_t>(lib + offset_offset + id * 4);
+    const uint32_t end = ReadBinaryUnchecked<uint32_t>(lib + offset_offset + (id + 1) * 4);
     if (begin > end || end > offset_offset) {
         *error = std::format("bad codebook {} range", id);
         return false;
@@ -443,9 +432,9 @@ bool WwiseVorbisStream::Init(std::span<const uint8_t> blob, const WemInfo& info,
         return false;
     }
     const uint8_t* vorb = blob.data() + info.fmt_offset + 0x18;
-    sample_count_ = ReadU32(vorb + 0x00);
-    const uint32_t setup_offset = ReadU32(vorb + 0x10);
-    const uint32_t audio_offset = ReadU32(vorb + 0x14);
+    sample_count_ = ReadBinaryUnchecked<uint32_t>(vorb + 0x00);
+    const uint32_t setup_offset = ReadBinaryUnchecked<uint32_t>(vorb + 0x10);
+    const uint32_t audio_offset = ReadBinaryUnchecked<uint32_t>(vorb + 0x14);
     blocksize_small_ = vorb[0x28];
     blocksize_large_ = vorb[0x29];
     modified_packets_ = blocksize_small_ != blocksize_large_;
@@ -456,7 +445,7 @@ bool WwiseVorbisStream::Init(std::span<const uint8_t> blob, const WemInfo& info,
         return false;
     }
     const size_t setup_pos = data_begin + setup_offset;
-    const uint16_t setup_size = ReadU16(blob.data() + setup_pos);
+    const uint16_t setup_size = ReadBinaryUnchecked<uint16_t>(blob.data() + setup_pos);
     if (setup_pos + 2 + setup_size != data_begin + audio_offset) {
         *error = "first audio packet does not follow the setup packet";
         return false;
@@ -539,7 +528,7 @@ bool WwiseVorbisStream::Init(std::span<const uint8_t> blob, const WemInfo& info,
     while (pos + 2 <= data_end) {
         Packet packet;
         packet.offset = static_cast<uint32_t>(pos);
-        packet.size = ReadU16(blob.data() + pos);
+        packet.size = ReadBinaryUnchecked<uint16_t>(blob.data() + pos);
         if (pos + 2 + packet.size > data_end) {
             break;
         }

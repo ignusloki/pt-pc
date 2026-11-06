@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/help_bones.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -10,15 +11,6 @@
 
 namespace pt::anim {
 namespace {
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 const glm::quat kIdentity(1.0f, 0.0f, 0.0f, 0.0f);
 constexpr float kPi = 3.14159265f;
@@ -130,31 +122,31 @@ bool HelpBones::Parse(std::span<const uint8_t> data, std::string* error) {
     if (data.size() < 0x10 || std::memcmp(data.data(), "FRDV", 4) != 0) {
         return fail("not an FRDV file");
     }
-    const uint32_t count = At<uint32_t>(data, 8);
+    const uint32_t count = ReadBinary<uint32_t>(data, 8);
     if (0x10 + static_cast<size_t>(count) * 4 > data.size()) {
         return fail(std::format("{} entries do not fit in {} bytes", count, data.size()));
     }
     for (uint32_t i = 0; i < count; ++i) {
-        const size_t o = At<uint32_t>(data, 0x10 + 4 * static_cast<size_t>(i));
+        const size_t o = ReadBinary<uint32_t>(data, 0x10 + 4 * static_cast<size_t>(i));
         if (o + kEntrySize > data.size()) {
             return fail(std::format("entry {} at {:#x} is out of the file", i, o));
         }
         HelpBoneEntry e;
-        e.type = At<uint16_t>(data, o);
-        e.driven = At<int16_t>(data, o + 0x02);
-        e.source = At<int16_t>(data, o + 0x04);
-        e.parent = At<int16_t>(data, o + 0x08);
-        e.reference = At<int16_t>(data, o + 0x0A);
-        e.weight = At<float>(data, o + 0x10);
-        e.min = At<float>(data, o + 0x18);
-        e.max = At<float>(data, o + 0x1C);
-        e.axis = At<uint32_t>(data, o + 0x20);
-        e.slide = At<float>(data, o + 0x24);
-        e.slide_min = At<float>(data, o + 0x2C);
-        e.slide_max = At<float>(data, o + 0x30);
-        e.slide_axis = At<uint32_t>(data, o + 0x34);
-        e.a = glm::vec3(At<float>(data, o + 0x40), At<float>(data, o + 0x44), At<float>(data, o + 0x48));
-        e.b = glm::vec3(At<float>(data, o + 0x50), At<float>(data, o + 0x54), At<float>(data, o + 0x58));
+        e.type = ReadBinary<uint16_t>(data, o);
+        e.driven = ReadBinary<int16_t>(data, o + 0x02);
+        e.source = ReadBinary<int16_t>(data, o + 0x04);
+        e.parent = ReadBinary<int16_t>(data, o + 0x08);
+        e.reference = ReadBinary<int16_t>(data, o + 0x0A);
+        e.weight = ReadBinary<float>(data, o + 0x10);
+        e.min = ReadBinary<float>(data, o + 0x18);
+        e.max = ReadBinary<float>(data, o + 0x1C);
+        e.axis = ReadBinary<uint32_t>(data, o + 0x20);
+        e.slide = ReadBinary<float>(data, o + 0x24);
+        e.slide_min = ReadBinary<float>(data, o + 0x2C);
+        e.slide_max = ReadBinary<float>(data, o + 0x30);
+        e.slide_axis = ReadBinary<uint32_t>(data, o + 0x34);
+        e.a = glm::vec3(ReadBinary<float>(data, o + 0x40), ReadBinary<float>(data, o + 0x44), ReadBinary<float>(data, o + 0x48));
+        e.b = glm::vec3(ReadBinary<float>(data, o + 0x50), ReadBinary<float>(data, o + 0x54), ReadBinary<float>(data, o + 0x58));
         entries_.push_back(e);
     }
     return true;

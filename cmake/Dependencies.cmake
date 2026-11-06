@@ -2,8 +2,9 @@ include(FetchContent)
 cmake_policy(SET CMP0169 OLD)
 set(FETCHCONTENT_QUIET ON)
 
-if(PT_IOS)
-  # Vulkan is loaded from the embedded framework; only headers and a HOST shader compiler are needed.
+if(APPLE)
+  # Both Apple platforms load MoltenVK directly. They need Vulkan headers and a
+  # host shader compiler, not the separate desktop Vulkan loader library.
   find_path(Vulkan_INCLUDE_DIR vulkan/vulkan.h PATHS /opt/homebrew/include /usr/local/include NO_CMAKE_FIND_ROOT_PATH REQUIRED)
   find_program(Vulkan_GLSLC_EXECUTABLE glslc NO_CMAKE_FIND_ROOT_PATH REQUIRED)
   add_library(Vulkan::Headers INTERFACE IMPORTED)
@@ -170,6 +171,10 @@ foreach(entry
     "ggml-silero-v6.2.0.bin|https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin|2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987")
   string(REPLACE "|" ";" parts "${entry}")
   list(GET parts 0 name)
+  # Mobile.cmake and tools/ios/package.py ship only base.en and VAD on iOS.
+  if(PT_IOS AND name STREQUAL "ggml-small.en-q5_1.bin")
+    continue()
+  endif()
   list(GET parts 1 url)
   list(GET parts 2 hash)
   set(target ${PT_VOICE_DIR}/${name})
@@ -198,12 +203,18 @@ FetchContent_Populate(glm)
 FetchContent_Populate(imgui)
 FetchContent_Populate(lua51)
 FetchContent_Populate(stb)
-# zstd (BSD, docs/licenses/zstd-BSD.txt), its decompressor only: the DLSS 5 install unpacks the RTX 20, 30 and 40 GPU code of the
-# community runtime with it (src/engine/render/upscale/neural_native.cpp)
-FetchContent_Declare(zstd URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
-  URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3)
-FetchContent_Populate(zstd)
-file(GLOB ZSTD_SOURCES ${zstd_SOURCE_DIR}/lib/common/*.c ${zstd_SOURCE_DIR}/lib/decompress/*.c)
+# Only Windows extracts the DLSS 5 community runtime's GPU code with zstd
+# (src/engine/render/upscale/neural_native.cpp). Other platforms do not use it.
+set(ZSTD_SOURCES)
+if(WIN32)
+  FetchContent_Declare(zstd URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3)
+  FetchContent_Populate(zstd)
+  file(GLOB ZSTD_SOURCES ${zstd_SOURCE_DIR}/lib/common/*.c ${zstd_SOURCE_DIR}/lib/decompress/*.c)
+else()
+  # Remove the generated notice left by build folders configured before this gate.
+  file(REMOVE "${CMAKE_BINARY_DIR}/licenses/zstd-BSD.txt")
+endif()
 
 file(GLOB LUA51_SOURCES ${lua51_SOURCE_DIR}/src/*.c)
 list(FILTER LUA51_SOURCES EXCLUDE REGEX ".*/(lua|luac|print)\\.c$")
@@ -244,13 +255,11 @@ add_library(pt_thirdparty STATIC
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/imgui_demo.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
   ${LUA51_SOURCES}
   ${ZSTD_SOURCES})
 target_include_directories(pt_thirdparty PUBLIC
-  ${zstd_SOURCE_DIR}/lib
   ${volk_SOURCE_DIR}
   ${vma_SOURCE_DIR}/include
   ${glm_SOURCE_DIR}
@@ -259,9 +268,10 @@ target_include_directories(pt_thirdparty PUBLIC
   ${lua51_SOURCE_DIR}/src
   ${stb_SOURCE_DIR})
 target_compile_definitions(pt_thirdparty PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
-# the decompressor's C build alone (its x86-64 assembly is for GCC and Clang)
-target_compile_definitions(pt_thirdparty PRIVATE ZSTD_DISABLE_ASM)
 if(WIN32)
+  target_include_directories(pt_thirdparty PUBLIC ${zstd_SOURCE_DIR}/lib)
+  # the decompressor's C build alone (its x86-64 assembly is for GCC and Clang)
+  target_compile_definitions(pt_thirdparty PRIVATE ZSTD_DISABLE_ASM)
   target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_WIN32_KHR)
 elseif(APPLE)
   # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
@@ -309,7 +319,7 @@ endif()
 
 set(PT_VORBIS_SOURCES)
 foreach(name mdct smallft block envelope window lsp lpc analysis synthesis psy info floor1 floor0 res0 mapping0 registry codebook
-    sharedbook lookup bitrate)
+    sharedbook lookup bitrate vorbisfile)
   list(APPEND PT_VORBIS_SOURCES ${vorbis_SOURCE_DIR}/lib/${name}.c)
 endforeach()
 add_library(pt_vorbis STATIC ${ogg_SOURCE_DIR}/src/bitwise.c ${ogg_SOURCE_DIR}/src/framing.c ${PT_VORBIS_SOURCES} ${PT_WWISE_CODEBOOKS_C})

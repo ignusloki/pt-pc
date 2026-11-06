@@ -1020,7 +1020,6 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         state.color = glm::vec4(1.0f, 1.0f, 1.0f, donate_hover_ ? 1.0f : 0.8f);
     }
     text(back_text_, "pc_back");
-    const bool quit_selected = false;
     {
         auto& state = view.State(footer_text_);
         state.visible = footer_.has_value() && tabbed;
@@ -1056,7 +1055,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     view.State(back_text_).font_type = UiFontType::PcSystem;
     view.State(quit_text_).font_type = UiFontType::PcSystem;
     view.State(back_text_).color = glm::vec4(1.0f, 1.0f, 1.0f, cursor_ == static_cast<int>(rows_.size()) ? 1.0f : 0.55f);
-    view.State(quit_text_).color = glm::vec4(1.0f, 1.0f, 1.0f, quit_selected ? 1.0f : 0.55f);
+    view.State(quit_text_).color = glm::vec4(1.0f, 1.0f, 1.0f, 0.55f);
     for (int i = 0; i < kMaxSections; ++i) {
         const glm::vec2 at = i < static_cast<int>(headers_.size()) ? headers_[i] + glm::vec2(0.0f, Browser() ? 0.0f : scroll_y_) : glm::vec2(0.0f);
         const int first_row = i < static_cast<int>(header_rows_.size()) ? header_rows_[i] : -1;
@@ -1204,7 +1203,6 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     if (tabbed && cursor_ < 0) note = source_->TabNote(source_->Tab());
     if (tabbed && donate_hover_) note = "pc_note_patreon";
     if (tabbed && update_hover_ && footer_) note = footer_->note;
-    if (quit_selected) note = "pc_note_quit";
     if (source_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) view.State(help_).description_samples = source_->DescriptionSamples();
     view.State(help_).text_box = gallery == PcGallery::None ? glm::vec4(92.0f, 540.0f, 1186.0f, 626.0f)
         : glm::vec4(90.0f, MuseumLayout::kHelpTop, 1190.0f, MuseumLayout::kHelpBottom);

@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/sound_package.h"
 
 #include <cstring>
@@ -31,24 +32,6 @@ std::shared_ptr<Media> ModMedia(uint32_t id) {
     return nullptr;
 }
 
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
-
-uint64_t U64(const uint8_t* p) {
-    uint64_t v;
-    std::memcpy(&v, p, 8);
-    return v;
-}
-
-double F64(const uint8_t* p) {
-    double v;
-    std::memcpy(&v, p, 8);
-    return v;
-}
-
 }
 
 bool ReadSbp(std::span<const uint8_t> data, std::vector<SbpEntry>& entries, std::string* error) {
@@ -72,8 +55,8 @@ bool ReadSbp(std::span<const uint8_t> data, std::vector<SbpEntry>& entries, std:
         const uint8_t* e = data.data() + 8 + i * 12;
         SbpEntry entry;
         entry.kind.assign(reinterpret_cast<const char*>(e), strnlen(reinterpret_cast<const char*>(e), 4));
-        entry.offset = U32(e + 4);
-        entry.size = U32(e + 8);
+        entry.offset = ReadBinaryUnchecked<uint32_t>(e + 4);
+        entry.size = ReadBinaryUnchecked<uint32_t>(e + 8);
         if (static_cast<size_t>(entry.offset) + entry.size > data.size()) {
             if (error) {
                 *error = std::format("entry {} runs past the end of the package", i);
@@ -93,7 +76,7 @@ bool ReadSal(std::span<const uint8_t> data, std::vector<SalRecord>& records, std
         }
         return false;
     }
-    const uint32_t count = U32(data.data() + 4);
+    const uint32_t count = ReadBinaryUnchecked<uint32_t>(data.data() + 4);
     if (8 + static_cast<size_t>(count) * 16 > data.size()) {
         if (error) {
             *error = "SAL3 index runs past the table";
@@ -103,14 +86,14 @@ bool ReadSal(std::span<const uint8_t> data, std::vector<SalRecord>& records, std
     for (uint32_t i = 0; i < count; ++i) {
         const uint8_t* index = data.data() + 8 + i * 16;
         SalRecord record;
-        record.key = U64(index);
-        const uint64_t offset = U64(index + 8);
+        record.key = ReadBinaryUnchecked<uint64_t>(index);
+        const uint64_t offset = ReadBinaryUnchecked<uint64_t>(index + 8);
         if (offset + 12 > data.size()) {
             continue;
         }
         const uint8_t* r = data.data() + offset;
         record.kind.assign(reinterpret_cast<const char*>(r + 4), strnlen(reinterpret_cast<const char*>(r + 4), 4));
-        const uint32_t param_size = U32(r + 8);
+        const uint32_t param_size = ReadBinaryUnchecked<uint32_t>(r + 8);
         const size_t text_start = offset + 12 + param_size + 6;
         if (text_start >= data.size()) {
             continue;
@@ -130,7 +113,7 @@ std::optional<DemoStreamAudio> ExtractDemoStreamAudio(std::span<const uint8_t> f
     size_t pos = 0;
     while (pos + 8 <= fsm.size()) {
         const uint8_t* chunk = fsm.data() + pos;
-        const uint32_t size = U32(chunk + 4);
+        const uint32_t size = ReadBinaryUnchecked<uint32_t>(chunk + 4);
         if (size == 0) {
             break;
         }
@@ -142,15 +125,15 @@ std::optional<DemoStreamAudio> ExtractDemoStreamAudio(std::span<const uint8_t> f
                 if (size < 0x20) {
                     return std::nullopt;
                 }
-                audio.start_time = F64(chunk + 8);
-                total_size = U32(chunk + 0x10);
+                audio.start_time = ReadBinaryUnchecked<double>(chunk + 8);
+                total_size = ReadBinaryUnchecked<uint32_t>(chunk + 0x10);
                 audio.wem.insert(audio.wem.end(), chunk + 0x20, chunk + size);
                 first = false;
             } else {
                 audio.wem.insert(audio.wem.end(), chunk + 0x10, chunk + size);
             }
         } else if (std::memcmp(chunk, "END ", 4) == 0 && size >= 0x10) {
-            audio.end_time = F64(chunk + 8);
+            audio.end_time = ReadBinaryUnchecked<double>(chunk + 8);
         }
         pos += size;
     }

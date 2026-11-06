@@ -10,12 +10,7 @@
 
 namespace pt::xr {
 
-inline float WrapAngle(float a) {
-    constexpr float kTwoPi = 6.28318530718f;
-    a = std::fmod(a + 3.14159265359f, kTwoPi);
-    if (a < 0.0f) a += kTwoPi;
-    return a - 3.14159265359f;
-}
+inline float WrapAngle(float a) { return pt::WrapAngle(a); }
 
 inline glm::quat YawRotation(float yaw) { return glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f)); }
 

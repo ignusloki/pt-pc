@@ -6,7 +6,6 @@
 target_link_libraries(pt_engine PUBLIC "-framework CoreFoundation")
 configure_file("${CMAKE_SOURCE_DIR}/docs/enhanced-rendering/hdr-post-licenses.txt" "${CMAKE_BINARY_DIR}/licenses/HDR-post-processing-MIT.txt" COPYONLY)
 configure_file("${google_sbc_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/google-libsbc-LICENSE.txt" COPYONLY)
-configure_file("${zstd_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/zstd-BSD.txt" COPYONLY)
 
 if(CMAKE_OSX_ARCHITECTURES MATCHES ";")
   message(FATAL_ERROR "Build macOS for one architecture at a time (CMAKE_OSX_ARCHITECTURES=arm64 or x86_64), not \"${CMAKE_OSX_ARCHITECTURES}\"; docs/macos.md")

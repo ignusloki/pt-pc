@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/core/menu_lookup.h"
 #include <string_view>
 
 namespace pt::german {
@@ -855,8 +856,5 @@ inline constexpr Text kMenu[] = {
     {"pc_note_patreon","Öffnet die Patreon-Seite des Entwicklers im Browser, um zu spenden."},
     {"pc_notice_patreon_failed","Der Browser konnte nicht geöffnet werden. Die Seite ist patreon.com/loreanxavier."},
 };
-inline std::string_view Menu(std::string_view key) {
-    for (const auto& e : kMenu) if (e.key == key) return e.text;
-    return {};
-}
+inline std::string_view Menu(std::string_view key) { return localized::FindMenuText(kMenu, key); }
 }

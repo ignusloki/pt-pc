@@ -1,3 +1,4 @@
+#include "game/ui/cell.h"
 #pragma once
 
 #include <glm/glm.hpp>
@@ -27,7 +28,7 @@ inline bool Rtl(int language) { return language == kArabic; }
 struct Cell {
     glm::vec2 lo{0.0f};
     glm::vec2 hi{0.0f};
-    bool Contains(glm::vec2 p) const { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; }
+    bool Contains(glm::vec2 p) const { return CellContains(lo, hi, p); }
 };
 
 Cell Panel();

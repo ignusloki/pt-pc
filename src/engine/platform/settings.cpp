@@ -75,7 +75,7 @@ void Read(const Values& values, const char* key, float& out) {
 void Read(const Values& values, const char* key, bool& out) {
     if (auto it = values.find(key); it != values.end()) {
         std::string v = it->second;
-        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(pt::AsciiLower(static_cast<char>(c))); });
+        pt::AsciiLowerInPlace(v);
         out = v == "1" || v == "true" || v == "yes" || v == "on";
     }
 }

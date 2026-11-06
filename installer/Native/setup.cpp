@@ -1,3 +1,4 @@
+#include "setup_integrity.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -91,10 +92,6 @@ std::string HashPart(const fs::path& file,uint64_t limit){
 }
 std::string Hash(const fs::path& file){return HashPart(file,UINT64_MAX);}
 std::string HashBody(const fs::path& file){return HashPart(file,pt::trailer::BodySize(file));}
-void VerifyIntegrity(){
-    CheckCancel();
-    if(!pt::integrity::IntegrityOk())throw std::runtime_error("This setup file is damaged or was modified. Please download it again.");
-}
 std::vector<InstalledFile> Unpack(const fs::path& root){
     auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(100),RT_RCDATA);if(!resource)throw std::runtime_error("Installer payload missing.");
     auto loaded=LoadResource(nullptr,resource);

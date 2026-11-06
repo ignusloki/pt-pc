@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/motion_generator.h"
 
 #include <algorithm>
@@ -7,36 +8,29 @@
 namespace pt::audio {
 namespace {
 
-template <typename T>
-T Read(std::span<const uint8_t> block, size_t offset) {
-    T value{};
-    std::memcpy(&value, block.data() + offset, sizeof(T));
-    return value;
-}
-
 }
 
 bool MotionGeneratorParams::Parse(std::span<const uint8_t> block) {
     if (block.size() < 0x24) {
         return false;
     }
-    period = Read<float>(block, 0x00);
-    period_multiplier = Read<float>(block, 0x04);
-    duration = Read<float>(block, 0x08);
-    attack = Read<float>(block, 0x0C);
-    decay = Read<float>(block, 0x10);
-    sustain_time = Read<float>(block, 0x14);
-    release = Read<float>(block, 0x18);
-    sustain_level = std::pow(10.0f, Read<float>(block, 0x1C) * 0.05f);
-    duration_type = Read<uint16_t>(block, 0x20);
+    period = pt::ReadBinaryUnchecked<float>(block, 0x00);
+    period_multiplier = pt::ReadBinaryUnchecked<float>(block, 0x04);
+    duration = pt::ReadBinaryUnchecked<float>(block, 0x08);
+    attack = pt::ReadBinaryUnchecked<float>(block, 0x0C);
+    decay = pt::ReadBinaryUnchecked<float>(block, 0x10);
+    sustain_time = pt::ReadBinaryUnchecked<float>(block, 0x14);
+    release = pt::ReadBinaryUnchecked<float>(block, 0x18);
+    sustain_level = std::pow(10.0f, pt::ReadBinaryUnchecked<float>(block, 0x1C) * 0.05f);
+    duration_type = pt::ReadBinaryUnchecked<uint16_t>(block, 0x20);
     curves.clear();
-    const uint16_t count = Read<uint16_t>(block, 0x22);
+    const uint16_t count = pt::ReadBinaryUnchecked<uint16_t>(block, 0x22);
     size_t pos = 0x24;
     for (uint16_t c = 0; c < count; ++c) {
         if (pos + 2 > block.size()) {
             return false;
         }
-        const uint16_t points = Read<uint16_t>(block, pos);
+        const uint16_t points = pt::ReadBinaryUnchecked<uint16_t>(block, pos);
         pos += 2;
         if (pos + static_cast<size_t>(points) * 12 > block.size()) {
             return false;
@@ -44,9 +38,9 @@ bool MotionGeneratorParams::Parse(std::span<const uint8_t> block) {
         Curve curve;
         for (uint16_t i = 0; i < points; ++i) {
             CurvePoint point;
-            point.x = Read<float>(block, pos);
-            point.y = Read<float>(block, pos + 4);
-            point.interp = static_cast<Interp>(std::min<uint32_t>(Read<uint32_t>(block, pos + 8), static_cast<uint32_t>(Interp::Constant)));
+            point.x = pt::ReadBinaryUnchecked<float>(block, pos);
+            point.y = pt::ReadBinaryUnchecked<float>(block, pos + 4);
+            point.interp = static_cast<Interp>(std::min<uint32_t>(pt::ReadBinaryUnchecked<uint32_t>(block, pos + 8), static_cast<uint32_t>(Interp::Constant)));
             curve.points.push_back(point);
             pos += 12;
         }

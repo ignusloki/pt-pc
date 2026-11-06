@@ -62,7 +62,6 @@ private:
     enum class Kind { Model, Preface, Opening, Room, Hallway, Kill, Ending, Teaser };
     enum class Phase { Boot, Walk, Settle, Playing, Model, Done };
 
-    void StartWalk();
     void Present();
     void UpdateAim(float dt);
     void StartModel();

@@ -3,6 +3,12 @@ import struct
 import sys
 from pathlib import Path
 
+try:
+    from .binary_strings import cstring
+except ImportError:
+    from binary_strings import cstring
+
+
 PKG_MAGIC = 0x7F434E54
 PFS_MAGIC = 20130315
 ENTRY_ENCRYPTED = 0x80000000
@@ -37,11 +43,6 @@ CONTENT_FLAGS = {
 }
 
 PFS_MODE_BITS = {0x1: "signed", 0x2: "64bit", 0x4: "encrypted", 0x8: "unknown_0x8"}
-
-
-def cstring(buf, offset):
-    end = buf.index(b"\x00", offset)
-    return buf[offset:end].decode("ascii", "replace")
 
 
 def read_header(f):

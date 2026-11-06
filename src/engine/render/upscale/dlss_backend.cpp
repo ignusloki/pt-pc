@@ -39,12 +39,7 @@ constexpr const char* kRayReconstructionRuntime = "nvngx_dlssd.dll";
 constexpr const char* kExecutable = "pt.exe";
 
 const std::wstring& DataPath() {
-    static const std::wstring path = [] {
-        std::error_code ec;
-        std::filesystem::path dir = std::filesystem::temp_directory_path(ec) / "pt-port-ngx";
-        std::filesystem::create_directories(dir, ec);
-        return dir.wstring();
-    }();
+    static const std::wstring path = CreateNgxTempPath();
     return path;
 }
 
@@ -117,16 +112,7 @@ NVSDK_NGX_FeatureDiscoveryInfo Discovery(const NVSDK_NGX_FeatureCommonInfo* comm
     return info;
 }
 
-NVSDK_NGX_PerfQuality_Value QualityValue(UpscaleQuality quality) {
-    switch (quality) {
-    case UpscaleQuality::NativeAA: return NVSDK_NGX_PerfQuality_Value_DLAA;
-    case UpscaleQuality::Quality: return NVSDK_NGX_PerfQuality_Value_MaxQuality;
-    case UpscaleQuality::Balanced: return NVSDK_NGX_PerfQuality_Value_Balanced;
-    case UpscaleQuality::Performance: return NVSDK_NGX_PerfQuality_Value_MaxPerf;
-    case UpscaleQuality::UltraPerformance: return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
-    default: return NVSDK_NGX_PerfQuality_Value_MaxQuality;
-    }
-}
+#include "engine/render/upscale/ngx_quality.inl"
 
 uint32_t PresetValue(DlssModel model) {
     switch (model) {

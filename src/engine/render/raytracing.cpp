@@ -1,3 +1,4 @@
+#include "engine/render/raytracing_retry.h"
 #include "engine/render/raytracing.h"
 
 #include <algorithm>
@@ -228,13 +229,7 @@ bool VkRayTracing::EnsureBuffer(Slot& slot, vk::Buffer& buffer, VkDeviceSize siz
 }
 
 bool VkRayTracing::Ready(uint32_t slot) const {
-    return slots_[slot].valid || std::chrono::steady_clock::now() >= retry_after_;
-}
-
-void VkRayTracing::BackOff(const char* what) {
-    const bool first = std::chrono::steady_clock::now() >= retry_after_;
-    retry_after_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-    if (first) LogWarn("ray tracing: {} not allocated (out of video memory), tried again in 1 s", what);
+    return RayTracingReady(slots_[slot].valid, retry_after_);
 }
 
 VkDeviceAddress VkRayTracing::Address(const vk::Buffer& buffer) const {
@@ -294,7 +289,7 @@ const VkRayTracing::Blas* VkRayTracing::StaticBlas(const GpuMesh& mesh, uint32_t
     vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &job.info, &primitives, &sizes);
     if (!ctx_->CreateBuffer(b.buffer, sizes.accelerationStructureSize,
                             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false)) {
-        BackOff("a static BLAS");
+        RayTracingBackOff(retry_after_, "a static BLAS");
         return nullptr;
     }
     VkAccelerationStructureCreateInfoKHR create{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
@@ -332,7 +327,7 @@ bool VkRayTracing::RunJobs(VkCommandBuffer cmd, Slot& slot, std::vector<BuildJob
     }
     const VkDeviceSize capacity = std::max(largest, std::min(total, kMaxScratch));
     if (!EnsureBuffer(slot, slot.scratch, capacity + align, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false)) {
-        BackOff("the build scratch buffer");
+        RayTracingBackOff(retry_after_, "the build scratch buffer");
         return false;
     }
     const VkDeviceAddress scratch = AlignUp(Address(slot.scratch), align);
@@ -625,7 +620,7 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
             !ctx_->CreateBuffer(records_buffer, sizeof(RtRecord) * capacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
             ctx_->DestroyBuffer(instances_buffer);
             ctx_->DestroyBuffer(records_buffer);
-            BackOff("the TLAS instance buffers");
+            RayTracingBackOff(retry_after_, "the TLAS instance buffers");
             EndLabel(cmd);
             return false;
         }
@@ -696,7 +691,7 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
         VkAccelerationStructureKHR tlas_handle = VK_NULL_HANDLE;
         if (!ctx_->CreateBuffer(tlas_buffer, sizes.accelerationStructureSize,
                                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false)) {
-            BackOff("the TLAS");
+            RayTracingBackOff(retry_after_, "the TLAS");
             EndLabel(cmd);
             return false;
         }

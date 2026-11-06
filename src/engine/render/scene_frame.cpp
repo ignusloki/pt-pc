@@ -26,16 +26,6 @@ constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 constexpr uint32_t kShadowTile = SceneRenderer::kShadowTile;
 constexpr uint32_t kShadowTiles = kShadowAtlasSize / kShadowTile;
 
-glm::mat4 ReverseZPerspective(float fov_y, float aspect, float near_plane) {
-    const float f = 1.0f / std::tan(fov_y * 0.5f);
-    glm::mat4 p(0.0f);
-    p[0][0] = f / aspect;
-    p[1][1] = -f;
-    p[2][3] = -1.0f;
-    p[3][2] = near_plane;
-    return p;
-}
-
 glm::mat4 SpotShadowProjection(float fov_y, float near_plane, float far_plane) {
     glm::mat4 p = ReverseZPerspective(fov_y, 1.0f, near_plane);
     p[2][2] = near_plane / (far_plane - near_plane);

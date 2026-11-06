@@ -28,13 +28,9 @@ float CoarseSceneZ(vec2 uv) {
     return ViewZ(v, ImgLod(IMG_DEPTH, SMP_POINT_CLAMP, uv, 0.0).x);
 }
 
-bool Outside(vec2 uv) {
-    return uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
-}
+#include "reflection_projection.glsl"
 
-vec2 Project(vec3 p) {
-    return ReflectionProject(p, v.projection_param.xy, v.jitter.xy);
-}
+
 
 void main() {
     v = frame.views[pass.ids.x];

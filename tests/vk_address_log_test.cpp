@@ -1,3 +1,4 @@
+#include "check.h"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -8,10 +9,7 @@ namespace {
 
 int failures = 0;
 
-void Check(bool ok, const char* what) {
-    std::printf("%s: %s\n", what, ok ? "PASS" : "FAIL");
-    failures += !ok;
-}
+void Check(bool ok, const char* what) { pt::test::CheckNamed(failures, what, ok); }
 
 bool Has(const std::vector<std::string>& lines, const std::string& part) {
     for (const std::string& l : lines) {

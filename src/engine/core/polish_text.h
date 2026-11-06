@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/core/menu_lookup.h"
 #include <cstdint>
 #include <initializer_list>
 #include <string_view>
@@ -499,6 +500,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_dlssg_multiplier", "2x, 3x lub 4x: łączna liczba wyświetlanych klatek na jedną wyrenderowaną klatkę. Wyższe mnożniki wymagają obsługi przez bibliotekę. Generowanie klatek jest wstrzymywane w menu."},
     {"pc_note_dlssg_multiplier_limit", "Ten mnożnik jest niedostępny z obecną kartą graficzną i biblioteką generowania klatek."},
     {"pc_note_frame_generation_dlss", "Funkcja eksperymentalna. NVIDIA DLSS Frame Generation wstawia wygenerowane klatki pomiędzy wyrenderowane klatki."},
+    {"pc_note_frame_generation_metalfx","Funkcja eksperymentalna. Apple MetalFX interpoluje jedną klatkę pomiędzy wyrenderowanymi klatkami. Wymaga komputera Mac z układem Apple silicon, systemu macOS 26 lub nowszego oraz skalowania MetalFX; wymusza synchronizację pionową. Bardzo jasne poruszające się światła mogą migotać. Generowanie klatek działa najlepiej, gdy gra renderuje co najmniej 30 kl./s."},
     {"pc_note_dlssg_gpu","Generowanie klatek DLSS wymaga karty graficznej z rodziny NVIDIA GeForce RTX z serii 40 lub nowszej."},
     {"pc_note_fsr_fg_gpu","Generowanie klatek FSR 3 wymaga karty graficznej AMD Radeon RX z serii 5000 / NVIDIA GTX z serii 10 lub nowszej."},
     {"pc_note_dlssg_driver","Generowanie klatek DLSS wymaga zainstalowania nowszej wersji sterownika graficznego NVIDIA."},
@@ -509,6 +511,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_d3d12_crashed_retry","DirectX 12 zatrzymał grę przy jednym z wcześniejszych uruchomień. Nadal możesz go wybrać: przy następnym uruchomieniu zostanie wypróbowany ponownie."},
     {"pc_note_dlssg_restart","Uruchom grę ponownie, aby aktywować generowanie klatek DLSS."},
     {"pc_note_vsync_dlssg","W środowisku Vulkan funkcja generowania klatek DLSS wyklucza działanie synchronizacji pionowej; synchronizacja pionowa stanie się ponownie aktywna po wyłączeniu generowania klatek."},
+    {"pc_note_vsync_metalfx_fg","Generowanie klatek MetalFX zawsze działa z synchronizacją pionową; ustawienie zacznie ponownie obowiązywać po wyłączeniu generowania klatek."},
     {"pc_note_fsr_fg_restart","Uruchom grę ponownie, aby przełączyć technologię generowania klatek z DLSS na FSR 3."},
     {"pc_note_frame_generation_xess","Funkcja eksperymentalna. Intel XeSS Frame Generation wstawia wygenerowaną klatkę pomiędzy dwie wyrenderowane. Obraz jest wyświetlany przez DirectX 12, tylko w SDR."},
     {"pc_note_xefg_gpu","XeSS Frame Generation wymaga karty graficznej DirectX 12 z obsługą Shader Model 6.4."},
@@ -871,10 +874,7 @@ inline constexpr Text kMenu[] = {
     {"pc_note_patreon","Otwiera w przeglądarce stronę twórcy w serwisie Patreon, aby przekazać darowiznę."},
     {"pc_notice_patreon_failed","Nie udało się otworzyć przeglądarki. Strona to patreon.com/loreanxavier."},
 };
-inline std::string_view Menu(std::string_view key) {
-    for (const auto& e : kMenu) if (e.key == key) return e.text;
-    return {};
-}
+inline std::string_view Menu(std::string_view key) { return localized::FindMenuText(kMenu, key); }
 struct Subtitle { uint32_t key; std::initializer_list<std::string_view> lines; };
 inline const Subtitle kSubtitles[] = {
     {0x54E4EFDE,{

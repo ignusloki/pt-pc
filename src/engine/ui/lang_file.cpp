@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/ui/lang_file.h"
 
 #include <cstring>
@@ -5,12 +6,6 @@
 
 namespace pt::ui {
 namespace {
-
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-}
 
 }
 
@@ -28,10 +23,10 @@ bool LangFile::Parse(std::span<const uint8_t> data, std::string* error) {
         }
         return false;
     }
-    const uint32_t count = U32(data.data() + 12);
-    const uint32_t table = U32(data.data() + 16);
-    const uint32_t keys = U32(data.data() + 20);
-    const uint32_t values = U32(data.data() + 24);
+    const uint32_t count = ReadBinaryUnchecked<uint32_t>(data.data() + 12);
+    const uint32_t table = ReadBinaryUnchecked<uint32_t>(data.data() + 16);
+    const uint32_t keys = ReadBinaryUnchecked<uint32_t>(data.data() + 20);
+    const uint32_t values = ReadBinaryUnchecked<uint32_t>(data.data() + 24);
     auto c_string = [&](size_t at) -> std::string {
         if (at >= data.size()) {
             return {};
@@ -47,8 +42,8 @@ bool LangFile::Parse(std::span<const uint8_t> data, std::string* error) {
             }
             return false;
         }
-        const size_t key_at = keys + static_cast<size_t>(U32(data.data() + at));
-        const size_t value_at = values + static_cast<size_t>(U32(data.data() + at + 4));
+        const size_t key_at = keys + static_cast<size_t>(ReadBinaryUnchecked<uint32_t>(data.data() + at));
+        const size_t value_at = values + static_cast<size_t>(ReadBinaryUnchecked<uint32_t>(data.data() + at + 4));
         if (value_at + 2 > data.size()) {
             continue;
         }

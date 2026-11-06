@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/assets/fmdl.h"
 
 #include <glm/gtc/packing.hpp>
@@ -12,19 +13,7 @@
 namespace pt {
 namespace {
 
-struct Reader {
-    std::span<const uint8_t> data;
-
-    template <typename T>
-    T At(size_t offset) const {
-        T value{};
-        if (offset + sizeof(T) <= data.size()) {
-            std::memcpy(&value, data.data() + offset, sizeof(T));
-        }
-        return value;
-    }
-};
-
+using Reader = BinaryReader;
 struct FeatureRef {
     size_t offset = 0;
     uint32_t count = 0;

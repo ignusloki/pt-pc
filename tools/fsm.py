@@ -15,6 +15,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import foxhash  # noqa: E402
 
+try:
+    from .binary_strings import cstring
+except ImportError:
+    from binary_strings import cstring
+
+
 CHUNK_HEADER = struct.Struct("<4sI")
 FIRST_SOUND_HEADER = struct.Struct("<dII8x")
 
@@ -202,11 +208,6 @@ def read_keys(buf, byte_offset, kind, bits, static, frames):
 
 
 # ---------------------------------------------------------------- node tree
-
-def cstring(buf, offset):
-    end = buf.index(b"\0", offset)
-    return buf[offset:end].decode("ascii", "replace")
-
 
 NODE = struct.Struct("<IIIiIiiiiIII")
 

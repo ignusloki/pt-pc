@@ -117,7 +117,7 @@ bool SubtitlePlayer::InRange(const Playing& playing, const audio::SubtitleEntry&
 
 bool SubtitlePlayer::Play(std::string_view subtitle_id, float offset_seconds, std::optional<glm::vec3> source, uint32_t sound) {
     std::string id(subtitle_id);
-    std::transform(id.begin(), id.end(), id.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
+    pt::AsciiLowerInPlace(id);
     const uint32_t key = audio::SubtitleTable::SubtitleKey(id);
     if (!PlayKey(key, offset_seconds, source, sound)) {
         return false;
@@ -185,7 +185,7 @@ void SubtitlePlayer::Update(float dt) {
 
 std::vector<SubtitlePlayer::TranscriptLine> SubtitlePlayer::Transcript(std::string_view subtitle_id, int language) {
     std::string id(subtitle_id);
-    std::transform(id.begin(), id.end(), id.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
+    pt::AsciiLowerInPlace(id);
     const uint32_t key = audio::SubtitleTable::SubtitleKey(id);
     const audio::SubtitleEntry* entry = nullptr;
     for (const int l : {language, 0}) {

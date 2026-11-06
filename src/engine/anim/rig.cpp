@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/rig.h"
 
 #include <algorithm>
@@ -9,15 +10,6 @@
 
 namespace pt::anim {
 namespace {
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 std::string CString(std::span<const uint8_t> data, size_t offset, size_t limit) {
     std::string out;
@@ -150,17 +142,17 @@ private:
 
 bool Rig::Parse(std::span<const uint8_t> data, std::string* error) {
     *this = Rig{};
-    if (data.size() < 0x20 || At<uint32_t>(data, 0) != kMagic) {
+    if (data.size() < 0x20 || ReadBinary<uint32_t>(data, 0) != kMagic) {
         if (error) {
             *error = "not a rig file";
         }
         return false;
     }
-    const uint32_t name_offset = At<uint32_t>(data, 0x04);
-    const uint32_t unit_count = At<uint32_t>(data, 0x0C);
-    track_count_ = At<uint32_t>(data, 0x10);
-    const uint32_t joints_offset = At<uint32_t>(data, 0x18);
-    const uint32_t masks_offset = At<uint32_t>(data, 0x1C);
+    const uint32_t name_offset = ReadBinary<uint32_t>(data, 0x04);
+    const uint32_t unit_count = ReadBinary<uint32_t>(data, 0x0C);
+    track_count_ = ReadBinary<uint32_t>(data, 0x10);
+    const uint32_t joints_offset = ReadBinary<uint32_t>(data, 0x18);
+    const uint32_t masks_offset = ReadBinary<uint32_t>(data, 0x1C);
     if (unit_count > 1024 || 0x20 + 4ull * unit_count > data.size()) {
         if (error) {
             *error = std::format("bad unit count {}", unit_count);
@@ -170,15 +162,15 @@ bool Rig::Parse(std::span<const uint8_t> data, std::string* error) {
     name_ = CString(data, name_offset, 64);
     evaluable_ = true;
     for (uint32_t i = 0; i < unit_count; ++i) {
-        const size_t o = At<uint32_t>(data, 0x20 + 4 * static_cast<size_t>(i));
+        const size_t o = ReadBinary<uint32_t>(data, 0x20 + 4 * static_cast<size_t>(i));
         RigUnit u;
-        u.type = At<uint32_t>(data, o);
-        const uint16_t tracks = At<uint16_t>(data, o + 4);
-        const uint16_t joints = At<uint16_t>(data, o + 6);
-        u.parent_joint = At<int16_t>(data, o + 8);
-        u.parent_unit = At<int16_t>(data, o + 0x0A);
-        auto word = [&](size_t k) { return static_cast<int>(At<int16_t>(data, o + k)); };
-        auto axis = [&] { return glm::vec3(At<float>(data, o + 0x20), At<float>(data, o + 0x24), At<float>(data, o + 0x28)); };
+        u.type = ReadBinary<uint32_t>(data, o);
+        const uint16_t tracks = ReadBinary<uint16_t>(data, o + 4);
+        const uint16_t joints = ReadBinary<uint16_t>(data, o + 6);
+        u.parent_joint = ReadBinary<int16_t>(data, o + 8);
+        u.parent_unit = ReadBinary<int16_t>(data, o + 0x0A);
+        auto word = [&](size_t k) { return static_cast<int>(ReadBinary<int16_t>(data, o + k)); };
+        auto axis = [&] { return glm::vec3(ReadBinary<float>(data, o + 0x20), ReadBinary<float>(data, o + 0x24), ReadBinary<float>(data, o + 0x28)); };
         switch (static_cast<RigUnitType>(u.type)) {
         case RigUnitType::Root:
             u.tracks = {word(0x10), word(0x12)};
@@ -219,22 +211,22 @@ bool Rig::Parse(std::span<const uint8_t> data, std::string* error) {
         units_.push_back(std::move(u));
     }
     if (joints_offset && joints_offset + 4 <= data.size()) {
-        const uint32_t count = At<uint32_t>(data, joints_offset);
+        const uint32_t count = ReadBinary<uint32_t>(data, joints_offset);
         for (uint32_t i = 0; i < count && i < 4096; ++i) {
             const size_t e = joints_offset + 4 + 8 * static_cast<size_t>(i);
-            joints_.push_back({At<uint32_t>(data, e), At<uint32_t>(data, e + 4)});
+            joints_.push_back({ReadBinary<uint32_t>(data, e), ReadBinary<uint32_t>(data, e + 4)});
         }
     }
     if (masks_offset && masks_offset + 8 <= data.size()) {
-        const uint32_t weights = At<uint32_t>(data, masks_offset);
-        const uint32_t count = At<uint32_t>(data, masks_offset + 4);
+        const uint32_t weights = ReadBinary<uint32_t>(data, masks_offset);
+        const uint32_t count = ReadBinary<uint32_t>(data, masks_offset + 4);
         for (uint32_t i = 0; i < count && i < 256 && weights <= 1024; ++i) {
-            const size_t m = masks_offset + At<uint32_t>(data, masks_offset + 8 + 4 * static_cast<size_t>(i));
+            const size_t m = masks_offset + ReadBinary<uint32_t>(data, masks_offset + 8 + 4 * static_cast<size_t>(i));
             RigMask mask;
-            mask.hash = At<uint32_t>(data, m);
+            mask.hash = ReadBinary<uint32_t>(data, m);
             mask.name = CString(data, m + 4, 12);
             for (uint32_t k = 0; k < weights; ++k) {
-                mask.weights.push_back(At<float>(data, m + 0x10 + 4 * static_cast<size_t>(k)));
+                mask.weights.push_back(ReadBinary<float>(data, m + 0x10 + 4 * static_cast<size_t>(k)));
             }
             masks_.push_back(std::move(mask));
         }

@@ -1,4 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AssemblyName>PT.PkgExtract</AssemblyName></PropertyGroup>
+  <!-- Both Mac distributions exercise the published helper in tools/macos/build.py.
+       Other runtimes retain their existing publish settings. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'osx-x64'">
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <ILLinkTreatWarningsAsErrors>true</ILLinkTreatWarningsAsErrors>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
   <ItemGroup><ProjectReference Include="$(LibOrbisSource)/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj" /></ItemGroup>
 </Project>

@@ -64,7 +64,7 @@ static void TestCoUninitialize(){if(GetCurrentThreadId()==main_thread){++uniniti
 #undef CoCreateInstance
 #undef CoInitializeEx
 #undef CoUninitialize
-namespace pt {void LogWrite(LogLevel,std::string_view text){std::printf("%.*s\n",static_cast<int>(text.size()),text.data());}}
+#include "log_write.inl"
 int main(){
  main_thread=GetCurrentThreadId(); int failed=0; AudioObjectType full=AudioObjectType_None;
  for(auto channel:pt::audio::kBed) full=static_cast<AudioObjectType>(full|channel);

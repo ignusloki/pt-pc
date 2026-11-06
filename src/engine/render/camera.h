@@ -1,3 +1,4 @@
+#include "engine/core/angles.h"
 #pragma once
 
 #include <cmath>
@@ -7,6 +8,20 @@
 #include <glm/gtc/quaternion.hpp>
 
 namespace pt {
+
+inline glm::mat4 ReverseZPerspective(float fov_y, float aspect, float near_plane) {
+    const float f = 1.0f / std::tan(fov_y * 0.5f);
+    glm::mat4 p(0.0f);
+    p[0][0] = f / aspect;
+    p[1][1] = -f;
+    p[2][3] = -1.0f;
+    p[3][2] = near_plane;
+    return p;
+}
+
+inline glm::vec3 ViewForward(float yaw, float pitch) {
+    return glm::normalize(glm::vec3(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)));
+}
 
 struct Camera {
     glm::vec3 position{0.0f, 1.6f, 5.0f};
@@ -18,9 +33,7 @@ struct Camera {
     /* Not a clip distance (the projection is reverse-Z to infinity); it only bounds the SSAO fade, which the original ends at min(far, 250). */
     float far_plane = 100.0f;
 
-    glm::vec3 Forward() const {
-        return glm::normalize(glm::vec3(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)));
-    }
+    glm::vec3 Forward() const { return ViewForward(yaw, pitch); }
 
     glm::vec3 Up() const {
         const glm::vec3 up(std::sin(yaw) * std::sin(pitch), std::cos(pitch), std::cos(yaw) * std::sin(pitch));
@@ -35,34 +48,18 @@ struct Camera {
         return glm::lookAt(position, position + Forward(), Up());
     }
 
-    glm::mat4 Projection(float aspect) const {
-        const float f = 1.0f / std::tan(fov_y * 0.5f);
-        glm::mat4 p(0.0f);
-        p[0][0] = f / aspect;
-        p[1][1] = -f;
-        p[2][3] = -1.0f;
-        p[3][2] = near_plane;
-        return p;
-    }
+    glm::mat4 Projection(float aspect) const { return ReverseZPerspective(fov_y, aspect, near_plane); }
 };
 
 inline Camera BlendCameras(const Camera& from, const Camera& to, float t, bool* cut = nullptr) {
-    constexpr float kPi = 3.14159265f;
-    const auto wrap = [](float a) {
-        float d = std::fmod(a + kPi, 2.0f * kPi);
-        if (d < 0.0f) {
-            d += 2.0f * kPi;
-        }
-        return d - kPi;
-    };
     if (cut) {
         *cut = true;
     }
     if (glm::length(to.position - from.position) > 1.0f) {
         return to;
     }
-    const float yaw_delta = wrap(to.yaw - from.yaw);
-    const float roll_delta = wrap(to.roll - from.roll);
+    const float yaw_delta = WrapAngle(to.yaw - from.yaw);
+    const float roll_delta = WrapAngle(to.roll - from.roll);
     if (std::abs(yaw_delta) > 0.5f || std::abs(to.pitch - from.pitch) > 0.5f || std::abs(roll_delta) > 0.5f) {
         return to;
     }

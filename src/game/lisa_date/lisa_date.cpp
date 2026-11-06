@@ -1,3 +1,4 @@
+#include "engine/core/interpolation.h"
 #include "game/lisa_date/lisa_date.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -54,17 +55,9 @@ const glm::vec4 kPeach(1.0f, 0.86f, 0.74f, 1.0f);
 const glm::vec4 kRose(0.93f, 0.45f, 0.62f, 1.0f);
 const glm::vec4 kInk(0.30f, 0.16f, 0.22f, 1.0f);
 
-float Ease(float current, float target, float rate, float dt) {
+template <typename T>
+T Ease(const T& current, const T& target, float rate, float dt) {
     return target + (current - target) * std::exp(-rate * dt);
-}
-
-glm::vec3 Ease(const glm::vec3& current, const glm::vec3& target, float rate, float dt) {
-    return target + (current - target) * std::exp(-rate * dt);
-}
-
-float Smooth(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 glm::mat4 About(const glm::vec3& pivot, const glm::mat4& rotation) {
@@ -1189,7 +1182,7 @@ void LisaDate::DrawLabel(ui::UiBatch& batch, const UiCanvas& canvas, const std::
 void LisaDate::DrawTransition(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full, const ui::UiDrawParams& noise) {
     const float t = phase_time_;
     (void)canvas;
-    const float tearing = phase_ == Phase::Intro ? Smooth(t / 0.9f) * (1.0f - Smooth((t - kIntroCover) / 0.3f)) : 0.0f;
+    const float tearing = phase_ == Phase::Intro ? SmoothStep01(t / 0.9f) * (1.0f - SmoothStep01((t - kIntroCover) / 0.3f)) : 0.0f;
     if (tearing > 0.0f && noise.textures[0] && !settings_.replay) {
         std::mt19937 r(static_cast<uint32_t>(t * 24.0f) * 977u + 5u);
         std::uniform_real_distribution<float> d(0.0f, 1.0f);
@@ -1206,19 +1199,19 @@ void LisaDate::DrawTransition(ui::UiBatch& batch, const UiCanvas& canvas, glm::v
         }
     }
     if (phase_ == Phase::Intro && t > 0.45f && t < kIntroCover + 0.2f) {
-        const float grow = Smooth((t - 0.45f) / 0.65f);
-        DrawHeart(batch, full * 0.5f, full.y * (0.15f + 2.6f * grow * grow), glm::vec4(1.0f, 0.42f, 0.66f, 0.95f * (1.0f - Smooth((t - 1.05f) / 0.4f))));
+        const float grow = SmoothStep01((t - 0.45f) / 0.65f);
+        DrawHeart(batch, full * 0.5f, full.y * (0.15f + 2.6f * grow * grow), glm::vec4(1.0f, 0.42f, 0.66f, 0.95f * (1.0f - SmoothStep01((t - 1.05f) / 0.4f))));
         const float flash = std::max(0.0f, 1.0f - std::abs(t - 1.0f) / 0.25f);
         batch.Quad({0, 0}, full, {0, 0}, {1, 1}, glm::vec4(1.0f, 0.9f, 0.95f, 0.9f * flash), ui::UiDrawParams::Plain(TextureManager::kWhite),
                    ui::UiShade::Solid, ui::UiBlend::Alpha);
     }
     float cover = 0.0f;
-    if (phase_ == Phase::Intro) cover = t < kIntroCover ? Smooth((t - 0.9f) / (kIntroCover - 0.9f)) : 1.0f - Smooth((t - 2.5f) / (kIntroLength - 2.5f));
+    if (phase_ == Phase::Intro) cover = t < kIntroCover ? SmoothStep01((t - 0.9f) / (kIntroCover - 0.9f)) : 1.0f - SmoothStep01((t - 2.5f) / (kIntroLength - 2.5f));
     if (cover > 0.0f) DrawGradient(batch, {0, 0}, full, kPink, kPeach, cover);
     if (phase_ == Phase::Intro) {
-        const float logo = Smooth((t - 1.15f) / 0.4f) * (1.0f - Smooth((t - 2.6f) / 0.5f));
+        const float logo = SmoothStep01((t - 1.15f) / 0.4f) * (1.0f - SmoothStep01((t - 2.6f) / 0.5f));
         if (logo > 0.0f) {
-            const float size = (0.62f + 0.04f * Smooth((t - 1.15f) / 2.0f)) * UiCanvas::kHeight;
+            const float size = (0.62f + 0.04f * SmoothStep01((t - 1.15f) / 2.0f)) * UiCanvas::kHeight;
             const glm::vec2 middle(0.5f * UiCanvas::kWidth, 0.48f * UiCanvas::kHeight);
             if (logo_.texture) {
                 const glm::vec2 half(size * 0.5f * logo_.aspect, size * 0.5f);
@@ -1419,7 +1412,7 @@ void LisaDate::DrawUi(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full
     if (phase_ == Phase::Intro) DrawTransition(batch, canvas, full, noise);
     if (phase_ == Phase::Outro || phase_ == Phase::Done) {
         const float t = phase_time_;
-        const float a = t < kOutroBlack ? Smooth(t / kOutroBlack) : 1.0f - Smooth((t - kOutroBlack) / (kOutroLength - kOutroBlack));
+        const float a = t < kOutroBlack ? SmoothStep01(t / kOutroBlack) : 1.0f - SmoothStep01((t - kOutroBlack) / (kOutroLength - kOutroBlack));
         batch.Quad({0, 0}, full, {0, 0}, {1, 1}, glm::vec4(0.0f, 0.0f, 0.0f, phase_ == Phase::Done ? 0.0f : a),
                    ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid, ui::UiBlend::Alpha);
     }

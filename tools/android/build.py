@@ -81,8 +81,7 @@ def stage_runtime(build, ndk, sdl_source):
                "VMA": dependencies / "vma-src/LICENSE.txt", "GLM": dependencies / "glm-src/copying.txt",
                "Dear-ImGui": dependencies / "imgui-src/LICENSE.txt", "stb": dependencies / "stb-src/LICENSE",
                "Lua": dependencies / "lua51-src/COPYRIGHT", "HarfBuzz": dependencies / "harfbuzz-src/COPYING",
-               "Ogg": dependencies / "ogg-src/COPYING", "Vorbis": dependencies / "vorbis-src/COPYING",
-               "zstd-BSD": build / "_deps/zstd-src/LICENSE"}
+               "Ogg": dependencies / "ogg-src/COPYING", "Vorbis": dependencies / "vorbis-src/COPYING"}
     for name, source in notices.items():
         if not source.is_file():
             raise RuntimeError(f"Missing dependency license: {source}")

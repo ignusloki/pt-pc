@@ -1,3 +1,4 @@
+#include "check.h"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -14,10 +15,6 @@ namespace {
 
 int failures = 0;
 
-void Check(const std::string& name, bool ok) {
-    std::printf("%s: %s\n", name.c_str(), ok ? "PASS" : "FAIL");
-    failures += ok ? 0 : 1;
-}
 
 bool Near(float a, float b) { return std::abs(a - b) <= 1e-5f * std::max(1.0f, std::abs(b)); }
 
@@ -59,18 +56,18 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(dir);
     const std::filesystem::path ini = dir / "roundtrip.ini";
 
-    Check("defaults", Same(RoundTrip(ini, {}), {}));
+    pt::test::CheckNamed(failures, "defaults", Same(RoundTrip(ini, {}), {}));
 
     {
         const auto old = LoadText(ini, "[upscaling]\nneural_quality=performance\n");
-        Check("legacy Performance keeps its Small model", old.upscaling.neural_model == "small");
+        pt::test::CheckNamed(failures, "legacy Performance keeps its Small model", old.upscaling.neural_model == "small");
         const auto balanced = LoadText(ini, "[upscaling]\nneural_quality=balanced\n");
-        Check("legacy Balanced migrates to Quality and Large model", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "large");
+        pt::test::CheckNamed(failures, "legacy Balanced migrates to Quality and Large model", balanced.upscaling.neural_quality == "quality" && balanced.upscaling.neural_model == "large");
         const auto explicit_model = LoadText(ini, "[upscaling]\nneural_quality=performance\nneural_model=large\nneural_intensity=4\n");
-        Check("explicit model independent of quality", explicit_model.upscaling.neural_model == "large");
-        Check("neural strength capped at 300 percent", Near(explicit_model.upscaling.neural_intensity, 3.0f));
-        Check("neural strength minimum", Near(LoadText(ini, "[upscaling]\nneural_intensity=-1\n").upscaling.neural_intensity, .25f));
-        Check("neural strength rejects nan", Near(LoadText(ini, "[upscaling]\nneural_intensity=nan\n").upscaling.neural_intensity, 1.0f));
+        pt::test::CheckNamed(failures, "explicit model independent of quality", explicit_model.upscaling.neural_model == "large");
+        pt::test::CheckNamed(failures, "neural strength capped at 300 percent", Near(explicit_model.upscaling.neural_intensity, 3.0f));
+        pt::test::CheckNamed(failures, "neural strength minimum", Near(LoadText(ini, "[upscaling]\nneural_intensity=-1\n").upscaling.neural_intensity, .25f));
+        pt::test::CheckNamed(failures, "neural strength rejects nan", Near(LoadText(ini, "[upscaling]\nneural_intensity=nan\n").upscaling.neural_intensity, 1.0f));
     }
 
     {
@@ -79,17 +76,17 @@ int main(int argc, char** argv) {
         expected.graphics.anisotropy = 8;
         expected.graphics.texture_detail = 2;
         expected.audio.volume = 0.6f;
-        Check("removed legacy options are ignored", Same(legacy, expected));
-        Check("save legacy settings", pt::SaveAppSettings(ini, legacy));
+        pt::test::CheckNamed(failures, "removed legacy options are ignored", Same(legacy, expected));
+        pt::test::CheckNamed(failures, "save legacy settings", pt::SaveAppSettings(ini, legacy));
         std::ifstream in(ini, std::ios::binary);
         const std::string saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        Check("removed options are not saved", saved.find("pause_on_focus_loss") == std::string::npos &&
+        pt::test::CheckNamed(failures, "removed options are not saved", saved.find("pause_on_focus_loss") == std::string::npos &&
               saved.find("mute_in_background") == std::string::npos && saved.find("enhanced_textures") == std::string::npos);
     }
 
-    Check("DLSS multiplier below minimum", LoadText(ini, "[upscaling]\ndlssg_multiplier=0\n").upscaling.dlssg_multiplier == 2);
-    Check("DLSS multiplier above maximum", LoadText(ini, "[upscaling]\ndlssg_multiplier=8\n").upscaling.dlssg_multiplier == 4);
-    Check("DLSS multiplier malformed", LoadText(ini, "[upscaling]\ndlssg_multiplier=wrong\n").upscaling.dlssg_multiplier == 2);
+    pt::test::CheckNamed(failures, "DLSS multiplier below minimum", LoadText(ini, "[upscaling]\ndlssg_multiplier=0\n").upscaling.dlssg_multiplier == 2);
+    pt::test::CheckNamed(failures, "DLSS multiplier above maximum", LoadText(ini, "[upscaling]\ndlssg_multiplier=8\n").upscaling.dlssg_multiplier == 4);
+    pt::test::CheckNamed(failures, "DLSS multiplier malformed", LoadText(ini, "[upscaling]\ndlssg_multiplier=wrong\n").upscaling.dlssg_multiplier == 2);
 
     const std::vector<std::pair<std::string, std::function<void(pt::AppSettings&)>>> changes = {
         {"upscaling.neural_model", [](auto& s) { s.upscaling.neural_model = "small"; }},
@@ -181,8 +178,8 @@ int main(int argc, char** argv) {
     s.display.hdr=true; s.display.fps_limit=144; s.audio.surround=true; s.input.rumble_profile=1; s.vr.height_offset=-0.15f;
         change(s);
         const pt::AppSettings loaded = RoundTrip(ini, s);
-        Check(name + " changes the settings", !Same(s, pt::AppSettings{}));
-        Check(name + " round trip", Same(loaded, s));
+        pt::test::CheckNamed(failures, name + " changes the settings", !Same(s, pt::AppSettings{}));
+        pt::test::CheckNamed(failures, name + " round trip", Same(loaded, s));
     }
     const pt::AppSettings odd = LoadText(ini,
         "[display]\nletterbox = 7\nfullscreen = -3\nwidth = 99999\n[graphics]\nanisotropy = 5\nfilm_grain = nan\nclarity = 3\n"
@@ -190,64 +187,64 @@ int main(int argc, char** argv) {
         "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n"
         "[accessibility]\ngyro = 7\ngyro_sensitivity = nan\ngyro_tightening = nan\nsound_captions = yes\nfield_of_view = 90\n"
         "[gyro_bias]\nfine = 0.125 -0.0625 0.03125\ntoo_big = 9 0 0\nshort = 0.1\nnot_a_number = a b c\n");
-    Check("letterbox clamped", odd.display.letterbox == 2);
-    Check("subtitle size lower bound", LoadText(ini, "[display]\nsubtitle_scale = 0\n").display.subtitle_scale == 1.0f);
-    Check("subtitle size upper bound", LoadText(ini, "[display]\nsubtitle_scale = 9\n").display.subtitle_scale == 2.0f);
-    Check("subtitle size non-finite fallback", LoadText(ini, "[display]\nsubtitle_scale = nan\n").display.subtitle_scale == 1.0f);
-    Check("desktop subtitle size unchanged for old settings", LoadText(ini, "[display]\nwidth = 960\n").display.subtitle_scale == 1.0f);
+    pt::test::CheckNamed(failures, "letterbox clamped", odd.display.letterbox == 2);
+    pt::test::CheckNamed(failures, "subtitle size lower bound", LoadText(ini, "[display]\nsubtitle_scale = 0\n").display.subtitle_scale == 1.0f);
+    pt::test::CheckNamed(failures, "subtitle size upper bound", LoadText(ini, "[display]\nsubtitle_scale = 9\n").display.subtitle_scale == 2.0f);
+    pt::test::CheckNamed(failures, "subtitle size non-finite fallback", LoadText(ini, "[display]\nsubtitle_scale = nan\n").display.subtitle_scale == 1.0f);
+    pt::test::CheckNamed(failures, "desktop subtitle size unchanged for old settings", LoadText(ini, "[display]\nwidth = 960\n").display.subtitle_scale == 1.0f);
     pt::AppSettings phone_defaults;
     phone_defaults.display.subtitle_scale = 1.5f;
     std::ofstream(ini) << "[display]\nwidth = 960\n";
-    Check("old Android settings keep the larger default", pt::LoadAppSettings(ini, phone_defaults) && phone_defaults.display.subtitle_scale == 1.5f);
-    Check("fullscreen clamped", odd.display.fullscreen == 0);
-    Check("width clamped", odd.display.width == 16384);
-    Check("anisotropy rounded down to a step", odd.graphics.anisotropy == 4);
-    Check("film grain nan is the original's", odd.graphics.film_grain == 1.0f);
-    Check("clarity clamped", odd.graphics.clarity == 1.0f);
-    Check("shadow quality clamped", odd.graphics.shadow_quality == 3);
-    Check("texture detail clamped", odd.graphics.texture_detail == 0);
-    Check("ray quality clamped to Path traced", odd.graphics.ray_quality == 4);
-    Check("ray quality 2 reads as Ultra", LoadText(dir / "rq2.ini", "[graphics]\nray_quality = 2\n").graphics.ray_quality == 3);
-    Check("ray quality 5 reads as the older Ultra", LoadText(dir / "rq5.ini", "[graphics]\nray_quality = 5\n").graphics.ray_quality == 2);
-    Check("ray quality 3 stays Ultra", LoadText(dir / "rq3.ini", "[graphics]\nray_quality = 3\n").graphics.ray_quality == 3);
-    Check("traced shadows clamped", odd.ray_tracing.shadows == 2);
-    Check("gamepad sensitivity clamped", odd.input.gamepad_sensitivity == 4.0f);
-    Check("malformed volume keeps the default", odd.audio.volume == 1.0f);
-    Check("yes reads as on", odd.input.rumble);
-    Check("vr turn clamped", odd.vr.turn == 1);
-    Check("vr resolution scale clamped", odd.vr.resolution_scale == 2.0f);
-    Check("vr snap nan is the default", odd.vr.snap_degrees == 30.0f);
-    Check("vr off by default", !pt::AppSettings{}.vr.enabled);
-    Check("fast walk off by default", !pt::AppSettings{}.extras.fast_walk);
-    Check("older settings keep fast walk off", !LoadText(ini, "[extras]\nspeedrun = 1\n").extras.fast_walk);
-    Check("disabled fast walk round trip", !RoundTrip(ini, {}).extras.fast_walk);
+    pt::test::CheckNamed(failures, "old Android settings keep the larger default", pt::LoadAppSettings(ini, phone_defaults) && phone_defaults.display.subtitle_scale == 1.5f);
+    pt::test::CheckNamed(failures, "fullscreen clamped", odd.display.fullscreen == 0);
+    pt::test::CheckNamed(failures, "width clamped", odd.display.width == 16384);
+    pt::test::CheckNamed(failures, "anisotropy rounded down to a step", odd.graphics.anisotropy == 4);
+    pt::test::CheckNamed(failures, "film grain nan is the original's", odd.graphics.film_grain == 1.0f);
+    pt::test::CheckNamed(failures, "clarity clamped", odd.graphics.clarity == 1.0f);
+    pt::test::CheckNamed(failures, "shadow quality clamped", odd.graphics.shadow_quality == 3);
+    pt::test::CheckNamed(failures, "texture detail clamped", odd.graphics.texture_detail == 0);
+    pt::test::CheckNamed(failures, "ray quality clamped to Path traced", odd.graphics.ray_quality == 4);
+    pt::test::CheckNamed(failures, "ray quality 2 reads as Ultra", LoadText(dir / "rq2.ini", "[graphics]\nray_quality = 2\n").graphics.ray_quality == 3);
+    pt::test::CheckNamed(failures, "ray quality 5 reads as the older Ultra", LoadText(dir / "rq5.ini", "[graphics]\nray_quality = 5\n").graphics.ray_quality == 2);
+    pt::test::CheckNamed(failures, "ray quality 3 stays Ultra", LoadText(dir / "rq3.ini", "[graphics]\nray_quality = 3\n").graphics.ray_quality == 3);
+    pt::test::CheckNamed(failures, "traced shadows clamped", odd.ray_tracing.shadows == 2);
+    pt::test::CheckNamed(failures, "gamepad sensitivity clamped", odd.input.gamepad_sensitivity == 4.0f);
+    pt::test::CheckNamed(failures, "malformed volume keeps the default", odd.audio.volume == 1.0f);
+    pt::test::CheckNamed(failures, "yes reads as on", odd.input.rumble);
+    pt::test::CheckNamed(failures, "vr turn clamped", odd.vr.turn == 1);
+    pt::test::CheckNamed(failures, "vr resolution scale clamped", odd.vr.resolution_scale == 2.0f);
+    pt::test::CheckNamed(failures, "vr snap nan is the default", odd.vr.snap_degrees == 30.0f);
+    pt::test::CheckNamed(failures, "vr off by default", !pt::AppSettings{}.vr.enabled);
+    pt::test::CheckNamed(failures, "fast walk off by default", !pt::AppSettings{}.extras.fast_walk);
+    pt::test::CheckNamed(failures, "older settings keep fast walk off", !LoadText(ini, "[extras]\nspeedrun = 1\n").extras.fast_walk);
+    pt::test::CheckNamed(failures, "disabled fast walk round trip", !RoundTrip(ini, {}).extras.fast_walk);
     auto scaled = pt::AppSettings{};
     scaled.display.render_scale = 0.5f;
-    Check("iOS render scale persists", Near(RoundTrip(ini, scaled).display.render_scale, 0.5f));
-    Check("render scale rejects nan", Near(LoadText(ini, "[display]\nrender_scale = nan\n").display.render_scale, 1.0f));
-    Check("render scale lower bound", Near(LoadText(ini, "[display]\nrender_scale = 0\n").display.render_scale, 0.25f));
-    Check("microphone on by default", pt::AppSettings{}.voice.microphone_enabled);
-    Check("older settings keep microphone on", LoadText(ini, "[voice]\ndevice = \"USB mic\"\nenabled = 0\n").voice.microphone_enabled);
+    pt::test::CheckNamed(failures, "iOS render scale persists", Near(RoundTrip(ini, scaled).display.render_scale, 0.5f));
+    pt::test::CheckNamed(failures, "render scale rejects nan", Near(LoadText(ini, "[display]\nrender_scale = nan\n").display.render_scale, 1.0f));
+    pt::test::CheckNamed(failures, "render scale lower bound", Near(LoadText(ini, "[display]\nrender_scale = 0\n").display.render_scale, 0.25f));
+    pt::test::CheckNamed(failures, "microphone on by default", pt::AppSettings{}.voice.microphone_enabled);
+    pt::test::CheckNamed(failures, "older settings keep microphone on", LoadText(ini, "[voice]\ndevice = \"USB mic\"\nenabled = 0\n").voice.microphone_enabled);
     const auto mic_off = LoadText(ini, "[voice]\nmicrophone_enabled = 0\nkey = \"J\"\n");
-    Check("microphone off retains optional trigger", !mic_off.voice.microphone_enabled && mic_off.voice.key == "J");
-    Check("microphone off persists", !RoundTrip(ini, mic_off).voice.microphone_enabled);
-    Check("microphone on persists", RoundTrip(ini, {}).voice.microphone_enabled);
-    Check("game plus on by default", pt::AppSettings{}.game.game_plus);
-    Check("game plus off reads", !LoadText(ini, "[game]\ngame_plus = 0\n").game.game_plus);
-    Check("gyro clamped", odd.accessibility.gyro == 2);
-    Check("gyro sensitivity nan is the default", odd.accessibility.gyro_sensitivity == 1.0f);
-    Check("gyro tightening nan is the default", odd.accessibility.gyro_tightening == 4.0f);
-    Check("a malformed or implausible gyro offset is dropped, a good one kept",
+    pt::test::CheckNamed(failures, "microphone off retains optional trigger", !mic_off.voice.microphone_enabled && mic_off.voice.key == "J");
+    pt::test::CheckNamed(failures, "microphone off persists", !RoundTrip(ini, mic_off).voice.microphone_enabled);
+    pt::test::CheckNamed(failures, "microphone on persists", RoundTrip(ini, {}).voice.microphone_enabled);
+    pt::test::CheckNamed(failures, "game plus on by default", pt::AppSettings{}.game.game_plus);
+    pt::test::CheckNamed(failures, "game plus off reads", !LoadText(ini, "[game]\ngame_plus = 0\n").game.game_plus);
+    pt::test::CheckNamed(failures, "gyro clamped", odd.accessibility.gyro == 2);
+    pt::test::CheckNamed(failures, "gyro sensitivity nan is the default", odd.accessibility.gyro_sensitivity == 1.0f);
+    pt::test::CheckNamed(failures, "gyro tightening nan is the default", odd.accessibility.gyro_tightening == 4.0f);
+    pt::test::CheckNamed(failures, "a malformed or implausible gyro offset is dropped, a good one kept",
           odd.accessibility.gyro_bias.size() == 1 && odd.accessibility.gyro_bias.count("fine") == 1 &&
               odd.accessibility.gyro_bias.at("fine") == std::array<float, 3>{0.125f, -0.0625f, 0.03125f});
-    Check("captions read yes as on", odd.accessibility.sound_captions);
-    Check("field of view clamped", odd.accessibility.fov_offset == 40);
-    Check("field of view is the original's by default", pt::AppSettings{}.accessibility.fov_offset == 0);
-    Check("accessibility off by default", pt::AppSettings{}.accessibility == pt::AppSettings::Accessibility{} && !pt::AppSettings{}.accessibility.sound_captions &&
+    pt::test::CheckNamed(failures, "captions read yes as on", odd.accessibility.sound_captions);
+    pt::test::CheckNamed(failures, "field of view clamped", odd.accessibility.fov_offset == 40);
+    pt::test::CheckNamed(failures, "field of view is the original's by default", pt::AppSettings{}.accessibility.fov_offset == 0);
+    pt::test::CheckNamed(failures, "accessibility off by default", pt::AppSettings{}.accessibility == pt::AppSettings::Accessibility{} && !pt::AppSettings{}.accessibility.sound_captions &&
                                             pt::AppSettings{}.accessibility.gyro == 0);
-    Check("vr world_scale of an older version leaves the size at 1", LoadText(ini, "[vr]\nworld_scale = 0.5\n").vr.world_size == 1.0f);
-    Check("vr world_size wins over an old world_scale", LoadText(ini, "[vr]\nworld_scale = 0.5\nworld_size = 1.25\n").vr.world_size == 1.25f);
-    Check("vr world_size clamped", LoadText(ini, "[vr]\nworld_size = 9\n").vr.world_size == 2.0f);
+    pt::test::CheckNamed(failures, "vr world_scale of an older version leaves the size at 1", LoadText(ini, "[vr]\nworld_scale = 0.5\n").vr.world_size == 1.0f);
+    pt::test::CheckNamed(failures, "vr world_size wins over an old world_scale", LoadText(ini, "[vr]\nworld_scale = 0.5\nworld_size = 1.25\n").vr.world_size == 1.25f);
+    pt::test::CheckNamed(failures, "vr world_size clamped", LoadText(ini, "[vr]\nworld_size = 9\n").vr.world_size == 2.0f);
     std::filesystem::remove(ini);
     std::printf("%s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;

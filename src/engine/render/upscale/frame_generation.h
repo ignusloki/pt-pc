@@ -64,11 +64,7 @@ public:
     virtual bool OwnsGeneratedFrame() const { return false; }
     virtual const vk::Image* GeneratedImage() { return nullptr; }
     virtual bool ExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) {
-        signal_semaphore = VK_NULL_HANDLE;
-        signal_value = 0;
-        wait_semaphore = VK_NULL_HANDLE;
-        wait_value = 0;
-        return false;
+        return NoExternalSync(signal_semaphore, signal_value, wait_semaphore, wait_value);
     }
 };
 

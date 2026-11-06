@@ -24,7 +24,7 @@ std::string_view RenderingApiName(RenderingApi api) {
 bool ParseRenderingApi(std::string_view text, RenderingApi& out) {
     std::string v(text);
     v.erase(std::remove_if(v.begin(), v.end(), [](unsigned char c) { return std::isspace(c) != 0; }), v.end());
-    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return pt::AsciiLower(static_cast<char>(c)); });
+    pt::AsciiLowerInPlace(v);
     if (v == "vulkan") {
         out = RenderingApi::Vulkan;
         return true;

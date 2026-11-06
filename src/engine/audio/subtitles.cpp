@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/core/ascii.h"
 #include "engine/audio/subtitles.h"
 
@@ -24,18 +25,6 @@ std::string NormalizeLanguage(std::string_view language) {
         lang[i] = static_cast<char>(i == 0 ? pt::AsciiUpper(lang[i]) : pt::AsciiLower(lang[i]));
     }
     return lang;
-}
-
-uint16_t U16(const uint8_t* p) {
-    uint16_t v;
-    std::memcpy(&v, p, 2);
-    return v;
-}
-
-uint32_t U32(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
 }
 
 }
@@ -110,7 +99,7 @@ bool SubtitleTable::Parse(std::span<const uint8_t> data, std::span<const std::ve
         }
         return false;
     }
-    const uint16_t count = U16(data.data() + 2);
+    const uint16_t count = ReadBinaryUnchecked<uint16_t>(data.data() + 2);
     if (4 + static_cast<size_t>(count) * 8 > data.size()) {
         if (error) {
             *error = "subp index runs past the file";
@@ -118,14 +107,14 @@ bool SubtitleTable::Parse(std::span<const uint8_t> data, std::span<const std::ve
         return false;
     }
     for (uint16_t i = 0; i < count; ++i) {
-        const uint32_t key = U32(data.data() + 4 + i * 8);
-        const uint32_t offset = U32(data.data() + 8 + i * 8);
+        const uint32_t key = ReadBinaryUnchecked<uint32_t>(data.data() + 4 + i * 8);
+        const uint32_t offset = ReadBinaryUnchecked<uint32_t>(data.data() + 8 + i * 8);
         if (offset + 12 > data.size()) {
             continue;
         }
         const uint8_t* header = data.data() + offset;
         const uint8_t line_count = header[2];
-        const uint16_t text_size = U16(header + 4);
+        const uint16_t text_size = ReadBinaryUnchecked<uint16_t>(header + 4);
         const size_t text_start = offset + 12 + static_cast<size_t>(line_count) * 4;
         if (text_start + text_size > data.size()) {
             continue;
@@ -147,12 +136,12 @@ bool SubtitleTable::Parse(std::span<const uint8_t> data, std::span<const std::ve
         SubtitleEntry entry;
         entry.key = key;
         entry.category = header[3];
-        entry.character = U16(header + 8);
+        entry.character = ReadBinaryUnchecked<uint16_t>(header + 8);
         entry.range = header[10];
         for (uint8_t l = 0; l < line_count; ++l) {
             SubtitleLine line;
-            line.start_seconds = U16(header + 12 + l * 4) / 100.0f;
-            line.end_seconds = U16(header + 14 + l * 4) / 100.0f;
+            line.start_seconds = ReadBinaryUnchecked<uint16_t>(header + 12 + l * 4) / 100.0f;
+            line.end_seconds = ReadBinaryUnchecked<uint16_t>(header + 14 + l * 4) / 100.0f;
             if (l < pieces.size()) {
                 std::string& piece = pieces[l];
                 std::string cleaned;

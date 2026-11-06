@@ -1,3 +1,4 @@
+#include "engine/core/angles.h"
 #include <chrono>
 #include "engine/platform/os.h"
 #include "engine/core/ascii.h"
@@ -1012,15 +1013,6 @@ constexpr float kBotFaceYaw = 0.02f;
 constexpr float kBotFacePitch = 0.03f;
 constexpr float kBotMinStick = 0.2f;
 
-float WrapAngle(float a) {
-    constexpr float kPi = 3.14159265f;
-    a = std::fmod(a + kPi, 2.0f * kPi);
-    if (a < 0.0f) {
-        a += 2.0f * kPi;
-    }
-    return a - kPi;
-}
-
 float TurnStick(float error, float tolerance) {
     const float a = std::abs(error);
     if (a < tolerance) {
@@ -1334,7 +1326,7 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
     } else if (what == "prompts") {
         const PromptDevice shown = GameUi::Active() ? GameUi::Active()->Menu().Prompts() : PromptDevice::Keyboard;
         std::string name = PromptDeviceName(shown);
-        std::transform(name.begin(), name.end(), name.begin(), [](char c) { return static_cast<char>(pt::AsciiLower(c)); });
+        pt::AsciiLowerInPlace(name);
         ok = name == word(1);
         got = std::format("option menu prompts {}", name);
     } else if (what == "invert") {

@@ -10,6 +10,11 @@
 
 namespace pt::ui {
 
+inline bool StrongRtl(uint32_t c) {
+    return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF);
+}
+
+
 struct FfntGlyph {
     uint32_t code = 0;
     uint16_t x = 0;

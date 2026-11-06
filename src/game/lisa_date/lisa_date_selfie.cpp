@@ -1,3 +1,4 @@
+#include "engine/core/interpolation.h"
 #include "game/lisa_date/lisa_date.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -33,11 +34,6 @@ constexpr float kSaveWait = 1.5f;
 const glm::vec4 kInk(0.30f, 0.16f, 0.22f, 1.0f);
 const glm::vec4 kRose(0.93f, 0.45f, 0.62f, 1.0f);
 const glm::vec4 kLine(0.96f, 0.6f, 0.74f, 1.0f);
-
-float Smooth(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
 
 float Level(const float (&table)[5], float level) {
     const float x = std::clamp(level, -2.0f, 2.0f) + 2.0f;
@@ -527,7 +523,7 @@ void LisaDate::DrawSelfieOutside(ui::UiBatch& batch, const UiCanvas& canvas, glm
         }
         batch.Quad(part[0], part[1], {0, 0}, {1, 1}, veil, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
     }
-    const float develop = selfie_ == Selfie::Developing ? 1.0f - Smooth((selfie_time_ - 0.3f) / (kDevelop - 0.5f)) : 0.0f;
+    const float develop = selfie_ == Selfie::Developing ? 1.0f - SmoothStep01((selfie_time_ - 0.3f) / (kDevelop - 0.5f)) : 0.0f;
     if (develop > 0.0f) {
         const glm::vec4 white(1.0f, 0.985f - 0.05f * (1.0f - develop), 0.96f - 0.12f * (1.0f - develop), develop);
         batch.Quad(wlo, whi, {0, 0}, {1, 1}, white, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);

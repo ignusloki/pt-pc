@@ -1,21 +1,5 @@
 #version 460
-#include "common.glsl"
-
-layout(push_constant) uniform PassPush {
-    uvec4 ids;
-    vec4 f0;
-    vec4 f1;
-    vec4 f2;
-    mat4 m;
-} pass;
-
-layout(location = 0) in vec2 in_uv;
-layout(location = 0) out vec4 out_color;
-
-float BloomAlpha(vec3 color) {
-    float r = Luma709(color) / 32.0;
-    return r * inversesqrt(max(1.0 / 512.0, r));
-}
+#include "compose_bloom_alpha_shared.glsl"
 
 void TppFog(vec3 eye, vec3 point, out vec3 inscatter, out float transmittance) {
     vec4 g0 = frame.fog[0];
@@ -40,13 +24,7 @@ void TppFog(vec3 eye, vec3 point, out vec3 inscatter, out float transmittance) {
     transmittance = 1.0 - opacity;
 }
 
-vec3 TppShoulder(vec3 x) {
-    float a = pass.f0.x;
-    float t = pass.f0.y;
-    float c = pass.f0.z;
-    vec3 curve = t + c - 1.0 / (a * (max(x, vec3(t)) - t + c));
-    return mix(curve, x, vec3(lessThanEqual(x, vec3(t))));
-}
+#include "tpp_shoulder.glsl"
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);

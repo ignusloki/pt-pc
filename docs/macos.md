@@ -114,7 +114,7 @@ missing Vulkan feature (`pt.log`, "required feature ... is not available"). The 
 ## Building
 
 Xcode's command line tools (`xcode-select --install`), then from Homebrew `cmake ninja shaderc` (for `glslc`),
-`vulkan-headers` and `vulkan-loader` (CMake's FindVulkan wants a library; the game itself loads MoltenVK):
+`vulkan-headers`. The game loads MoltenVK directly, so a separate Vulkan loader is not needed:
 
     cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake --build build/macos --target pt

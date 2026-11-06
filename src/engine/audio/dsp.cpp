@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/dsp.h"
 
 #include <algorithm>
@@ -19,19 +20,13 @@ public:
     explicit ParamReader(const std::vector<uint8_t>& data) : data_(data) {}
 
     float F32() {
-        float v = 0.0f;
-        if (pos_ + 4 <= data_.size()) {
-            std::memcpy(&v, data_.data() + pos_, 4);
-        }
+        const auto v = ReadBinary<float>(data_, pos_);
         pos_ += 4;
         return v;
     }
 
     uint32_t U32() {
-        uint32_t v = 0;
-        if (pos_ + 4 <= data_.size()) {
-            std::memcpy(&v, data_.data() + pos_, 4);
-        }
+        const auto v = ReadBinary<uint32_t>(data_, pos_);
         pos_ += 4;
         return v;
     }
@@ -193,12 +188,11 @@ public:
         pos_ = 0;
     }
     bool Active() const { return !buffer_.empty(); }
+    float Read() const { return buffer_[pos_]; }
+    void Write(float x) { WriteDelaySample(buffer_, pos_, x); }
     float Push(float x) {
-        const float y = buffer_[pos_];
-        buffer_[pos_] = x;
-        if (++pos_ == buffer_.size()) {
-            pos_ = 0;
-        }
+        const float y = Read();
+        Write(x);
         return y;
     }
     void Clear() { std::fill(buffer_.begin(), buffer_.end(), 0.0f); }
@@ -601,25 +595,7 @@ public:
     }
 
 private:
-    class Line {
-    public:
-        void Resize(uint32_t length) {
-            buffer_.assign(std::max<uint32_t>(length, 4), 0.0f);
-            pos_ = 0;
-        }
-        float Read() const { return buffer_[pos_]; }
-        void Write(float x) {
-            buffer_[pos_] = x;
-            if (++pos_ == buffer_.size()) {
-                pos_ = 0;
-            }
-        }
-        void Clear() { std::fill(buffer_.begin(), buffer_.end(), 0.0f); }
-
-    private:
-        std::vector<float> buffer_;
-        size_t pos_ = 0;
-    };
+    using Line = SampleDelay;
 
     struct Unit {
         uint32_t length[4] = {};

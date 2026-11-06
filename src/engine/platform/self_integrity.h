@@ -75,6 +75,26 @@ inline bool Sha256(const unsigned char* data, size_t size, unsigned char out[32]
 }
 #endif
 
+inline std::string Sha256Hex(const unsigned char* digest) {
+    static const char* hex = "0123456789abcdef";
+    std::string out(64, '0');
+    for (int i = 0; i < 32; ++i) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0xF];
+    }
+    return out;
+}
+
+inline std::string FileSha256(const std::filesystem::path& path, uint64_t* size_out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (size_out) *size_out = bytes.size();
+    unsigned char digest[32];
+    if (!Sha256(bytes.data(), bytes.size(), digest)) return {};
+    return Sha256Hex(digest);
+}
+
 inline bool IntegrityOk() {
 #ifdef _WIN32
     const std::filesystem::path path = pt::os::ExecutableFile();

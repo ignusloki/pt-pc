@@ -5,8 +5,15 @@
 #include "engine/render/camera.h"
 
 namespace pt {
+struct Renderer {
+    bool enhanced = false;
+    bool EnhancedRendering() const { return enhanced; }
+};
+
 struct SceneRenderer {
     static constexpr float kCameraCutDistance = 3.0f;
+    Renderer renderer;
+    Renderer* renderer_ = &renderer;
     struct Lighting { struct Screen { bool smooth_camera_motion_blur = false; } screen; } lighting;
     Lighting* lighting_ = &lighting;
     struct { bool reset = false; } up_;
@@ -25,10 +32,10 @@ struct SceneRenderer {
 #include "motion_update_under_test.inc"
 }
 
-int main() {
+int CheckMotion(bool enhanced) {
     int failures = 0;
     auto check = [&](const char* name, bool ok) {
-        std::printf("%s: %s\n", name, ok ? "PASS" : "FAIL");
+        std::printf("%s: %s: %s\n", enhanced ? "Enhanced" : "Original", name, ok ? "PASS" : "FAIL");
         failures += !ok;
     };
     auto close = [](const glm::mat4& a, const glm::mat4& b) {
@@ -38,6 +45,7 @@ int main() {
     };
     constexpr float dt = 1.0f / 60.0f;
     pt::SceneRenderer scene;
+    scene.renderer.enhanced = enhanced;
     pt::Camera camera;
     scene.UpdateMotion(camera, dt);
     camera.yaw += 0.04f;
@@ -79,6 +87,36 @@ int main() {
     scene.UpdateMotion(camera, dt);
     check("camera cuts have no filtered motion", scene.up_.reset && glm::length(scene.blur_rates_) == 0.0f &&
           glm::length(scene.blur_velocity_) == 0.0f && close(scene.blur_previous_view_projection_, scene.previous_view_projection_));
+    check("camera cuts invalidate temporal history only in Enhanced", scene.motion_history_valid_ == !enhanced);
+
+    pt::SceneRenderer missing_history;
+    missing_history.renderer.enhanced = enhanced;
+    missing_history.motion_reference_set_ = true;
+    missing_history.motion_reference_history_ = false;
+    missing_history.motion_reference_ = camera;
+    missing_history.motion_reference_.yaw -= 0.02f;
+    missing_history.UpdateMotion(camera, dt);
+    const pt::Camera& previous = enhanced ? camera : missing_history.motion_reference_;
+    check("missing history resets the previous camera only in Enhanced",
+          missing_history.up_.reset && !missing_history.motion_history_valid_ &&
+          close(missing_history.previous_view_projection_, previous.Projection(1920.0f / 1080.0f) * previous.View()));
+
+    pt::SceneRenderer timing;
+    timing.renderer.enhanced = enhanced;
+    timing.UpdateMotion(camera, dt * 2.0f);
+    check("Enhanced uses the current frame interval; Original smooths it",
+          enhanced ? std::abs(timing.frame_time_ - dt * 2.0f) < 1e-8 : timing.frame_time_ > dt && timing.frame_time_ < dt * 2.0f);
+    timing.motion_reference_set_ = true;
+    timing.motion_reference_ = camera;
+    timing.motion_interval_ = dt * 0.5f;
+    timing.UpdateMotion(camera, dt * 2.0f);
+    check("explicit tick references use their own frame interval", std::abs(timing.frame_time_ - dt * 0.5f) < 1e-8);
+    return failures;
+}
+
+int main() {
+    int failures = CheckMotion(false);
+    failures += CheckMotion(true);
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;
 }

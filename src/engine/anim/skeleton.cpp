@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/anim/skeleton.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,15 +12,6 @@
 
 namespace pt::anim {
 namespace {
-
-template <typename T>
-T At(std::span<const uint8_t> data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
 
 }
 
@@ -46,22 +38,22 @@ bool ReadFmdlSkeleton(std::span<const uint8_t> data, Skeleton& out) {
     if (data.size() < 0x40 || std::memcmp(data.data(), "FMDL", 4) != 0) {
         return false;
     }
-    const uint64_t table = At<uint64_t>(data, 0x08);
-    const uint32_t feature_count = At<uint32_t>(data, 0x20);
-    const uint32_t buffer_count = At<uint32_t>(data, 0x24);
-    const uint32_t features_offset = At<uint32_t>(data, 0x28);
-    const uint32_t buffers_offset = At<uint32_t>(data, 0x30);
+    const uint64_t table = ReadBinary<uint64_t>(data, 0x08);
+    const uint32_t feature_count = ReadBinary<uint32_t>(data, 0x20);
+    const uint32_t buffer_count = ReadBinary<uint32_t>(data, 0x24);
+    const uint32_t features_offset = ReadBinary<uint32_t>(data, 0x28);
+    const uint32_t buffers_offset = ReadBinary<uint32_t>(data, 0x30);
     std::map<uint8_t, std::pair<size_t, uint32_t>> features;
     for (uint32_t i = 0; i < feature_count; ++i) {
         const size_t h = table + 8 * static_cast<size_t>(i);
-        const uint32_t count = At<uint8_t>(data, h + 1) * 65536u + At<uint16_t>(data, h + 2);
-        features[At<uint8_t>(data, h)] = {features_offset + static_cast<size_t>(At<uint32_t>(data, h + 4)), count};
+        const uint32_t count = ReadBinary<uint8_t>(data, h + 1) * 65536u + ReadBinary<uint16_t>(data, h + 2);
+        features[ReadBinary<uint8_t>(data, h)] = {features_offset + static_cast<size_t>(ReadBinary<uint32_t>(data, h + 4)), count};
     }
     size_t string_buffer = 0;
     for (uint32_t i = 0; i < buffer_count; ++i) {
         const size_t h = table + 8 * static_cast<size_t>(feature_count) + 12 * static_cast<size_t>(i);
-        if (At<uint32_t>(data, h) == 3) {
-            string_buffer = buffers_offset + static_cast<size_t>(At<uint32_t>(data, h + 4));
+        if (ReadBinary<uint32_t>(data, h) == 3) {
+            string_buffer = buffers_offset + static_cast<size_t>(ReadBinary<uint32_t>(data, h + 4));
         }
     }
     if (!features.contains(0)) {
@@ -73,8 +65,8 @@ bool ReadFmdlSkeleton(std::span<const uint8_t> data, Skeleton& out) {
             return std::string();
         }
         const size_t rec = strings_at + 8 * static_cast<size_t>(index);
-        const uint16_t length = At<uint16_t>(data, rec + 2);
-        const size_t start = string_buffer + At<uint32_t>(data, rec + 4);
+        const uint16_t length = ReadBinary<uint16_t>(data, rec + 2);
+        const size_t start = string_buffer + ReadBinary<uint32_t>(data, rec + 4);
         if (start + length > data.size()) {
             return std::string();
         }
@@ -83,10 +75,10 @@ bool ReadFmdlSkeleton(std::span<const uint8_t> data, Skeleton& out) {
     const auto [bones_at, bone_count] = features[0];
     for (uint32_t i = 0; i < bone_count; ++i) {
         const size_t rec = bones_at + 0x30 * static_cast<size_t>(i);
-        out.names.push_back(string(At<uint16_t>(data, rec)));
+        out.names.push_back(string(ReadBinary<uint16_t>(data, rec)));
         out.hashes.push_back(StrCode32(out.names.back()));
-        out.parents.push_back(At<int16_t>(data, rec + 2));
-        out.bind_world.emplace_back(At<float>(data, rec + 0x20), At<float>(data, rec + 0x24), At<float>(data, rec + 0x28));
+        out.parents.push_back(ReadBinary<int16_t>(data, rec + 2));
+        out.bind_world.emplace_back(ReadBinary<float>(data, rec + 0x20), ReadBinary<float>(data, rec + 0x24), ReadBinary<float>(data, rec + 0x28));
     }
     out.bind_local.resize(out.names.size());
     for (size_t i = 0; i < out.names.size(); ++i) {

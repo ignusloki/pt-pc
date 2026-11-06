@@ -1,3 +1,4 @@
+#include "check.h"
 #include <windows.h>
 #include <wrl/client.h>
 
@@ -24,9 +25,6 @@ struct Object final : IUnknown {
     ULONG STDMETHODCALLTYPE Release() override { return --refs; }
 };
 int failures = 0;
-void Check(bool ok, const char* label) {
-    if (!ok) { ++failures; std::printf("FAIL %s\n", label); }
-}
 }
 
 int main() {
@@ -38,25 +36,25 @@ int main() {
         auto device = ReShadeNative<IUnknown>(&device_proxy);
         auto create_list = ReShadeNative<IUnknown>(&list_proxy);
         auto eval_list = ReShadeNative<IUnknown>(&list_proxy);
-        Check(device.Get() == &native_device, "NGX initializes and shuts down on the native device");
-        Check(create_list.Get() == &native_list && eval_list.Get() == &native_list,
+        pt::test::Expect(failures, device.Get() == &native_device, "NGX initializes and shuts down on the native device");
+        pt::test::Expect(failures, create_list.Get() == &native_list && eval_list.Get() == &native_list,
               "feature creation and evaluation use the matching native list");
-        Check(native_device.refs == 2 && native_list.refs == 3, "native interfaces stay owned during NGX calls");
-        Check(device_proxy.refs == 1 && list_proxy.refs == 1, "unwrapped calls do not retain proxy references");
+        pt::test::Expect(failures, native_device.refs == 2 && native_list.refs == 3, "native interfaces stay owned during NGX calls");
+        pt::test::Expect(failures, device_proxy.refs == 1 && list_proxy.refs == 1, "unwrapped calls do not retain proxy references");
     }
-    Check(native_device.refs == 1 && native_list.refs == 1, "each QueryInterface reference is released once");
+    pt::test::Expect(failures, native_device.refs == 1 && native_list.refs == 1, "each QueryInterface reference is released once");
     Object plain;
     {
         auto fallback = ReShadeNative<IUnknown>(&plain);
-        Check(fallback.Get() == &plain && plain.refs == 2, "plain native interfaces are retained");
+        pt::test::Expect(failures, fallback.Get() == &plain && plain.refs == 2, "plain native interfaces are retained");
     }
-    Check(plain.refs == 1, "plain fallback reference is released");
+    pt::test::Expect(failures, plain.refs == 1, "plain fallback reference is released");
     plain.null_success = true;
     {
         auto fallback = ReShadeNative<IUnknown>(&plain);
-        Check(fallback.Get() == &plain && plain.refs == 2, "a null successful query preserves the caller interface");
+        pt::test::Expect(failures, fallback.Get() == &plain && plain.refs == 2, "a null successful query preserves the caller interface");
     }
-    Check(!ReShadeNative<IUnknown>(nullptr), "null remains null");
+    pt::test::Expect(failures, !ReShadeNative<IUnknown>(nullptr), "null remains null");
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;
 }

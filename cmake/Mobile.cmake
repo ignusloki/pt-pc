@@ -108,7 +108,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/voice/licenses" "$<TARGET_FILE_DIR:pt>/licenses/voice"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/licenses/bcdecode-LICENSE.txt" "$<TARGET_FILE_DIR:pt>/licenses/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${google_sbc_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:pt>/licenses/google-libsbc-LICENSE.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${zstd_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:pt>/licenses/zstd-LICENSE.txt" VERBATIM)
+    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:pt>/licenses/zstd-LICENSE.txt" VERBATIM)
   foreach(entry
       "${CMAKE_SOURCE_DIR}/LICENSE|pt-MIT.txt"
       "${CMAKE_SOURCE_DIR}/third_party/macos_notices/MoltenVK-Apache-2.0.txt|MoltenVK-Apache-2.0.txt"

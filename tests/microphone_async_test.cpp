@@ -1,3 +1,4 @@
+#include "check.h"
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -8,9 +9,6 @@
 
 namespace {
 int failures = 0;
-void Expect(bool value, const char* what) {
-    if (!value) { ++failures; std::printf("FAIL %s\n", what); }
-}
 pt::Microphone::AsyncState FinishOpen(pt::Microphone& microphone) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     auto state = microphone.OpenAsync(16000);
@@ -25,17 +23,17 @@ pt::Microphone::AsyncState FinishOpen(pt::Microphone& microphone) {
 int main() {
     SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
     if (!SDL_Init(SDL_INIT_AUDIO)) return 1;
-    Expect(std::string(SDL_GetCurrentAudioDriver()) == "dummy", "fixture uses no physical microphone");
+    pt::test::Expect(failures, std::string(SDL_GetCurrentAudioDriver()) == "dummy", "fixture uses no physical microphone");
     for (int i = 0; i < 20; ++i) {
         pt::Microphone microphone;
-        Expect(FinishOpen(microphone) == pt::Microphone::AsyncState::Opened, "completed asynchronous open transfers the stream");
-        Expect(microphone.IsOpen(), "completed stream is usable");
+        pt::test::Expect(failures, FinishOpen(microphone) == pt::Microphone::AsyncState::Opened, "completed asynchronous open transfers the stream");
+        pt::test::Expect(failures, microphone.IsOpen(), "completed stream is usable");
         microphone.Close();
-        Expect(!microphone.IsOpen(), "close drops the completed stream");
+        pt::test::Expect(failures, !microphone.IsOpen(), "close drops the completed stream");
         microphone.OpenAsync(16000);
         microphone.Close();
-        Expect(!microphone.IsOpen(), "cancellation never transfers the cancelled stream");
-        Expect(FinishOpen(microphone) == pt::Microphone::AsyncState::Opened, "a cancelled open can be retried");
+        pt::test::Expect(failures, !microphone.IsOpen(), "cancellation never transfers the cancelled stream");
+        pt::test::Expect(failures, FinishOpen(microphone) == pt::Microphone::AsyncState::Opened, "a cancelled open can be retried");
     }
     for (int i = 0; i < 20; ++i) {
         pt::Microphone microphone;

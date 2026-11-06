@@ -1,3 +1,4 @@
+#include "engine/render/upscale/unlock_io.h"
 #include "engine/render/upscale/fg_unlock.h"
 
 #include <algorithm>
@@ -27,26 +28,6 @@ namespace pt::fg_unlock {
 
 namespace {
 
-std::string Hex(const unsigned char* digest) {
-    static const char* hex = "0123456789abcdef";
-    std::string out(64, '0');
-    for (int i = 0; i < 32; ++i) {
-        out[i * 2] = hex[digest[i] >> 4];
-        out[i * 2 + 1] = hex[digest[i] & 0xF];
-    }
-    return out;
-}
-
-std::string FileSha256Impl(const std::filesystem::path& path, uint64_t* size_out) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return {};
-    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (size_out) *size_out = bytes.size();
-    unsigned char digest[32];
-    if (!integrity::Sha256(bytes.data(), bytes.size(), digest)) return {};
-    return Hex(digest);
-}
-
 std::string ReadText(const std::filesystem::path& path, size_t max_bytes) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return {};
@@ -54,45 +35,23 @@ std::string ReadText(const std::filesystem::path& path, size_t max_bytes) {
     return text.size() > max_bytes ? text.substr(text.size() - max_bytes) : text;
 }
 
-std::string EnvOr(const char* name, std::string_view fallback) {
-    const std::string value = os::GetEnv(name);
-    return value.empty() ? std::string(fallback) : value;
-}
-
-std::string MemberText(const metadata_json::Value& v, const char* name) {
-    const auto it = v.members.find(name);
-    return it != v.members.end() && !it->second.object && it->second.items.empty() ? it->second.text : std::string();
-}
-
-std::filesystem::path FileUrlPath(const std::string& url) {
-    return url.compare(0, 5, "file:") == 0 ? os::PathFromUtf8(url.substr(5)) : std::filesystem::path();
-}
-
 std::optional<std::string> HttpGetText(const std::string& url, bool metadata) {
-    if (const std::filesystem::path f = FileUrlPath(url); !f.empty()) {
+    if (const std::filesystem::path f = unlock_io::FileUrlPath(url); !f.empty()) {
         return std::filesystem::exists(f) ? std::optional<std::string>(ReadText(f, 256 * 1024)) : std::nullopt;
     }
-    if (!(metadata ? update::AllowedMetadataUrl(url) : update::AllowedAssetUrl(url))) return std::nullopt;
-    http::Request request;
-    request.url = url;
-    request.timeout_ms = 8000;
-    request.follow_redirects = true;
-    request.max_body = 256 * 1024;
-    const auto response = http::Get(request);
-    if (!response || response->status != 200) return std::nullopt;
-    return response->body;
+    return unlock_io::FetchAllowedText(url, metadata);
 }
 
 std::pair<std::string, std::string> AssetUrlDigest(const metadata_json::Value& release, std::string_view suffix) {
     const auto it = release.members.find("assets");
     if (it == release.members.end()) return {};
     for (const metadata_json::Value& a : it->second.items) {
-        const std::string low = AsciiLowerCopy(MemberText(a, "name"));
+        const std::string low = AsciiLowerCopy(metadata_json::StringMember(a, "name"));
         if (low.size() >= suffix.size() && low.compare(low.size() - suffix.size(), suffix.size(), AsciiLowerCopy(std::string(suffix))) == 0) {
-            std::string digest = MemberText(a, "digest");
+            std::string digest = metadata_json::StringMember(a, "digest");
             if (digest.compare(0, 7, "sha256:") == 0) digest = AsciiLowerCopy(digest.substr(7));
             else digest.clear();
-            return {MemberText(a, "browser_download_url"), digest};
+            return {metadata_json::StringMember(a, "browser_download_url"), digest};
         }
     }
     return {};
@@ -100,7 +59,7 @@ std::pair<std::string, std::string> AssetUrlDigest(const metadata_json::Value& r
 
 std::string Download(const std::string& url, const std::filesystem::path& dest, uint64_t max_bytes, const std::function<void(int)>& percent,
                      const std::function<bool()>& cancelled, std::string* error) {
-    if (const std::filesystem::path f = FileUrlPath(url); !f.empty()) {
+    if (const std::filesystem::path f = unlock_io::FileUrlPath(url); !f.empty()) {
         std::error_code ec;
         if (!std::filesystem::exists(f, ec)) {
             if (error) *error = "404 (fixture not found)";
@@ -113,7 +72,7 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
             return {};
         }
         if (percent) percent(100);
-        return FileSha256Impl(dest, nullptr);
+        return integrity::FileSha256(dest, nullptr);
     }
     std::filesystem::path part = dest;
     part += ".part";
@@ -148,7 +107,7 @@ std::string Download(const std::string& url, const std::filesystem::path& dest, 
         std::filesystem::remove(part, ec);
         return {};
     }
-    return FileSha256Impl(dest, nullptr);
+    return integrity::FileSha256(dest, nullptr);
 }
 
 bool HasMarker(const std::filesystem::path& path) {
@@ -160,24 +119,24 @@ bool HasMarker(const std::filesystem::path& path) {
 
 }
 
-std::string FileSha256(const std::filesystem::path& path) { return FileSha256Impl(path, nullptr); }
+std::string FileSha256(const std::filesystem::path& path) { return integrity::FileSha256(path, nullptr); }
 
 std::optional<Install> ParseInstall(std::string_view text) {
     metadata_json::Value root;
     if (!metadata_json::Reader(text).Parse(root) || !root.object) return std::nullopt;
     Install install;
-    install.complete = MemberText(root, "complete") == "true";
-    install.tool_tag = MemberText(root, "tool_tag");
-    install.runtime = MemberText(root, "runtime");
-    install.proxy = MemberText(root, "proxy");
+    install.complete = metadata_json::StringMember(root, "complete") == "true";
+    install.tool_tag = metadata_json::StringMember(root, "tool_tag");
+    install.runtime = metadata_json::StringMember(root, "runtime");
+    install.proxy = metadata_json::StringMember(root, "proxy");
     if (const auto f = root.members.find("files"); f != root.members.end())
         for (const metadata_json::Value& e : f->second.items) {
             if (e.is_string && !e.text.empty()) install.files.push_back(e.text);
             else if (e.object) {
-                const std::string name = MemberText(e, "name");
+                const std::string name = metadata_json::StringMember(e, "name");
                 if (name.empty()) continue;
                 install.files.push_back(name);
-                if (AsciiLowerCopy(name) == AsciiLowerCopy(install.proxy)) install.proxy_sha256 = AsciiLowerCopy(MemberText(e, "sha256"));
+                if (AsciiLowerCopy(name) == AsciiLowerCopy(install.proxy)) install.proxy_sha256 = AsciiLowerCopy(metadata_json::StringMember(e, "sha256"));
             }
         }
     return install;
@@ -284,7 +243,7 @@ std::vector<ProxyFile> UnrecordedProxies(const std::filesystem::path& game_dir) 
         if (!std::filesystem::is_regular_file(p, ec)) continue;
         ProxyFile f;
         f.name = name;
-        f.sha256 = FileSha256Impl(p, &f.size);
+        f.sha256 = integrity::FileSha256(p, &f.size);
         f.marker = HasMarker(p);
         f.loaded = ModuleLoadedFrom(p);
         out.push_back(std::move(f));
@@ -310,7 +269,7 @@ std::string RetireShippedProxy(const std::filesystem::path& game_dir, const std:
     if (std::filesystem::exists(game_dir / std::string(kManifest), ec)) return {};
     const std::filesystem::path p = game_dir / "version.dll";
     uint64_t size = 0;
-    if (!std::filesystem::is_regular_file(p, ec) || FileSha256Impl(p, &size) != kPinnedProxySha256) return {};
+    if (!std::filesystem::is_regular_file(p, ec) || integrity::FileSha256(p, &size) != kPinnedProxySha256) return {};
     std::string where;
     if (!MoveAside(p, archive_dir / NowStamp(), where))
         return std::format("the version.dll 1.0.6 and 1.0.7 shipped by mistake (no FG unlock record) could not be moved out: {}", where);
@@ -452,7 +411,7 @@ RouteReport ReadRouteReport(const std::filesystem::path& game_dir) {
 }
 
 std::filesystem::path ZipPath(const std::filesystem::path& work_dir) {
-    const std::string pinned_url = EnvOr("PT_FG_TOOL_URL", kToolUrl);
+    const std::string pinned_url = unlock_io::EnvOr("PT_FG_TOOL_URL", kToolUrl);
     return work_dir / std::string(std::string_view(pinned_url).substr(pinned_url.rfind('/') + 1));
 }
 
@@ -466,18 +425,18 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
     };
     std::error_code ec;
     std::filesystem::create_directories(work_dir, ec);
-    const std::string pinned_url = EnvOr("PT_FG_TOOL_URL", kToolUrl);
+    const std::string pinned_url = unlock_io::EnvOr("PT_FG_TOOL_URL", kToolUrl);
     std::filesystem::path zip = work_dir / std::string(std::string_view(pinned_url).substr(pinned_url.rfind('/') + 1));
     ToolSource source;
     std::string pinned_fail;
     uint64_t size = 0;
-    std::string sha = FileSha256Impl(zip, &size);
+    std::string sha = integrity::FileSha256(zip, &size);
     if (sha != kToolZipSha256 || size != kToolZipSize) {
         std::string err;
         LogInfo("fg unlock: fetching the pinned {} {} from {}", kToolName, kToolVersion, pinned_url);
         sha = Download(pinned_url, zip, kToolZipSize + 1024 * 1024, percent, cancelled, &err);
         size = 0;
-        if (!sha.empty()) sha = FileSha256Impl(zip, &size);
+        if (!sha.empty()) sha = integrity::FileSha256(zip, &size);
         if (sha != kToolZipSha256 || size != kToolZipSize) {
             pinned_fail = err.empty() ? std::format("the pinned asset's SHA-256 {} ({} bytes) is not {} ({} bytes)", sha.empty() ? "unreadable" : sha,
                                                     size, kToolZipSha256, kToolZipSize)
@@ -488,14 +447,14 @@ bool PrepareTool(const std::filesystem::path& work_dir, const std::function<void
         source = {ToolSource::Which::Pinned, "v" + std::string(kToolVersion), sha, std::format("pinned {} {}", kToolName, kToolVersion)};
     } else {
         LogWarn("fg unlock: {}; trying the latest release", pinned_fail);
-        const std::string api = EnvOr("PT_FG_TOOL_API", kToolLatestApi);
+        const std::string api = unlock_io::EnvOr("PT_FG_TOOL_API", kToolLatestApi);
         const auto meta = HttpGetText(api, true);
         metadata_json::Value release;
         if (!meta || !metadata_json::Reader(*meta).Parse(release) || !release.object) {
             return fail("pc_note_fg_unlock_download", std::format("neither the pinned asset nor the latest release could be read ({}; the release metadata at {} failed)",
                                                                   pinned_fail, api));
         }
-        const std::string tag = MemberText(release, "tag_name");
+        const std::string tag = metadata_json::StringMember(release, "tag_name");
         const auto [zip_url, digest] = AssetUrlDigest(release, "-x64.zip");
         if (zip_url.empty() || digest.size() != 64) {
             return fail("pc_note_fg_unlock_hash", std::format("the latest release {} has no x64 zip with a SHA-256 digest to verify against (pinned: {})", tag, pinned_fail));
@@ -563,14 +522,14 @@ bool InstallLive(const std::filesystem::path& work_dir, const std::filesystem::p
     std::vector<File> selected;
     const std::string proxy_source = proxy == "version.dll" ? proxy : "alternatives/" + proxy;
     for (const auto& f : files->second.items) {
-        const auto name = MemberText(f, "path");
+        const auto name = metadata_json::StringMember(f, "path");
         if (name != proxy_source && name != kIni && name.rfind(std::string(kDir) + "/", 0) != 0) continue;
         const auto relative = os::PathFromUtf8(name);
         if (relative.is_absolute() || name.find("..") != std::string::npos || name.find(':') != std::string::npos) {
             detail = "unsafe package path"; return false;
         }
         const std::string dest = name == proxy_source ? proxy : name;
-        const auto hash = MemberText(f, "sha256");
+        const auto hash = metadata_json::StringMember(f, "sha256");
         if (hash.size() != 64 || FileSha256(stage / relative) != hash || std::filesystem::exists(game_dir / dest, ec)) {
             detail = "package file failed verification or destination is occupied: " + dest; return false;
         }
@@ -597,7 +556,7 @@ bool InstallLive(const std::filesystem::path& work_dir, const std::filesystem::p
     if (cancel.load()) { detail = "installation cancelled"; rollback(); return false; }
     std::ofstream out(game_dir / kManifest, std::ios::binary | std::ios::trunc);
     out << "{\"complete\":true,\"tool_tag\":\"" << tag << "\",\"runtime\":\""
-        << MemberText(manifest, "runtime_model") << "\",\"proxy\":\"" << proxy << "\",\"files\":[";
+        << metadata_json::StringMember(manifest, "runtime_model") << "\",\"proxy\":\"" << proxy << "\",\"files\":[";
     for (size_t i = 0; i < selected.size(); ++i) {
         if (i) out << ',';
         out << "{\"name\":\"" << selected[i].name << "\",\"sha256\":\"" << selected[i].hash << "\"}";

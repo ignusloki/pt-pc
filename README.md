@@ -160,7 +160,7 @@ GCC 13 or clang 17, the Vulkan headers and `glslc`. Linux includes DLSS and FSR 
 `tools/linux/` has the cross build I use from Windows. More in docs/linux.md.
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
-vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
+vulkan-headers` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
 build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
 are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
 

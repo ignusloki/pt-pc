@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/audio/sound_engine.h"
 
 #include "engine/audio/channel_layout.h"
@@ -205,20 +206,8 @@ struct ToneParams {
 
 ToneParams ReadToneParams(const std::vector<uint8_t>& p) {
     ToneParams t;
-    auto f32 = [&](size_t off) {
-        float v = 0.0f;
-        if (off + 4 <= p.size()) {
-            std::memcpy(&v, p.data() + off, 4);
-        }
-        return v;
-    };
-    auto u32 = [&](size_t off) {
-        uint32_t v = 0;
-        if (off + 4 <= p.size()) {
-            std::memcpy(&v, p.data() + off, 4);
-        }
-        return v;
-    };
+    auto f32 = [&](size_t off) { return ReadBinary<float>(p, off); };
+    auto u32 = [&](size_t off) { return ReadBinary<uint32_t>(p, off); };
     t.gain_db = f32(0);
     t.start_freq = f32(4);
     t.stop_freq = f32(8);

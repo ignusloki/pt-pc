@@ -1,3 +1,4 @@
+#include "check.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -15,10 +16,7 @@ namespace {
 
 int failures = 0;
 
-void Check(bool ok, const char* what) {
-    std::printf("%s: %s\n", what, ok ? "PASS" : "FAIL");
-    failures += !ok;
-}
+void Check(bool ok, const char* what) { pt::test::CheckNamed(failures, what, ok); }
 
 double Ms(std::chrono::steady_clock::time_point from) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - from).count();

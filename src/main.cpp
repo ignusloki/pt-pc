@@ -4869,7 +4869,6 @@ private:
     static constexpr int kUpdatePage = 18;
     static constexpr int kVrPage = 12;
     static constexpr int kMaxModRows = 20;
-    static constexpr int kMainPage = 0;
     static constexpr int kGraphicsPage = 1;
     static constexpr int kMicrophonePage = 2;
     static constexpr int kSoundPage = 13;

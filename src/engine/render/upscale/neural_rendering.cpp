@@ -39,13 +39,7 @@ std::string HashFile(const std::filesystem::path& path, uint64_t& size_out) {
     if (!integrity::Sha256(bytes.data(), bytes.size(), digest)) {
         return {};
     }
-    static const char* hex = "0123456789abcdef";
-    std::string out(64, '0');
-    for (int i = 0; i < 32; ++i) {
-        out[i * 2] = hex[digest[i] >> 4];
-        out[i * 2 + 1] = hex[digest[i] & 0xF];
-    }
-    return out;
+    return integrity::Sha256Hex(digest);
 }
 
 std::filesystem::path RuntimeIn(const std::filesystem::path& where, int depth) {

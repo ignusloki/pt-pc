@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/ui/uia.h"
 
 #include <algorithm>
@@ -10,18 +11,6 @@ namespace {
 constexpr uint32_t kMagic = 0x0BFCA2D2;
 constexpr size_t kTreeNodeSize = 0x30;
 constexpr float kHalfScale = 128.0f;
-
-uint32_t U32(std::span<const uint8_t> d, size_t at) {
-    uint32_t v;
-    std::memcpy(&v, d.data() + at, 4);
-    return v;
-}
-
-int32_t I32(std::span<const uint8_t> d, size_t at) {
-    int32_t v;
-    std::memcpy(&v, d.data() + at, 4);
-    return v;
-}
 
 uint32_t ReadBits(std::span<const uint8_t> d, size_t pos, int count) {
     const size_t start = pos >> 3;
@@ -60,8 +49,8 @@ bool UiaAnimation::ParseUnits(std::span<const uint8_t> d, size_t at, uint32_t no
     if (at + 20 > d.size()) {
         return false;
     }
-    const uint32_t unit_count = U32(d, at);
-    const uint32_t frames = U32(d, at + 12);
+    const uint32_t unit_count = ReadBinaryUnchecked<uint32_t>(d, at);
+    const uint32_t frames = ReadBinaryUnchecked<uint32_t>(d, at + 12);
     if (unit_count == 0 || unit_count > 4096 || at + 20 + unit_count * 4ull > d.size()) {
         return false;
     }
@@ -69,11 +58,11 @@ bool UiaAnimation::ParseUnits(std::span<const uint8_t> d, size_t at, uint32_t no
     UiaNode node;
     node.node = node_hash;
     for (uint32_t i = 0; i < unit_count; ++i) {
-        const size_t u = at + U32(d, at + 20 + i * 4);
+        const size_t u = at + ReadBinaryUnchecked<uint32_t>(d, at + 20 + i * 4);
         if (u + 8 > d.size()) {
             return false;
         }
-        const uint32_t unit_hash = U32(d, u);
+        const uint32_t unit_hash = ReadBinaryUnchecked<uint32_t>(d, u);
         const uint8_t count = d[u + 4];
         const bool is_static = (d[u + 5] & 4) != 0;
         for (uint8_t t = 0; t < count; ++t) {
@@ -81,7 +70,7 @@ bool UiaAnimation::ParseUnits(std::span<const uint8_t> d, size_t at, uint32_t no
             if (e + 8 > d.size()) {
                 return false;
             }
-            const int32_t data_off = I32(d, e);
+            const int32_t data_off = ReadBinaryUnchecked<int32_t>(d, e);
             const int kind = d[e + 6] & 0xF;
             const int bits = d[e + 7];
             const int components = kind >= 1 && kind <= 4 ? kind : kind == 6 ? 3 : 0;
@@ -128,10 +117,10 @@ bool UiaAnimation::Parse(std::span<const uint8_t> d, std::string* error) {
     };
     frames_ = 0;
     nodes_.clear();
-    if (d.size() < 16 || U32(d, 0) != kMagic) {
+    if (d.size() < 16 || ReadBinaryUnchecked<uint32_t>(d, 0) != kMagic) {
         return fail("not a UIA file");
     }
-    const size_t root = U32(d, 4);
+    const size_t root = ReadBinaryUnchecked<uint32_t>(d, 4);
     std::vector<std::pair<size_t, int>> stack{{root, 0}};
     int visited = 0;
     while (!stack.empty()) {
@@ -141,11 +130,11 @@ bool UiaAnimation::Parse(std::span<const uint8_t> d, std::string* error) {
             if (at + kTreeNodeSize > d.size() || ++visited > 4096 || depth > 32) {
                 return fail(std::format("UIA tree out of range at {:#x}", at));
             }
-            const uint32_t hash = U32(d, at);
-            const uint32_t has_units = U32(d, at + 8);
-            const int32_t data_off = I32(d, at + 12);
-            const int32_t child = I32(d, at + 0x18);
-            const int32_t next = I32(d, at + 0x20);
+            const uint32_t hash = ReadBinaryUnchecked<uint32_t>(d, at);
+            const uint32_t has_units = ReadBinaryUnchecked<uint32_t>(d, at + 8);
+            const int32_t data_off = ReadBinaryUnchecked<int32_t>(d, at + 12);
+            const int32_t child = ReadBinaryUnchecked<int32_t>(d, at + 0x18);
+            const int32_t next = ReadBinaryUnchecked<int32_t>(d, at + 0x20);
             if (has_units && data_off > 0 && !ParseUnits(d, at + data_off, hash)) {
                 return fail(std::format("UIA units out of range at {:#x}", at));
             }

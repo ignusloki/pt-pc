@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/assets/geom.h"
 
 #include <algorithm>
@@ -13,19 +14,7 @@ constexpr uint32_t kShapeFmdlVertices = 0x800;
 constexpr uint32_t kPrimPoly = 2;
 constexpr uint32_t kPrimAabb = 4;
 
-struct Reader {
-    std::span<const uint8_t> data;
-
-    template <typename T>
-    T At(size_t offset) const {
-        T value{};
-        if (offset + sizeof(T) <= data.size()) {
-            std::memcpy(&value, data.data() + offset, sizeof(T));
-        }
-        return value;
-    }
-};
-
+using Reader = BinaryReader;
 int32_t Signed28(uint32_t v) {
     v &= 0x0FFFFFFFu;
     return (v & 0x08000000u) ? static_cast<int32_t>(v | 0xF0000000u) : static_cast<int32_t>(v);

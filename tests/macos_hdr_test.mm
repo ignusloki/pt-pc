@@ -1,3 +1,4 @@
+#include "check.h"
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -21,10 +22,6 @@ int observed_calls = 0;
 NSData* observed_display;
 NSData* observed_content;
 
-void Expect(bool ok, const char* label) {
-    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
-    failures += !ok;
-}
 
 id ObserveMetadata(id receiver, SEL selector, NSData* display, NSData* content, float scale) {
     ++observed_calls;
@@ -77,7 +74,7 @@ CAMetalLayer* WindowLayer(SDL_Window* window) {
 
 bool Create(pt::vk::Context& ctx, bool hdr, const char* label) {
     const bool created = ctx.CreateSwapchain(128, 128, true, hdr);
-    Expect(created, label);
+    pt::test::Check(failures, created, label);
     return created;
 }
 
@@ -126,16 +123,16 @@ int Run() {
         // Observe the public Apple constructor in this test process: CAEDRMetadata does not expose its scale as a property.
         MetadataObserver observer;
         if (Create(ctx, false, "a default SDR start succeeds")) {
-            Expect(WindowLayer(window).EDRMetadata == nil, "a default SDR start has no HDR metadata");
+            pt::test::Check(failures, WindowLayer(window).EDRMetadata == nil, "a default SDR start has no HDR metadata");
         }
         if (Create(ctx, true, "native HDR swapchain starts")) {
             CAMetalLayer* layer = WindowLayer(window);
-            Expect(layer != nil, "inspect the actual SDL Vulkan Metal layer");
-            Expect(ctx.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT &&
+            pt::test::Check(failures, layer != nil, "inspect the actual SDL Vulkan Metal layer");
+            pt::test::Check(failures, ctx.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT &&
                        ctx.swapchain.format == VK_FORMAT_R16G16B16A16_SFLOAT, "HDR uses floating point scRGB");
-            Expect(layer.wantsExtendedDynamicRangeContent && layer.EDRMetadata != nil, "HDR metadata reaches the display layer");
-            Expect(observed_calls > 0 && observed_scale == 80.0f, "final metadata scale is 80 nits per linear unit, not MoltenVK's 1");
-            Expect(observed_display.length == 24 && observed_content.length == 4, "mastering and content-light messages keep their standard sizes");
+            pt::test::Check(failures, layer.wantsExtendedDynamicRangeContent && layer.EDRMetadata != nil, "HDR metadata reaches the display layer");
+            pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f, "final metadata scale is 80 nits per linear unit, not MoltenVK's 1");
+            pt::test::Check(failures, observed_display.length == 24 && observed_content.length == 4, "mastering and content-light messages keep their standard sizes");
 
             for (int paper : {80, 200, 300, 500}) {
                 ResetObservation();
@@ -143,9 +140,9 @@ int Run() {
                 ctx.hdr_peak_setting = 1500;
                 ctx.SetHdrMetadata();
                 const float white = paper / 80.0f;
-                Expect(observed_calls > 0 && std::abs(white * observed_scale - paper) < 0.001f,
+                pt::test::Check(failures, observed_calls > 0 && std::abs(white * observed_scale - paper) < 0.001f,
                        "paper white's scRGB buffer value is described in the intended nits");
-                Expect(ContentValue(2) == paper && ContentValue(0) == 1500 && MasteringPeak() == 1500,
+                pt::test::Check(failures, ContentValue(2) == paper && ContentValue(0) == 1500 && MasteringPeak() == 1500,
                        "level changes preserve paper white, content peak and mastering peak");
             }
 
@@ -153,29 +150,29 @@ int Run() {
             ctx.hdr_metadata = false;
             ResetObservation();
             ctx.SetHdrMetadata();
-            Expect(observed_calls == 1 && observed_scale == 80.0f, "native metadata also works when VK_EXT_hdr_metadata is unavailable");
+            pt::test::Check(failures, observed_calls == 1 && observed_scale == 80.0f, "native metadata also works when VK_EXT_hdr_metadata is unavailable");
             ctx.hdr_metadata = has_extension;
 
             ResetObservation();
             if (Create(ctx, false, "HDR switches to SDR without restarting")) {
                 layer = WindowLayer(window);
-                Expect(ctx.swapchain.color_space == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, "SDR uses its normal color space");
-                Expect(layer.EDRMetadata == nil && !layer.wantsExtendedDynamicRangeContent, "SDR clears the previous HDR metadata and EDR request");
-                Expect(observed_calls == 0, "SDR does not attach HDR metadata");
+                pt::test::Check(failures, ctx.swapchain.color_space == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, "SDR uses its normal color space");
+                pt::test::Check(failures, layer.EDRMetadata == nil && !layer.wantsExtendedDynamicRangeContent, "SDR clears the previous HDR metadata and EDR request");
+                pt::test::Check(failures, observed_calls == 0, "SDR does not attach HDR metadata");
             }
             ResetObservation();
             if (Create(ctx, true, "SDR switches back to HDR")) {
-                Expect(observed_calls > 0 && observed_scale == 80.0f && WindowLayer(window).EDRMetadata != nil,
+                pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f && WindowLayer(window).EDRMetadata != nil,
                        "HDR re-enables metadata with the correct scale");
             }
-            Expect(SDL_SetWindowSize(window, 160, 144) && SDL_SyncWindow(window), "native resize completes");
+            pt::test::Check(failures, SDL_SetWindowSize(window, 160, 144) && SDL_SyncWindow(window), "native resize completes");
             ResetObservation();
             if (Create(ctx, true, "HDR swapchain is recreated after resize")) {
-                Expect(observed_calls > 0 && observed_scale == 80.0f, "resizing retains the HDR brightness scale");
+                pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f, "resizing retains the HDR brightness scale");
             }
             // Returning through SDR more than once catches metadata left behind by replacement swapchains.
             if (Create(ctx, false, "final return to SDR")) {
-                Expect(WindowLayer(window).EDRMetadata == nil, "replacement SDR swapchain has no stale HDR metadata");
+                pt::test::Check(failures, WindowLayer(window).EDRMetadata == nil, "replacement SDR swapchain has no stale HDR metadata");
             }
         }
     }

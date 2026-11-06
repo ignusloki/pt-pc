@@ -1,3 +1,4 @@
+#include "engine/core/binary_read.h"
 #include "engine/assets/ftex.h"
 
 #include <zlib.h>
@@ -18,23 +19,14 @@
 namespace pt {
 namespace {
 
-template <typename T>
-T Read(const std::vector<uint8_t>& data, size_t offset) {
-    T value{};
-    if (offset + sizeof(T) <= data.size()) {
-        std::memcpy(&value, data.data() + offset, sizeof(T));
-    }
-    return value;
-}
-
 bool ReadChunked(const std::vector<uint8_t>& file, size_t block, uint32_t unpacked, uint16_t chunk_count, std::vector<uint8_t>& out) {
     out.resize(unpacked);
     size_t written = 0;
     for (uint16_t c = 0; c < chunk_count; ++c) {
         const size_t entry = block + c * 8;
-        const uint16_t stored_size = Read<uint16_t>(file, entry);
-        const uint16_t chunk_unpacked = Read<uint16_t>(file, entry + 2);
-        const uint32_t offset_field = Read<uint32_t>(file, entry + 4);
+        const uint16_t stored_size = ReadBinary<uint16_t>(file, entry);
+        const uint16_t chunk_unpacked = ReadBinary<uint16_t>(file, entry + 2);
+        const uint32_t offset_field = ReadBinary<uint32_t>(file, entry + 4);
         const bool raw = (offset_field & 0x80000000u) != 0;
         const size_t chunk = block + (offset_field & 0x7FFFFFFFu);
         const size_t size = chunk_unpacked ? chunk_unpacked : 0x10000;
@@ -104,17 +96,17 @@ static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexT
     if (!header || header->size() < 0x40 || std::memcmp(header->data(), "FTEX", 4) != 0) {
         return false;
     }
-    out.pixel_format = Read<uint16_t>(*header, 0x08);
-    out.width = Read<uint16_t>(*header, 0x0A);
-    out.height = Read<uint16_t>(*header, 0x0C);
-    out.depth = std::max<uint16_t>(1, Read<uint16_t>(*header, 0x0E));
-    out.mip_count = Read<uint8_t>(*header, 0x10);
+    out.pixel_format = ReadBinary<uint16_t>(*header, 0x08);
+    out.width = ReadBinary<uint16_t>(*header, 0x0A);
+    out.height = ReadBinary<uint16_t>(*header, 0x0C);
+    out.depth = std::max<uint16_t>(1, ReadBinary<uint16_t>(*header, 0x0E));
+    out.mip_count = ReadBinary<uint8_t>(*header, 0x10);
 #if defined(__ANDROID__) || PT_IOS
     if (!out.width || !out.height || !out.mip_count || out.mip_count > 16) return false;
 #endif
-    out.filter = Read<uint8_t>(*header, 0x11);
-    out.address_mode = Read<uint16_t>(*header, 0x12);
-    out.flags = Read<uint32_t>(*header, 0x1C);
+    out.filter = ReadBinary<uint8_t>(*header, 0x11);
+    out.address_mode = ReadBinary<uint16_t>(*header, 0x12);
+    out.flags = ReadBinary<uint32_t>(*header, 0x1C);
     out.faces = out.Cube() ? 6 : 1;
     const uint32_t entries = out.mip_count * out.faces;
     std::map<uint8_t, std::optional<std::vector<uint8_t>>> files;
@@ -132,10 +124,10 @@ static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexT
         if (std::max(out.MipWidth(level), out.MipHeight(level)) > max_dimension && level + 1 < out.mip_count) continue;
 #endif
         const size_t e = 0x40 + size_t(i) * 16;
-        const uint32_t offset = Read<uint32_t>(*header, e);
-        const uint32_t unpacked = Read<uint32_t>(*header, e + 4);
-        const uint8_t file_number = Read<uint8_t>(*header, e + 0x0D);
-        const uint16_t chunk_count = Read<uint16_t>(*header, e + 0x0E);
+        const uint32_t offset = ReadBinary<uint32_t>(*header, e);
+        const uint32_t unpacked = ReadBinary<uint32_t>(*header, e + 4);
+        const uint8_t file_number = ReadBinary<uint8_t>(*header, e + 0x0D);
+        const uint16_t chunk_count = ReadBinary<uint16_t>(*header, e + 0x0E);
         const std::vector<uint8_t>* source = nullptr;
         size_t block = offset;
         if (file_number == 0) {

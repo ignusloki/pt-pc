@@ -7,10 +7,6 @@
 namespace pt::ui {
 namespace {
 
-bool StrongRtl(uint32_t c) {
-    return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF);
-}
-
 bool Cjk(uint32_t c) {
     return (c >= 0x2E80 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0x20000 && c <= 0x3FFFF);
 }

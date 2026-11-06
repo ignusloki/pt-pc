@@ -1,3 +1,4 @@
+#include "engine/render/raytracing_retry.h"
 #include "engine/render/d3d12/backend/d3d12_raytracing.h"
 
 #ifdef _WIN32
@@ -63,7 +64,7 @@ public:
     void Forget(const GpuMesh& mesh) override;
     bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) override;
     bool Valid(uint32_t slot) const override { return slots_[slot].valid; }
-    bool Ready(uint32_t slot) const override { return slots_[slot].valid || std::chrono::steady_clock::now() >= retry_after_; }
+    bool Ready(uint32_t slot) const override { return RayTracingReady(slots_[slot].valid, retry_after_); }
     void SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) override;
     void SetAoImages(std::span<const gpu::ImageViewHandle> views) override;
     void SetFullImages(std::span<const gpu::ImageViewHandle> views) override;
@@ -109,7 +110,6 @@ private:
         Blas* owner = nullptr;
     };
 
-    void BackOff(const char* what);
     bool EnsureRaw(Slot& slot, Raw& raw, uint64_t size, D3D12_RESOURCE_STATES state, const char* name);
     uint32_t RawIndex(const gpu::BufferResource& buffer);
     void Unregister(const gpu::BufferResource& buffer);
@@ -234,12 +234,6 @@ void D3D12RayTracing::Shutdown() {
     raw_free_.clear();
     raw_next_ = 0;
     ready_ = false;
-}
-
-void D3D12RayTracing::BackOff(const char* what) {
-    const bool first = std::chrono::steady_clock::now() >= retry_after_;
-    retry_after_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-    if (first) LogWarn("ray tracing: {} not allocated (out of video memory), tried again in 1 s", what);
 }
 
 bool D3D12RayTracing::EnsureRaw(Slot& slot, Raw& raw, uint64_t size, D3D12_RESOURCE_STATES state, const char* name) {
@@ -375,7 +369,7 @@ const D3D12RayTracing::Blas* D3D12RayTracing::StaticBlas(CommandListImpl& cl, co
     const uint64_t size = AlignUp(info.ResultDataMaxSizeInBytes, kAlignment);
     if (!dev_.CreateRawBuffer(size, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true, b.storage.resource, b.storage.allocation,
                               "static BLAS")) {
-        BackOff("a static BLAS");
+        RayTracingBackOff(retry_after_, "a static BLAS");
         return nullptr;
     }
     b.storage.size = size;
@@ -403,7 +397,7 @@ bool D3D12RayTracing::RunJobs(CommandListImpl& cl, ID3D12GraphicsCommandList4* l
     }
     const uint64_t capacity = std::max(largest, std::min(total, kMaxScratch));
     if (!EnsureRaw(slot, slot.scratch, capacity, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, "ray tracing scratch")) {
-        BackOff("the build scratch buffer");
+        RayTracingBackOff(retry_after_, "the build scratch buffer");
         return false;
     }
     const D3D12_GPU_VIRTUAL_ADDRESS scratch = slot.scratch.resource->GetGPUVirtualAddress();
@@ -576,7 +570,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
             dev_.WriteBindings({&write, 1});
             positions_ready = true;
         } else {
-            BackOff("the skinned positions");
+            RayTracingBackOff(retry_after_, "the skinned positions");
         }
     }
     if (positions_ready) {
@@ -651,7 +645,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
                 jobs.clear();
             }
         } else if (!pending.empty()) {
-            BackOff("the skinned BLAS");
+            RayTracingBackOff(retry_after_, "the skinned BLAS");
         }
     }
 
@@ -669,7 +663,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
             !dev_.CreateBuffer({sizeof(RtRecord) * capacity, gpu::BufferUsage::StorageBuffer, true, false, "ray tracing records", true}, records_buffer)) {
             dev_.DestroyBuffer(instances_buffer);
             dev_.DestroyBuffer(records_buffer);
-            BackOff("the TLAS instance buffers");
+            RayTracingBackOff(retry_after_, "the TLAS instance buffers");
             cmd.EndLabel();
             return false;
         }
@@ -734,7 +728,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
         Raw grown;
         const uint64_t size = AlignUp(info.ResultDataMaxSizeInBytes, kAlignment);
         if (!dev_.CreateRawBuffer(size, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true, grown.resource, grown.allocation, "TLAS")) {
-            BackOff("the TLAS");
+            RayTracingBackOff(retry_after_, "the TLAS");
             cmd.EndLabel();
             return false;
         }
