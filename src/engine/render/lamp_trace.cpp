@@ -51,7 +51,7 @@ void LampTrace::Mark(const char* reason) {
 }
 
 void LampTrace::ObserveWindow(SDL_Window* window) {
-#if defined(__APPLE__) && !PT_IOS
+#if defined(__APPLE__) && !PT_IOS && !defined(PT_NO_RUNTIME_LOGS)
     if (whole_frame_ && window && !window_observer_) window_observer_ = vk::StartMacWindowTrace(window, directory_);
 #endif
 }

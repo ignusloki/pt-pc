@@ -3895,6 +3895,8 @@ public:
             reset.note = "pc_note_reset_done";
         }
         progress.rows.push_back(std::move(reset));
+        out.push_back(std::move(progress));
+        if constexpr (!pt::kRuntimeLogs) return;
         pt::game::PcSettingSection support{"pc_section_support", 0, {}};
         {
             const pt::LogReportState state = pt::GetLogReportState();
@@ -3909,7 +3911,6 @@ public:
             send.enabled = state != pt::LogReportState::Sending && state != pt::LogReportState::Sent;
             support.rows.push_back(std::move(send));
         }
-        out.push_back(std::move(progress));
         out.push_back(std::move(support));
     }
 
@@ -5163,7 +5164,7 @@ public:
                 pt::LogInfo("input: gyro calibration started");
             }
         }
-        if (id == kSendLog) pt::SendLogReport(g_log_path, g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()));
+        if (pt::kRuntimeLogs && id == kSendLog) pt::SendLogReport(g_log_path, g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()));
         if (id == kReset && game_.SavesEnabled()) {
             pt::LogInfo("save: progress reset from the PC settings page ({})", game_.ResetProgress() ? "accepted" : "failed");
         }
@@ -10219,7 +10220,7 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-#if defined(__APPLE__) && !PT_IOS
+#if defined(__APPLE__) && !PT_IOS && !defined(PT_NO_RUNTIME_LOGS)
     std::error_code trace_ec;
     std::error_code marker_ec;
     const auto frame_base = pt::os::GetEnv("PT_FRAME_TRACE");
@@ -10243,14 +10244,14 @@ int main(int argc, char** argv) {
 #endif
     g_output_dir = log_path.parent_path();
     g_log_path = log_path;
-    if (!tool) pt::PreserveCrashLog(log_path);
-    if (!tool) {
+    if (pt::kRuntimeLogs && !tool) {
+        pt::PreserveCrashLog(log_path);
         std::error_code ec;
         if (std::filesystem::exists(log_path, ec))
             std::filesystem::copy_file(log_path, log_path.parent_path() / "pt-previous.log", std::filesystem::copy_options::overwrite_existing, ec);
     }
     pt::LogSetFile(log_path);
-#if defined(__APPLE__) && !PT_IOS
+#if defined(__APPLE__) && !PT_IOS && !defined(PT_NO_RUNTIME_LOGS)
     if (trace_ec) pt::LogWarn("lamp diagnostics setup: {}", trace_ec.message());
     if (whole_frame && app.renderer.lamp_trace) pt::LogInfo("frame diagnostics active: drawable scanlines from startup; F5 marks a black flash and starts sampling the game window");
     else if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: source stages and scRGB lamp, halo and wall tiles; press F5 to mark visible flicker");
@@ -10386,8 +10387,9 @@ int main(int argc, char** argv) {
         if (options.headless) {
             return;
         }
-        const std::string text = what + "\n\n" + advice + "\n\nDetails are in " + pt::os::PathToUtf8(std::filesystem::absolute(log_path)) +
-                                 "; please attach that file when you report this.";
+        std::string text = what + "\n\n" + advice;
+        if constexpr (pt::kRuntimeLogs)
+            text += "\n\nDetails are in " + pt::os::PathToUtf8(std::filesystem::absolute(log_path)) + "; please attach that file when you report this.";
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T. could not start", text.c_str(), nullptr);
     };
 #ifdef _WIN32
@@ -10583,7 +10585,7 @@ int main(int argc, char** argv) {
                      pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), missing);
         const std::string text = pt::first_run::Text("pc_game_incomplete", pt::first_run::PlayerLanguage(UserDataDir()),
                                                      {pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), std::to_string(missing),
-                                                      pt::os::PathToUtf8(std::filesystem::absolute(g_log_path))});
+                                                      pt::os::PathToUtf8(std::filesystem::absolute(g_log_path))}, pt::kRuntimeLogs);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         return 1;
     }
@@ -10699,7 +10701,7 @@ int main(int argc, char** argv) {
     pt::LogInfo("android: original textures, 1024 px mip cap, low graphics defaults and private profile");
     pt::LogInfo("android: subtitle size {}%", app.settings.display.subtitle_scale * 100.0f);
 #endif
-    if (settings_loaded && app.settings.upscaling.frame_generation != "off") {
+    if (pt::kRuntimeLogs && settings_loaded && app.settings.upscaling.frame_generation != "off") {
         std::ifstream previous_log(log_path.parent_path() / "pt-previous.log");
         const pt::FgStartLoss fg_loss = pt::FindFrameGenStartLoss(previous_log);
         if (fg_loss.found) {
@@ -10859,7 +10861,7 @@ int main(int argc, char** argv) {
             if (previous.api == "vulkan" && !NoStartMessages()) {
                 const int language = pt::first_run::PlayerLanguage(UserDataDir());
                 std::string text = pt::first_run::Text("pc_start_died", language,
-                                                       {previous.step, pt::os::PathToUtf8(std::filesystem::absolute(log_path.parent_path() / "pt-previous.log"))});
+                                                       {previous.step, pt::os::PathToUtf8(std::filesystem::absolute(log_path.parent_path() / "pt-previous.log"))}, pt::kRuntimeLogs);
                 if (layers_retry) text += "\n\n" + pt::first_run::Text("pc_start_retry_layers", language);
                 pt::LogInfo("start: message about the last start shown");
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, pt::first_run::Text("pc_start_died_title", language).c_str(), text.c_str(), nullptr);
@@ -10890,7 +10892,7 @@ int main(int argc, char** argv) {
                               .hang_title = NoStartMessages() ? std::function<std::string()>() : [] { return pt::first_run::Text("pc_start_died_title", pt::first_run::PlayerLanguage(UserDataDir())); },
                               .hang_text = [log_path](int seconds, const std::string& step) {
                                   return pt::first_run::Text("pc_start_hang", pt::first_run::PlayerLanguage(UserDataDir()),
-                                                             {std::to_string(seconds), step, pt::os::PathToUtf8(std::filesystem::absolute(log_path))});
+                                                             {std::to_string(seconds), step, pt::os::PathToUtf8(std::filesystem::absolute(log_path))}, pt::kRuntimeLogs);
                               }});
         pt::start_watch::Step("window", vulkan_start ? "SDL_CreateWindow; with Vulkan, SDL loads the Vulkan loader here and asks it for "
                                                        "the instance extensions: the loader loads every driver and the pre-instance layers"
@@ -11041,7 +11043,7 @@ int main(int argc, char** argv) {
             if (!NoStartMessages()) {
                 const int language = pt::first_run::PlayerLanguage(UserDataDir());
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, pt::first_run::Text("pc_start_died_title", language).c_str(),
-                                         pt::first_run::Text("pc_start_no_api", language, {pt::os::PathToUtf8(std::filesystem::absolute(log_path))}).c_str(),
+                                         pt::first_run::Text("pc_start_no_api", language, {pt::os::PathToUtf8(std::filesystem::absolute(log_path))}, pt::kRuntimeLogs).c_str(),
                                          nullptr);
             }
         } else {

@@ -8,6 +8,12 @@
 
 namespace pt {
 
+#ifdef PT_NO_RUNTIME_LOGS
+inline constexpr bool kRuntimeLogs = false;
+#else
+inline constexpr bool kRuntimeLogs = true;
+#endif
+
 enum class LogLevel { Debug, Info, Warn, Error };
 
 void LogWrite(LogLevel level, std::string_view text);
@@ -18,22 +24,22 @@ double LogClock();
 
 template <typename... Args>
 void LogDebug(std::format_string<Args...> fmt, Args&&... args) {
-    LogWrite(LogLevel::Debug, std::format(fmt, std::forward<Args>(args)...));
+    if constexpr (kRuntimeLogs) LogWrite(LogLevel::Debug, std::format(fmt, std::forward<Args>(args)...));
 }
 
 template <typename... Args>
 void LogInfo(std::format_string<Args...> fmt, Args&&... args) {
-    LogWrite(LogLevel::Info, std::format(fmt, std::forward<Args>(args)...));
+    if constexpr (kRuntimeLogs) LogWrite(LogLevel::Info, std::format(fmt, std::forward<Args>(args)...));
 }
 
 template <typename... Args>
 void LogWarn(std::format_string<Args...> fmt, Args&&... args) {
-    LogWrite(LogLevel::Warn, std::format(fmt, std::forward<Args>(args)...));
+    if constexpr (kRuntimeLogs) LogWrite(LogLevel::Warn, std::format(fmt, std::forward<Args>(args)...));
 }
 
 template <typename... Args>
 void LogError(std::format_string<Args...> fmt, Args&&... args) {
-    LogWrite(LogLevel::Error, std::format(fmt, std::forward<Args>(args)...));
+    if constexpr (kRuntimeLogs) LogWrite(LogLevel::Error, std::format(fmt, std::forward<Args>(args)...));
 }
 
 }

@@ -29,6 +29,6 @@ Result Run(const Context& context);
 bool LooksLikeGameDir(const std::filesystem::path& dir);
 std::filesystem::path FindGameFolder(const std::filesystem::path& picked);
 int PlayerLanguage(const std::filesystem::path& user_dir);
-std::string Text(std::string_view key, int language, std::initializer_list<std::string> args = {});
+std::string Text(std::string_view key, int language, std::initializer_list<std::string> args = {}, bool include_last_field_paragraph = true);
 
 }

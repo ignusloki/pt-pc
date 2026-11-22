@@ -30,6 +30,7 @@ const char* LevelTag(LogLevel level) {
 }
 
 void LogSetFile(const std::filesystem::path& path) {
+    if constexpr (!kRuntimeLogs) return;
     std::lock_guard lock(g_log_mutex);
     if (g_log_file) {
         std::fclose(g_log_file);
@@ -44,6 +45,7 @@ double LogClock() {
 }
 
 void LogWrite(LogLevel level, std::string_view text) {
+    if constexpr (!kRuntimeLogs) return;
     const double seconds = LogClock();
     std::lock_guard lock(g_log_mutex);
     char tick[32] = "";
@@ -58,6 +60,7 @@ void LogWrite(LogLevel level, std::string_view text) {
 }
 
 bool LogTryWrite(LogLevel level, std::string_view text) {
+    if constexpr (!kRuntimeLogs) return true;
     const double seconds = LogClock();
     std::unique_lock lock(g_log_mutex, std::try_to_lock);
     if (!lock.owns_lock()) return false;
@@ -69,6 +72,7 @@ bool LogTryWrite(LogLevel level, std::string_view text) {
 }
 
 void LogSetTick(uint64_t tick) {
+    if constexpr (!kRuntimeLogs) return;
     std::lock_guard lock(g_log_mutex);
     g_tick = tick;
 }

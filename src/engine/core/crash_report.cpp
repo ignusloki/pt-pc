@@ -219,7 +219,7 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
     std::signal(SIGABRT, OnSignalAbort);
 #else
     InstallFaultHandlers();
-    RedirectStderr(dump_dir);
+    if constexpr (kRuntimeLogs) RedirectStderr(dump_dir);
 #endif
     std::atexit(OnAtExit);
     std::set_terminate([] {
@@ -353,9 +353,12 @@ void FatalError(const std::string& reason, bool show_message, int code) {
     LogError("fatal: {}", reason);
     const std::filesystem::path dump = WriteCrashDump(reason.c_str());
     if (show_message) {
-        const std::string text = "P.T. stopped: " + reason + "\n\nThe log and a crash dump were written to:\n" +
-                                 (dump.empty() ? pt::os::PathToUtf8(g_dump_dir) : pt::os::PathToUtf8(dump.parent_path())) +
-                                 "\n\nPlease send pt.log and the .dmp file with your report.";
+        std::string text = "P.T. stopped: " + reason;
+        if constexpr (kRuntimeLogs) {
+            text += "\n\nThe log and a crash dump were written to:\n" +
+                    (dump.empty() ? pt::os::PathToUtf8(g_dump_dir) : pt::os::PathToUtf8(dump.parent_path())) +
+                    "\n\nPlease send pt.log and the .dmp file with your report.";
+        }
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
     }
     LogExit(code, "fatal error");

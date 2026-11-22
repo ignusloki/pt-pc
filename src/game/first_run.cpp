@@ -507,8 +507,17 @@ int PlayerLanguage(const fs::path& user_dir) {
     return std::clamp(pt::game::DefaultOptionsForLocale(tag).subtitle_language, 0, kLanguages - 1);
 }
 
-std::string Text(std::string_view key, int language, std::initializer_list<std::string> args) {
+std::string Text(std::string_view key, int language, std::initializer_list<std::string> args, bool include_last_field_paragraph) {
     std::string text(pt::game::PcText(key, std::clamp(language, 0, kLanguages - 1)));
+    // Startup messages put instructions for attaching a log in their own paragraph.
+    if (!include_last_field_paragraph && args.size()) {
+        const size_t field = text.find("{" + std::to_string(args.size()) + "}");
+        if (field != std::string::npos) {
+            const size_t start = text.rfind("\n\n", field);
+            const size_t end = text.find("\n\n", field);
+            if (start != std::string::npos) text.erase(start, end == std::string::npos ? end : end - start);
+        }
+    }
     int index = 1;
     for (const auto& arg : args) {
         const std::string token = "{" + std::to_string(index++) + "}";
