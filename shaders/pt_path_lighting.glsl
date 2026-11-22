@@ -6,6 +6,7 @@
 const uint kPtOccluderMask = 128u;
 const uint kPtSurfaceMask = 8u;
 const uint kPtLayerMask = 64u;
+const uint kPtEffectMask = 16u;
 const float kPtPi = 3.14159265;
 
 struct PtMaterial {
