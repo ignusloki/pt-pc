@@ -674,7 +674,7 @@ private:
                 id<MTLTexture> native_previous = export_texture(previous);
                 id<MTLTexture> native_output = export_texture(interp_);
                 const bool hdr = UsesHdrTransport();
-                if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous, prepare_.output_brightness, ctx_.enhanced_rendering)) {
+                if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous)) {
                     LogError("frame generation: encoding HDR input failed");
                     return nullptr;
                 }
@@ -694,12 +694,10 @@ private:
                 interpolator.farPlane = 100000.0f;
                 interpolator.fieldOfView = glm::degrees(prepare_.fov_y);
                 interpolator.aspectRatio = static_cast<float>(display_.width) / static_cast<float>(std::max(1u, display_.height));
-                const bool brightness_changed = hdr && hdr_brightness_ != prepare_.output_brightness;
-                interpolator.shouldResetHistory = reset_ || brightness_changed ? YES : NO;
-                hdr_brightness_ = hdr ? prepare_.output_brightness : 0.0f;
+                interpolator.shouldResetHistory = reset_ ? YES : NO;
                 reset_ = false;
                 [interpolator encodeToCommandBuffer:command];
-                if (hdr && !hdr_transport_.DecodeOutput(command, native_current, native_previous, native_output, prepare_.output_brightness, ctx_.enhanced_rendering)) {
+                if (hdr && !hdr_transport_.DecodeOutput(command, native_output)) {
                     LogError("frame generation: decoding HDR output failed");
                     return nullptr;
                 }
@@ -774,10 +772,9 @@ private:
             }
             interpolator_ = interpolator;
             interp_render_ = render;
-            hdr_brightness_ = 0.0f;
             LogInfo("frame generation: interpolator for {}x{} motion and depth -> {}x{} colour", render.width, render.height, display_.width,
                     display_.height);
-            if (UsesHdrTransport()) LogInfo("frame generation: {} HDR RGB transport", ctx_.enhanced_rendering ? "extended signed" : "original gain");
+            if (UsesHdrTransport()) LogInfo("frame generation: extended signed HDR RGB transport");
             return true;
         }
         return false;
@@ -791,7 +788,6 @@ private:
 
     void DestroyTargets() {
         hdr_transport_.Release();
-        hdr_brightness_ = 0.0f;
         for (vk::Image& image : hudless_) {
             ctx_.DestroyImage(image);
         }
@@ -815,7 +811,6 @@ private:
     PFN_vkExportMetalObjectsEXT export_fn_ = nullptr;
     id interpolator_ = nil;
     MetalFxHdrTransport hdr_transport_;
-    float hdr_brightness_ = 0.0f;
     id<MTLSharedEvent> event_ = nil;
     id<MTLCommandQueue> queue_ = nil;
     VkSemaphore input_semaphore_ = VK_NULL_HANDLE;

@@ -168,10 +168,9 @@ def framegen_checks(build, game, output):
         code, elapsed = run(command, case, case / "console.log", env, timeout=180)
         log = (case / "pt.log").read_text(errors="replace") if (case / "pt.log").exists() else ""
         generated = re.search(r"MetalFX queued (\d+) interpolated frames", log)
-        transport = "extended signed" if pipeline == "enhanced" else "original gain"
         errors = [line for line in log.splitlines() if re.search(r"\berror\b|VK_ERROR|FAIL", line)]
         good = (code == 0 and f"renderer: {pipeline} pipeline" in log and
-                f"{transport} HDR RGB transport" in log and generated and int(generated[1]) > 0 and
+                "extended signed HDR RGB transport" in log and generated and int(generated[1]) > 0 and
                 (case / "framegen.png").is_file() and not errors)
         results.append({"test": f"{pipeline}-native-hdr-framegen", "code": 0 if good else 1,
                         "process_code": code, "seconds": elapsed, "errors": errors,

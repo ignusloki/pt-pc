@@ -23,11 +23,6 @@ float Float(uint16_t bits) {
     std::memcpy(&h, &bits, sizeof(h));
     return h;
 }
-// Expected display colour is independent of MetalFX and of the transport's choice of alpha encoding.
-float Display(float color, float gain, float brightness) {
-    return std::pow(std::clamp(std::pow(std::max(color, 0.0f), 1.0f / brightness), 0.0f, 1.0f), 2.2f) *
-           std::pow(std::clamp(gain, 1.0f, 8.0f), 2.2f);
-}
 } // namespace
 #endif
 
@@ -43,14 +38,10 @@ int main() {
             id<MTLCommandQueue> queue = [device newCommandQueue];
             pt::MetalFxHdrTransport hdr;
             int failures = 0, checks = 0;
-            for (bool extended : {false, true}) {
-            const std::array<std::array<float, 4>, 6> colors = {{{1, 1, 1, 1.5f}, {.25f, .5f, .75f, 2},
-                {.1f, .04f, .02f, 1}, {0, 0, 0, 1}, {.5f, .5f, .5f, 1.25f}, {1, .75f, .25f, 8}}};
-            const std::array<std::array<float, 4>, 6> extended_colors = {{{2.5f, 2.5f, 2.5f, 1}, {-.1f, .5f, 1.8f, 1},
+            // Original 1.1 and Enhanced store highlights above 1 in RGB. The fourth
+            // channel is not a multiplier, and generated scene coverage must be opaque.
+            const std::array<std::array<float, 4>, 6> colors = {{{2.5f, 2.5f, 2.5f, 1}, {-.1f, .5f, 1.8f, 1},
                 {.001f, .0001f, .002f, 1}, {0, 0, 0, 1}, {.5f, .5f, .5f, 1}, {3.5f, .75f, .1f, 1}}};
-            const auto& inputs = extended ? extended_colors : colors;
-            std::printf("Checking %s MetalFX HDR transport\n", extended ? "Enhanced signed RGB" : "Original gain");
-            // Reuse the production transport across an output resize, then switch brightness with history resets.
             for (NSUInteger height : {128u, 192u}) {
                 const NSUInteger width = 192;
                 MTLFXFrameInterpolatorDescriptor* desc = [MTLFXFrameInterpolatorDescriptor new];
@@ -77,7 +68,7 @@ int main() {
                 if (!queue || !current || !previous || !output || !motion || !depth || !readback) return 1;
                 std::vector<uint16_t> pixels(width*height*4), zero_motion(width*height*2, 0);
                 for (NSUInteger y = 0; y < height; ++y) for (NSUInteger x = 0; x < width; ++x) {
-                    const auto& color = inputs[(y/(height/2))*3+x/64];
+                    const auto& color = colors[(y/(height/2))*3+x/64];
                     for (int c = 0; c < 4; ++c) pixels[(y*width+x)*4+c] = Half(color[c]);
                 }
                 const MTLRegion region = MTLRegionMake2D(0, 0, width, height);
@@ -97,51 +88,43 @@ int main() {
                 fx.motionVectorScaleX = width; fx.motionVectorScaleY = height;
                 fx.deltaTime = 1.0f/30.0f; fx.nearPlane = .05f; fx.farPlane = 100000;
                 fx.fieldOfView = 60; fx.aspectRatio = float(width)/height;
-                for (float brightness : {.5f, 1.0f, 2.0f}) {
-                    const int before = failures;
-                    for (int frame = 0; frame < 8; ++frame) {
-                        id<MTLCommandBuffer> command = [queue commandBuffer];
-                        if (!hdr.EncodeInputs(command, current, previous, brightness, extended)) return 1;
-                        fx.shouldResetHistory = frame == 0;
-                        [fx encodeToCommandBuffer:command];
-                        if (!hdr.DecodeOutput(command, current, previous, output, brightness, extended)) return 1;
-                        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-                        [blit copyFromTexture:output sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
-                            sourceSize:MTLSizeMake(width,height,1) toBuffer:readback destinationOffset:0
-                            destinationBytesPerRow:width*8 destinationBytesPerImage:width*height*8];
-                        [blit endEncoding]; [command commit]; [command waitUntilCompleted];
-                        if (command.status == MTLCommandBufferStatusError) {
-                            std::fprintf(stderr, "MetalFX HDR GPU failure: %s\n", command.error.description.UTF8String);
-                            return 1;
+                for (int frame = 0; frame < 8; ++frame) {
+                    id<MTLCommandBuffer> command = [queue commandBuffer];
+                    if (!hdr.EncodeInputs(command, current, previous)) return 1;
+                    fx.shouldResetHistory = frame == 0;
+                    [fx encodeToCommandBuffer:command];
+                    if (!hdr.DecodeOutput(command, output)) return 1;
+                    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+                    [blit copyFromTexture:output sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
+                        sourceSize:MTLSizeMake(width,height,1) toBuffer:readback destinationOffset:0
+                        destinationBytesPerRow:width*8 destinationBytesPerImage:width*height*8];
+                    [blit endEncoding]; [command commit]; [command waitUntilCompleted];
+                    if (command.status == MTLCommandBufferStatusError) {
+                        std::fprintf(stderr, "MetalFX HDR GPU failure: %s\n", command.error.description.UTF8String);
+                        return 1;
+                    }
+                    if (frame < 4) continue; // Verify the interpolator after the alpha-preserving warm-up ends.
+                    const auto* result = static_cast<const uint16_t*>(readback.contents);
+                    for (size_t i = 0; i < colors.size(); ++i) {
+                        const NSUInteger x = (i%3)*64+32, y = (i/3)*(height/2)+height/4;
+                        const auto* pixel = result+(y*width+x)*4;
+                        const float alpha = Float(pixel[3]);
+                        bool good = alpha == 1.0f;
+                        for (int c = 0; c < 3; ++c) {
+                            const float expected = colors[i][c];
+                            const float actual = Float(pixel[c]);
+                            good = good && std::isfinite(actual) && std::abs(expected-actual) <= .02f*std::max(std::abs(expected), .01f);
                         }
-                        if (frame < 4) continue; // Verify the interpolator after the alpha-preserving warm-up ends.
-                        const auto* result = static_cast<const uint16_t*>(readback.contents);
-                        for (size_t i = 0; i < colors.size(); ++i) {
-                            const NSUInteger x = (i%3)*64+32, y = (i/3)*(height/2)+height/4;
-                            const auto* pixel = result+(y*width+x)*4;
-                            const float gain = Float(pixel[3]);
-                            bool good = std::isfinite(gain) && gain >= 1 && gain <= 8;
-                            for (int c = 0; c < 3; ++c) {
-                                const float expected = extended ? inputs[i][c] : Display(inputs[i][c], inputs[i][3], brightness);
-                                const float actual = extended ? Float(pixel[c]) : Display(Float(pixel[c]), gain, brightness);
-                                good = good && std::isfinite(actual) && std::abs(expected-actual) <= .02f*std::max(std::abs(expected), .01f);
-                                // Static images must also preserve the grain/UI input split, not only total brightness.
-                                good = good && std::abs(Float(pixel[c])-inputs[i][c]) < .012f;
-                            }
-                            ++checks;
-                            if (!good) {
-                                ++failures;
-                                std::printf("FAIL %lux%lu brightness %.1f frame %d patch %zu: rgba %.5f %.5f %.5f %.5f\n",
-                                            width,height,brightness,frame,i,Float(pixel[0]),Float(pixel[1]),Float(pixel[2]),gain);
-                            }
+                        ++checks;
+                        if (!good) {
+                            ++failures;
+                            std::printf("FAIL %lux%lu frame %d patch %zu: rgba %.5f %.5f %.5f %.5f\n",
+                                        width,height,frame,i,Float(pixel[0]),Float(pixel[1]),Float(pixel[2]),alpha);
                         }
                     }
-                    std::printf("%s MetalFX HDR %lux%lu brightness %.1f: white, colour, dark, fade and maximum gain after warm-up\n",
-                                failures==before ? "PASS" : "FAIL",width,height,brightness);
                 }
                 [fx release]; [current release]; [previous release]; [output release];
                 [motion release]; [depth release]; [readback release];
-            }
             }
             std::printf("MetalFX HDR transport: %d checks, %d failures\n",checks,failures);
             [queue release]; [device release];

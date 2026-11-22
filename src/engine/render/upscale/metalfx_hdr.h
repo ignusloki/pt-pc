@@ -4,18 +4,16 @@
 
 namespace pt {
 
-// MetalFX interpolates RGB, but does not retain Original's custom HDR-gain alpha.
-// Original reconstructs that representation; Enhanced carries signed extended RGB
-// directly and restores coverage alpha. Neither path clips the other one's data.
+// Both HDR pipelines store highlights in extended RGB. Keep those channels intact
+// through interpolation and restore opaque alpha before compositing the HUD.
 class MetalFxHdrTransport {
 public:
     ~MetalFxHdrTransport();
     bool Init(id<MTLDevice> device, NSUInteger width, NSUInteger height, MTLTextureUsage input_usage,
               MTLTextureUsage output_usage);
     void Release();
-    bool EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous, float brightness, bool extended_rgb = false);
-    bool DecodeOutput(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous,
-                      id<MTLTexture> output, float brightness, bool extended_rgb = false);
+    bool EncodeInputs(id<MTLCommandBuffer> command, id<MTLTexture> current, id<MTLTexture> previous);
+    bool DecodeOutput(id<MTLCommandBuffer> command, id<MTLTexture> output);
     id<MTLTexture> Current() const { return current_; }
     id<MTLTexture> Previous() const { return previous_; }
     id<MTLTexture> Interpolated() const { return interpolated_; }
