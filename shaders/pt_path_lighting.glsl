@@ -1,4 +1,4 @@
-// Shared verbatim by the Original and Enhanced shader families.
+// Shared by the Original and Enhanced shader families.
 #include "pt_foliage_shadow.glsl"
 
 #include "pt_native_projection.glsl"
@@ -78,7 +78,7 @@ bool PtLightEval(Light l, vec3 p, vec3 N, vec3 V, PtMaterial s, float cutoff, ou
             return false;
         }
         vec2 uv = vec2(0.5 * c.x / c.w + 0.5, 1.0 - (0.5 * c.y / c.w + 0.5));
-        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), uv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, uv, 0.0).rgb;
+        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb;
     }
     vec3 R = reflect(-V, N);
     vec3 to_ray = R - L;
@@ -113,7 +113,17 @@ vec3 PtDiscPoint(Light l, vec3 p, vec2 u) {
     return l.position.xyz + (d.u * cos(a) + d.v * sin(a)) * r;
 }
 
-#include "rt_surface_uv.glsl"
+vec2 PtCasterUV(uint record, uint primitive, vec2 bary) {
+    RtRecord r = rt_records[record];
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
+    uint base = r.first_index + 3u * primitive;
+    uint i0 = (RT_INDEX(ib, base) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i1 = (RT_INDEX(ib, base + 1u) + uint(r.vertex_offset)) * 22u + 10u;
+    uint i2 = (RT_INDEX(ib, base + 2u) + uint(r.vertex_offset)) * 22u + 10u;
+    return vec2(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u)) * (1.0 - bary.x - bary.y) +
+           vec2(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u)) * bary.x + vec2(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u)) * bary.y;
+}
 
 bool PtCasterOpaque(uint record, uint primitive, vec2 bary, float u) {
     RtRecord r = rt_records[record];
@@ -238,7 +248,7 @@ bool PtOccluded(Light l, vec3 origin, vec3 target, vec3 receiver_normal, inout u
 bool g_pt_fill_unshadowed = false;
 
 bool PtFillUnshadowed(uint light) {
-    return g_pt_fill_unshadowed && rt_light_state[light].w < 0.5;
+    return (g_pt_fill_unshadowed && rt_light_state[light].w < 0.5) || (uint(frame.lights[light].scales.w) & 8u) != 0u;
 }
 
 vec3 PtNextEventN(vec3 p, vec3 N, vec3 V, PtMaterial s, vec3 origin, uint light_count, float cutoff, uint samples, inout uint rng) {
@@ -364,9 +374,9 @@ vec3 PtSpecularAlbedo(vec3 N, vec3 V, PtMaterial s) {
     return s.specular * mat0.rgb * F;
 }
 
-PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
+PtMaterial PtHitMaterial(Material m, vec2 uv, float lod, vec3 tint) {
     PtMaterial s;
-    s.albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, lod).rgb;
+    s.albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, lod).rgb) * tint;
     vec4 srm = (m.flags & MAT_NORMAL_WAVE) != 0u ? vec4(m.extra.x, m.extra.y, 0.0, 0.0) : textureLod(PT_TEX2D(m.specular), uv, lod);
     s.specular = srm.r;
     s.roughness = srm.g;
@@ -377,3 +387,5 @@ PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
 }
 
 bool g_pt_mirror_view = false;
+bool g_pt_first_effects = false;
+bool g_pt_layer_effects = false;

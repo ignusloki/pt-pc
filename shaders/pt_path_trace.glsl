@@ -1,4 +1,4 @@
-// Shared verbatim by the Original and Enhanced shader families.
+// Shared by the Original and Enhanced shader families.
 uint g_pt_first_mask = kPtSurfaceMask;
 bool g_pt_seen_emissive = false;
 float PtEmissiveCap(uint bounce, float cutoff) {
@@ -41,7 +41,7 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         }
 #if defined(PT_D3D12) && defined(PT_INDIRECT_RENDER_SIZE)
         uint record = 0u;
-        RtSurfaceHit hs = RtSurfaceHit(vec3(0.0), vec2(0.0), 0u);
+        RtSurfaceHit hs = RtSurfaceHit(vec3(0.0), vec2(0.0), 0u, vec3(1.0));
         bool hit_front = false;
         if (hit) {
             record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -52,7 +52,11 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
 #endif
         vec3 glass_point;
         vec3 glass_normal;
-        if (PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng, glass_point, glass_normal)) {
+        g_pt_layer_effects = g_pt_first_effects && bounce == 0u;
+        bool layer_glass = PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng,
+                                    glass_point, glass_normal);
+        g_pt_layer_effects = false;
+        if (layer_glass) {
             origin = glass_point + glass_normal * 0.002;
             dir = reflect(dir, glass_normal);
             continue;
@@ -83,7 +87,7 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         if (!front || m.kind != KIND_DEFERRED) {
             break;
         }
-        PtMaterial s = PtHitMaterial(m, hs.uv, lod);
+        PtMaterial s = PtHitMaterial(m, hs.uv, lod, hs.tint);
         if (mirror_lining) {
             s.albedo = mix(s.albedo, vec3(1.0), 0.035);
         }

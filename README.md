@@ -14,7 +14,8 @@
 
 </div>
 
-**Release 1.0.13:** Mac players can choose **Original** or **Enhanced** rendering.
+This Mac test branch integrates **P.T. PC Port 1.1.0**, including Survive the Night and keyboard rebinding.
+Mac players can choose **Original** or **Enhanced** rendering.
 Original remains the default; Enhanced adds HDR colour customization, independent UI
 brightness, smoother lighting effects and a live settings preview. Android and iOS
 retain Original rendering. No original game files are included.
@@ -83,6 +84,15 @@ The game checks GitHub Releases for a newer version at startup; `[network] check
 
 Thanks to ahm3texe for the Apple silicon port, totsu0jv for Czech translation, and yewhochen for the Linux library-loading
 and startup-focus fixes.
+
+### Antivirus warnings
+
+Some antivirus programs flag the installer or `pt.exe`. These are false positives. The files are not code signed (a
+certificate costs more every year than this free project makes), and an installer that unpacks programs and starts one
+of them is exactly what heuristic scanners watch for. On VirusTotal the release files are flagged by 1 to 3 engines out
+of about 70. Every line of the port is in this repository, so you can read it or build it yourself (see Building from
+source). If your antivirus stops the installer, save it to a folder first instead of opening it from the browser, or use
+the portable ZIP.
 
 ## Playing
 
@@ -200,8 +210,8 @@ executable.
 
 ## License
 
-The port's own code is under the MIT license (see LICENSE). The third-party pieces listed above keep their own
-licenses.
+The port's own code is under the MIT license (see LICENSE). P.T. and all of its content belong to Konami, and the
+third-party pieces listed above keep their own licenses (see NOTICE).
 
 ## AI Disclosure
 

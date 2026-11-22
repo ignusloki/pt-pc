@@ -13,6 +13,10 @@ void main() {
     Material m = materials[creature ? uint(in_color.r + 0.5) : draw.ids.y];
     uint debug_mode = draw.ids.z & 0xFFu;
     vec2 uv = creature ? CreatureUv(in_color.gb) : in_uv0;
+    g_tile_dx = dFdx(in_uv0) * kTileSpan * 1.6;
+    g_tile_dy = dFdy(in_uv0) * kTileSpan * 1.6;
+    g_tile = (m.flags & MAT_BLEND_TILE) != 0u;
+    if ((m.flags & MAT_FINE_SPECULAR) != 0u) g_mip_bias = max(g_mip_bias, 0.25);
     vec4 base = Tex(m.albedo, uv);
     if ((m.flags & MAT_CONSTANT_COLOR) != 0u) {
         base = vec4(m.albedo_factor.rgb, 1.0);
@@ -44,7 +48,7 @@ void main() {
         if ((m.flags & MAT_SUB_NORMAL) != 0u) {
             bool layer = (m.flags & MAT_LAYER) != 0u;
             vec4 mask = layer ? Tex(m.aux2, in_uv2) : Tex(m.aux2, uv);
-            vec4 sn = Tex(m.aux1, uv * m.extra.yz);
+            vec4 sn = g_tile ? textureGrad(PT_TEX2D(m.aux1), uv * kTileSpan * m.extra.yz, g_tile_dx * m.extra.yz, g_tile_dy * m.extra.yz) : Tex(m.aux1, uv * m.extra.yz);
             float k = m.extra.x * (layer ? mask.y : mask.x);
             nts = normalize(vec3(nxy.x + k * (2.0 * sn.w - 1.0), nxy.y + k * (2.0 * sn.y - 1.0), nz));
         }
@@ -57,7 +61,11 @@ void main() {
         srm = vec4(1.0, 0.6430664, 0.0, 0.0);
     }
     float roughness = srm.g;
-    float specular = srm.r;
+    if (g_tile || (m.flags & MAT_FINE_SPECULAR) != 0u) {
+        vec3 dx = dFdx(n), dy = dFdy(n);
+        roughness = sqrt(roughness * roughness + min(2.0 * (dot(dx, dx) + dot(dy, dy)), 0.3));
+    }
+    float specular = (m.flags & MAT_DULL_SPECULAR) != 0u ? srm.r * 0.03 : srm.r;
     float reflection = srm.b;
     float index = m.indices.x;
     uint multi = (m.flags >> 12u) & 3u;

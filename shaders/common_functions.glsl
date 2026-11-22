@@ -80,6 +80,10 @@ layout(set = 1, binding = 4) uniform texture3D lut2_image;
 #define MAT_GBUFFER_BASE2 16777216u
 #define MAT_MIRROR_LINING 33554432u
 
+#define MAT_BLEND_TILE 134217728u
+#define MAT_DULL_SPECULAR 268435456u
+#define MAT_FINE_SPECULAR 536870912u
+
 #define KIND_DEFERRED 0u
 #define KIND_CONSTANT 1u
 #define KIND_GLASS 2u

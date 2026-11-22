@@ -110,7 +110,7 @@ void SceneRenderer::RecordEnhancedPost(gpu::CommandList& cmd, const SceneLightin
     cmd.BeginPass(output_extent_, {{&ldr_[0], false, {}}});
     push.ids.x = 0;
     const float lut_blend = std::clamp(screen.lut_blend, 0.0f, 1.0f);
-    push.f0 = glm::vec4(bloom ? graphics.bloom_strength : 0.0f, lut_blend, lighting.valid ? 1.0f : renderer_->exposure, 0.0f);
+    push.f0 = glm::vec4(bloom ? graphics.enhanced_bloom_strength : 0.0f, lut_blend, lighting.valid ? 1.0f : renderer_->exposure, 0.0f);
     static const bool tonemap_test = std::getenv("PT_TONEMAP_TEST") != nullptr;
     if (tonemap_test) {
         push.f0.x = 0.0f;
@@ -151,7 +151,7 @@ void SceneRenderer::RecordEnhancedPost(gpu::CommandList& cmd, const SceneLightin
         s.ids = glm::uvec4(subliminal_string_state_.texture, ldr_index(current), 0, 0);
         const float across = output_extent_.height ? (static_cast<float>(output_extent_.width) / static_cast<float>(output_extent_.height)) / (16.0f / 9.0f) : 1.0f;
         s.f0 = glm::vec4(subliminal_string_state_.position, subliminal_string_state_.value, across);
-        s.f1 = glm::vec4(bloom && !tonemap_test ? graphics.bloom_strength : 0.0f, lighting.valid ? 1.0f : renderer_->exposure, hdr_output ? 1.0f : 0.0f, 0.0f);
+        s.f1 = glm::vec4(bloom && !tonemap_test ? graphics.enhanced_bloom_strength : 0.0f, lighting.valid ? 1.0f : renderer_->exposure, hdr_output ? 1.0f : 0.0f, 0.0f);
         run(subliminal_string_, s);
     }
     if (toggles.color_lut) {

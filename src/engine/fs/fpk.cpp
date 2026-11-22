@@ -5,6 +5,7 @@
 
 #include "engine/core/log.h"
 #include "engine/core/memory_status.h"
+#include "engine/fs/data_trace.h"
 #include "engine/fs/fox_crypt.h"
 #include "engine/fs/mods.h"
 
@@ -64,6 +65,7 @@ const FoxPackage::Entry* FoxPackage::Find(std::string_view path) const {
 }
 
 std::vector<uint8_t> FoxPackage::Read(const Entry& entry) const {
+    DataTraceFile(entry.path);
     if (auto data = mods::ReadOverride(entry.path)) {
         return std::move(*data);
     }

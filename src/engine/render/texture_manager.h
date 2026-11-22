@@ -75,6 +75,7 @@ public:
     uint64_t ReleaseModelRef(uint32_t index);
     uint32_t FreeSlots() const { return static_cast<uint32_t>(free_.size()); }
     uint32_t LoadFox(const QarArchive& qar, const std::string& path, bool* ok = nullptr, bool raw = false);
+    void PreloadModImages(const QarArchive& qar, std::span<const std::string> paths);
     uint32_t LoadImageFile(const std::filesystem::path& path, const std::string& key);
     void DecodeAhead(const QarArchive& qar, const std::vector<std::string>& paths);
     bool StillDecoding(const std::string& path) const;
@@ -89,6 +90,7 @@ public:
     void RedirectTexture(uint32_t texture, uint32_t shown);
     void FlushMaterials();
     uint32_t MaterialFlags(uint32_t index) const { return index < materials_.size() ? materials_[index].flags : 0u; }
+    const MaterialGpu* Material(uint32_t index) const { return index < materials_.size() ? &materials_[index] : nullptr; }
     int SetAnisotropy(int level);
     int Anisotropy() const { return anisotropy_; }
     gpu::BindingLayoutHandle BindingLayout() const { return set_layout_; }

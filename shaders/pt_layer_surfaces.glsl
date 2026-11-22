@@ -1,4 +1,4 @@
-// Shared verbatim by the Original and Enhanced shader families.
+// Shared by the Original and Enhanced shader families.
 float LayerEnd(float t) {
     return t - max(1.0e-3, 2.0e-4 * t);
 }
@@ -33,7 +33,8 @@ bool FindGlass(vec3 eye, vec3 dir, float t_end, inout float t_glass, out RtSurfa
         rayQueryEXT rq;
         rayQueryInitializeEXT(rq, rt_casters, gl_RayFlagsCullBackFacingTrianglesEXT, kPtLayerMask, eye, t_start, dir, t_end);
         while (rayQueryProceedEXT(rq)) {
-            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                !RtEffectRecord(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false))) {
                 rayQueryConfirmIntersectionEXT(rq);
             }
         }

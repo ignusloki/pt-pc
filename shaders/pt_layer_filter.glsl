@@ -1,4 +1,11 @@
-// Shared verbatim by the Original and Enhanced shader families.
+// Shared by the Original and Enhanced shader families.
+vec3 LayerTone(vec3 c) {
+    return HdrOutput() ? c / (1.0 + Luma709(max(c, vec3(0.0))) * v.exposure.x) : c;
+}
+vec3 LayerLight(vec3 t) {
+    return HdrOutput() ? t / max(1.0 - Luma709(t) * v.exposure.x, 1.0e-3) : t;
+}
+
 bool PreviousSecond() {
     return (pass.ids.w & 1u) != 0u;
 }
@@ -13,6 +20,7 @@ void Temporal(ivec2 pixel, ivec2 size) {
         if (second) imageStore(pt_layer_history1, pixel, value); else imageStore(pt_layer_history0, pixel, value);
         return;
     }
+    raw.rgb = LayerTone(raw.rgb);
     bool coat = kind == 1.0 && raw.a > 2.0;
     vec2 ndc = coat ? PixelNdc(v, vec2(pixel) + 0.5) : (vec2(pixel) + 0.5) * v.viewport.zw * 2.0 - 1.0;
     float t_layer = 0.0;
@@ -36,8 +44,9 @@ void Temporal(ivec2 pixel, ivec2 size) {
         for (int x = -1; x <= 1; ++x) {
             vec4 c = imageLoad(pt_layer_raw, clamp(pixel + ivec2(x, y), ivec2(0), size - 1));
             if (floor(c.a * 0.5) == kind) {
-                lo = min(lo, c.rgb);
-                hi = max(hi, c.rgb);
+                vec3 toned = LayerTone(c.rgb);
+                lo = min(lo, toned);
+                hi = max(hi, toned);
             }
         }
     }
@@ -152,7 +161,7 @@ void Spatial(ivec2 pixel, ivec2 size) {
     bool background = depth <= 0.0;
     if ((uint(pass.f1.w + 0.5) & 4u) != 0u && !background) return;
     if (kind < 1.0 || (background && kind < 2.0)) {
-        imageStore(pt_layer_raw, pixel, vec4(center.rgb, raw.a));
+        imageStore(pt_layer_raw, pixel, vec4(LayerLight(center.rgb), raw.a));
         return;
     }
     bool pane = kind >= 2.0 && kind < 3.0;
@@ -160,17 +169,30 @@ void Spatial(ivec2 pixel, ivec2 size) {
     vec3 n = background ? vec3(0.0, 0.0, -1.0) : DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
     float roughness = background ? 0.0 : ImgFetch(IMG_MATERIAL, pixel).x;
     int radius = kind >= 3.0 ? 1 : kind >= 2.0 ? 2 : (roughness > 0.6 ? 2 : 1);
+    float softness = kind < 3.0 ? frame.grade.w : 0.0;
+    if (softness > 0.0) {
+        float rows = v.viewport.y / 1080.0;
+        radius = max(radius, int(softness * (kind >= 2.0 ? 24.0 : 8.0 + 40.0 * roughness) * rows + 0.5));
+    }
+    int stride = radius > 4 ? (radius + 3) / 4 : 1;
+    float spread = max(4.0, float(radius * radius) * 0.5);
+    float normal_power = mix(32.0, 2.0, softness);
+    float edge_kept = 1.0 - Saturate(4.0 * softness);
+    uint pattern = RtHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u);
+    ivec2 shift = stride > 1 ? ivec2(int(pattern % uint(stride)), int((pattern >> 8) % uint(stride))) - stride / 2 : ivec2(0);
     float l_center = Luma709(center.rgb);
     vec3 sum = vec3(0.0);
     float weight_sum = 0.0;
-    for (int y = -radius; y <= radius; ++y) {
-        for (int x = -radius; x <= radius; ++x) {
-            ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+    for (int y = -radius; y <= radius; y += stride) {
+        for (int x = -radius; x <= radius; x += stride) {
+            bool middle = x == 0 && y == 0;
+            ivec2 offset = middle ? ivec2(0) : ivec2(x, y) + shift;
+            ivec2 p = clamp(pixel + offset, ivec2(0), size - 1);
             float code = imageLoad(pt_layer_raw, p).a;
             if (floor(code * 0.5) != kind) {
                 continue;
             }
-            if (kind < 2.0 && code <= 2.0 && (x != 0 || y != 0)) {
+            if (kind < 2.0 && code <= 2.0 && !middle) {
                 continue;
             }
             float dk = ImgFetch(IMG_DEPTH, p).x;
@@ -178,19 +200,20 @@ void Spatial(ivec2 pixel, ivec2 size) {
                 continue;
             }
             vec3 c = written_second ? imageLoad(pt_layer_history1, p).rgb : imageLoad(pt_layer_history0, p).rgb;
-            float w = exp(-float(x * x + y * y) / 4.0);
-            if (x != 0 || y != 0) {
+            float apart = float(dot(offset, offset));
+            float w = exp(-apart / spread);
+            if (!middle) {
                 if (!background && !pane) {
-                    w *= exp(-abs(ViewZ(v, dk) - z) / (0.01 * z + 0.002));
-                    w *= pow(max(dot(n, DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz)), 0.0), 32.0);
+                    w *= exp(-abs(ViewZ(v, dk) - z) / ((0.01 * z + 0.002) * (1.0 + softness * apart)));
+                    w *= pow(max(dot(n, DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz)), 0.0), normal_power);
                 }
-                w *= exp(-abs(Luma709(c) - l_center) / (0.5 * l_center + 1.0e-4));
+                w *= mix(1.0, exp(-abs(Luma709(c) - l_center) / (0.5 * l_center + 1.0e-4)), edge_kept);
             }
             sum += w * c;
             weight_sum += w;
         }
     }
-    imageStore(pt_layer_raw, pixel, vec4(weight_sum > 1.0e-6 ? sum / weight_sum : center.rgb, raw.a));
+    imageStore(pt_layer_raw, pixel, vec4(LayerLight(weight_sum > 1.0e-6 ? sum / weight_sum : center.rgb), raw.a));
 }
 
 void main() {

@@ -1,4 +1,3 @@
-// Shared verbatim by the Original and Enhanced shader families.
 layout(location = 0) in vec2 in_uv0;
 layout(location = 1) in vec2 in_uv1;
 layout(location = 2) in vec4 in_color;
@@ -24,7 +23,32 @@ layout(location = 2) out vec4 out_material;
 
 float g_mip_bias = 0.0;
 
+bool g_tile = false;
+vec2 g_tile_dx = vec2(0.0);
+vec2 g_tile_dy = vec2(0.0);
+const float kTileEdge = 0.16;
+const float kTileSpan = 0.68;
+const float kTileBlend = 0.14;
+
+vec4 TileTex(uint index, vec2 p) {
+    vec2 f = fract(p);
+    vec2 past = f + mix(mix(vec2(0.0), vec2(-1.0), greaterThan(f, vec2(1.0 - kTileBlend))), vec2(1.0), lessThan(f, vec2(kTileBlend)));
+    vec2 w = 0.5 * (1.0 - smoothstep(vec2(0.0), vec2(kTileBlend), min(f, 1.0 - f)));
+    vec2 a = kTileEdge + kTileSpan * f;
+    vec2 b = kTileEdge + kTileSpan * past;
+    vec4 mean = textureLod(PT_TEX2D(index), vec2(0.5), 12.0);
+    vec4 aa = textureGrad(PT_TEX2D(index), a, g_tile_dx, g_tile_dy) - mean;
+    vec4 ba = textureGrad(PT_TEX2D(index), vec2(b.x, a.y), g_tile_dx, g_tile_dy) - mean;
+    vec4 ab = textureGrad(PT_TEX2D(index), vec2(a.x, b.y), g_tile_dx, g_tile_dy) - mean;
+    vec4 bb = textureGrad(PT_TEX2D(index), b, g_tile_dx, g_tile_dy) - mean;
+    float w00 = (1.0 - w.x) * (1.0 - w.y), w10 = w.x * (1.0 - w.y), w01 = (1.0 - w.x) * w.y, w11 = w.x * w.y;
+    return mean + (aa * w00 + ba * w10 + ab * w01 + bb * w11) * inversesqrt(w00 * w00 + w10 * w10 + w01 * w01 + w11 * w11);
+}
+
 vec4 Tex(uint index, vec2 uv) {
+    if (g_tile) {
+        return TileTex(index, uv);
+    }
     return texture(PT_TEX2D(index), uv, g_mip_bias);
 }
 

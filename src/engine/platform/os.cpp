@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <thread>
+#include <vector>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -495,6 +496,71 @@ FileLock::~FileLock() {
 #endif
 
 #ifdef _WIN32
+namespace {
+
+// the display configuration path of the window's monitor; `use` gets its target and returns what the caller returns
+template <class Use>
+bool WithWindowDisplayTarget(void* hwnd, Use use) {
+    HMONITOR monitor = MonitorFromWindow(static_cast<HWND>(hwnd), MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) {
+        return false;
+    }
+    UINT32 path_count = 0;
+    UINT32 mode_count = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
+        return false;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+    for (UINT32 i = 0; i < path_count; ++i) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = paths[i].sourceInfo.adapterId;
+        source.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) == ERROR_SUCCESS && wcscmp(source.viewGdiDeviceName, info.szDevice) == 0) {
+            return use(paths[i].targetInfo.adapterId, paths[i].targetInfo.id);
+        }
+    }
+    return false;
+}
+
+}
+
+bool WindowDisplayHdrCapable(void* hwnd) {
+    if (!hwnd) {
+        return false;
+    }
+    return WithWindowDisplayTarget(hwnd, [](LUID adapter, UINT32 id) {
+        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO color{};
+        color.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+        color.header.size = sizeof(color);
+        color.header.adapterId = adapter;
+        color.header.id = id;
+        return DisplayConfigGetDeviceInfo(&color.header) == ERROR_SUCCESS && color.advancedColorSupported && !color.advancedColorForceDisabled;
+    });
+}
+
+bool SetWindowDisplayHdr(void* hwnd, bool on) {
+    if (!hwnd) {
+        return false;
+    }
+    return WithWindowDisplayTarget(hwnd, [on](LUID adapter, UINT32 id) {
+        DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE state{};
+        state.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
+        state.header.size = sizeof(state);
+        state.header.adapterId = adapter;
+        state.header.id = id;
+        state.enableAdvancedColor = on ? 1 : 0;
+        return DisplayConfigSetDeviceInfo(&state.header) == ERROR_SUCCESS;
+    });
+}
+
 std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
     if (!hwnd) return std::nullopt;
     // DXGI by hand (no import library): CreateDXGIFactory1, the adapters' outputs, IDXGIOutput6::GetDesc1's colour space for
@@ -563,6 +629,8 @@ std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd) {
 std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void*) {
     return std::nullopt;
 }
+bool WindowDisplayHdrCapable(void*) { return false; }
+bool SetWindowDisplayHdr(void*, bool) { return false; }
 #endif
 
 std::optional<bool> WindowDisplayHdr(void* hwnd) {

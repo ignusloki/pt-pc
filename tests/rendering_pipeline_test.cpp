@@ -48,6 +48,9 @@ int main(int argc, char** argv) {
         pt::ApplyGraphicsPreset(enhanced, pt::GraphicsPreset::High, false);
         check("Enhanced High recognized", pt::DetectGraphicsPreset(enhanced, false) == pt::GraphicsPreset::High);
         check("Enhanced preset keeps Original stored", enhanced.original_graphics.clarity == .2f);
+        check("save Enhanced preset", pt::SaveAppSettings(path, enhanced));
+        check("High survives an Enhanced restart", pt::LoadAppSettings(path, original) &&
+              pt::DetectGraphicsPreset(original, false) == pt::GraphicsPreset::High);
     } else {
         check("unsupported platforms retain Original", enhanced.active_pipeline == pt::RenderingPipeline::Original && enhanced.graphics.clarity == .2f);
     }
@@ -56,6 +59,6 @@ int main(int argc, char** argv) {
     s = load("[display]\nrendering_pipeline=enhanced\nhdr_sdr_eotf=99\nhdr_ui_brightness=-1\n[hdr_color]\nexposure=nan\ncontrast=300\n[enhanced_graphics]\nfilm_grain=nan\nclarity=nan\nbloom_strength=inf\nlut_sampling=99\n");
     check("invalid grading is normalized", s.display.hdr_color.exposure == 0 && s.display.hdr_color.contrast == 2);
     check("invalid calibration is bounded", s.display.hdr_sdr_eotf == 2 && s.display.hdr_ui_brightness == 80);
-    check("invalid enhanced controls are normalized", s.enhanced_graphics.film_grain == 1 && s.enhanced_graphics.clarity == 0 && s.enhanced_graphics.bloom_strength == 1 && s.enhanced_graphics.lut_sampling == 1);
+    check("invalid enhanced controls are normalized", s.enhanced_graphics.film_grain == 1 && s.enhanced_graphics.clarity == 0 && s.enhanced_graphics.enhanced_bloom_strength == 1 && s.enhanced_graphics.lut_sampling == 1);
     return failures ? 1 : 0;
 }

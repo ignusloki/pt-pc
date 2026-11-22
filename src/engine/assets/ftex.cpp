@@ -12,6 +12,7 @@
 
 #include "engine/core/log.h"
 #include "engine/core/pathcode.h"
+#include "engine/fs/data_trace.h"
 #include "engine/fs/io_stats.h"
 #include "engine/fs/mods.h"
 #include "engine/platform/ios_memory.h"
@@ -87,6 +88,7 @@ bool LoadFtex(const QarArchive& qar, std::string_view path, FtexTexture& out) {
 }
 
 static bool LoadFtexUntraced(const QarArchive& qar, std::string_view path, FtexTexture& out) {
+    DataTraceFile(path);
     const std::string stem = FtexStem(path);
     auto header = mods::ReadOverride(stem + ".ftex");
     const bool modded = header.has_value();

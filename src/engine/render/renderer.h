@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -41,7 +42,10 @@ struct RendererSettings {
     int hdr_sdr_eotf = 1;
     HdrColorSettings hdr_color;
     int hdr_paper_white = 200;
+    int hdr_ui_white = 0;
+    int hdr_reach = 100;
     int hdr_peak = 0;
+    render::HdrLook hdr_look;
     std::filesystem::path pipeline_cache_dir;
     uint32_t width = 1600;
     uint32_t height = 900;
@@ -79,7 +83,7 @@ public:
     void Resize(uint32_t width, uint32_t height);
     void SetVsync(bool enabled);
     void SetHdr(bool enabled);
-    void SetHdrLevels(int paper_white, int peak);
+    void SetHdrLevels(int paper_white, int peak, int ui_white = 0);
     bool EnhancedRendering() const { return settings_.rendering_pipeline == RenderingPipeline::Enhanced; }
     int HdrSdrEotf() const { return hdr_sdr_eotf_; }
     void SetHdrSdrEotf(int mode) { hdr_sdr_eotf_ = std::clamp(mode, 0, 2); }
@@ -95,13 +99,20 @@ public:
     std::string FrameGenReasonD3D12(gpu::d3d12::FrameGenOwner owner);
 #endif
     float HdrPaperWhite() const { return EnhancedRendering() ? std::min(ctx_.hdr_paper_nits, HdrPeak()) : ctx_.hdr_paper_nits; }
+    void SetHdrPattern(int kind) { hdr_pattern_ = kind; }
+    void SetHdrLook(const render::HdrLook& look) { hdr_look_ = look; }
+    const render::HdrLook& HdrLookSettings() const { return hdr_look_; }
+    void SetHdrReach(int percent) { hdr_reach_ = std::clamp(percent, 100, 300) / 100.0f; }
+    float HdrReach() const { return hdr_reach_; }
+    float HdrUiWhite() const { return hdr_ui_nits_ > 0.0f ? hdr_ui_nits_ : ctx_.hdr_paper_nits; }
     float HdrPeak() const {
         return d3d12_ ? render::ResolveHdrPeak(static_cast<float>(ctx_.hdr_peak_setting), d3d12_display_peak_) : ctx_.HdrPeakNits();
     }
     float DisplayPeak() const { return d3d12_ ? d3d12_display_peak_ : ctx_.display_peak_nits; }
     void RecheckOutput();
     void ImGuiNewFrame();
-    bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f});
+    bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f}, bool background = false, bool hdr_copy = true);
+    void FinishScreenshots();
 
     vk::Context& Context() { return ctx_; }
     gpu::Device& Gpu() { return *gpu_; }
@@ -109,8 +120,6 @@ public:
     VkCommandBuffer Cmd() const { return active_cmd_; }
     gpu::CommandList& List() { return *list_; }
     const gpu::ImageResource& SceneColor() const { return scene_color_; }
-    const gpu::ImageResource& HdrBoost() const { return hdr_boost_; }
-    static constexpr gpu::Format kHdrBoostFormat = gpu::Format::R16Sfloat;
     gpu::Extent2D RenderExtent() const { return {scene_color_.extent.width, scene_color_.extent.height}; }
     uint32_t FrameIndex() const { return frame_index_; }
     struct CpuWaits {
@@ -123,8 +132,9 @@ public:
     };
     const CpuWaits& LastCpuWaits() const { return cpu_waits_; }
     static constexpr uint32_t kFramesInFlight = 2;
-    static constexpr gpu::Format kSceneColorFormat = gpu::Format::R8G8B8A8Unorm;
-    gpu::Format SceneColorFormat() const { return EnhancedRendering() ? gpu::Format::R16G16B16A16Sfloat : kSceneColorFormat; }
+    gpu::Format SceneColorFormat() const {
+        return !EnhancedRendering() && output_mode_ == RendererOutputMode::Sdr ? gpu::Format::R8G8B8A8Unorm : gpu::Format::R16G16B16A16Sfloat;
+    }
     gpu::Format FinalFormat() const { return final_format_; }
     RendererOutputMode OutputMode() const { return output_mode_; }
     float OutputBrightness() const {
@@ -182,7 +192,7 @@ private:
                                 gpu::PipelineLayoutHandle layout = {});
     bool CreateLayerPipeline();
     gpu::BindingSetHandle LayerSet(gpu::ImageViewHandle hudless_view);
-    void CompositePush(float (&push)[20], float mode, gpu::Extent2D extent, bool with_top_ui, bool grain_off) const;
+    void CompositePush(float (&push)[32], float mode, gpu::Extent2D extent, bool with_top_ui, bool grain_off) const;
     void EnhancedCompositePush(float (&push)[32], float mode, gpu::Extent2D extent, bool with_top_ui, bool grain_off) const;
     void WriteCompositePush(gpu::CommandList& cmd, gpu::PipelineLayoutHandle layout, float mode,
                             gpu::Extent2D extent, bool with_top_ui, bool grain_off) const;
@@ -261,7 +271,6 @@ private:
     float brightness_override_ = 0.0f;
 
     gpu::ImageResource scene_color_;
-    gpu::ImageResource hdr_boost_;
     int hdr_sdr_eotf_ = 1;
     gpu::ImageResource final_;
     gpu::ImageResource ui_top_;
@@ -271,6 +280,10 @@ private:
     gpu::Format output_format_ = gpu::Format::R8G8B8A8Unorm;
     gpu::Format final_format_ = gpu::Format::R16G16B16A16Sfloat;
     RendererOutputMode output_mode_ = RendererOutputMode::Sdr;
+    float hdr_ui_nits_ = 0.0f;
+    int hdr_pattern_ = 0;
+    float hdr_reach_ = 1.0f;
+    render::HdrLook hdr_look_;
     gpu::SamplerHandle linear_sampler_;
     gpu::SamplerHandle wrap_sampler_;
     gpu::ImageViewHandle grain_noise_;
@@ -296,6 +309,7 @@ private:
     VkDescriptorSet hud_set_ = VK_NULL_HANDLE;
     VkPipelineLayout xr_layout_ = VK_NULL_HANDLE;
     std::vector<std::pair<VkFormat, VkPipeline>> xr_pipelines_;
+    std::vector<std::future<bool>> screenshot_writes_;
 };
 
 }

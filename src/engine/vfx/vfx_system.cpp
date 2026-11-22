@@ -23,11 +23,23 @@ std::atomic<bool> g_enhanced_rendering{false};
 void SetEnhancedRendering(bool enabled) { g_enhanced_rendering = enabled; }
 std::atomic<int> g_flare_quality{0};
 std::atomic<float> g_flare_strength{1.0f};
-void SetFlareQuality(int quality, float strength) { g_flare_quality = quality; g_flare_strength = strength; }
+void SetFlareQuality(int quality) { g_flare_quality = quality; }
 std::atomic<float> g_flare_ghost_scale{0.0f};
 void SetFlareGhostScale(float scale) { g_flare_ghost_scale = scale; }
+std::atomic<float> g_ghost_strength{1.0f};
+std::atomic<bool> g_flare_smooth{false};
+void SetFlareStrength(float flares, float ghosts) {
+    g_flare_strength = flares;
+    g_ghost_strength = ghosts;
+}
+void SetFlareSmooth(bool smooth) { g_flare_smooth = smooth; }
 
 namespace {
+
+bool TraceLog() {
+    static const bool on = std::getenv("PT_VFX_TRACE_LOG") != nullptr;
+    return on;
+}
 
 constexpr float kTwoPi = 6.2831855f;
 constexpr float kDegToRad = 0.017453292f;
@@ -281,7 +293,7 @@ bool System::Spawn(const InstanceKey& key, const std::string& path, const glm::m
         state.particle_rng = inst.random;
         state.material_rng = SeedFor(inst, 0, 0, def->shapes[i].material.node_id);
     }
-    if (std::getenv("PT_VFX_TRACE_LOG")) {
+    if (TraceLog()) {
         LogDebug("vfx: create {} counter {} seed {:#x} ({}) at ({:.6f} {:.6f} {:.6f})", path, creation_counter, inst.seed,
                  seed ? "user" : "counter", world[3].x, world[3].y, world[3].z);
     }
@@ -726,7 +738,7 @@ void System::Update(float dt, const ViewInfo& view) {
             inst.emitted |= n > 0;
             Spawn(inst, i, n, view);
         }
-        if (inst.emitted && std::getenv("PT_VFX_TRACE_LOG")) {
+        if (inst.emitted && TraceLog()) {
             LogDebug("vfx: emitted {} at frame {:.3f}, loop {}, owner {}", def.name, inst.frame, inst.loop, key.owner);
         }
     }
@@ -1096,6 +1108,7 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
     Draw draw;
     draw.layer = shape.kind == ShapeKind::Sprite2D ? Layer::Screen : Layer::World;
     draw.blend = m.blend;
+    if (glowing_dust_ && (inst.def->name.find("dstptlviw") != std::string::npos || inst.def->name.find("dstcomviw") != std::string::npos)) draw.blend = BlendMode::Add;
     draw.first = static_cast<uint32_t>(out.quads.size());
     draw.priority = static_cast<int32_t>(shape.priority);
     draw.cull = mesh && shape.cull_face;
@@ -1393,7 +1406,7 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
                 q.light_factors = glm::vec4(block.sky * m.ambient_rate + block.directional * m.directional_rate, m.point_rate);
                 for (uint32_t i = 0; i < std::min(block.count, m.point_lights); ++i) {
                     q.light_position[i] = glm::vec4(block.position[i], block.inv_r4[i]);
-                    q.light_color[i] = glm::vec4(block.color[i], 0.0f);
+                    q.light_color[i] = glm::vec4(block.color[i], block.min_dist[i]);
                 }
             }
         }
@@ -1405,6 +1418,11 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
         out.quads.push_back(it.quad);
     }
     draw.count = static_cast<uint32_t>(out.quads.size()) - draw.first;
+    if (smoke_light_ != 1.0f && inst.def->name.find("_smk") != std::string::npos) {
+        for (uint32_t q = draw.first; q < draw.first + draw.count; ++q) {
+            out.quads[q].color = glm::vec4(glm::vec3(out.quads[q].color) * smoke_light_, out.quads[q].color.a);
+        }
+    }
     out.draws.push_back(draw);
 }
 
@@ -1485,11 +1503,19 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
     const glm::vec4 clip = view.view_projection * glm::vec4(light.position, 1.0f);
     const glm::vec2 ndc = std::fabs(clip.w) > 1e-6f ? glm::vec2(clip.x, -clip.y) / clip.w : glm::vec2(0.0f);
     const bool on_screen = std::fabs(ndc.x) <= 1.0f && std::fabs(ndc.y) <= 1.0f;
-    const bool smooth_flare = g_flare_quality.load() == 1;
-    glm::vec4 params(Unorm8(0.5f), Unorm8(0.5f), 0.0f, std::max(flare.depth_tolerance, 0.001f));
-    if (on_screen) {
-        if (smooth_flare) params = glm::vec4(ndc.x * 0.5f + 0.5f, ndc.y * -0.5f + 0.5f, clip.w, params.w);
-        else params = glm::vec4(Unorm8(ndc.x * 0.5f + 0.5f), Unorm8(ndc.y * -0.5f + 0.5f), HalfTrunc(clip.w), params.w);
+    const float edge = std::max(std::fabs(ndc.x), std::fabs(ndc.y));
+    const float edge_fade = on_screen ? 1.0f : std::clamp((1.08f - edge) / 0.08f, 0.0f, 1.0f);
+    if (edge_fade <= 0.0f) {
+        return;
+    }
+    const bool smooth = g_enhanced_rendering.load() ? g_flare_quality.load() == 1 : g_flare_smooth.load();
+    const auto position = [smooth](float f) { return smooth ? f : Unorm8(f); };
+    const float tap_u = on_screen ? ndc.x * 0.5f + 0.5f : std::clamp(ndc.x * 0.5f + 0.5f, 0.005f, 0.995f);
+    const float tap_v = on_screen ? ndc.y * -0.5f + 0.5f : std::clamp(ndc.y * -0.5f + 0.5f, 0.005f, 0.995f);
+    const glm::vec4 params(position(tap_u), position(tap_v), smooth ? clip.w : HalfTrunc(clip.w), std::max(flare.depth_tolerance, 0.001f));
+    const float flare_strength = g_flare_strength.load();
+    if (flare_strength <= 0.0f) {
+        return;
     }
     glm::vec4 root(0.0f);
     if (def->exposure_blend > 0.0f) {
@@ -1536,7 +1562,15 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
             sy *= el.angle_scale_y.Eval(light.cone);
         }
         alpha *= fade;
+        if (!on_screen) {
+            alpha *= edge_fade * edge_fade * (3.0f - 2.0f * edge_fade);
+        }
         if (full_ghost && !g_enhanced_rendering.load()) alpha *= ghost_scale;
+        if (full_ghost && smooth) {
+            const float edge = std::max(std::fabs(ndc.x), std::fabs(ndc.y));
+            const float t = std::clamp((1.0f - edge) / 0.12f, 0.0f, 1.0f);
+            alpha *= t * t * (3.0f - 2.0f * t);
+        }
         if (el.angle_alpha.valid) {
             alpha *= el.angle_alpha.Eval(light.cone);
         }
@@ -1587,15 +1621,18 @@ void System::BuildFlare(const glm::mat4& world, const FlareDef& flare, const Fla
         }
         q.uv = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
         q.uv_next = q.uv;
-        q.color = glm::vec4(view.hdr_output ? glm::max(glm::vec3(el.color), glm::vec3(0.0f)) : PackedColor(el.color), alpha * el.color.a);
+        q.color = glm::vec4((view.hdr_output || smooth) ? glm::max(glm::vec3(el.color), glm::vec3(0.0f)) : PackedColor(el.color), alpha * el.color.a);
         q.params = params;
-        q.color *= glm::vec4(glm::vec3(g_flare_strength.load() * (full_ghost && g_enhanced_rendering.load() ? ghost_scale : 1.0f)), 1.0f);
-        q.extra.x = smooth_flare ? (full_ghost ? 0.04f : 0.025f) : 0.0f;
+        if (g_enhanced_rendering.load()) {
+            q.color *= glm::vec4(glm::vec3(flare_strength * (full_ghost ? ghost_scale : 1.0f)), 1.0f);
+        }
+        q.extra.x = smooth ? (full_ghost ? 0.04f : 0.025f) : 0.0f;
         q.extra.y = full_ghost ? 1.0f : 0.0f;
         q.extra.z = ndc.x * 0.5f + 0.5f;
         q.extra.w = ndc.y * -0.5f + 0.5f;
         q.luminance = root;
-        q.info = glm::uvec4(textures ? textures(el.texture) : 0u, kQuadFlare, kNoTexture, 0u);
+        q.luminance.w = flare_strength * (full_ghost ? g_ghost_strength.load() : 1.0f);
+        q.info = glm::uvec4(textures ? textures(el.texture) : 0u, kQuadFlare, kNoTexture, smooth ? (full_ghost ? 2u : 1u) : 0u);
         out.quads.push_back(q);
         if (static const bool flare_log = std::getenv("PT_FLARE_LOG") != nullptr; flare_log) {
             LogInfo("flare: {} {} light ({:.2f} {:.2f} {:.2f}) d {:.2f} ndc ({:.3f} {:.3f}) w {:.2f} on_screen {} cone {:.2f} fade {:.2f} visible {} "

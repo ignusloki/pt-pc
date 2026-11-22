@@ -77,7 +77,7 @@ vec3 PointLight(vec4 position, vec4 color) {
         return vec3(0.0);
     }
     vec3 delta = position.xyz - in_world;
-    float distance_to_light = max(length(delta), 0.01);
+    float distance_to_light = max(length(delta), max(color.a, 0.01));
     float distance_squared = distance_to_light * distance_to_light;
     float attenuation = max(0.0, 1.0 / distance_squared - distance_squared * position.w);
     return color.rgb * attenuation;

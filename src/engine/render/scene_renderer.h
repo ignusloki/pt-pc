@@ -22,6 +22,7 @@
 #include "engine/render/gpu_types.h"
 #include "engine/render/light_cull.h"
 #include "engine/render/mesh.h"
+#include "engine/render/motion_window.h"
 #include "engine/render/raytracing.h"
 #include "engine/render/render_util.h"
 #include "engine/render/renderer.h"
@@ -31,6 +32,10 @@
 #include "engine/render/upscale/upscale.h"
 
 namespace pt {
+
+namespace vfx {
+struct RenderList;
+}
 
 class Vfs;
 
@@ -105,6 +110,10 @@ struct DrawItem {
     MeshMask hidden_meshes;
     uint8_t hidden_views = 0;
     bool character_shadow = false;
+    bool handy_shadowless = false;
+    bool view_attached = false;
+    bool turns_with_view = false;
+    bool original_look = false;
     uint64_t source = 0;
 };
 
@@ -196,6 +205,11 @@ public:
     void Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt);
     void DrawDebugUi();
     void ResetExposure() { adaptation_valid_ = false; }
+    void SettleExposureClock() {
+        if (exposure_camera_dt_ > 1.0 / 15.0) exposure_camera_dt_ = 1.0 / 30.0;
+        exposure_previous_dt_ = 1.0f / 30.0f;
+        exposure_clock_started_ = true;
+    }
     void SetMotionReference(const Camera& previous, float interval, bool history);
     void AdvanceTime(float seconds) {
         pending_time_ += seconds;
@@ -206,6 +220,7 @@ public:
     DebugView debug_view = DebugView::Lit;
     RenderToggles toggles;
     AppSettings::Graphics graphics;
+    bool original_look = false;
     static constexpr gpu::Format kHdrTargetFormat = gpu::Format::R16G16B16A16Sfloat;
     static constexpr gpu::Format kDepthTargetFormat = gpu::Format::D32Sfloat;
     static constexpr gpu::Format kPostTargetFormat = gpu::Format::R16G16B16A16Sfloat;
@@ -216,6 +231,7 @@ public:
     std::function<void(const SceneVfxContext&)> vfx_liquid_depth;
     std::function<void(const SceneFilterContext&)> vfx_filter;
     std::function<bool(uint32_t layers)> vfx_has_filter;
+    std::function<const vfx::RenderList*()> vfx_list;
     const RenderStats& Stats() const { return stats_; }
     UpscaleSettings upscale;
     struct NeuralState {
@@ -233,6 +249,7 @@ public:
     bool UpscalerAvailable(UpscalerKind kind, std::string& reason);
     bool RayReconstructionAvailable(std::string& reason);
     void RequestTargetDump() { dump_requested_ = true; }
+    void DumpDraws(const std::vector<DrawItem>& items, const std::string& path);
     bool DumpTargets(const std::string& prefix);
     RayTracingSettings raytracing;
     bool RayTracingReady() const { return rt_ != nullptr; }
@@ -242,6 +259,7 @@ public:
         uint32_t texture = 0;
         glm::vec2 position{0.0f};
         float value = 0.0f;
+        float ink = 0.1f;
     };
     void SetSubliminalString(const SubliminalString& s) { subliminal_string_state_ = s; }
     struct Backdrop {
@@ -304,6 +322,8 @@ private:
         uint8_t hidden_views = 0;
         uint8_t occluded_views = 0;
         bool character_shadow = false;
+        bool handy_shadowless = false;
+        bool view_shadowless = false;
     };
 
     struct MotionHistory {
@@ -338,6 +358,9 @@ private:
 
     gpu::Extent2D ViewArea(const ViewSetup& view) const { return view.area.width > 0 ? view.area : extent_; }
     bool CreatePipelines();
+    void SetHdrPost(bool on);
+    float Meter(const glm::vec2* texels, uint32_t count) const;
+    gpu::Format BloomFormat() const;
     void DestroyPipelines();
     bool CreateDescriptors();
     bool EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bool upscaling);
@@ -351,7 +374,7 @@ private:
     bool UploadImageMips(gpu::ImageResource& image, gpu::Format format, gpu::Extent3D extent, const std::vector<std::vector<uint8_t>>& mips);
     void CreateBuiltinResources();
     void UpdateColorLut(const ScreenSettings& screen);
-    bool BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out);
+    bool BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out, std::vector<float>* fine = nullptr);
     bool BuildEnhancedColorLut(const std::string& path, const ScreenSettings& screen, std::vector<float>& out);
     void UpdateEnhancedColorLut(const ScreenSettings& screen);
     void ReadEnhancedMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings);
@@ -374,6 +397,7 @@ private:
     void BindSets(gpu::CommandList& cmd, gpu::BindPoint point);
     void RecordShadows(gpu::CommandList& cmd);
     void RecordRayTracing(gpu::CommandList& cmd);
+    void CollectEffects();
     void RecordView(gpu::CommandList& cmd, const ViewSetup& view, RenderTarget& output, bool main_view);
     void RecordGBuffer(gpu::CommandList& cmd, const ViewSetup& view);
     void RecordOcclusion(gpu::CommandList& cmd, const ViewSetup& view);
@@ -452,6 +476,8 @@ private:
 
     Renderer* renderer_ = nullptr;
     gpu::Format ldr_format_ = gpu::Format::R8G8B8A8Unorm;
+    bool hdr_post_ = false;
+    glm::vec4 bloom_shoulder_{0.0f};
     TextureManager* textures_ = nullptr;
     gpu::QueryPoolHandle queries_;
     glm::vec3 last_eye_{0.0f};
@@ -550,6 +576,7 @@ private:
     gpu::ImageResource mask_;
     gpu::ImageResource white_;
     std::string color_lut_key_;
+    bool color_lut_fine_ = false;
     std::string color_lut_prev_key_;
     std::string reflection_key_;
     uint32_t reflection_cube_ = 0;
@@ -570,19 +597,22 @@ private:
     gpu::PipelineHandle bright_;
     gpu::PipelineHandle kawase_;
     gpu::PipelineHandle forward_emissive_;
+    gpu::PipelineHandle forward_glow_;
     gpu::PipelineHandle bloom_add_;
     gpu::PipelineHandle bloom_kawase_;
     bool bloom_compute_ = false;
     gpu::PipelineHandle kawase_sum_;
     gpu::PipelineHandle gaussian_;
     gpu::PipelineHandle tonemap_;
-    gpu::PipelineHandle hdr_boost_pipeline_;
     gpu::PipelineHandle fxaa_;
     gpu::PipelineHandle mirror_temporal_pipeline_;
     gpu::PipelineHandle dof_ratio_;
     gpu::PipelineHandle dof_down_;
     gpu::PipelineHandle dof_blur_;
     gpu::PipelineHandle dof_blend_;
+    gpu::PipelineHandle dof_layers_;
+    gpu::PipelineHandle dof_gather_;
+    gpu::PipelineHandle dof_merge_;
     gpu::PipelineHandle mb_velocity_;
     gpu::PipelineHandle mb_tile_pipeline_;
     gpu::PipelineHandle mb_bake_pipeline_;
@@ -630,6 +660,8 @@ private:
     static constexpr uint32_t kRtSoftSamples = 4;
     uint64_t rt_built_frame_[Renderer::kFramesInFlight] = {~0ull, ~0ull};
     std::vector<RtCaster> rt_casters_;
+    std::vector<Vertex> rt_effect_vertices_;
+    std::vector<uint32_t> rt_effect_indices_;
     bool rt_contact_active_ = false;
     gpu::PipelineHandle light_contact_;
     float rt_contact_reach_ = 0.35f;
@@ -728,6 +760,18 @@ private:
     gpu::PipelineHandle fsr_rr_prepare_, fsr_rr_resolve_, fsr_rr_motion_trace_, fsr_rr_velocity_;
     bool EnsureFsrRrTargets();
     void RecordFsrRayRegeneration(gpu::CommandList& cmd, const ViewSetup& view);
+    struct FsrRrSample {
+        const char* name = nullptr;
+        gpu::BufferResource buffer;
+        gpu::Format format{};
+    };
+    std::vector<FsrRrSample> fsr_rr_samples_;
+    uint32_t fsr_rr_denoised_ = 0;
+    uint32_t fsr_rr_sample_age_ = 0;
+    gpu::Extent2D fsr_rr_sample_size_{};
+    void RecordFsrRrSamples(gpu::CommandList& cmd, RenderTarget* const* output);
+    void LogFsrRrSamples();
+    void DestroyFsrRrSamples();
     bool EnsureRrTargets();
     void DestroyRrTargets();
     void RecordRrGuides(gpu::CommandList& cmd, const ViewSetup& view);
@@ -822,6 +866,10 @@ private:
     glm::vec3 blur_velocity_{0.0f};
     bool blur_rates_valid_ = false;
     double frame_time_ = 1.0 / 60.0;
+    float motion_step_ = 1.0f / 60.0f;
+    render::MotionWindow motion_window_;
+    float blur_span_ = static_cast<float>(render::kOriginalFrameSeconds);
+    bool motion_cut_ = false;
     uint32_t frame_counter_ = 0;
     RenderStats stats_;
 

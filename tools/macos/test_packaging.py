@@ -26,7 +26,7 @@ class PackagingTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='pt-packaging-');self.root=Path(self.temp.name)
         self.build=self.root/'build';self.source=self.root/'source';self.extractor=self.root/'extractor'
-        for folder in (self.build/'shaders',self.build/'voice/licenses',self.build/'fonts',self.build/'generated',self.source,self.extractor):folder.mkdir(parents=True)
+        for folder in (self.build/'survival',self.build/'shaders',self.build/'voice/licenses',self.build/'fonts',self.build/'generated',self.source,self.extractor):folder.mkdir(parents=True)
         self.magic=b'\xcf\xfa\xed\xfe'+struct.pack('<I',0x0100000C)
         for name in ('pt_release','libMoltenVK.dylib'):(self.build/name).write_bytes(self.magic+b'fixture')
         (self.build/'generated/pt_version.h').write_text('#define PT_VERSION "1.2.3"')
@@ -35,6 +35,7 @@ class PackagingTests(unittest.TestCase):
         (self.build/'voice/libggml-cpu-fixture.so').write_bytes(self.magic)
         (self.build/'voice/licenses/MIT.txt').write_text('Fixture license')
         (self.build/'fonts/font.ttf').write_bytes(b'font fixture')
+        (self.build/'survival/guns.json').write_text('{}')
         (self.build/'extras.pak').write_bytes(b'Fixture packed bonus content')
         (self.build/'licenses/enhanced-textures').mkdir(parents=True)
         (self.build/'licenses/enhanced-textures/notice.txt').write_text('Fixture texture tool license')
@@ -45,8 +46,7 @@ class PackagingTests(unittest.TestCase):
         for shader in (REPO/'shaders').iterdir():
             if shader.suffix in {'.vert','.frag','.comp'}:
                 (self.build/'shaders'/f'{shader.name}.spv').write_bytes(b'SPIR-V fixture')
-                if shader.name != 'hdr_boost.frag':
-                    (self.build/'shaders'/f'enhanced_{shader.name}.spv').write_bytes(b'Enhanced SPIR-V fixture')
+                (self.build/'shaders'/f'enhanced_{shader.name}.spv').write_bytes(b'Enhanced SPIR-V fixture')
         (self.source/'LICENSE.txt').write_text('Fixture license')
         (self.extractor/'PT.PkgExtract').write_bytes(self.magic)
     def tearDown(self):self.temp.cleanup()
@@ -83,6 +83,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(files[prefix+'Resources/'+mac.ICON_FILE],(REPO/'assets/macos'/mac.ICON_FILE).read_bytes())
         self.assertFalse(any(n.startswith('__MACOSX') for n in files))
         self.assertIn('extractor/PT.PkgExtract',files)
+        self.assertEqual(files[prefix+'Resources/survival/guns.json'], b'{}')
         self.assertEqual(files[prefix+'Resources/extras.pak'],b'Fixture packed bonus content')
         self.assertFalse(any('texture-tools/' in name or 'enhanced-textures/' in name or
                              name.endswith('bc7enc.txt') or 'Real-ESRGAN-' in name for name in files))

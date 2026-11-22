@@ -65,9 +65,12 @@ layout(std430, set = 1, binding = 0) readonly buffer FrameData {
     Probe probes[512];
     vec4 fog[8];
     vec4 mirror;
+    vec4 display;
+    vec4 grade;
     vec4 hdr_output; // x: native HDR scene, including reflection captures
 } frame;
 
+#include "display_helpers.glsl"
 #include "common_functions.glsl"
 
 #include "srgb.glsl"

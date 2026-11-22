@@ -72,7 +72,7 @@ def copy_voice(source, target):
 
 
 def validate_build(build, exe):
-    required = [exe, build / "libMoltenVK.dylib", build / "fonts", build / "voice/licenses", build / "extras.pak", REPO / "assets/macos" / ICON_FILE]
+    required = [exe, build / "libMoltenVK.dylib", build / "fonts", build / "voice/licenses", build / "extras.pak", build / "survival/guns.json", REPO / "assets/macos" / ICON_FILE]
     required += [build / "voice" / name for name in VOICE_MODELS + VOICE_LIBRARIES]
     for path in required:
         if not path.exists():
@@ -83,9 +83,10 @@ def validate_build(build, exe):
         if not is_macho(path):
             raise RuntimeError(f"Expected a Mach-O executable or library: {path}")
     expected = {p.name + ".spv" for p in (REPO / "shaders").iterdir() if p.suffix in {".vert", ".frag", ".comp"}}
-    expected |= {"enhanced_" + name for name in expected if name != "hdr_boost.frag.spv"}
+    expected |= {"enhanced_" + name for name in expected}
     if not expected.issubset({p.name for p in (build / "shaders").glob("*.spv")}):
         raise RuntimeError("Shader build is incomplete; build pt_release or pt_shaders first")
+    return sorted(expected)
 
 
 def sign(app, identity="-"):
@@ -119,7 +120,7 @@ def main():
     archive = out / f"pt-port-{ver}-macos-{arch}.zip"
     if app.exists() or archive.exists():
         sys.exit(f"Package output already exists; choose another --out folder: {app}")
-    validate_build(build, exe)
+    shader_files = validate_build(build, exe)
     contents = app / "Contents"
     resources = contents / "Resources"
     (contents / "MacOS").mkdir(parents=True)
@@ -127,10 +128,12 @@ def main():
     (resources / "shaders").mkdir(parents=True)
     shutil.copy2(exe, contents / "MacOS" / "pt")
     shutil.copy2(moltenvk, contents / "Frameworks" / "libMoltenVK.dylib")
-    for spv in sorted((build / "shaders").glob("*.spv")):
-        shutil.copy2(spv, resources / "shaders" / spv.name)
+    for name in shader_files:
+        shutil.copy2(build / "shaders" / name, resources / "shaders" / name)
     copy_voice(build / "voice", resources / "voice")
     shutil.copytree(build / "fonts", resources / "fonts")
+    # the survival night's guns, pickups, reload poses and sounds (assets/survival), read from ExecutableDir() / "survival"
+    shutil.copytree(build / "survival", resources / "survival")
     # the port's data pack (src/engine/fs/data_pack.h), read from ExecutableDir(), which is Contents/Resources in the app
     if (build / "extras.pak").is_file():
         shutil.copy2(build / "extras.pak", resources / "extras.pak")
@@ -141,6 +144,7 @@ def main():
                         ignore=shutil.ignore_patterns("enhanced-textures", "Real-ESRGAN-*.txt", "bc7enc.txt"))
     (resources / "licenses").mkdir(exist_ok=True)
     shutil.copy2(REPO / "LICENSE", resources / "licenses/PT-MIT.txt")
+    shutil.copy2(REPO / "NOTICE", resources / "licenses/NOTICE")
     shutil.copy2(REPO / "README.md", resources / "README.md")
     shutil.copy2(REPO / "docs" / "macos.md", resources / "macOS.md")
     copy_icon(resources)

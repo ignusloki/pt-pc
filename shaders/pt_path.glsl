@@ -15,6 +15,9 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
                 if (g_pt_mirror_view && (rt_records[record].flags & 1024u) != 0u) {
                     continue;
                 }
+                if (!g_pt_layer_effects && RtEffectRecord(record)) {
+                    continue;
+                }
                 rayQueryConfirmIntersectionEXT(rq);
             }
         }
@@ -23,6 +26,19 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
         }
         float t = rayQueryGetIntersectionTEXT(rq, true);
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        if (RtEffectRecord(record)) {
+            vec4 e = RtEffectLayer(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
+            radiance += throughput * min(vec3(emissive_cap), e.rgb);
+            throughput *= 1.0 - e.a;
+            if (dot(throughput, throughput) < 1.0e-8) {
+                return false;
+            }
+            t_start = t + 1.0e-3;
+            if (!(t_start < t_end)) {
+                return false;
+            }
+            continue;
+        }
         RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
                                         rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
         Material m = materials[hs.material];
