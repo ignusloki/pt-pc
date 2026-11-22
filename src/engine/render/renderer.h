@@ -69,7 +69,7 @@ struct XrFrame {
 
 struct GeneratedFrameHooks {
     std::function<const vk::Image*()> generate;
-    std::function<bool(VkSemaphore&, uint64_t&, VkSemaphore&, uint64_t&)> sync;
+    std::function<bool(VkSemaphore&, uint64_t&)> input_signal;
 };
 
 class Renderer {
@@ -189,7 +189,7 @@ private:
     void* android_native_window_ = nullptr;
 #endif
     void DestroyTargets();
-    void PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui);
+    void PresentGeneratedFrame(Frame& frame, const vk::Image* source, bool draw_ui);
     void CopyRenderedDrawable(Frame& frame);
     VkResult PresentWindowImage(const VkPresentInfoKHR& present, const char* kind);
     void ReadDisplayTimes();

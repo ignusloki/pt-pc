@@ -1,0 +1,15 @@
+0 focus 1
+0 swait 30
+0 sktap F5 2
+0 swait 360
+0 sstep 15
+0 swait 120
+0 sktap Escape 2
+0 swait 50
+0 sexpect menu 1
+0 swait 60
+0 sktap Escape 2
+0 swait 50
+0 sexpect menu 0
+0 swait 150
+0 squit

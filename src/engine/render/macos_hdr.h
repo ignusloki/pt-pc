@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine/render/vk.h"
+#include <filesystem>
+#include <memory>
 
 struct SDL_Window;
 
@@ -10,5 +12,7 @@ namespace pt::vk {
 // HDR10 uses MoltenVK's normalized PQ path. Called on the window's main thread.
 bool SetMacHdrMetadata(SDL_Window* window, VkColorSpaceKHR color_space, const VkHdrMetadataEXT* metadata);
 void LogMacHdrDisplayState(SDL_Window* window, bool menu);
+class MacWindowTrace;
+std::shared_ptr<MacWindowTrace> StartMacWindowTrace(SDL_Window* window, const std::filesystem::path& directory);
 
 }

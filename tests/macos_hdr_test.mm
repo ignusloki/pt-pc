@@ -12,6 +12,8 @@
 
 #include "engine/render/vk_context.h"
 
+int TestFirstMetalFxFrame(pt::vk::Context& ctx);
+
 namespace {
 
 int failures = 0;
@@ -131,8 +133,9 @@ int Run() {
             pt::test::Check(failures, ctx.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT &&
                        ctx.swapchain.format == VK_FORMAT_R16G16B16A16_SFLOAT, "HDR uses floating point scRGB");
             pt::test::Check(failures, layer.wantsExtendedDynamicRangeContent && layer.EDRMetadata != nil, "HDR metadata reaches the display layer");
-            pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f, "final metadata scale is 80 nits per linear unit, not MoltenVK's 1");
+            pt::test::Check(failures, observed_calls == 1 && observed_scale == 80.0f, "startup assigns one scRGB brightness scale of 80 nits per linear unit");
             pt::test::Check(failures, observed_display.length == 24 && observed_content.length == 4, "mastering and content-light messages keep their standard sizes");
+            failures += TestFirstMetalFxFrame(ctx);
 
             for (int paper : {80, 200, 300, 500}) {
                 ResetObservation();
@@ -140,7 +143,7 @@ int Run() {
                 ctx.hdr_peak_setting = 1500;
                 ctx.SetHdrMetadata();
                 const float white = paper / 80.0f;
-                pt::test::Check(failures, observed_calls > 0 && std::abs(white * observed_scale - paper) < 0.001f,
+                pt::test::Check(failures, observed_calls == 1 && std::abs(white * observed_scale - paper) < 0.001f,
                        "paper white's scRGB buffer value is described in the intended nits");
                 pt::test::Check(failures, ContentValue(2) == paper && ContentValue(0) == 1500 && MasteringPeak() == 1500,
                        "level changes preserve paper white, content peak and mastering peak");
@@ -162,13 +165,13 @@ int Run() {
             }
             ResetObservation();
             if (Create(ctx, true, "SDR switches back to HDR")) {
-                pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f && WindowLayer(window).EDRMetadata != nil,
+                pt::test::Check(failures, observed_calls == 1 && observed_scale == 80.0f && WindowLayer(window).EDRMetadata != nil,
                        "HDR re-enables metadata with the correct scale");
             }
             pt::test::Check(failures, SDL_SetWindowSize(window, 160, 144) && SDL_SyncWindow(window), "native resize completes");
             ResetObservation();
             if (Create(ctx, true, "HDR swapchain is recreated after resize")) {
-                pt::test::Check(failures, observed_calls > 0 && observed_scale == 80.0f, "resizing retains the HDR brightness scale");
+                pt::test::Check(failures, observed_calls == 1 && observed_scale == 80.0f, "resizing publishes the intended HDR brightness scale once");
             }
             // Returning through SDR more than once catches metadata left behind by replacement swapchains.
             if (Create(ctx, false, "final return to SDR")) {

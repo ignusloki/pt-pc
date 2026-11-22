@@ -96,7 +96,11 @@ def sign(app, identity="-"):
 
 def main():
     parser = argparse.ArgumentParser(description="Make P.T. PC Port.app from a macOS build folder and zip it")
-    parser.add_argument("--lamp-diagnostics", action="store_true", help="record local lamp and wall luminance during play")
+    diagnostic = parser.add_mutually_exclusive_group()
+    diagnostic.add_argument("--lamp-diagnostics", dest="diagnostic", action="store_const", const="lamp-diagnostics",
+                            help="record local lamp and wall luminance during play")
+    diagnostic.add_argument("--frame-diagnostics", dest="diagnostic", action="store_const", const="frame-diagnostics",
+                            help="trace full-frame black flashes from boot and sample the game window on F5")
     parser.add_argument("--build", default=str(REPO / "build" / "macos"))
     parser.add_argument("--out", default=str(REPO / "dist"))
     parser.add_argument("--exe", help="Explicit executable: pt_release for the release 1.0 game (PT_RELEASE_LOCKS); shipped as pt")
@@ -116,10 +120,10 @@ def main():
         sys.exit(f"{moltenvk} not found; it is copied there when pt is built (cmake/MacOS.cmake)")
     ver = version(build)
     out = Path(args.out)
-    app_name = "P.T. Lamp Diagnostics" if args.lamp_diagnostics else APP_NAME
+    app_name = {"lamp-diagnostics": "P.T. Lamp Diagnostics", "frame-diagnostics": "P.T. Frame Diagnostics"}.get(args.diagnostic, APP_NAME)
     app = out / f"{app_name}.app"
     arch = architecture(exe)
-    suffix = "-lamp-diagnostics" if args.lamp_diagnostics else ""
+    suffix = "-" + args.diagnostic if args.diagnostic else ""
     archive = out / f"pt-port-{ver}-macos-{arch}{suffix}.zip"
     if app.exists() or archive.exists():
         sys.exit(f"Package output already exists; choose another --out folder: {app}")
@@ -204,8 +208,8 @@ def main():
             (previews / extra).unlink(missing_ok=True)
     else:
         print(f"loop browser previews skipped: no game files at {args.game}")
-    if args.lamp_diagnostics:
-        (resources / "lamp-diagnostics").touch()
+    if args.diagnostic:
+        (resources / args.diagnostic).touch()
     sign(app, args.identity)
     if args.no_zip:
         print(app)

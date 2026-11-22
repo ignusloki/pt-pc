@@ -61,10 +61,10 @@ public:
     }
     virtual bool SwapchainFailed() { return false; }
     virtual bool OwnsGeneratedFrame() const { return false; }
+    // The renderer signals the input timeline on scene submission. GeneratedImage
+    // returns a completed image, or null to present the composed real frame again.
+    virtual bool InputReadySignal(VkSemaphore&, uint64_t&) { return false; }
     virtual const vk::Image* GeneratedImage() { return nullptr; }
-    virtual bool ExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) {
-        return NoExternalSync(signal_semaphore, signal_value, wait_semaphore, wait_value);
-    }
 };
 
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues& queues);

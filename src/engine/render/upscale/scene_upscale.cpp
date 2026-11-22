@@ -168,12 +168,12 @@ void UpdateMetalfxFrameGeneration(Renderer& renderer, bool wanted) {
     }
     if (fg->Generating()) {
         renderer.generated_frame.generate = [fg]() -> const vk::Image* { return fg->GeneratedImage(); };
-        renderer.generated_frame.sync = [fg](VkSemaphore& s, uint64_t& sv, VkSemaphore& w, uint64_t& wv) {
-            return fg->ExternalSync(s, sv, w, wv);
+        renderer.generated_frame.input_signal = [fg](VkSemaphore& input, uint64_t& value) {
+            return fg->InputReadySignal(input, value);
         };
     } else {
         renderer.generated_frame.generate = nullptr;
-        renderer.generated_frame.sync = nullptr;
+        renderer.generated_frame.input_signal = nullptr;
     }
 }
 
@@ -345,7 +345,8 @@ bool SceneRenderer::BeginUpscaleFrame(gpu::Extent2D output) {
     if (streamline::Active()) {
         UpdateDlssFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Dlss && generate);
     } else if (upscale.frame_generation == FrameGenKind::Metalfx) {
-        UpdateMetalfxFrameGeneration(*renderer_, generate && vr_eye_ < 0);
+        // The title and shader preparation screens are full-screen UI with no scene motion to interpolate.
+        UpdateMetalfxFrameGeneration(*renderer_, generate && vr_eye_ < 0 && !renderer_->plain_output);
     } else {
         if (upscale.frame_generation == FrameGenKind::Xess) {
             UpdateFrameGeneration(*renderer_, false);

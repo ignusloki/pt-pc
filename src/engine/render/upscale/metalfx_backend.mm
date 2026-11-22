@@ -497,20 +497,16 @@ public:
             // the renderer's generated-frame composite records GENERAL -> SHADER_READ_ONLY before this slot ends; keep the
             // state for the next submitted frame's transition back to GENERAL.
             interp_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        } else {
+            reset_ = true;
         }
         return generated;
     }
 
-    bool ExternalSync(VkSemaphore& signal_semaphore, uint64_t& signal_value, VkSemaphore& wait_semaphore, uint64_t& wait_value) override {
-        if (!input_semaphore_ || !completion_semaphore_) {
-            return false;
-        }
-        metal_wait_value_ += 1;
-        metal_signal_value_ += 1;
+    bool InputReadySignal(VkSemaphore& signal_semaphore, uint64_t& signal_value) override {
+        if (!input_semaphore_) return false;
         signal_semaphore = input_semaphore_;
-        signal_value = metal_wait_value_;
-        wait_semaphore = completion_semaphore_;
-        wait_value = metal_signal_value_;
+        signal_value = ++metal_wait_value_;
         return true;
     }
 
@@ -520,8 +516,7 @@ public:
         }
         generating_ = false;
         ctx_.force_vsync = false;
-        // completion handlers host-signal semaphore_ after MetalFX; wait for the Vulkan queue that consumes those signals
-        // before destroying the imported shared event and semaphore.
+        // Drain the scene submissions that signal the imported Metal input event.
         if (ctx_.device) {
             vkDeviceWaitIdle(ctx_.device);
         }
@@ -543,10 +538,6 @@ public:
                 vkDestroySemaphore(ctx_.device, input_semaphore_, nullptr);
                 input_semaphore_ = VK_NULL_HANDLE;
             }
-            if (completion_semaphore_) {
-                vkDestroySemaphore(ctx_.device, completion_semaphore_, nullptr);
-                completion_semaphore_ = VK_NULL_HANDLE;
-            }
         }
     }
 
@@ -564,6 +555,12 @@ private:
         window_note_.clear();
         if (hudless_.size() == ctx_.swapchain.images.size() && display_.width == ctx_.swapchain.extent.width &&
             display_.height == ctx_.swapchain.extent.height && format_ == ctx_.swapchain.format) {
+            if (swapchain_generation_ != ctx_.swapchain_generation) {
+                // A restored window may have a new set of drawables at exactly the old size.
+                swapchain_generation_ = ctx_.swapchain_generation;
+                previous_input_ = {};
+                reset_ = true;
+            }
             return true;
         }
         DestroyTargets();
@@ -599,16 +596,6 @@ private:
                 LogError("frame generation: the Metal event or queue could not be created");
                 return false;
             }
-            // a host-signaled completion timeline is deliberately separate from the input shared-event timeline: Metal
-            // completion handlers signal this one only after interpolation, with no queue-signaled values pending.
-            VkSemaphoreTypeCreateInfo completion_type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-            completion_type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-            VkSemaphoreCreateInfo completion_create{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-            completion_create.pNext = &completion_type;
-            if (vkCreateSemaphore(ctx_.device, &completion_create, nullptr, &completion_semaphore_) != VK_SUCCESS) {
-                LogError("frame generation: the MetalFX completion timeline could not be created");
-                return false;
-            }
         }
         if (@available(macOS 26.0, *)) {
             // the interpolator itself is built in Interpolate, once the upscaler's render extent is known (its input sizes
@@ -618,6 +605,7 @@ private:
         }
         format_ = format;
         display_ = display;
+        swapchain_generation_ = ctx_.swapchain_generation;
         hudless_.resize(ctx_.swapchain.images.size());
         for (vk::Image& image : hudless_) {
             if (!ctx_.CreateImage(image, format_, {display_.width, display_.height, 1},
@@ -645,7 +633,6 @@ private:
     const vk::Image* Interpolate() {
         @autoreleasepool {
             if (@available(macOS 26.0, *)) {
-                id<MTLFXFrameInterpolator> interpolator = reinterpret_cast<id<MTLFXFrameInterpolator>>(interpolator_);
                 const auto export_texture = [&](const vk::Image& image) -> id<MTLTexture> {
                     if (!image.image) {
                         return nil;
@@ -665,6 +652,8 @@ private:
                         return nullptr;
                     }
                 }
+                // CreateInterpolator replaces the instance when the render extent changes.
+                id<MTLFXFrameInterpolator> interpolator = reinterpret_cast<id<MTLFXFrameInterpolator>>(interpolator_);
                 id<MTLCommandBuffer> command = [queue_ commandBuffer];
                 if (!command) {
                     LogError("frame generation: Metal would not give a command buffer");
@@ -677,6 +666,12 @@ private:
                 id<MTLTexture> native_current = export_texture(current);
                 id<MTLTexture> native_previous = export_texture(previous);
                 id<MTLTexture> native_output = export_texture(interp_);
+                id<MTLTexture> depth = export_texture(VkOf(prepare_.depth));
+                id<MTLTexture> motion = export_texture(VkOf(prepare_.motion));
+                if (!native_current || !native_previous || !native_output || !depth || !motion) {
+                    LogError("frame generation: missing a Metal texture, repeating the rendered frame");
+                    return nullptr;
+                }
                 const bool hdr = UsesHdrTransport();
                 if (hdr && !hdr_transport_.EncodeInputs(command, native_current, native_previous)) {
                     LogError("frame generation: encoding HDR input failed");
@@ -684,8 +679,8 @@ private:
                 }
                 interpolator.colorTexture = hdr ? hdr_transport_.Current() : native_current;
                 interpolator.prevColorTexture = hdr ? hdr_transport_.Previous() : native_previous;
-                interpolator.depthTexture = export_texture(VkOf(prepare_.depth));
-                interpolator.motionTexture = export_texture(VkOf(prepare_.motion));
+                interpolator.depthTexture = depth;
+                interpolator.motionTexture = motion;
                 interpolator.outputTexture = hdr ? hdr_transport_.Interpolated() : native_output;
                 // colour is already the jitter-resolved output of the temporal upscaler; these full-output-size frames are not
                 // jittered inputs, so do not apply the lower-resolution scene jitter to the frame interpolator
@@ -699,30 +694,21 @@ private:
                 interpolator.fieldOfView = glm::degrees(prepare_.fov_y);
                 interpolator.aspectRatio = static_cast<float>(display_.width) / static_cast<float>(std::max(1u, display_.height));
                 interpolator.shouldResetHistory = reset_ ? YES : NO;
-                reset_ = false;
                 [interpolator encodeToCommandBuffer:command];
                 if (hdr && !hdr_transport_.DecodeOutput(command, native_output)) {
                     LogError("frame generation: decoding HDR output failed");
                     return nullptr;
                 }
-                const VkDevice vk_device = ctx_.device;
-                const VkSemaphore vk_semaphore = completion_semaphore_;
-                const uint64_t vk_value = metal_signal_value_;
-                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-                    (void)completed;
-                    // Metal's event signal is invisible to Vulkan validation (and leaves vkQueuePresentKHR's binary
-                    // semaphore dependency unresolved there). Signal the imported timeline semaphore on the host from the
-                    // Metal completion handler: presentation waits on a Vulkan-visible signal that occurs only after the
-                    // interpolation actually finishes.
-                    VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-                    signal.semaphore = vk_semaphore;
-                    signal.value = vk_value;
-                    const VkResult result = vkSignalSemaphore(vk_device, &signal);
-                    if (result != VK_SUCCESS) {
-                        LogError("frame generation: host signal for MetalFX interpolation failed ({})", static_cast<int>(result));
-                    }
-                }];
                 [command commit];
+                // Presentation already requires a host wait before sampling this external texture.
+                // Check the command's result here while the renderer can still repeat the real image.
+                [command waitUntilCompleted];
+                if (command.status != MTLCommandBufferStatusCompleted) {
+                    LogError("frame generation: MetalFX command failed ({}), repeating the rendered frame",
+                             command.error.localizedDescription.UTF8String ?: "unknown Metal error");
+                    return nullptr;
+                }
+                reset_ = false;
                 ++generated_count_;
                 return &interp_;
             }
@@ -776,6 +762,7 @@ private:
             }
             interpolator_ = interpolator;
             interp_render_ = render;
+            reset_ = true;
             LogInfo("frame generation: interpolator for {}x{} motion and depth -> {}x{} colour", render.width, render.height, display_.width,
                     display_.height);
             if (UsesHdrTransport()) LogInfo("frame generation: extended signed HDR RGB transport");
@@ -791,6 +778,9 @@ private:
     }
 
     void DestroyTargets() {
+        // The previous frame's Vulkan composite can still be sampling these images when
+        // opening Settings disables generation in the middle of the next frame.
+        if (!hudless_.empty()) ctx_.CheckDeviceLost(vkQueueWaitIdle(ctx_.queue), "MetalFX frame target retirement");
         hdr_transport_.Release();
         for (vk::Image& image : hudless_) {
             ctx_.DestroyImage(image);
@@ -819,12 +809,12 @@ private:
     id<MTLSharedEvent> event_ = nil;
     id<MTLCommandQueue> queue_ = nil;
     VkSemaphore input_semaphore_ = VK_NULL_HANDLE;
-    VkSemaphore completion_semaphore_ = VK_NULL_HANDLE;
     std::vector<vk::Image> hudless_;
     vk::Image interp_;
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     VkExtent2D display_{};
     VkExtent2D interp_render_{};
+    uint32_t swapchain_generation_ = 0;
     VkImageLayout interp_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
     FrameGenPrepare prepare_;
     bool checked_ = false;
@@ -840,7 +830,6 @@ private:
     uint32_t current_ = 0;
     uint32_t previous_ = 0;
     uint64_t metal_wait_value_ = 0;
-    uint64_t metal_signal_value_ = 0;
     std::string reason_;
     std::string reason_unused_;
     std::string window_note_;

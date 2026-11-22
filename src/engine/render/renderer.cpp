@@ -1204,12 +1204,8 @@ void Renderer::EndFrame(bool draw_ui) {
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSemaphoreSubmitInfo fg_signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    VkSemaphore fg_wait = VK_NULL_HANDLE;
-    uint64_t fg_signal_value = 0;
-    uint64_t fg_wait_value = 0;
-    const bool fg_sync = presenting_ && gen_acquired_ && generated_frame.sync &&
-                         generated_frame.sync(fg_signal.semaphore, fg_signal_value, fg_wait, fg_wait_value);
-    fg_signal.value = fg_signal_value;
+    const bool fg_sync = presenting_ && gen_acquired_ && generated_frame.input_signal &&
+                         generated_frame.input_signal(fg_signal.semaphore, fg_signal.value);
     fg_signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSemaphoreSubmitInfo waits[2] = {wait, fg_signal};
     VkSemaphoreSubmitInfo signals[2] = {signal, fg_signal};
@@ -1237,7 +1233,7 @@ void Renderer::EndFrame(bool draw_ui) {
     ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, pair ? VK_NULL_HANDLE : frame.in_flight), "frame submit");
     if (presenting_ && gen_acquired_) {
         const vk::Image* generated = fg_sync && !xr ? generated_frame.generate() : nullptr;
-        PresentGeneratedFrame(frame, generated, generated ? fg_wait : VK_NULL_HANDLE, fg_wait_value, draw_ui);
+        PresentGeneratedFrame(frame, generated, draw_ui);
     }
     if (pair) CopyRenderedDrawable(frame);
     streamline::SetMarker(streamline::Marker::RenderSubmitEnd);
@@ -1365,22 +1361,10 @@ void Renderer::CopyRenderedDrawable(Frame& frame) {
     if (result != VK_SUCCESS) FatalError("Cannot submit the rendered frame copy.", window_ != nullptr);
 }
 
-void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui) {
+void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, bool draw_ui) {
     if (gen_index_ >= ctx_.swapchain.images.size() || !gen_set_[frame_index_]) {
         gen_acquired_ = false;
         return;
-    }
-    if (source && fg_wait) {
-        VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        wait_info.semaphoreCount = 1;
-        wait_info.pSemaphores = &fg_wait;
-        wait_info.pValues = &fg_wait_value;
-        const VkResult waited = vkWaitSemaphores(ctx_.device, &wait_info, UINT64_MAX);
-        ctx_.CheckDeviceLost(waited, "MetalFX interpolation wait");
-        if (waited != VK_SUCCESS) {
-            source = nullptr;
-            fg_wait = VK_NULL_HANDLE;
-        }
     }
     VkImage target = ctx_.swapchain.images[gen_index_];
     VkImageView view = ctx_.swapchain.views[gen_index_];

@@ -56,11 +56,11 @@ target_sources(pt_engine PRIVATE src/engine/platform/macos_permissions.mm)
 set_source_files_properties(src/engine/platform/macos_permissions.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_link_libraries(pt_engine PUBLIC "-framework AVFoundation" "-framework Foundation")
 
-target_sources(pt_engine PRIVATE src/engine/render/macos_hdr.mm)
-set_source_files_properties(src/engine/render/macos_hdr.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-target_link_libraries(pt_engine PUBLIC "-framework AppKit" "-framework QuartzCore")
+target_sources(pt_engine PRIVATE src/engine/render/macos_hdr.mm src/engine/render/macos_window_trace.mm)
+set_source_files_properties(src/engine/render/macos_hdr.mm src/engine/render/macos_window_trace.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(pt_engine PUBLIC "-framework AppKit" "-framework QuartzCore" "-framework ScreenCaptureKit" "-framework CoreMedia" "-framework CoreVideo")
 
-add_executable(pt_macos_hdr_test tests/macos_hdr_test.mm)
+add_executable(pt_macos_hdr_test tests/macos_hdr_test.mm tests/macos_metalfx_start_test.mm)
 target_compile_options(pt_macos_hdr_test PRIVATE "-fobjc-arc")
 target_link_libraries(pt_macos_hdr_test PRIVATE pt_engine "-framework Metal")
 add_custom_command(TARGET pt_macos_hdr_test POST_BUILD

@@ -56,10 +56,11 @@ void LogMacHdrDisplayState(SDL_Window* window, bool menu) {
         NSScreen* screen = cocoa.screen;
         NSString* space = layer.colorspace ? (__bridge NSString*)CGColorSpaceGetName(layer.colorspace) : nil;
         LogInfo("lamp display: menu {} current EDR {:.3f} potential {:.3f} reference {:.3f} layer EDR {} metadata {} "
-                "display sync {} format {} color space {}", menu, double(screen.maximumExtendedDynamicRangeColorComponentValue),
+                "display sync {} format {} color space {} drawable {:.0f}x{:.0f} key {} visible {} occluded {}", menu, double(screen.maximumExtendedDynamicRangeColorComponentValue),
                 double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue), double(screen.maximumReferenceExtendedDynamicRangeColorComponentValue),
                 bool(layer.wantsExtendedDynamicRangeContent), layer.EDRMetadata != nil, bool(layer.displaySyncEnabled),
-                unsigned(layer.pixelFormat), space.UTF8String ?: "(unnamed)");
+                unsigned(layer.pixelFormat), space.UTF8String ?: "(unnamed)", double(layer.drawableSize.width), double(layer.drawableSize.height),
+                bool(cocoa.keyWindow), bool(cocoa.visible), !(cocoa.occlusionState & NSWindowOcclusionStateVisible));
     }
 }
 

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <glm/glm.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -18,14 +19,17 @@ struct RenderStats;
 struct SceneLighting;
 class Renderer;
 namespace vfx { struct RenderList; }
+namespace vk { class MacWindowTrace; }
 
 // Read small patches of the lighting passes and finished scRGB images using the existing frame fences.
 class LampTrace {
 public:
-    explicit LampTrace(std::filesystem::path directory);
+    explicit LampTrace(std::filesystem::path directory, bool whole_frame = false);
+    bool WholeFrame() const { return whole_frame_; }
+    void ObserveWindow(SDL_Window* window);
     void Scene(uint64_t tick, const std::string& floor, const Camera& camera, const SceneLighting& lights,
                const RenderStats& stats, const vfx::RenderList& effects, float aspect, bool lens, const Renderer& renderer,
-               SDL_Window* window, bool menu, bool paused);
+               SDL_Window* window, bool menu, bool paused, const char* phase);
     void Capture(vk::Context& ctx, VkCommandBuffer cmd, VkImage image, VkFormat format, VkExtent2D extent,
                  uint32_t slot, bool interpolated, bool repeat, VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     enum Stage { Diffuse, SceneHdr, Reactive, Resolved, Bloom, Flare, BeforeComposite, StageCount };
@@ -63,9 +67,12 @@ private:
         std::array<VkBufferImageCopy, kRegions> copies{};
         unsigned side = 0;
         const char* kind = nullptr;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        uint32_t swapchain = 0;
     };
     std::array<std::array<Readback, 2>, 2> slots_;
     void Write(vk::Context& ctx, Readback& readback);
+    void WriteScreen(const Readback& readback);
     struct StagePatch {
         unsigned stage, probe, region, side;
         VkOffset3D offset;
@@ -105,6 +112,9 @@ private:
     bool warned_ = false;
     bool failed_ = false;
     bool stage_failed_ = false;
+    bool whole_frame_ = false;
+    const char* phase_ = "startup";
+    std::shared_ptr<vk::MacWindowTrace> window_observer_;
 };
 
 }

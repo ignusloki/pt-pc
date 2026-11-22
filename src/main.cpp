@@ -7207,6 +7207,8 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLat
         }
         if (focus_event) {
             const bool main_window = event.window.windowID == SDL_GetWindowID(app.window);
+            if (main_window && app.renderer.lamp_trace && app.renderer.lamp_trace->WholeFrame())
+                app.renderer.lamp_trace->Mark(focus_event);
             g_focus_trace.last_event =
                 std::format("{} of {} (SDL window {})", focus_event, main_window ? "the game window" : "another window", event.window.windowID);
             ++g_focus_trace.events;
@@ -7468,8 +7470,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
     if (presence_on) pt::PresenceStart(discord_id);
     float boot_splash_seconds = 0.0f;
     uint32_t boot_splash_texture = pt::TextureManager::kWhite;
-    const bool shader_screen_wanted = ui_ready && app.window && options.input_script.empty() && app.renderer.Context().pipeline_cache_cold;
-    if (ui_ready && app.window && options.input_script.empty()) {
+    const bool show_boot_ui = ui_ready && app.window && (options.input_script.empty() || std::getenv("PT_BOOT_SHOTS"));
+    const bool shader_screen_wanted = show_boot_ui && app.renderer.Context().pipeline_cache_cold;
+    if (show_boot_ui) {
         const uint32_t splash = app.textures.LoadImageFile(options.game_dir / "sce_sys" / "pic1.png", "boot_splash");
         if (splash != pt::TextureManager::kWhite) {
             boot_splash_seconds = 4.0f;
@@ -8344,7 +8347,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : pointer_up && !show_settings                  ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
-        if (input.TakeLampMarker() && app.renderer.lamp_trace) app.renderer.lamp_trace->Mark("player-F5");
+        if (input.TakeLampMarker() && app.renderer.lamp_trace) {
+            app.renderer.lamp_trace->Mark("player-F5");
+            app.renderer.lamp_trace->ObserveWindow(app.window);
+        }
         pc_settings.CollectGyroCalibration();
         if (g_touch) polled.mouse_look += g_touch->TakeLook() * 2.6f * app.settings.input.mouse_sensitivity;
         if (app.window) {
@@ -9747,11 +9753,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 app.scene.Render(camera, draw_items, lighting, dt);
             }
             if (app.renderer.lamp_trace && !armory_studio) {
+                const char* phase = ui.ShaderScreenShown() ? "shader-preparation" : ui.BootSplashShown() ? "title" :
+                                    (ui_ready && ui.MenuOpen()) || show_settings ? "settings" : boot_wait ? "loading" : "gameplay";
                 app.renderer.lamp_trace->Scene(view.Frame(), view.Floor().CurrentFloorName(), camera, lighting, app.scene.Stats(),
                                                vfx_pass.List(), float(vfx_extent.width) / std::max(1u, vfx_extent.height),
                                                app.scene.toggles.distortion && lighting.valid && lighting.screen.screen_distortion,
-                                               app.renderer, app.window, (ui_ready && ui.MenuOpen()) || show_settings, game.Paused());
-                app.scene.CaptureLampStages(*app.renderer.lamp_trace);
+                                               app.renderer, app.window, (ui_ready && ui.MenuOpen()) || show_settings, game.Paused(), phase);
+                if (!app.renderer.lamp_trace->WholeFrame()) app.scene.CaptureLampStages(*app.renderer.lamp_trace);
             }
             take_reflection_readback(view);
             last_render_frame = frame;
@@ -10213,10 +10221,13 @@ int main(int argc, char** argv) {
     }
 #if defined(__APPLE__) && !PT_IOS
     std::error_code trace_ec;
-    const auto trace_base = pt::os::GetEnv("PT_LAMP_TRACE");
     std::error_code marker_ec;
-    if (!trace_base.empty() || (!tool && std::filesystem::is_regular_file(pt::ExecutableDir() / "lamp-diagnostics", marker_ec))) {
-        const auto base = trace_base.empty() ? UserDataDir() / "lamp-diagnostics" : pt::os::PathFromUtf8(trace_base);
+    const auto frame_base = pt::os::GetEnv("PT_FRAME_TRACE");
+    const auto lamp_base = pt::os::GetEnv("PT_LAMP_TRACE");
+    const bool whole_frame = !frame_base.empty() || (lamp_base.empty() && !tool && std::filesystem::is_regular_file(pt::ExecutableDir() / "frame-diagnostics", marker_ec));
+    const auto& trace_base = whole_frame ? frame_base : lamp_base;
+    if (whole_frame || !trace_base.empty() || (!tool && std::filesystem::is_regular_file(pt::ExecutableDir() / "lamp-diagnostics", marker_ec))) {
+        const auto base = trace_base.empty() ? UserDataDir() / (whole_frame ? "frame-diagnostics" : "lamp-diagnostics") : pt::os::PathFromUtf8(trace_base);
         const auto stamp = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
         const auto name = std::format("session-{:%Y%m%d-%H%M%S}", stamp);
         auto session = base / name;
@@ -10225,7 +10236,7 @@ int main(int argc, char** argv) {
             session = base / std::format("{}-{}", name, suffix);
         }
         if (!trace_ec) {
-            app.renderer.lamp_trace = std::make_shared<pt::LampTrace>(session);
+            app.renderer.lamp_trace = std::make_shared<pt::LampTrace>(session, whole_frame);
             if (options.log_path.empty()) log_path = session / "pt.log";
         }
     }
@@ -10241,7 +10252,8 @@ int main(int argc, char** argv) {
     pt::LogSetFile(log_path);
 #if defined(__APPLE__) && !PT_IOS
     if (trace_ec) pt::LogWarn("lamp diagnostics setup: {}", trace_ec.message());
-    if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: source stages and scRGB lamp, halo and wall tiles; press F5 to mark visible flicker");
+    if (whole_frame && app.renderer.lamp_trace) pt::LogInfo("frame diagnostics active: drawable scanlines from startup; F5 marks a black flash and starts sampling the game window");
+    else if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: source stages and scRGB lamp, halo and wall tiles; press F5 to mark visible flicker");
 #endif
     pt::ios_diag::Stage("engine log opened");
 #if PT_IOS && defined(PT_IOS_DIAGNOSTICS)

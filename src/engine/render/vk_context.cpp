@@ -1087,17 +1087,20 @@ void Context::SetHdrMetadata() {
     metadata.minLuminance = hdr_min_nits;
     metadata.maxContentLightLevel = peak;
     metadata.maxFrameAverageLightLevel = hdr_paper_nits;
-    if (hdr_metadata && vkSetHdrMetadataEXT) vkSetHdrMetadataEXT(device, 1, &swapchain.handle, &metadata);
 #if defined(__APPLE__) && !PT_IOS
-    // Reapply after MoltenVK on every swapchain creation or HDR-level change, including when the extension is absent.
+    // The extension and the native adapter write the same CAMetalLayer. Only the adapter
+    // supplies scRGB's 80 nits per unit; do not publish a transient 1-nit scale first.
     if (scrgb && window_) {
         if (SetMacHdrMetadata(window_, swapchain.color_space, &metadata)) {
             LogInfo("macOS: scRGB HDR metadata uses 80 nits per linear unit (paper white {:.0f}, peak {:.0f} nits)", hdr_paper_nits, peak);
-        } else {
-            LogWarn("macOS: could not set the scRGB HDR brightness scale on the window");
+            return;
         }
+        LogWarn("macOS: could not set the scRGB HDR brightness scale on the window");
     }
 #endif
+    if (hdr_metadata && vkSetHdrMetadataEXT) {
+        vkSetHdrMetadataEXT(device, 1, &swapchain.handle, &metadata);
+    }
     LogInfo("vulkan: HDR metadata set: peak {:.0f} nits (display reports {:.0f}), paper white {:.0f} nits ({})", peak, display_peak_nits,
             hdr_paper_nits, hdr10 ? "HDR10" : "scRGB");
 }

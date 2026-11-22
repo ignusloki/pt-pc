@@ -2,6 +2,7 @@
 
 #include "engine/core/log.h"
 #include "engine/render/camera.h"
+#include "engine/render/frame_signature.h"
 #include "engine/render/renderer.h"
 #include "engine/render/scene_renderer.h"
 #include "engine/vfx/vfx_system.h"
@@ -12,6 +13,7 @@
 #include <glm/gtc/packing.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace pt {
 
@@ -37,19 +39,26 @@ glm::vec2 DisplayUv(glm::vec2 source, float aspect) {
 }
 }
 
-LampTrace::LampTrace(std::filesystem::path directory) : directory_(std::move(directory)), events_(directory_ / "events.csv") {
+LampTrace::LampTrace(std::filesystem::path directory, bool whole_frame)
+    : directory_(std::move(directory)), events_(directory_ / "events.csv"), whole_frame_(whole_frame) {
     events_ << "seconds,sequence,floor,pipeline,menu_open,event\n";
 }
 
 void LampTrace::Mark(const char* reason) {
     events_ << std::format("{:.6f},{},{},{},{},{}\n", LogClock(), sequence_, floor_, enhanced_ ? "enhanced" : "original", int(menu_), reason);
     events_.flush();
-    LogInfo("lamp marker: {} at sequence {} ({}, {})", reason, sequence_, floor_, enhanced_ ? "Enhanced" : "Original");
+    LogInfo("{} marker: {} at sequence {} ({}, {})", whole_frame_ ? "frame" : "lamp", reason, sequence_, floor_, enhanced_ ? "Enhanced" : "Original");
+}
+
+void LampTrace::ObserveWindow(SDL_Window* window) {
+#if defined(__APPLE__) && !PT_IOS
+    if (whole_frame_ && window && !window_observer_) window_observer_ = vk::StartMacWindowTrace(window, directory_);
+#endif
 }
 
 void LampTrace::Scene(uint64_t tick, const std::string& floor, const Camera& camera, const SceneLighting& lights,
                       const RenderStats& stats, const vfx::RenderList& effects, float aspect, bool lens, const Renderer& renderer,
-                      SDL_Window* window, bool menu, bool paused) {
+                      SDL_Window* window, bool menu, bool paused, const char* phase) {
     scene_.sequence = ++sequence_;
     const bool enhanced = renderer.EnhancedRendering();
     const bool changed_scene = floor_ != floor || enhanced_ != enhanced;
@@ -71,6 +80,14 @@ void LampTrace::Scene(uint64_t tick, const std::string& floor, const Camera& cam
         display_menu_ = menu;
     }
 #endif
+    if (whole_frame_) {
+        if (std::string_view(phase_) != phase) { phase_ = phase; Mark(phase); }
+        // Each copy is a horizontal scanline across the entire drawable, including any black borders.
+        scene_.count = 2 * FrameSignature::Rows;
+        static_assert(2 * FrameSignature::Rows <= kRegions);
+        scene_.metadata = std::format("{:.6f},{},{},{},{},{},{:.3f}", now, tick, floor, phase, enhanced ? "enhanced" : "original", int(menu), headroom);
+        return;
+    }
     float power = 0;
     for (const auto& light : lights.lights) {
         power += glm::dot(light.intensity, glm::vec3(.2126f, .7152f, .0722f));
@@ -168,31 +185,45 @@ void LampTrace::Scene(uint64_t tick, const std::string& floor, const Camera& cam
 void LampTrace::Capture(vk::Context& ctx, VkCommandBuffer cmd, VkImage image, VkFormat format, VkExtent2D extent,
                         uint32_t slot, bool interpolated, bool repeat, VkImageLayout layout) {
     if (failed_ || !scene_.count || !image || !extent.width || !extent.height) return;
-    if (format != VK_FORMAT_R16G16B16A16_SFLOAT) {
+    const bool half = format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    const bool bgra8 = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool rgba8 = format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB;
+    if (!half && !(whole_frame_ && (bgra8 || rgba8))) {
         if (!warned_) LogWarn("lamp diagnostics: output format {} is outside the scRGB luminance capture", int(format));
         warned_ = true;
         return;
     }
     auto& r = slots_[slot][interpolated];
     constexpr unsigned stride = kSide * kSide * 8;
-    if (!r.buffer.buffer && !ctx.CreateBuffer(r.buffer, kRegions * stride, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+    const unsigned bytes = half ? 8 : 4;
+    const VkDeviceSize required = whole_frame_ ? VkDeviceSize(extent.width) * bytes * scene_.count : kRegions * stride;
+    if (r.buffer.buffer && r.buffer.size < required) ctx.DestroyBuffer(r.buffer); // The slot's fence has completed.
+    if (!r.buffer.buffer && !ctx.CreateBuffer(r.buffer, required, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
         LogWarn("lamp diagnostics: readback allocation failed");
         failed_ = true;
         return;
     }
     r.sample = scene_;
     r.extent = extent;
+    r.format = format;
+    r.swapchain = ctx.swapchain_generation;
     r.kind = interpolated ? (repeat ? "repeat" : "generated") : "rendered";
     r.side = std::min({kSide, extent.width, extent.height});
     // Fit the normalized scene coordinates to the same centered viewport as the compositor.
     const float window_aspect = float(extent.width) / extent.height;
     const glm::vec2 used(std::min(1.f, r.sample.aspect / window_aspect), std::min(1.f, window_aspect / r.sample.aspect));
     for (unsigned i = 0; i < r.sample.count; ++i) {
+        auto& copy = r.copies[i];
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        if (whole_frame_) {
+            copy.bufferOffset = VkDeviceSize(i) * extent.width * bytes;
+            copy.imageOffset = {0, int((uint64_t(2 * i + 1) * extent.height) / (2 * r.sample.count)), 0};
+            copy.imageExtent = {extent.width, 1, 1};
+            continue;
+        }
         const auto uv = (r.sample.regions[i].uv - .5f) * used + .5f;
         auto origin = [&](float center, unsigned size) { return std::clamp(int(center * size) - int(r.side / 2), 0, int(size - r.side)); };
-        auto& copy = r.copies[i];
         copy.bufferOffset = i * stride;
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageOffset = {origin(uv.x, extent.width), origin(uv.y, extent.height), 0};
         copy.imageExtent = {r.side, r.side, 1};
     }
@@ -305,6 +336,14 @@ void LampTrace::OpenSegment(uint64_t sequence) {
         stages_.close();
         tiles_.close();
         const auto index = FileIndex(segment);
+        if (whole_frame_) {
+            csv_.open(directory_ / std::format("screen-{}.csv", index));
+            failed_ = !csv_;
+            if (failed_) { LogWarn("frame diagnostics: cannot open drawable log"); return; }
+            segment_ = segment;
+            csv_ << "sequence,scene_seconds,tick,floor,phase,pipeline,menu_open,headroom,kind,swapchain,width,height,unit," << FrameSignature::Header << '\n';
+            return;
+        }
         csv_.open(directory_ / std::format("frames-{}.csv", index));
         stages_.open(directory_ / std::format("stages-{}.csv", index));
         tiles_.open(directory_ / std::format("tiles-{}.pgm", index), std::ios::binary | std::ios::out | std::ios::trunc);
@@ -324,11 +363,43 @@ void LampTrace::OpenSegment(uint64_t sequence) {
     }
 }
 
+void LampTrace::WriteScreen(const Readback& r) {
+    const bool half = r.format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    const bool bgra = r.format == VK_FORMAT_B8G8R8A8_UNORM || r.format == VK_FORMAT_B8G8R8A8_SRGB;
+    const auto* base = static_cast<const uint8_t*>(r.buffer.mapped);
+    FrameSignature signature;
+    for (unsigned y = 0; y < r.sample.count; ++y) {
+        const auto* p = base + r.copies[y].bufferOffset;
+        for (unsigned x = 0; x < r.extent.width; ++x, p += half ? 8 : 4) {
+            const unsigned cell = (y / 2) * FrameSignature::Columns + x * FrameSignature::Columns / r.extent.width;
+            if (half) {
+                uint64_t bits;
+                std::memcpy(&bits, p, sizeof(bits));
+                const auto* rgb = reinterpret_cast<const uint16_t*>(p);
+                signature.Add(cell, bits & 0xffffffffffffull, 80.f * glm::unpackHalf1x16(rgb[0]),
+                              80.f * glm::unpackHalf1x16(rgb[1]), 80.f * glm::unpackHalf1x16(rgb[2]), .01f);
+            } else {
+                const uint32_t bits = (uint32_t(p[0]) << 16) | (uint32_t(p[1]) << 8) | p[2];
+                signature.Add(cell, bits, p[bgra ? 2 : 0], p[1], p[bgra ? 0 : 2], 1.f);
+            }
+        }
+    }
+    csv_ << std::format("{},{},{},{},{},{},{},", r.sample.sequence, r.sample.metadata, r.kind, r.swapchain,
+                        r.extent.width, r.extent.height, half ? "scrgb_nits" : "sdr_code_0_255");
+    signature.Write(csv_);
+    if (r.sample.sequence % 16 == 0) csv_.flush();
+}
+
 void LampTrace::Write(vk::Context& ctx, Readback& r) {
     if (!r.kind || failed_) return;
     OpenSegment(r.sample.sequence);
     if (failed_) return;
     vmaInvalidateAllocation(ctx.allocator, r.buffer.allocation, 0, VK_WHOLE_SIZE);
+    if (whole_frame_) {
+        WriteScreen(r);
+        r.kind = nullptr;
+        return;
+    }
     for (unsigned i = 0; i < r.sample.count; ++i) {
         const auto& region = r.sample.regions[i];
         const auto& copy = r.copies[i];
@@ -408,6 +479,7 @@ void LampTrace::Queued(const vk::Context& ctx, uint32_t id, uint32_t image, cons
 }
 
 void LampTrace::Shutdown(vk::Context& ctx) {
+    window_observer_.reset();
     static_assert(Renderer::kFramesInFlight == 2);
     const unsigned oldest = slots_[0][0].sample.sequence <= slots_[1][0].sample.sequence ? 0 : 1;
     for (unsigned i : {oldest, 1u - oldest}) {
