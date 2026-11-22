@@ -33,6 +33,8 @@
 
 namespace pt {
 
+class LampTrace;
+
 namespace vfx {
 struct RenderList;
 }
@@ -250,6 +252,7 @@ public:
     bool UpscalerAvailable(UpscalerKind kind, std::string& reason);
     bool RayReconstructionAvailable(std::string& reason);
     void RequestTargetDump() { dump_requested_ = true; }
+    void CaptureLampStages(LampTrace& trace);
     void DumpDraws(const std::vector<DrawItem>& items, const std::string& path);
     bool DumpTargets(const std::string& prefix);
     RayTracingSettings raytracing;
@@ -554,6 +557,7 @@ private:
     RenderTarget fg_motion_;
     RenderTarget fg_depth_;
     bool dump_requested_ = false;
+    bool lamp_stages_ready_ = false;
     bool dump_recorded_ = false;
     gpu::BufferResource dump_compose_;
     gpu::BufferResource dump_forward_;

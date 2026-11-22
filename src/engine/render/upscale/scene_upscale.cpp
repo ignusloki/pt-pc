@@ -261,6 +261,7 @@ void SceneRenderer::DestroyUpscalePipelines() {
 
 bool SceneRenderer::CreateUpscaleTargets(gpu::Extent2D render, gpu::Extent2D output) {
     const gpu::ImageUsageFlags color = gpu::ImageUsage::ColorAttachment | gpu::ImageUsage::Sampled;
+    const gpu::ImageUsageFlags trace_read = renderer_->lamp_trace ? gpu::ImageUsageFlags(gpu::ImageUsage::TransferSrc) : gpu::ImageUsageFlags{};
     const gpu::AspectFlags c = gpu::Aspect::Color;
     const gpu::ImageUsageFlags exposure_usage = gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst |
                                                 (gpu_->Info().backend == gpu::Backend::D3D12 ? gpu::ImageUsageFlags(gpu::ImageUsage::ColorAttachment)
@@ -272,7 +273,7 @@ bool SceneRenderer::CreateUpscaleTargets(gpu::Extent2D render, gpu::Extent2D out
                     CreateTarget(upscaled_, kUpscaleColorFormat, output,
                                  gpu::ImageUsage::Storage | gpu::ImageUsage::Sampled | gpu::ImageUsage::TransferDst |
                                      gpu::ImageUsage::ColorAttachment, c) &&
-                    CreateTarget(post_hdr_, kUpscaleColorFormat, output, color, c) && CreateTarget(post_depth_, kPostDepthFormat, output, color, c) &&
+                    CreateTarget(post_hdr_, kUpscaleColorFormat, output, color | trace_read, c) && CreateTarget(post_depth_, kPostDepthFormat, output, color, c) &&
                     CreateTarget(post_object_velocity_, kUpscaleColorFormat, output, color, c);
     if (!ok) {
         LogError("scene renderer: cannot create upscale targets {}x{} -> {}x{}", render.width, render.height, output.width, output.height);

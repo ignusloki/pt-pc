@@ -1,6 +1,7 @@
 #include "engine/render/scene_renderer.h"
 #include "engine/render/bc_decode.h"
 #include "engine/render/hdr_output.h"
+#include "engine/render/lamp_trace.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -751,6 +752,7 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
     const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(double(BloomRows()) * output.width / std::max(output.height, 1u))));
     const gpu::Extent2D quarter{bloom_width, BloomRows()};
     const gpu::ImageUsageFlags bloom_usage = bloom_compute_ ? color | gpu::ImageUsage::Storage : color;
+    const gpu::ImageUsageFlags trace_read = renderer_->lamp_trace ? gpu::ImageUsageFlags(gpu::ImageUsage::TransferSrc) : gpu::ImageUsageFlags{};
     const gpu::AspectFlags c = gpu::Aspect::Color;
     bool ok = CreateTarget(albedo_, albedo_format_, extent, dumped, c) && CreateTarget(normal_, kNormalFormat, extent, dumped, c) &&
               CreateTarget(material_, material_format_, extent, dumped, c) &&
@@ -780,7 +782,7 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
               CreateTarget(mirror_capture_cache_[1], kHdrFormat, {std::min(512u, extent.width), std::min(512u, extent.height)},
                            color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(bloom_[0], BloomFormat(), quarter, bloom_usage, c) && CreateTarget(bloom_[1], BloomFormat(), quarter, bloom_usage, c) &&
-              CreateTarget(bloom_[2], BloomFormat(), quarter, bloom_usage, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
+              CreateTarget(bloom_[2], BloomFormat(), quarter, bloom_usage | trace_read, c) && CreateTarget(flare_, kPostFormat, output, color | trace_read, c) &&
               CreateTarget(ldr_[0], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(ldr_[1], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(history_, ldr_format_, output, color | gpu::ImageUsage::TransferDst, c) &&
@@ -1612,6 +1614,16 @@ uint32_t DumpTexelBytes(gpu::Format format) {
     return bytes ? bytes : 4;
 }
 
+}
+
+void SceneRenderer::CaptureLampStages(LampTrace& trace) {
+    if (!lamp_stages_ready_ || renderer_->Backend() != gpu::Backend::Vulkan) return;
+    const bool bloom = toggles.bloom && std::abs(lighting_->exposure.bloom_size) >= 1.0e-5f;
+    RenderTarget screen;
+    screen.image = renderer_->SceneColor();
+    screen.layout = gpu::Layout::ColorAttachment;
+    trace.CaptureStages(*renderer_, {&diffuse_, &hdr_, up_.enabled ? &reactive_ : nullptr,
+                                    up_.enabled ? &post_hdr_ : nullptr, bloom ? &bloom_[2] : nullptr, &flare_, &screen});
 }
 
 void SceneRenderer::RecordDumpCopy(gpu::CommandList& cmd, RenderTarget& target, gpu::BufferResource& buffer) {

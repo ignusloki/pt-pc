@@ -2843,6 +2843,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
 }
 
 void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt) {
+    lamp_stages_ready_ = false;
     const auto cpu_start = std::chrono::steady_clock::now();
     if (frame_counter_ == 0) {
         ApplyEnvironmentOverrides();
@@ -3220,6 +3221,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     if (timed) last_timed_slot_ = renderer_->FrameIndex();
     slot.timed = timed;
     slot.measured = true;
+    lamp_stages_ready_ = lighting.valid && renderer_->OutputMode() != RendererOutputMode::Sdr && debug_view == DebugView::Lit && vr_eye_ < 0;
     slot.exposure_used = exposure_;
     slot.exposure_sample_time = exposure_time_;
     slot.vr_eye = vr_eye_;

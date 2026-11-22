@@ -242,6 +242,7 @@ public:
     void Init();
     void Shutdown();
     void ProcessEvent(const SDL_Event& event);
+    bool TakeLampMarker() { return std::exchange(lamp_marker_edge_, false); }
     InputState Poll(bool keyboard_free, MouseUse mouse, bool pads_free = true);
     void SetRumble(uint8_t large_motor, uint8_t small_motor);
     void SetTriggerRumble(uint8_t left, uint8_t right);
@@ -338,6 +339,7 @@ private:
     bool previous_date_auto_key_ = false;
     bool previous_date_skip_key_ = false;
     bool capture_pose_edge_ = false;
+    bool lamp_marker_edge_ = false;
     uint32_t previous_music_keys_ = 0;
     bool pause_edge_ = false;
     bool confirm_edge_ = false;

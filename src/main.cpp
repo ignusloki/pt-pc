@@ -4175,6 +4175,7 @@ public:
             if (pt::EnhancedRenderingAvailable()) {
                 s.display.rendering_pipeline = value == 1 ? "enhanced" : "original";
                 Save();
+                if (app_.renderer.lamp_trace) app_.renderer.lamp_trace->Mark(value == 1 ? "selected-enhanced" : "selected-original");
                 if (pt::ResolveRenderingPipeline(s.display.rendering_pipeline) != s.active_pipeline)
                     game_.ShowNoticeDialog("pc_restart_needed");
             }
@@ -8343,6 +8344,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : pointer_up && !show_settings                  ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        if (input.TakeLampMarker() && app.renderer.lamp_trace) app.renderer.lamp_trace->Mark("player-F5");
         pc_settings.CollectGyroCalibration();
         if (g_touch) polled.mouse_look += g_touch->TakeLook() * 2.6f * app.settings.input.mouse_sensitivity;
         if (app.window) {
@@ -9748,8 +9750,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 app.renderer.lamp_trace->Scene(view.Frame(), view.Floor().CurrentFloorName(), camera, lighting, app.scene.Stats(),
                                                vfx_pass.List(), float(vfx_extent.width) / std::max(1u, vfx_extent.height),
                                                app.scene.toggles.distortion && lighting.valid && lighting.screen.screen_distortion,
-                                               app.renderer.HdrPaperWhite(), app.window,
-                                               app.renderer.EnhancedRendering(), (ui_ready && ui.MenuOpen()) || show_settings, game.Paused());
+                                               app.renderer, app.window, (ui_ready && ui.MenuOpen()) || show_settings, game.Paused());
+                app.scene.CaptureLampStages(*app.renderer.lamp_trace);
             }
             take_reflection_readback(view);
             last_render_frame = frame;
@@ -10239,7 +10241,7 @@ int main(int argc, char** argv) {
     pt::LogSetFile(log_path);
 #if defined(__APPLE__) && !PT_IOS
     if (trace_ec) pt::LogWarn("lamp diagnostics setup: {}", trace_ec.message());
-    if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: final scRGB lamp and wall patches for rendered, generated and repeated frames");
+    if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: source stages and scRGB lamp, halo and wall tiles; press F5 to mark visible flicker");
 #endif
     pt::ios_diag::Stage("engine log opened");
 #if PT_IOS && defined(PT_IOS_DIAGNOSTICS)

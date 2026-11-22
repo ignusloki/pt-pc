@@ -890,6 +890,7 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         last_from_gamepad_ = false;
         key_pressed_since_poll_ = true;
         if (event.key.scancode == SDL_SCANCODE_F9) capture_pose_edge_ = true;
+        if (event.key.scancode == SDL_SCANCODE_F5) lamp_marker_edge_ = true;
         UsePrompts(PromptStyle{}, 0);
         for (const KeyBinding& binding : MutableBindings()) {
             if (binding.scancode == 0 || binding.scancode != event.key.scancode) {
