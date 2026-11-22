@@ -14,12 +14,12 @@
 
 </div>
 
-This Mac test branch integrates **P.T. PC Port 1.1.0**, including Survive the Night and keyboard rebinding.
-Mac players can choose **Original** or **Enhanced** rendering.
-Original remains the default; Enhanced adds HDR colour customization, independent UI
-brightness, smoother lighting effects and a live settings preview. Android and iOS
-retain Original rendering. No original game files are included.
-Read the [changelog](docs/release-notes-1.0.13.md),
+**P.T. PC Port 1.1.1** integrates LoreanXavier’s native HDR and New Game+ hotfixes,
+Survive the Night and the fork’s fix for black frames at Mac startup. Mac players
+can choose **Original** (default) or **Enhanced** rendering. Android and iOS use
+Original. Players supply their own game files.
+Standard gameplay was tested on Apple silicon with both HDR modes. Gameplay validation
+on Intel Mac, iOS and Android is pending. Read the [changelog](docs/release-notes-1.1.1.md),
 [Android installation guide](docs/android-installation.md), and
 [iPhone/iPad beta guide](docs/mobile.md).
 

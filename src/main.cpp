@@ -718,6 +718,7 @@ int RunVoiceTest(const std::filesystem::path& input) {
         return 1;
     }
     int total = 0;
+    size_t processed = 0;
     for (const std::filesystem::path& wav_path : files) {
         SDL_AudioSpec spec{};
         Uint8* data = nullptr;
@@ -729,8 +730,12 @@ int RunVoiceTest(const std::filesystem::path& input) {
         const SDL_AudioSpec target{SDL_AUDIO_S16, 1, pt::VoiceRecognizer::kSampleRate};
         Uint8* converted = nullptr;
         int converted_length = 0;
-        SDL_ConvertAudioSamples(&spec, data, static_cast<int>(length), &target, &converted, &converted_length);
+        const bool converted_ok = SDL_ConvertAudioSamples(&spec, data, static_cast<int>(length), &target, &converted, &converted_length);
         SDL_free(data);
+        if (!converted_ok || converted_length == 0) {
+            SDL_free(converted);
+            continue;
+        }
         recognizer.Reset();
         recognizer.TakeResults();
         const int16_t* samples = reinterpret_cast<const int16_t*>(converted);
@@ -750,11 +755,12 @@ int RunVoiceTest(const std::filesystem::path& input) {
         pt::LogInfo("voice test: file {} | {} detections | {} utterances | {:.2f} s | {}", pt::os::PathToUtf8(wav_path.filename()), detections,
                     results.size(), static_cast<double>(count) / pt::VoiceRecognizer::kSampleRate, heard);
         total += detections > 0 ? 1 : 0;
+        ++processed;
         SDL_free(converted);
     }
     pt::LogInfo("voice test: {} of {} files with the word", total, files.size());
     SDL_Quit();
-    return 0;
+    return !files.empty() && processed == files.size() ? 0 : 1;
 }
 
 void WriteWav(const std::filesystem::path& path, const std::vector<float>& samples, uint32_t rate, uint16_t channels) {

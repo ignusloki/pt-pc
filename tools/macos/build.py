@@ -66,8 +66,10 @@ def verify_packaged_voice(app, output):
         audio.setsampwidth(2)
         audio.setframerate(16000)
         audio.writeframes(b"\0\0" * 16000 * 3)
+    log.unlink(missing_ok=True)
     run(app / "Contents/MacOS/pt", "--voice-test", fixture, "--log", log)
-    if "voice test: file voice-smoke.wav" not in log.read_text(encoding="utf-8"):
+    # Quiet builds report read, conversion and recognizer failures through their exit status.
+    if log.exists() and "voice test: file voice-smoke.wav" not in log.read_text(encoding="utf-8"):
         raise RuntimeError("Packaged voice smoke test did not process the WAV; see voice-smoke.log")
 
 

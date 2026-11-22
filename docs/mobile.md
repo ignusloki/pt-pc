@@ -1,9 +1,8 @@
-# iPhone and iPad — iOS Beta 2
+# iPhone and iPad
 
-Release `v1.0.12` provides `P.T.PC.Port-iOS-Beta-2.ipa`, an unsigned, optimized
-Release build that needs to be sideloaded. No original game files or maintainer
-provisioning profiles are included. This is a beta release for iOS/iPadOS 17+;
-the deployment target does not establish compatibility with every device.
+Download `P.T.PC.Port-iOS-1.1.1.ipa` from the [1.1.1 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.1).
+It is an unsigned, optimized device build for iOS/iPadOS 17+. A sideloading tool
+signs the IPA for your device. On-device gameplay validation for 1.1.1 is pending.
 
 The port is adapted from Alex Blount (`ilsonb`)'s
 [PR #5](https://github.com/ignusloki/pt-pc/pull/5). Android continues to use its
@@ -34,13 +33,12 @@ limit; larger devices retain 1024 pixels. Performance and heat need wider testin
 
 The iPhone 13 reporter confirmed startup, gameplay and AirPlay with test build 5
 on iOS 26.7.1. Earlier beta tests covered an iPhone 15 Pro Max and a 12.9-inch iPad
-Pro (5th generation, M1), on iOS/iPadOS 26.6.2. The final optimized IPA is a fresh
-build; these reports do not establish a full playthrough or minimum supported
-device. See the [1.0.12 changelog](release-notes-1.0.12.md).
+Pro (5th generation, M1), on iOS/iPadOS 26.6.2. These reports are from the
+previous beta cycle. See the [1.0.12 changelog](release-notes-1.0.12.md).
 
 ## Build from source on a Mac
 
-Check out `v1.0.12`. Install the full Xcode app and iOS SDK, select its developer
+Check out `v1.1.1`. Install the full Xcode app and iOS SDK, select its developer
 tools, and install `cmake`, `ninja`, `shaderc` and `vulkan-headers` with Homebrew.
 The build uses the device arm64 SDK; simulator execution is not supported.
 
@@ -53,7 +51,7 @@ Pass the extracted dynamic framework to the builder:
 python3 tools/ios/build.py --build build/ios-release --configuration Release \
   --moltenvk /absolute/path/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework
 python3 tools/ios/audit.py build/ios-release/pt.app
-python3 tools/ios/package.py build/ios-release/pt.app dist/P.T.PC.Port-iOS-Beta-2.ipa
+python3 tools/ios/package.py build/ios-release/pt.app dist/P.T.PC.Port-iOS-1.1.1.ipa
 ```
 
 The IPA needs to be sideloaded. `--source-cache build/macos-local-validation`
@@ -63,7 +61,7 @@ when `--configuration` is omitted. `--xcode --configure-only` generates a projec
 for developers who sign their own builds. Keep the same identifier and signing
 account when updating an existing installation.
 
-The numeric bundle build number is derived from the version (1.0.12 → 101200),
+The numeric bundle build number is derived from the version (1.1.1 → 110100),
 or explicitly set with `--build-number`. The bundle contains shaders, fonts,
 `extras.pak`, voice models and embedded MoltenVK. Original game files do not
 belong in the bundle. Mac and Android retain their own runtime selection.

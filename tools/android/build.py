@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LIBORBIS_REVISION = "643477263b2644e0803e0f58b8726ea4e3f3b7d4"
 NDK_VERSION = "28.2.13676358"
-VERSION = "1.0.12"
+VERSION = "1.1.1"
 
 
 def run(*args, env=None):
@@ -58,11 +58,12 @@ def stage_runtime(build, ndk, sdl_source):
         if not library.is_file():
             raise RuntimeError(f"Missing native library: {library}")
         shutil.copy2(library, native / library.name)
-    for directory, source in (("shaders", build / "shaders"), ("fonts", REPO / "assets/fonts"), ("voice", build / "voice")):
+    for directory, source in (("shaders", build / "shaders"), ("fonts", REPO / "assets/fonts"),
+                              ("voice", build / "voice"), ("survival", REPO / "assets/survival")):
         target = assets / "runtime" / directory
         target.mkdir(parents=True, exist_ok=True)
         for path in source.rglob("*"):
-            if not path.is_file() or path.suffix in (".so", ".dylib", ".dll"):
+            if not path.is_file() or path.name.startswith(".") or path.suffix in (".so", ".dylib", ".dll", ".d"):
                 continue
             destination = target / path.relative_to(source)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +93,7 @@ def stage_runtime(build, ndk, sdl_source):
     shutil.copytree(sdl_source / "android-project/app/src/main/java", java, dirs_exist_ok=True)
     entries = {}
     for path in assets.rglob("*"):
-        if path.is_file():
+        if path.is_file() and path != assets / "runtime-manifest.json":
             entries[path.relative_to(assets).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     (assets / "runtime-manifest.json").write_text(json.dumps(entries, indent=2) + "\n")
     return stage
@@ -111,7 +112,7 @@ def main():
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
     parser.add_argument("--application-id", help="Personal app ID for self-built APKs; permits coexistence with the signed beta")
     parser.add_argument("--version", default=VERSION)
-    parser.add_argument("--version-code", type=int, default=17)
+    parser.add_argument("--version-code", type=int, default=18)
     parser.add_argument("--keystore", type=Path, help="Private APK signing key; required for Release")
     parser.add_argument("--key-alias", help="Alias in the private signing keystore")
     parser.add_argument("--password-file", type=Path, help="Private file containing the keystore/key password")
@@ -140,7 +141,7 @@ def main():
     cached = []
     if args.source_cache:
         cache = args.source_cache.resolve()
-        for name in ("sdl3", "zlib", "volk", "vma", "glm", "imgui", "stb", "lua51", "whisper", "harfbuzz", "ogg", "vorbis"):
+        for name in ("sdl3", "zlib", "volk", "vma", "glm", "imgui", "stb", "lua51", "whisper", "harfbuzz", "ogg", "vorbis", "google_sbc"):
             path = cache / "_deps" / f"{name}-src"
             if path.is_dir():
                 cached.append(f"-DFETCHCONTENT_SOURCE_DIR_{name.upper()}={path}")

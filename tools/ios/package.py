@@ -26,7 +26,7 @@ def main():
     executable = info['CFBundleExecutable']
     allowed_roots = {'Info.plist', executable, 'extras.pak', 'Assets.car',
                      'AppIcon60x60@2x.png', 'AppIcon76x76@2x~ipad.png'}
-    allowed_directories = {'shaders', 'fonts', 'licenses', 'voice', 'Frameworks'}
+    allowed_directories = {'shaders', 'fonts', 'licenses', 'voice', 'Frameworks', 'survival'}
     voice = {'ggml-base.en-q5_1.bin', 'ggml-silero-v6.2.0.bin'}
     files = []
     for path in sorted(app.rglob('*')):
@@ -50,6 +50,11 @@ def main():
         files.append((path, relative))
     if digest(app / 'extras.pak') != digest(root / 'assets/extras.pak'):
         raise ValueError('extras.pak differs from the repository resource')
+    survival = root / 'assets/survival'
+    expected = {path.relative_to(survival): digest(path) for path in survival.rglob('*') if path.is_file()}
+    packaged = {path.relative_to(app / 'survival'): digest(path) for path, relative in files if relative.parts[0] == 'survival'}
+    if packaged != expected:
+        raise ValueError('Survive the Night resources differ from the repository resources')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(args.output, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path, relative in files:

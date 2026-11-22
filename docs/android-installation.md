@@ -1,9 +1,9 @@
-# Android 1.0.12 — build and install your own APK
+# Android 1.1.1 installation and source builds
 
-Android remains an official **source release**. No new public APK is
-provided for 1.0.12. The last prebuilt download remains
-[1.0.10 Android Beta 5](https://github.com/ignusloki/pt-pc/releases/tag/v1.0.10),
-with its [existing installation guide](android-beta-installation.md).
+Download `PT-1.1.1-arm64.apk` from the [1.1.1 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.1).
+Install it over the signed Android beta to keep your game files and progress.
+On a fresh installation, open the launcher and select your own P.T. PKG.
+On-device Android gameplay validation for 1.1.1 is pending.
 
 ## Preserve an existing beta installation
 
@@ -27,7 +27,7 @@ pinned LibOrbisPkg reader:
 ```sh
 git clone https://github.com/ignusloki/pt-pc.git
 cd pt-pc
-git checkout v1.0.12
+git checkout v1.1.1
 git clone https://github.com/maxton/LibOrbisPkg.git /your/work/LibOrbisPkg
 git -C /your/work/LibOrbisPkg checkout 643477263b2644e0803e0f58b8726ea4e3f3b7d4
 ```
@@ -40,7 +40,7 @@ python3 tools/android/build.py \
   --jdk /absolute/path/to/jdk-21 \
   --liborbis /your/work/LibOrbisPkg \
   --application-id com.yourname.pt.selfbuilt \
-  --version 1.0.12 --version-code 17
+  --version 1.1.1 --version-code 18
 ```
 
 The development APK is named `PT-Android-Prototype-arm64.apk` under
@@ -75,9 +75,8 @@ the PR's separate native APK builder is not used.
 
 Requirements remain Android 10+, ARM64, Vulkan 1.3 with the required features,
 descriptor limits and usable BC formats. 8 GB RAM or more is recommended.
-The verified hardware baseline is **Galaxy S22 SM-S901B/DS**, Exynos 2200 /
-Xclipse 920, Android 16. Official source status does not establish additional
-device compatibility, and the absence of new tickets is not extra testing.
+Earlier betas were tested on a **Galaxy S22 SM-S901B/DS** with Exynos 2200 /
+Xclipse 920 and Android 16.
 
 Start with Low graphics, 30 fps and original textures. The existing 960-pixel
 surface, 1024-pixel mip cap, touch/menu navigation, subtitle sizing, AAudio phone

@@ -231,6 +231,9 @@ class PackagingTests(unittest.TestCase):
         with patch.object(mac_build, "run", side_effect=lambda *args: Path(args[-1]).write_text("cannot load WAV")):
             with self.assertRaisesRegex(RuntimeError, "did not process the WAV"):
                 mac_build.verify_packaged_voice(app, self.root)
+        with patch.object(mac_build, "run"):
+            mac_build.verify_packaged_voice(app, self.root)
+            self.assertFalse((self.root / "voice-smoke.log").exists())
 
     def test_runtime_notices_match_the_published_runtime(self):
         artifacts = self.root / "dotnet-artifacts"
