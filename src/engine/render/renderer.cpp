@@ -1,5 +1,6 @@
 #include "engine/platform/os.h"
 #include "engine/render/renderer.h"
+#include "engine/render/lamp_trace.h"
 #include "engine/platform/ios_diagnostics.h"
 
 #include <SDL3/SDL.h>
@@ -531,6 +532,7 @@ void Renderer::Shutdown() {
         return;
     }
     gpu_->WaitIdle();
+    if (lamp_trace && !d3d12_) lamp_trace->Shutdown(ctx_);
     if (imgui_ready_ && !d3d12_) {
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplSDL3_Shutdown();
@@ -853,6 +855,7 @@ bool Renderer::BeginFrame(bool present) {
         frame.gen_pending = false;
     }
     vkResetFences(ctx_.device, 1, &frame.gen_in_flight);
+    if (lamp_trace) lamp_trace->FinishSlot(ctx_, frame_index_);
     vkResetCommandPool(ctx_.device, frame.pool, 0);
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1125,6 +1128,10 @@ void Renderer::EndFrame(bool draw_ui) {
             list.EndPass();
         }
     }
+    if (lamp_trace && target_image) {
+        lamp_trace->Capture(ctx_, cmd, gpu::vk::Native(target_image), window_ ? ctx_.swapchain.format : gpu::vk::Native(output_.format),
+                            gpu::vk::Native(window_extent), frame_index_, false, false);
+    }
     if (presenting_ && output_.image && !fitted && !layer_over_rendered) {
         list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
                                   Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
@@ -1365,6 +1372,7 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
         Composite(list, final_set_, 1.0f, extent, gpu::vk::FromNative(ctx_.swapchain.format), {0, 0}, true);
     }
     list.EndPass();
+    if (lamp_trace) lamp_trace->Capture(ctx_, cmd, target, ctx_.swapchain.format, ctx_.swapchain.extent, frame_index_, true, !source);
     vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
     const VkResult ended = vkEndCommandBuffer(cmd);

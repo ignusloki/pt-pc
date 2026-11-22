@@ -1,0 +1,23 @@
+0 focus 1
+20 sstep 15
+20 swait 60
+20 goto 0 0 12.5
+20 swait 15
+20 sfree
+20 sanchor
+20 gfile 0 -1.4 -4.0
+20 ffile 0 -0.2 7.5
+20 scamera 0 1.65 12.89 0 -0.035 1 54.879
+20 swait 220
+20 scamera -0.0074 1.6506 13.8854 0.002 -0.0365 0.9993 54.879
+20 swait 220
+20 scamera 0 1.65 18.4 0 0.02 1 54.879
+20 swait 220
+20 scamera off
+20 gfile 0 -1.4 6.5
+20 gfile -1.0 -1.4 7.5
+20 ffile -8 -0.2 7.5
+20 gfile -4.4 -1.4 7.5
+20 swait 100
+20 slog
+20 squit

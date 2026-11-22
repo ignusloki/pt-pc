@@ -1580,6 +1580,21 @@ void SceneRenderer::RecordShadows(gpu::CommandList& cmd) {
     cmd.UseTargets({{&shadow_, gpu::Layout::DepthReadOnly}});
 }
 
+void SceneRenderer::RecordFlareDepth(gpu::CommandList& cmd, const ViewSetup& view) {
+    // Flares are composited after MetalFX. Rasterize their occluders at the unjittered camera position that
+    // produced the flare coordinates. Moving objects still occlude immediately, using this frame's skin and transforms.
+    cmd.UseTargets({{&flare_depth_, gpu::Layout::DepthAttachment}});
+    cmd.BeginPass(extent_, {}, &flare_depth_, false, true);
+    cmd.BindPipeline(gpu::BindPoint::Graphics, shadow_pipeline_);
+    cmd.SetDepthBias(0.f, 0.f, 0.f);
+    for (const Draw& draw : draws_) {
+        if (draw.sub->pass == RenderPass::Opaque && draw.sub->kind == gpu::kKindDeferred && Visible(draw, view))
+            DrawMesh(cmd, draw, post_view_, 0, view.mirrored);
+    }
+    cmd.EndPass();
+    cmd.UseTargets({{&flare_depth_, gpu::Layout::DepthReadOnly}});
+}
+
 void SceneRenderer::RecordGBuffer(gpu::CommandList& cmd, const ViewSetup& view) {
     cmd.UseTargets({{&albedo_, gpu::Layout::ColorAttachment},
                      {&normal_, gpu::Layout::ColorAttachment},
@@ -2693,7 +2708,11 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
     if (main_view && reflect_map_early_ && &output == &hdr_) {
         RecordReflectMap(cmd, view);
     }
-    if (&output == &hdr_ && flare_depth_.Valid()) {
+    const bool original_metalfx_hdr = main_view && up_.enabled && up_.kind == UpscalerKind::MetalFx &&
+                                      !renderer_->EnhancedRendering() && renderer_->OutputMode() != RendererOutputMode::Sdr;
+    if (&output == &hdr_ && flare_depth_.Valid() && original_metalfx_hdr && vfx_has_filter && vfx_has_filter(1u)) {
+        RecordFlareDepth(cmd, view);
+    } else if (&output == &hdr_ && flare_depth_.Valid()) {
         cmd.UseTargets({{&depth_, gpu::Layout::TransferSrc}, {&flare_depth_, gpu::Layout::TransferDst}});
         gpu::ImageCopy copy;
         copy.src = {gpu::Aspect::Depth, 0, 0, 1};
@@ -2716,7 +2735,10 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
         Stamp(cmd, 7);
     }
     cmd.BeginPass(ViewArea(view), {{&output, false, {}}}, &depth_, true, false);
-    if (main_view && up_.enabled) {
+    // Full-resolution refractive surfaces belong to the scene that temporal AA reconstructs.
+    // Compare the subsequent particle pass against that scene so fixed lamp glass keeps its history.
+    const bool snapshot_after_scene_vfx = original_metalfx_hdr && vfx_forward;
+    if (main_view && up_.enabled && !snapshot_after_scene_vfx) {
         RecordOpaqueSnapshot(cmd, output);
     }
     SceneVfxContext liquid_context;
@@ -2747,6 +2769,7 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
         }
         vfx_forward(context);
         BindSets(cmd, gpu::BindPoint::Graphics);
+        if (snapshot_after_scene_vfx) RecordOpaqueSnapshot(cmd, output);
         if (&output == &hdr_) {
             RecordEffects(cmd, output, context);
         }
@@ -3201,6 +3224,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     slot.exposure_sample_time = exposure_time_;
     slot.vr_eye = vr_eye_;
     stats_.ev = ev_;
+    stats_.jitter_pixels = up_.enabled ? up_.jitter_pixels : glm::vec2(0.f);
     stats_.exposure = exposure_;
     if (vr_eye_ != 0) {
         ++frame_counter_;

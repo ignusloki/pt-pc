@@ -96,6 +96,7 @@ def sign(app, identity="-"):
 
 def main():
     parser = argparse.ArgumentParser(description="Make P.T. PC Port.app from a macOS build folder and zip it")
+    parser.add_argument("--lamp-diagnostics", action="store_true", help="record local lamp and wall luminance during play")
     parser.add_argument("--build", default=str(REPO / "build" / "macos"))
     parser.add_argument("--out", default=str(REPO / "dist"))
     parser.add_argument("--exe", help="Explicit executable: pt_release for the release 1.0 game (PT_RELEASE_LOCKS); shipped as pt")
@@ -115,9 +116,11 @@ def main():
         sys.exit(f"{moltenvk} not found; it is copied there when pt is built (cmake/MacOS.cmake)")
     ver = version(build)
     out = Path(args.out)
-    app = out / f"{APP_NAME}.app"
+    app_name = "P.T. Lamp Diagnostics" if args.lamp_diagnostics else APP_NAME
+    app = out / f"{app_name}.app"
     arch = architecture(exe)
-    archive = out / f"pt-port-{ver}-macos-{arch}.zip"
+    suffix = "-lamp-diagnostics" if args.lamp_diagnostics else ""
+    archive = out / f"pt-port-{ver}-macos-{arch}{suffix}.zip"
     if app.exists() or archive.exists():
         sys.exit(f"Package output already exists; choose another --out folder: {app}")
     shader_files = validate_build(build, exe)
@@ -155,8 +158,8 @@ def main():
             "CFBundleIconFile": ICON_FILE,
             "CFBundleIdentifier": BUNDLE_ID,
             "CFBundleInfoDictionaryVersion": "6.0",
-            "CFBundleName": APP_NAME,
-            "CFBundleDisplayName": APP_NAME,
+            "CFBundleName": app_name,
+            "CFBundleDisplayName": app_name,
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": re.sub(r"-.*$", "", ver),
             "CFBundleVersion": ver,
@@ -201,6 +204,8 @@ def main():
             (previews / extra).unlink(missing_ok=True)
     else:
         print(f"loop browser previews skipped: no game files at {args.game}")
+    if args.lamp_diagnostics:
+        (resources / "lamp-diagnostics").touch()
     sign(app, args.identity)
     if args.no_zip:
         print(app)

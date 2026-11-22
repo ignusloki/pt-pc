@@ -79,6 +79,7 @@
 #include "engine/render/model_cache.h"
 #include "engine/render/gpu/gpu_vk_native.h"
 #include "engine/render/renderer.h"
+#include "engine/render/lamp_trace.h"
 #include "engine/render/scene_renderer.h"
 #include "engine/render/texture_manager.h"
 #include "engine/render/d3d12/vk_d3d12_share.h"
@@ -9743,6 +9744,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
             } else {
                 app.scene.Render(camera, draw_items, lighting, dt);
             }
+            if (app.renderer.lamp_trace && !armory_studio) {
+                app.renderer.lamp_trace->Scene(view.Frame(), view.Floor().CurrentFloorName(), camera, lighting, app.scene.Stats(),
+                                               vfx_pass.List(), float(vfx_extent.width) / std::max(1u, vfx_extent.height),
+                                               app.scene.toggles.distortion && lighting.valid && lighting.screen.screen_distortion,
+                                               app.renderer.HdrPaperWhite(), app.window ? SDL_GetFloatProperty(SDL_GetWindowProperties(app.window),
+                                                   SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 1.f) : 0.f);
+            }
             take_reflection_readback(view);
             last_render_frame = frame;
             const auto part_t5 = std::chrono::steady_clock::now();
@@ -10201,6 +10209,25 @@ int main(int argc, char** argv) {
 #endif
         }
     }
+#if defined(__APPLE__) && !PT_IOS
+    std::error_code trace_ec;
+    const auto trace_base = pt::os::GetEnv("PT_LAMP_TRACE");
+    std::error_code marker_ec;
+    if (!trace_base.empty() || (!tool && std::filesystem::is_regular_file(pt::ExecutableDir() / "lamp-diagnostics", marker_ec))) {
+        const auto base = trace_base.empty() ? UserDataDir() / "lamp-diagnostics" : pt::os::PathFromUtf8(trace_base);
+        const auto stamp = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
+        const auto name = std::format("session-{:%Y%m%d-%H%M%S}", stamp);
+        auto session = base / name;
+        std::filesystem::create_directories(base, trace_ec);
+        for (unsigned suffix = 1; !trace_ec && !std::filesystem::create_directory(session, trace_ec); ++suffix) {
+            session = base / std::format("{}-{}", name, suffix);
+        }
+        if (!trace_ec) {
+            app.renderer.lamp_trace = std::make_shared<pt::LampTrace>(session);
+            if (options.log_path.empty()) log_path = session / "pt.log";
+        }
+    }
+#endif
     g_output_dir = log_path.parent_path();
     g_log_path = log_path;
     if (!tool) pt::PreserveCrashLog(log_path);
@@ -10210,6 +10237,10 @@ int main(int argc, char** argv) {
             std::filesystem::copy_file(log_path, log_path.parent_path() / "pt-previous.log", std::filesystem::copy_options::overwrite_existing, ec);
     }
     pt::LogSetFile(log_path);
+#if defined(__APPLE__) && !PT_IOS
+    if (trace_ec) pt::LogWarn("lamp diagnostics setup: {}", trace_ec.message());
+    if (app.renderer.lamp_trace) pt::LogInfo("lamp diagnostics active: final scRGB lamp and wall patches for rendered, generated and repeated frames");
+#endif
     pt::ios_diag::Stage("engine log opened");
 #if PT_IOS && defined(PT_IOS_DIAGNOSTICS)
     pt::LogInfo("iOS startup diagnostic 5 (AirPlay scene guards): all diagnostic logs in Documents/data/ios-diagnostics");

@@ -27,6 +27,7 @@ struct SDL_Window;
 namespace pt {
 
 enum class FrameStartAction;
+class LampTrace;
 
 struct RendererSettings {
     gpu::Backend backend = gpu::Backend::Vulkan;
@@ -157,6 +158,7 @@ public:
     std::function<bool()> ui_layer_over_rendered;
     static constexpr VkFormat kUiLayerFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     GeneratedFrameHooks generated_frame;
+    std::shared_ptr<LampTrace> lamp_trace;
     std::function<FrameStartAction(bool)> frame_start;
     std::function<bool()> swapchain_failed;
 

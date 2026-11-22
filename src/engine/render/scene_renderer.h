@@ -160,6 +160,7 @@ struct RenderStats {
     uint32_t lights = 0;
     uint32_t probes = 0;
     uint32_t shadow_views = 0;
+    glm::vec2 jitter_pixels{0.f};
     float ev = 0.0f;
     float exposure = 1.0f;
     float luminance = 0.0f;
@@ -399,6 +400,7 @@ private:
     void RecordRayTracing(gpu::CommandList& cmd);
     void CollectEffects();
     void RecordView(gpu::CommandList& cmd, const ViewSetup& view, RenderTarget& output, bool main_view);
+    void RecordFlareDepth(gpu::CommandList& cmd, const ViewSetup& view);
     void RecordGBuffer(gpu::CommandList& cmd, const ViewSetup& view);
     void RecordOcclusion(gpu::CommandList& cmd, const ViewSetup& view);
     bool EnsureAoTargets();
