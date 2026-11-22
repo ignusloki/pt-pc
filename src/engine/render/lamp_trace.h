@@ -7,6 +7,7 @@
 #include <fstream>
 #include <glm/glm.hpp>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace pt {
@@ -21,14 +22,17 @@ class LampTrace {
 public:
     explicit LampTrace(std::filesystem::path directory);
     void Scene(uint64_t tick, const std::string& floor, const Camera& camera, const SceneLighting& lights,
-               const RenderStats& stats, const vfx::RenderList& effects, float aspect, bool lens, float paper, float headroom);
+               const RenderStats& stats, const vfx::RenderList& effects, float aspect, bool lens, float paper, SDL_Window* window,
+               bool enhanced, bool menu, bool paused);
     void Capture(vk::Context& ctx, VkCommandBuffer cmd, VkImage image, VkFormat format, VkExtent2D extent,
-                 uint32_t slot, bool interpolated, bool repeat);
+                 uint32_t slot, bool interpolated, bool repeat, VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     void FinishSlot(vk::Context& ctx, uint32_t slot);
+    void Queued(const vk::Context& ctx, uint32_t id, uint32_t image, const char* kind, double submitted, VkResult result);
+    void Displayed(const vk::Context& ctx, const VkPastPresentationTimingGOOGLE& timing);
     void Shutdown(vk::Context& ctx);
 
 private:
-    static constexpr unsigned kRegions = 12, kSide = 48;
+    static constexpr unsigned kRegions = 14, kSide = 48;
     struct Region {
         std::string name;
         glm::vec2 uv;
@@ -54,8 +58,18 @@ private:
     };
     std::array<std::array<Readback, 2>, 2> slots_;
     void Write(vk::Context& ctx, Readback& readback);
+    struct PreviousPatch {
+        std::array<float, kSide * kSide> nits{};
+        VkOffset3D offset{};
+        unsigned side = 0;
+        uint64_t sequence = 0;
+    };
+    std::unordered_map<std::string, PreviousPatch> previous_;
     std::filesystem::path directory_;
     std::ofstream csv_;
+    std::ofstream presents_;
+    double display_sample_time_ = -1;
+    bool display_menu_ = false;
     std::unordered_set<uint64_t> named_lights_;
     uint64_t sequence_ = 0;
     uint64_t segment_ = UINT64_MAX;

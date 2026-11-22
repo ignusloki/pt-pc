@@ -2708,9 +2708,9 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
     if (main_view && reflect_map_early_ && &output == &hdr_) {
         RecordReflectMap(cmd, view);
     }
-    const bool original_metalfx_hdr = main_view && up_.enabled && up_.kind == UpscalerKind::MetalFx &&
-                                      !renderer_->EnhancedRendering() && renderer_->OutputMode() != RendererOutputMode::Sdr;
-    if (&output == &hdr_ && flare_depth_.Valid() && original_metalfx_hdr && vfx_has_filter && vfx_has_filter(1u)) {
+    const bool metalfx_hdr = main_view && up_.enabled && up_.kind == UpscalerKind::MetalFx &&
+                             renderer_->OutputMode() != RendererOutputMode::Sdr;
+    if (&output == &hdr_ && flare_depth_.Valid() && metalfx_hdr && vfx_has_filter && vfx_has_filter(1u)) {
         RecordFlareDepth(cmd, view);
     } else if (&output == &hdr_ && flare_depth_.Valid()) {
         cmd.UseTargets({{&depth_, gpu::Layout::TransferSrc}, {&flare_depth_, gpu::Layout::TransferDst}});
@@ -2737,7 +2737,7 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
     cmd.BeginPass(ViewArea(view), {{&output, false, {}}}, &depth_, true, false);
     // Full-resolution refractive surfaces belong to the scene that temporal AA reconstructs.
     // Compare the subsequent particle pass against that scene so fixed lamp glass keeps its history.
-    const bool snapshot_after_scene_vfx = original_metalfx_hdr && vfx_forward;
+    const bool snapshot_after_scene_vfx = metalfx_hdr && vfx_forward;
     if (main_view && up_.enabled && !snapshot_after_scene_vfx) {
         RecordOpaqueSnapshot(cmd, output);
     }

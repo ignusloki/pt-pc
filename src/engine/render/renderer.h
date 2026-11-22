@@ -174,6 +174,7 @@ private:
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkCommandBuffer resume = VK_NULL_HANDLE;
         VkCommandBuffer gen_cmd = VK_NULL_HANDLE;
+        VkCommandBuffer present_copy_cmd = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkSemaphore gen_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
@@ -189,6 +190,9 @@ private:
 #endif
     void DestroyTargets();
     void PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui);
+    void CopyRenderedDrawable(Frame& frame);
+    VkResult PresentWindowImage(const VkPresentInfoKHR& present, const char* kind);
+    void ReadDisplayTimes();
     bool CreateCompositePipeline(gpu::Format output_format);
     bool BuildCompositePipeline(gpu::Format format, gpu::PipelineHandle& pipeline, const char* fragment = "composite.frag",
                                 gpu::PipelineLayoutHandle layout = {});
@@ -226,6 +230,8 @@ private:
     uint32_t image_index_ = 0;
     uint32_t gen_index_ = 0;
     bool gen_acquired_ = false;
+    vk::Image paired_output_{};
+    uint32_t presentation_id_ = 0;
     gpu::BindingSetHandle gen_set_[kFramesInFlight] = {};
     VkCommandBuffer active_cmd_ = VK_NULL_HANDLE;
     gpu::vk::CommandList active_list_{VK_NULL_HANDLE};

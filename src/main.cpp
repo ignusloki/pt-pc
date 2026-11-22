@@ -9748,8 +9748,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 app.renderer.lamp_trace->Scene(view.Frame(), view.Floor().CurrentFloorName(), camera, lighting, app.scene.Stats(),
                                                vfx_pass.List(), float(vfx_extent.width) / std::max(1u, vfx_extent.height),
                                                app.scene.toggles.distortion && lighting.valid && lighting.screen.screen_distortion,
-                                               app.renderer.HdrPaperWhite(), app.window ? SDL_GetFloatProperty(SDL_GetWindowProperties(app.window),
-                                                   SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 1.f) : 0.f);
+                                               app.renderer.HdrPaperWhite(), app.window,
+                                               app.renderer.EnhancedRendering(), (ui_ready && ui.MenuOpen()) || show_settings, game.Paused());
             }
             take_reflection_readback(view);
             last_render_frame = frame;

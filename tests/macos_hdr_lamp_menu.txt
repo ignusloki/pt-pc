@@ -1,0 +1,33 @@
+0 focus 1
+20 sstep 15
+20 swait 75
+20 scamera -0.001 1.65 8.56 0.0276 -0.0768 0.9967 54.879
+20 swait 155
+20 sktap Escape 2
+20 swait 40
+20 sexpect menu 1
+20 swait 75
+20 sktap Escape 2
+20 swait 45
+20 sexpect menu 0
+20 swait 155
+20 scamera off
+20 goto 0 0 12.5
+20 swait 15
+20 sfree
+20 sanchor
+20 gfile 0 -1.4 -4.0
+20 ffile 0 -0.2 7.5
+20 scamera -0.009 1.65 12.93 0.1249 -0.0993 0.9872 54.879
+20 swait 155
+20 sktap Escape 2
+20 swait 40
+20 sexpect menu 1
+20 swait 75
+20 sktap Escape 2
+20 swait 45
+20 sexpect menu 0
+20 swait 155
+20 scamera off
+20 slog
+20 squit

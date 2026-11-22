@@ -53,6 +53,7 @@ struct Swapchain {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkColorSpaceKHR color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D extent{};
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     std::vector<VkImage> images;
     std::vector<VkImageView> views;
     std::vector<VkSemaphore> render_finished;
@@ -73,6 +74,8 @@ private:
 class Context {
 public:
     bool enhanced_rendering = false;
+    bool display_timing = false;
+    uint32_t swapchain_generation = 0;
     bool Init(SDL_Window* window, bool validation, bool want_hdr = false);
     void Shutdown();
 
@@ -83,7 +86,7 @@ public:
     bool android_surface_lost = false;
 #endif
     VkResult AcquireNextImage(VkSemaphore semaphore, uint32_t* index);
-    VkResult QueuePresent(const VkPresentInfoKHR& info);
+    VkResult QueuePresent(const VkPresentInfoKHR& info, uint32_t timing_id = 0);
     const SwapchainHooks* SwapchainOwner() const { return swapchain_owner_; }
     VkImageLayout PresentLayout() const { return swapchain_owner_ ? swapchain_owner_->PresentLayout() : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; }
 

@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "engine/render/macos_hdr.h"
+#include "engine/core/log.h"
 
 namespace pt::vk {
 namespace {
@@ -45,6 +46,21 @@ uint16_t Unorm16(float value) {
     return CFSwapInt16HostToBig(static_cast<uint16_t>(std::clamp(std::lround(value), 0l, 65535l)));
 }
 
+}
+
+void LogMacHdrDisplayState(SDL_Window* window, bool menu) {
+    @autoreleasepool {
+        CAMetalLayer* layer = WindowLayer(window);
+        if (!layer) return;
+        NSWindow* cocoa = (__bridge NSWindow*)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+        NSScreen* screen = cocoa.screen;
+        NSString* space = layer.colorspace ? (__bridge NSString*)CGColorSpaceGetName(layer.colorspace) : nil;
+        LogInfo("lamp display: menu {} current EDR {:.3f} potential {:.3f} reference {:.3f} layer EDR {} metadata {} "
+                "display sync {} format {} color space {}", menu, double(screen.maximumExtendedDynamicRangeColorComponentValue),
+                double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue), double(screen.maximumReferenceExtendedDynamicRangeColorComponentValue),
+                bool(layer.wantsExtendedDynamicRangeContent), layer.EDRMetadata != nil, bool(layer.displaySyncEnabled),
+                unsigned(layer.pixelFormat), space.UTF8String ?: "(unnamed)");
+    }
 }
 
 bool SetMacHdrMetadata(SDL_Window* window, VkColorSpaceKHR color_space, const VkHdrMetadataEXT* metadata) {

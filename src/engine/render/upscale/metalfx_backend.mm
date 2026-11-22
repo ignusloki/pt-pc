@@ -16,6 +16,7 @@
 #include "engine/render/upscale/upscale.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 
 #include "engine/core/log.h"
@@ -467,9 +468,13 @@ public:
         interp_layout_ = VK_IMAGE_LAYOUT_GENERAL;
         prepared_ = true;
         prepare_ = p;
-        if (p.reset) {
-            reset_ = true;
-        }
+        // The motion interval is capped at 250 ms by scene_upscale. After a loading stall or
+        // a camera cut, show the current image and seed interpolation with it for the next pair.
+        const auto now = std::chrono::steady_clock::now();
+        interpolate_pair_ = !p.reset && previous_input_ != std::chrono::steady_clock::time_point{} &&
+                            now - previous_input_ < std::chrono::milliseconds(250);
+        previous_input_ = now;
+        if (!interpolate_pair_) reset_ = true;
     }
 
     const vk::Image* Present(uint32_t image_index) override {
@@ -484,10 +489,9 @@ public:
     }
 
     const vk::Image* GeneratedImage() override {
-        if (!generating_ || !prepared_ || !has_previous_) {
-            return nullptr;
-        }
+        if (!generating_ || !prepared_) return nullptr;
         prepared_ = false;
+        if (!has_previous_ || !interpolate_pair_) return nullptr;
         const vk::Image* generated = Interpolate();
         if (generated) {
             // the renderer's generated-frame composite records GENERAL -> SHADER_READ_ONLY before this slot ends; keep the
@@ -804,6 +808,7 @@ private:
         presented_count_ = 0;
         has_previous_ = false;
         prepared_ = false;
+        previous_input_ = {};
         reset_ = true;
     }
 
@@ -826,6 +831,8 @@ private:
     bool available_ = false;
     bool generating_ = false;
     bool prepared_ = false;
+    bool interpolate_pair_ = false;
+    std::chrono::steady_clock::time_point previous_input_{};
     bool reset_ = true;
     bool has_previous_ = false;
     uint32_t presented_count_ = 0;

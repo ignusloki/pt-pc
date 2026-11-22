@@ -157,6 +157,7 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     settings_ = settings;
     if (!EnhancedRenderingAvailable()) settings_.rendering_pipeline = RenderingPipeline::Original;
     ctx_.enhanced_rendering = EnhancedRendering();
+    ctx_.display_timing = lamp_trace != nullptr;
     hdr_color = settings.hdr_color;
     hdr_ui_brightness = settings.hdr_ui_brightness;
     SetHdrSdrEotf(settings.hdr_sdr_eotf);
@@ -232,12 +233,13 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         alloc.commandPool = frame.pool;
         alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        VkCommandBuffer buffers[3] = {};
-        alloc.commandBufferCount = 3;
+        VkCommandBuffer buffers[4] = {};
+        alloc.commandBufferCount = 4;
         vkAllocateCommandBuffers(ctx_.device, &alloc, buffers);
         frame.cmd = buffers[0];
         frame.resume = buffers[1];
         frame.gen_cmd = buffers[2];
+        frame.present_copy_cmd = buffers[3];
         VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.image_available);
         vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.gen_available);
@@ -388,6 +390,7 @@ void Renderer::SetGrainNoise(gpu::ImageViewHandle view) {
 }
 
 void Renderer::DestroyTargets() {
+    if (paired_output_.image) ctx_.DestroyImage(paired_output_);
     gpu_->DestroyImage(scene_color_);
     gpu_->DestroyImage(final_);
     gpu_->DestroyImage(ui_top_);
@@ -532,7 +535,10 @@ void Renderer::Shutdown() {
         return;
     }
     gpu_->WaitIdle();
-    if (lamp_trace && !d3d12_) lamp_trace->Shutdown(ctx_);
+    if (lamp_trace && !d3d12_) {
+        ReadDisplayTimes();
+        lamp_trace->Shutdown(ctx_);
+    }
     if (imgui_ready_ && !d3d12_) {
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplSDL3_Shutdown();
@@ -865,7 +871,12 @@ bool Renderer::BeginFrame(bool present) {
     split_wait_ = VK_NULL_HANDLE;
     split_wait_value_ = 0;
     gen_acquired_ = false;
-    if (presenting_ && generated_frame.generate) {
+    if (presenting_ && generated_frame.generate && !paired_output_.image) {
+        const auto size = ctx_.swapchain.extent;
+        ctx_.CreateImage(paired_output_, ctx_.swapchain.format, {size.width, size.height, 1},
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    }
+    if (presenting_ && generated_frame.generate && paired_output_.image) {
         const auto gen_acquire_started = std::chrono::steady_clock::now();
         const VkResult gen_acquire = ctx_.AcquireNextImage(frame.gen_available, &gen_index_);
         cpu_waits_.acquire_ms += wait_ms(std::chrono::steady_clock::now() - gen_acquire_started).count();
@@ -983,10 +994,13 @@ void Renderer::EndFrame(bool draw_ui) {
     list.Barrier(ColorBarrier(scene_color_.image, PipelineStage::ColorAttachmentOutput | PipelineStage::ComputeShader,
                               Access::ColorAttachmentWrite | Access::ShaderStorageWrite, Layout::ColorAttachment, PipelineStage::FragmentShader,
                               gpu::Bits(Access::ShaderSampledRead), Layout::ShaderReadOnly));
-    const gpu::ImageHandle target_image = window_ ? (presenting_ ? gpu::vk::Wrap<gpu::ImageTag>(ctx_.swapchain.images[image_index_]) : gpu::ImageHandle{})
-                                                  : output_.image;
-    const gpu::ImageViewHandle target_view =
-        window_ ? (presenting_ ? gpu::vk::Wrap<gpu::ImageViewTag>(ctx_.swapchain.views[image_index_]) : gpu::ImageViewHandle{}) : output_.view;
+    const bool pair = gen_acquired_;
+    gpu::ImageHandle target_image = window_ ? gpu::ImageHandle{} : output_.image;
+    gpu::ImageViewHandle target_view = window_ ? gpu::ImageViewHandle{} : output_.view;
+    if (presenting_) {
+        target_image = gpu::vk::Wrap<gpu::ImageTag>(pair ? paired_output_.image : ctx_.swapchain.images[image_index_]);
+        target_view = gpu::vk::Wrap<gpu::ImageViewTag>(pair ? paired_output_.view : ctx_.swapchain.views[image_index_]);
+    }
     const gpu::Extent2D extent = RenderExtent();
     const bool xr = std::exchange(xr_pending_, false);
     static const bool ui_over_grain = [] {
@@ -1090,10 +1104,12 @@ void Renderer::EndFrame(bool draw_ui) {
     }
     const gpu::Extent2D window_extent = presenting_ ? gpu::vk::FromNative(ctx_.swapchain.extent) : extent;
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
-    const gpu::Layout present_layout = gpu::vk::FromNative(ctx_.PresentLayout());
+    const gpu::Layout present_layout = pair ? Layout::TransferSrc : gpu::vk::FromNative(ctx_.PresentLayout());
+    const auto present_stage = pair ? PipelineStage::Transfer : PipelineStage::BottomOfPipe;
+    const auto present_access = pair ? gpu::Bits(Access::TransferRead) : 0u;
     if (target_image) {
-        list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
-                                  gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
+        list.Barrier(ColorBarrier(target_image, pair ? PipelineStage::Transfer : PipelineStage::ColorAttachmentOutput, 0, Layout::Undefined,
+                                  PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite), Layout::ColorAttachment));
         color.view = target_view;
         if (fitted) {
             color.load = gpu::LoadOp::Clear;
@@ -1128,7 +1144,7 @@ void Renderer::EndFrame(bool draw_ui) {
             list.EndPass();
         }
     }
-    if (lamp_trace && target_image) {
+    if (lamp_trace && target_image && !pair) {
         lamp_trace->Capture(ctx_, cmd, gpu::vk::Native(target_image), window_ ? ctx_.swapchain.format : gpu::vk::Native(output_.format),
                             gpu::vk::Native(window_extent), frame_index_, false, false);
     }
@@ -1146,7 +1162,7 @@ void Renderer::EndFrame(bool draw_ui) {
         list.CopyImage(target, Layout::TransferSrc, output_, Layout::TransferDst, {&copy, 1});
         list.Barrier(ColorBarrier(output_.image, PipelineStage::Transfer, gpu::Bits(Access::TransferWrite), Layout::TransferDst,
                                   PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
-        list.Barrier(ColorBarrier(target_image, PipelineStage::Transfer, 0, Layout::TransferSrc, PipelineStage::BottomOfPipe, 0, present_layout));
+        if (!pair) list.Barrier(ColorBarrier(target_image, PipelineStage::Transfer, 0, Layout::TransferSrc, present_stage, present_access, present_layout));
         output_ready_ = true;
     } else if (presenting_ && output_.image && (fitted || layer_over_rendered)) {
         list.Barrier(ColorBarrier(output_.image, PipelineStage::AllCommands, 0, Layout::Undefined, PipelineStage::ColorAttachmentOutput,
@@ -1160,11 +1176,11 @@ void Renderer::EndFrame(bool draw_ui) {
         list.Barrier(ColorBarrier(output_.image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
                                   Layout::ColorAttachment, PipelineStage::Transfer, gpu::Bits(Access::TransferRead), Layout::TransferSrc));
         list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
-                                  Layout::ColorAttachment, PipelineStage::BottomOfPipe, 0, present_layout));
+                                  Layout::ColorAttachment, present_stage, present_access, present_layout));
         output_ready_ = true;
     } else if (presenting_) {
         list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
-                                  Layout::ColorAttachment, PipelineStage::BottomOfPipe, 0, present_layout));
+                                  Layout::ColorAttachment, present_stage, present_access, present_layout));
     } else if (!window_) {
         output_ready_ = true;
         list.Barrier(ColorBarrier(target_image, PipelineStage::ColorAttachmentOutput, gpu::Bits(Access::ColorAttachmentWrite),
@@ -1202,7 +1218,7 @@ void Renderer::EndFrame(bool draw_ui) {
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cmd_info;
-    if (presenting_) {
+    if (presenting_ && !pair) {
         signal.semaphore = ctx_.swapchain.render_finished[image_index_];
         waits[wait_count++] = wait;
         signals[signal_count++] = signal;
@@ -1218,11 +1234,12 @@ void Renderer::EndFrame(bool draw_ui) {
     active_list_ = gpu::vk::CommandList(active_cmd_);
     const auto submit_started = std::chrono::steady_clock::now();
     cpu_waits_.end_record_ms = wait_ms(submit_started - end_started).count();
-    ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, frame.in_flight), "frame submit");
+    ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, pair ? VK_NULL_HANDLE : frame.in_flight), "frame submit");
     if (presenting_ && gen_acquired_) {
         const vk::Image* generated = fg_sync && !xr ? generated_frame.generate() : nullptr;
         PresentGeneratedFrame(frame, generated, generated ? fg_wait : VK_NULL_HANDLE, fg_wait_value, draw_ui);
     }
+    if (pair) CopyRenderedDrawable(frame);
     streamline::SetMarker(streamline::Marker::RenderSubmitEnd);
     const auto present_started = std::chrono::steady_clock::now();
     cpu_waits_.submit_ms = wait_ms(present_started - submit_started).count();
@@ -1234,7 +1251,7 @@ void Renderer::EndFrame(bool draw_ui) {
         present.pSwapchains = &ctx_.swapchain.handle;
         present.pImageIndices = &image_index_;
         streamline::SetMarker(streamline::Marker::PresentStart);
-        const VkResult result = ctx_.QueuePresent(present);
+        const VkResult result = PresentWindowImage(present, "rendered");
         streamline::SetMarker(streamline::Marker::PresentEnd);
         ctx_.CheckDeviceLost(result, "present");
 #ifdef __ANDROID__
@@ -1287,6 +1304,65 @@ bool Renderer::SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSem
     split_wait_ = wait;
     split_wait_value_ = wait_value;
     return true;
+}
+
+void Renderer::ReadDisplayTimes() {
+    if (!ctx_.display_timing || !ctx_.swapchain.handle) return;
+    std::array<VkPastPresentationTimingGOOGLE, 32> timings{};
+    uint32_t count = timings.size();
+    const auto result = vkGetPastPresentationTimingGOOGLE(ctx_.device, ctx_.swapchain.handle, &count, timings.data());
+    if (result != VK_SUCCESS && result != VK_INCOMPLETE) return;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& timing = timings[i];
+        if (lamp_trace) lamp_trace->Displayed(ctx_, timing);
+    }
+}
+
+VkResult Renderer::PresentWindowImage(const VkPresentInfoKHR& present, const char* kind) {
+    if (!lamp_trace) return ctx_.QueuePresent(present);
+    const uint32_t id = ++presentation_id_;
+    const double submitted = LogClock();
+    const auto result = ctx_.QueuePresent(present, id);
+    lamp_trace->Queued(ctx_, id, *present.pImageIndices, kind, submitted, result);
+    if (id % 8 == 0) ReadDisplayTimes();
+    return result;
+}
+
+void Renderer::CopyRenderedDrawable(Frame& frame) {
+    // MoltenVK obtains a native drawable on its first GPU use. The generated drawable
+    // must be written and queued before the rendered drawable is touched.
+    const auto cmd = frame.present_copy_cmd;
+    const auto target = ctx_.swapchain.images[image_index_];
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (!vk::Check(vkBeginCommandBuffer(cmd, &begin), "begin rendered drawable copy")) FatalError("Cannot begin the rendered frame copy.", window_ != nullptr);
+    vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageCopy copy{};
+    copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.extent = paired_output_.extent;
+    vkCmdCopyImage(cmd, paired_output_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    if (lamp_trace) lamp_trace->Capture(ctx_, cmd, target, ctx_.swapchain.format, ctx_.swapchain.extent,
+                                        frame_index_, false, false, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vk::ImageBarrier(cmd, target, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0, ctx_.PresentLayout());
+    if (!vk::Check(vkEndCommandBuffer(cmd), "end rendered drawable copy")) FatalError("Cannot finish the rendered frame copy.", window_ != nullptr);
+    VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    command.commandBuffer = cmd;
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = frame.image_available;
+    wait.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signal.semaphore = ctx_.swapchain.render_finished[image_index_];
+    signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = submit.waitSemaphoreInfoCount = submit.signalSemaphoreInfoCount = 1;
+    submit.pCommandBufferInfos = &command;
+    submit.pWaitSemaphoreInfos = &wait;
+    submit.pSignalSemaphoreInfos = &signal;
+    const auto result = vkQueueSubmit2(ctx_.queue, 1, &submit, frame.in_flight);
+    ctx_.CheckDeviceLost(result, "rendered drawable copy");
+    if (result != VK_SUCCESS) FatalError("Cannot submit the rendered frame copy.", window_ != nullptr);
 }
 
 void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui) {
@@ -1405,7 +1481,7 @@ void Renderer::PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSe
     present.swapchainCount = 1;
     present.pSwapchains = &ctx_.swapchain.handle;
     present.pImageIndices = &gen_index_;
-    const VkResult result = ctx_.QueuePresent(present);
+    const VkResult result = PresentWindowImage(present, source ? "generated" : "repeat");
     ctx_.CheckDeviceLost(result, "generated frame present");
 #ifdef __ANDROID__
     if (result == VK_ERROR_SURFACE_LOST_KHR) ctx_.android_surface_lost = true;

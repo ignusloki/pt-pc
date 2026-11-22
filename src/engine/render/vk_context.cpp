@@ -611,6 +611,10 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             add(VK_EXT_HDR_METADATA_EXTENSION_NAME);
             hdr_metadata = true;
         }
+#if defined(__APPLE__) && !PT_IOS
+        display_timing = display_timing && surface && has(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
+        if (display_timing) add(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
+#endif
         if (has(VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) {
             VkPhysicalDeviceFaultFeaturesEXT query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
             VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
@@ -1017,6 +1021,8 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     swapchain.format = chosen.format;
     swapchain.color_space = chosen.colorSpace;
     swapchain.extent = extent;
+    swapchain.present_mode = present_mode;
+    ++swapchain_generation;
     swapchain.min_image_count = image_count;
     SetHdrMetadata();
     uint32_t count = 0;
@@ -1204,9 +1210,16 @@ VkResult Context::AcquireNextImage(VkSemaphore semaphore, uint32_t* index) {
     return vkAcquireNextImageKHR(device, swapchain.handle, UINT64_MAX, semaphore, VK_NULL_HANDLE, index);
 }
 
-VkResult Context::QueuePresent(const VkPresentInfoKHR& info) {
+VkResult Context::QueuePresent(const VkPresentInfoKHR& info, uint32_t timing_id) {
     if (swapchain_owner_) {
         return swapchain_owner_->QueuePresent(queue, info);
+    }
+    if (display_timing && timing_id) {
+        VkPresentTimeGOOGLE time{timing_id, 0};
+        VkPresentTimesInfoGOOGLE times{VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE, info.pNext, 1, &time};
+        VkPresentInfoKHR timed = info;
+        timed.pNext = &times;
+        return vkQueuePresentKHR(queue, &timed);
     }
     return vkQueuePresentKHR(queue, &info);
 }
