@@ -49,6 +49,9 @@ void LogMemoryStatus(const char* what, size_t bytes) {
                   what, bytes, static_cast<unsigned long long>(process.PrivateUsage) / mb,
                   static_cast<unsigned long long>(process.WorkingSetSize) / mb,
                   (system.ullTotalPageFile - system.ullAvailPageFile) / mb, system.ullTotalPageFile / mb, system.ullAvailPhys / mb);
+#elif PT_IOS
+    std::snprintf(line, sizeof(line), "memory: %s (%zu bytes), %.0f MiB available to the app",
+                  what, bytes, QuerySystemMemory().commit_headroom_mb);
 #else
     std::snprintf(line, sizeof(line), "memory: %s (%zu bytes)", what, bytes);
 #endif

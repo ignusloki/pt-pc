@@ -9,7 +9,6 @@
 #include <format>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,6 +16,7 @@
 #include "engine/assets/gltf_model.h"
 #include "engine/core/json.h"
 #include "engine/core/log.h"
+#include "engine/core/memory_status.h"
 #include "engine/core/resource_path.h"
 #include "engine/fs/mods.h"
 #include "engine/render/gpu_types.h"
@@ -1155,13 +1155,19 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
         }
         return out;
     };
-    std::unordered_map<std::string, std::optional<std::vector<uint8_t>>> file_cache;
+    // Nodes of each model are loaded together. Release the previous GLB before reading the next.
+    std::string cached_file;
+    std::optional<std::vector<uint8_t>> cached_bytes;
     auto read_cached = [&](const std::string& file) -> const std::vector<uint8_t>* {
-        auto it = file_cache.find(file);
-        if (it == file_cache.end()) {
-            it = file_cache.emplace(file, mods::ReadDiskFile(dir / file)).first;
+        if (file != cached_file) {
+            cached_bytes.reset();
+#if PT_IOS
+            LogInfo("iOS survival: loading {} with {:.0f} MiB available to the app", file, QuerySystemMemory().commit_headroom_mb);
+#endif
+            cached_bytes = mods::ReadDiskFile(dir / file);
+            cached_file = file;
         }
-        return it->second ? &(*it->second) : nullptr;
+        return cached_bytes ? &*cached_bytes : nullptr;
     };
     auto part = [&](const json::Value& g, const char* key, std::vector<SurvivalGunModel::SkinMaterial>* collect = nullptr) -> const GpuMesh* {
         const json::Value* parts = g.Find("parts");

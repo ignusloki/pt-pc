@@ -2,11 +2,9 @@
 #include "engine/render/texture_manager.h"
 
 #include "engine/render/bc_decode.h"
-#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -15,68 +13,23 @@
 #include <utility>
 
 #include "engine/assets/ftex.h"
+#include "engine/assets/image_decode.h"
 #include "engine/core/log.h"
 #include "engine/fs/mods.h"
 #include "engine/render/vk/vk_device.h"
 #include "engine/platform/ios_diagnostics.h"
 #include "engine/platform/ios_lifecycle.h"
+#include "engine/platform/ios_memory.h"
 
 namespace pt {
 namespace {
 
-// A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
-// light for a colour texture). Uncompressed, so loading never stalls on an encoder.
-bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
-                    uint32_t& height, std::string& error) {
-    int w = 0, h = 0, channels = 0;
-    stbi_uc* pixels = stbi_load_from_memory(png.data(), static_cast<int>(png.size()), &w, &h, &channels, 4);
-    if (!pixels) {
-        error = stbi_failure_reason() ? stbi_failure_reason() : "not a PNG";
-        return false;
-    }
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) {
-        stbi_image_free(pixels);
-        error = std::format("{} x {} is outside 1 to 8192 px", w, h);
-        return false;
-    }
-    width = static_cast<uint32_t>(w);
-    height = static_cast<uint32_t>(h);
-    levels.clear();
-    levels.emplace_back(pixels, pixels + size_t(width) * height * 4);
-    stbi_image_free(pixels);
-    float to_linear[256];
-    for (int i = 0; i < 256; ++i) {
-        const float f = i / 255.0f;
-        to_linear[i] = srgb ? (f <= 0.04045f ? f / 12.92f : std::pow((f + 0.055f) / 1.055f, 2.4f)) : f;
-    }
-    uint32_t lw = width, lh = height;
-    while (lw > 1 || lh > 1) {
-        const uint32_t nw = std::max(1u, lw / 2), nh = std::max(1u, lh / 2);
-        const std::vector<uint8_t>& above = levels.back();
-        std::vector<uint8_t> next(size_t(nw) * nh * 4);
-        for (uint32_t y = 0; y < nh; ++y) {
-            for (uint32_t x = 0; x < nw; ++x) {
-                for (uint32_t c = 0; c < 4; ++c) {
-                    float sum = 0.0f;
-                    for (uint32_t dy = 0; dy < 2; ++dy) {
-                        for (uint32_t dx = 0; dx < 2; ++dx) {
-                            const uint8_t v = above[(size_t(std::min(y * 2 + dy, lh - 1)) * lw + std::min(x * 2 + dx, lw - 1)) * 4 + c];
-                            sum += c < 3 ? to_linear[v] : v / 255.0f;
-                        }
-                    }
-                    float f = sum * 0.25f;
-                    if (srgb && c < 3) {
-                        f = f <= 0.0031308f ? f * 12.92f : 1.055f * std::pow(f, 1.0f / 2.4f) - 0.055f;
-                    }
-                    next[(size_t(y) * nw + x) * 4 + c] = static_cast<uint8_t>(std::clamp(std::lround(f * 255.0f), 0l, 255l));
-                }
-            }
-        }
-        levels.push_back(std::move(next));
-        lw = nw;
-        lh = nh;
-    }
-    return true;
+uint32_t ModelImageLimit() {
+#if PT_IOS || PT_BC_DECODE_TEST
+    return IosTextureLimit();
+#else
+    return kMaxImageDimension;
+#endif
 }
 
 }
@@ -716,7 +669,7 @@ uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& 
     std::vector<std::vector<uint8_t>> levels;
     uint32_t width = 0, height = 0;
     std::string error;
-    if (!ModImageLevels(png, srgb, levels, width, height, error)) {
+    if (!DecodeImageMips(png, srgb, ModelImageLimit(), levels, width, height, error)) {
         LogWarn("mods: {}.png ignored: {}", stem, error);
         return kWhite;
     }
@@ -726,7 +679,7 @@ uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& 
     }
     const uint32_t index = Create(key, srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
     if (index != kWhite) {
-        LogInfo("mods: texture {} from a {} x {} PNG", stem, width, height);
+        LogInfo("mods: texture {} prepared at {} x {}", stem, width, height);
     }
     return index;
 }
@@ -765,7 +718,7 @@ void TextureManager::PreloadModImages(const QarArchive& qar, std::span<const std
     ParallelChunks(jobs.size(), jobs.size(), [&](size_t, size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             Job& j = jobs[i];
-            j.ok = ModImageLevels(j.png, j.srgb, j.levels, j.width, j.height, j.error);
+            j.ok = DecodeImageMips(j.png, j.srgb, ModelImageLimit(), j.levels, j.width, j.height, j.error);
         }
     });
     for (Job& j : jobs) {
@@ -779,7 +732,7 @@ void TextureManager::PreloadModImages(const QarArchive& qar, std::span<const std
         }
         const uint32_t idx = Create(j.key, j.srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
         if (idx != kWhite) {
-            LogInfo("mods: texture {} from a {} x {} PNG", j.stem, j.width, j.height);
+            LogInfo("mods: texture {} prepared at {} x {}", j.stem, j.width, j.height);
         }
     }
 }
@@ -793,7 +746,7 @@ uint32_t TextureManager::LoadImageFile(const std::filesystem::path& path, const 
     std::vector<std::vector<uint8_t>> levels;
     uint32_t width = 0, height = 0;
     std::string error;
-    if (!ModImageLevels(data, true, levels, width, height, error)) {
+    if (!DecodeImageMips(data, true, kMaxImageDimension, levels, width, height, error)) {
         LogWarn("texture: {} unreadable: {}", key, error);
         return kWhite;
     }

@@ -96,7 +96,7 @@ public:
                 if (type == kChunkJson) {
                     json_text = std::string_view(reinterpret_cast<const char*>(data.data() + at + 8), length);
                 } else if (type == kChunkBin && glb_bin_.empty()) {
-                    glb_bin_.assign(data.begin() + static_cast<ptrdiff_t>(at + 8), data.begin() + static_cast<ptrdiff_t>(at + 8 + length));
+                    glb_bin_ = data.subspan(at + 8, length);
                 }
                 at += 8 + ((length + 3) & ~3u);
             }
@@ -141,7 +141,8 @@ private:
             }
             auto bytes = ReadUri(uri);
             if (!bytes) return FailWithError(&error, std::format("buffer {} ({}) was not found beside the model", i, uri.starts_with("data:") ? "embedded" : uri));
-            buffers_.push_back(std::move(*bytes));
+            uri_buffers_.push_back(std::move(*bytes));
+            buffers_.emplace_back(uri_buffers_.back());
         }
         return true;
     }
@@ -153,9 +154,9 @@ private:
         const size_t buffer = static_cast<size_t>(view->Number("buffer", -1));
         const size_t offset = static_cast<size_t>(view->Number("byteOffset", 0));
         const size_t length = static_cast<size_t>(view->Number("byteLength", 0));
-        if (buffer >= buffers_.size() || offset + length > buffers_[buffer].size()) return std::nullopt;
+        if (buffer >= buffers_.size() || offset > buffers_[buffer].size() || length > buffers_[buffer].size() - offset) return std::nullopt;
         if (stride) *stride = static_cast<size_t>(view->Number("byteStride", 0));
-        return std::span<const uint8_t>(buffers_[buffer].data() + offset, length);
+        return buffers_[buffer].subspan(offset, length);
     }
 
     bool Accessor(int index, std::vector<float>& out, int& components) const {
@@ -654,8 +655,10 @@ private:
     const FmdlModel* original_;
     std::string only_node_;
     json::Value doc_;
-    std::vector<uint8_t> glb_bin_;
-    std::vector<std::vector<uint8_t>> buffers_;
+    // The caller owns the GLB through Read(). URI buffers have their own backing storage.
+    std::span<const uint8_t> glb_bin_;
+    std::vector<std::vector<uint8_t>> uri_buffers_;
+    std::vector<std::span<const uint8_t>> buffers_;
     std::unordered_map<std::string, std::string> images_;
     std::vector<bool> alpha_test_;
     std::vector<bool> double_sided_;

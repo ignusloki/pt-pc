@@ -423,6 +423,9 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             model.mesh.bounds_max = glm::max(model.mesh.bounds_max, v.position);
         }
     }
+    // On iOS BuildMaterial loads and uploads each image on demand. Predecoding a whole
+    // survival model would keep every image's decoded mip chain in RAM at the same time.
+#if !PT_IOS && !PT_BC_DECODE_TEST
     {
         std::vector<std::string> tex_paths;
         for (const FmdlMaterial& m : model.materials) {
@@ -432,6 +435,7 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
         }
         if (tex_paths.size() >= 2) textures_.PreloadModImages(vfs_.Textures(), tex_paths);
     }
+#endif
     std::vector<int32_t> alpha_tested[2] = {std::vector<int32_t>(model.materials.size(), -1), std::vector<int32_t>(model.materials.size(), -1)};
     diagnostic.Step("build materials and load textures");
     for (const FmdlMaterial& m : model.materials) {
