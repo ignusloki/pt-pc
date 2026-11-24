@@ -434,7 +434,12 @@ private:
     SceneFilterContext FilterContext(gpu::CommandList& cmd, uint32_t layers) const;
     void UpdateMotion(const Camera& camera, float dt);
     void RecordDebug(gpu::CommandList& cmd);
-    void DrawMesh(gpu::CommandList& cmd, const Draw& draw, uint32_t view, uint32_t flags, bool mirrored, bool no_cull = false,
+    // Bindings are local to consecutive draws in one graphics pipeline and view.
+    struct MeshBindings {
+        const GpuMesh* mesh = nullptr;
+        gpu::CullMode cull = gpu::CullMode::None;
+    };
+    void DrawMesh(gpu::CommandList& cmd, MeshBindings& bound, const Draw& draw, uint32_t view, uint32_t flags, bool mirrored,
                   const glm::vec4* aux = nullptr, gpu::CullMode cull = gpu::CullMode::Back, bool shadow_pass = false);
     uint32_t ForwardLights(const Draw& draw, glm::vec4 aux[2], uint8_t view_bit) const;
     void UpdateDominantLight(const Camera& camera, const SceneLighting& lighting, float dt);

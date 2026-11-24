@@ -7669,7 +7669,6 @@ int RunGame(App& app, pt::Vfs& vfs) {
     const bool paced = app.window != nullptr || options.display_rate > 0.0f;
     const int headless_fps_limit = options.headless && std::getenv("PT_HEADLESS_FPS_LIMIT")
                                        ? std::clamp(std::atoi(std::getenv("PT_HEADLESS_FPS_LIMIT")), 0, 60) : 0;
-    std::chrono::steady_clock::time_point headless_frame_deadline{};
     if (headless_fps_limit > 0) pt::LogInfo("headless: rendering limited to {} FPS (PT_HEADLESS_FPS_LIMIT)", headless_fps_limit);
     TickState tick_state;
     std::vector<glm::mat4> blended_skins;
@@ -8039,6 +8038,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
     }
     while (running) {
+        const auto frame_started = std::chrono::steady_clock::now();
         if (app.window) {
             const bool focus = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS) != 0;
             const SDL_DisplayID id = SDL_GetDisplayForWindow(app.window);
@@ -10006,11 +10006,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 status_path = {};
             }
         }
+        int cap = headless_fps_limit;
         if (app.window && !vr) {
             constexpr int kMenuFpsCap = 60;
-            static std::chrono::steady_clock::time_point frame_deadline{};
             const bool menu = ((ui_ready && ui.MenuOpen()) || show_settings || game.Paused()) && !photo_mode;
-            int cap = app.settings.display.fps_limit;
+            cap = app.settings.display.fps_limit;
             if (menu) {
                 cap = cap > 0 ? std::min(cap, kMenuFpsCap) : kMenuFpsCap;
             }
@@ -10034,31 +10034,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (reflex_paced) {
                 cap = 0;
             }
-            if (cap > 0) {
-                const auto period = std::chrono::nanoseconds(1000000000LL / cap);
-                const auto now = std::chrono::steady_clock::now();
-                if (frame_deadline.time_since_epoch().count() == 0 || now - frame_deadline > period) {
-                    frame_deadline = now;
-                }
-                frame_deadline += period;
-                const auto wait = std::chrono::duration_cast<std::chrono::nanoseconds>(frame_deadline - std::chrono::steady_clock::now());
-                if (wait.count() > 0) {
-                    const auto cap_started = std::chrono::steady_clock::now();
-                    SDL_DelayPrecise(static_cast<Uint64>(wait.count()));
-                    frame_phases.current[FramePhases::kCap] += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - cap_started).count();
-                }
-            } else {
-                frame_deadline = {};
-            }
         }
-        if (headless_fps_limit > 0) {
-            const auto period = std::chrono::nanoseconds(1000000000LL / headless_fps_limit);
+        if (cap > 0) {
             const auto now = std::chrono::steady_clock::now();
-            if (headless_frame_deadline.time_since_epoch().count() == 0 || now - headless_frame_deadline > period) {
-                headless_frame_deadline = now;
+            const auto wait = pt::FrameLimitWait(cap, std::chrono::duration_cast<std::chrono::nanoseconds>(now - frame_started));
+            if (wait.count() > 0) {
+                if (app.window) SDL_DelayPrecise(static_cast<Uint64>(wait.count()));
+                else std::this_thread::sleep_until(now + wait);
+                frame_phases.current[FramePhases::kCap] += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - now).count();
             }
-            headless_frame_deadline += period;
-            std::this_thread::sleep_until(headless_frame_deadline);
         }
         if (!boot_shots.empty() && app.window) {
             const double seconds = static_cast<double>(SDL_GetTicksNS() - boot_wait_start) * 1e-9;

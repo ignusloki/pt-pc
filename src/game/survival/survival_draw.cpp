@@ -965,9 +965,8 @@ glm::mat4 SurvivalNight::ThirdPersonRightHandLocal() const {
 }
 
 glm::mat4 SurvivalNight::DrawnWeaponTransform(const Camera& camera) const {
-    const glm::mat4 desired = WeaponTransform(camera);
     if (!BodyHoldsGun() || weapon_ == SurvivalWeapon::Flashlight || hud_.dead || SwingAway() > 0.02f || PipeHold() > 0.02f) {
-        return desired;
+        return WeaponTransform(camera);
     }
     const Player& player = game_.GetPlayer();
     if (glm::mat4 rhand_model(1.0f); player.BoneModel("SKL_023_RHAND", rhand_model)) {
@@ -996,7 +995,7 @@ glm::mat4 SurvivalNight::DrawnWeaponTransform(const Camera& camera) const {
         }
         return welded;
     }
-    return desired;
+    return WeaponTransform(camera);
 }
 
 bool SurvivalNight::ThirdPersonGrip(const glm::mat4& body, const Camera& camera, glm::mat4& right_hand) {

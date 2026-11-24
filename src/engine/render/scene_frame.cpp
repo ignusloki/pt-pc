@@ -1251,14 +1251,21 @@ void SceneRenderer::BindSets(gpu::CommandList& cmd, gpu::BindPoint point) {
     cmd.BindSets(point, layout_, 0, sets);
 }
 
-void SceneRenderer::DrawMesh(gpu::CommandList& cmd, const Draw& draw, uint32_t view, uint32_t flags, bool mirrored, bool no_cull,
+void SceneRenderer::DrawMesh(gpu::CommandList& cmd, MeshBindings& bound, const Draw& draw, uint32_t view, uint32_t flags, bool mirrored,
                              const glm::vec4* aux, gpu::CullMode cull, bool shadow_pass) {
     const SubMesh& sub = *draw.sub;
     const bool double_sided = shadow_pass ? sub.shadow_double_sided : sub.double_sided;
-    cmd.SetCullMode(double_sided || no_cull ? gpu::CullMode::None : cull);
-    cmd.SetFrontFace(mirrored ? gpu::FrontFace::Clockwise : gpu::FrontFace::CounterClockwise);
-    cmd.BindVertexBuffer(draw.mesh->vertices.buffer, 0);
-    cmd.BindIndexBuffer(draw.mesh->indices.buffer, 0, gpu::IndexType::Uint32);
+    const auto face_cull = double_sided ? gpu::CullMode::None : cull;
+    if (!bound.mesh) cmd.SetFrontFace(mirrored ? gpu::FrontFace::Clockwise : gpu::FrontFace::CounterClockwise);
+    if (!bound.mesh || bound.cull != face_cull) {
+        cmd.SetCullMode(face_cull);
+        bound.cull = face_cull;
+    }
+    if (bound.mesh != draw.mesh) {
+        cmd.BindVertexBuffer(draw.mesh->vertices.buffer, 0);
+        cmd.BindIndexBuffer(draw.mesh->indices.buffer, 0, gpu::IndexType::Uint32);
+        bound.mesh = draw.mesh;
+    }
     gpu::DrawPush push;
     push.model = draw.transform;
     push.ids = glm::uvec4(view, draw.material, flags, sub.skinned ? draw.skin_base : gpu::kInvalid);
@@ -1539,6 +1546,7 @@ void SceneRenderer::RecordShadows(gpu::CommandList& cmd) {
         cmd.SetDepthBias(sv.bias_constant, 0.0f, sv.bias_slope);
         const uint8_t casters = sv.casters;
         uint32_t shadow_draws = 0, shadow_indices = 0;
+        MeshBindings bound;
         for (const Draw& d : draws_) {
             if (!d.sub->shadow || d.view_shadowless || (d.hidden_views & casters) != 0 || (d.handy_shadowless && light_sources_[sv.light]->id == kHandyLightId)) {
                 continue;
@@ -1562,11 +1570,10 @@ void SceneRenderer::RecordShadows(gpu::CommandList& cmd) {
                 continue;
             }
             ++shadow_draws; shadow_indices += d.sub->index_count;
-            ++shadow_draws; shadow_indices += d.sub->index_count;
             if (static const bool dump = std::getenv("PT_SHADOW_PASS_DUMP") != nullptr; dump && light_sources_[sv.light]->id == kMirrorLightId) {
                 LogInfo("shadow draw: {}#{} {} verts-radius {:.2f} centre ({:.2f} {:.2f} {:.2f})", d.mesh->name, static_cast<int>(d.sub - d.mesh->submeshes.data()), d.sub->index_count, d.radius, d.center.x, d.center.y, d.center.z);
             }
-            DrawMesh(cmd, d, sv.view, 0, false, false, nullptr, sv.cull, true);
+            DrawMesh(cmd, bound, d, sv.view, 0, false, nullptr, sv.cull, true);
         }
         if (static const bool trace = std::getenv("PT_SHADOW_PASS_TRACE") != nullptr; trace) {
             const SceneLight& light = *light_sources_[sv.light];
@@ -1587,9 +1594,10 @@ void SceneRenderer::RecordFlareDepth(gpu::CommandList& cmd, const ViewSetup& vie
     cmd.BeginPass(extent_, {}, &flare_depth_, false, true);
     cmd.BindPipeline(gpu::BindPoint::Graphics, shadow_pipeline_);
     cmd.SetDepthBias(0.f, 0.f, 0.f);
+    MeshBindings bound;
     for (const Draw& draw : draws_) {
         if (draw.sub->pass == RenderPass::Opaque && draw.sub->kind == gpu::kKindDeferred && Visible(draw, view))
-            DrawMesh(cmd, draw, post_view_, 0, view.mirrored);
+            DrawMesh(cmd, bound, draw, post_view_, 0, view.mirrored);
     }
     cmd.EndPass();
     cmd.UseTargets({{&flare_depth_, gpu::Layout::DepthReadOnly}});
@@ -1632,8 +1640,9 @@ void SceneRenderer::RecordGBuffer(gpu::CommandList& cmd, const ViewSetup& view) 
         if (pass == 1 && by_layer) {
             std::stable_sort(decal_order_.begin(), decal_order_.end(), [](const Draw* a, const Draw* b) { return a->sub->layer < b->sub->layer; });
         }
+        MeshBindings bound;
         for (const Draw* d : decal_order_) {
-            DrawMesh(cmd, *d, view.index, debug_flags, view.mirrored, false, aux);
+            DrawMesh(cmd, bound, *d, view.index, debug_flags, view.mirrored, aux);
         }
     }
     cmd.EndPass();
@@ -1820,6 +1829,9 @@ void SceneRenderer::RecordLighting(gpu::CommandList& cmd, const ViewSetup& view)
         cmd.SetCullMode(cull);
         for (uint32_t i = 0; i < probe_count_; ++i) {
             const SceneProbe& p = lighting_->probes[probe_order_[i]];
+            const glm::vec3 half = glm::abs(glm::vec3(p.box_world[0])) + glm::abs(glm::vec3(p.box_world[1])) +
+                                   glm::abs(glm::vec3(p.box_world[2]));
+            if (p.weight <= 0.0f || !BoxInPlanes(glm::vec3(p.box_world[3]), half + glm::vec3(0.001f), view.planes)) continue;
             gpu::PassPush push;
             push.ids = glm::uvec4(view.index, i, shrink_flag, 0);
             push.m = p.box_world;
@@ -2179,6 +2191,7 @@ void SceneRenderer::RecordForward(gpu::CommandList& cmd, const ViewSetup& view, 
         cmd.BeginPass(extent_, {{&particles_, true, {{0.0f, 0.0f, 0.0f, 1.0f}}}}, &depth_, false, false);
     }
     gpu::PipelineHandle bound;
+    MeshBindings mesh_bindings;
     for (const Draw& d : draws_) {
         const RenderPass pass = d.sub->pass;
         if ((pass != RenderPass::Unlit && pass != RenderPass::Transparent) || d.sub->kind == gpu::kKindShadowOnly || !Visible(d, view)) {
@@ -2193,6 +2206,7 @@ void SceneRenderer::RecordForward(gpu::CommandList& cmd, const ViewSetup& view, 
         if (pipeline != bound) {
             cmd.BindPipeline(gpu::BindPoint::Graphics, pipeline);
             bound = pipeline;
+            mesh_bindings = {};
         }
         uint32_t flags = main_view ? 0x80u : 0u;
         glm::vec4 aux[2]{};
@@ -2238,7 +2252,7 @@ void SceneRenderer::RecordForward(gpu::CommandList& cmd, const ViewSetup& view, 
                         aux[1].x, aux[1].y, aux[1].z, aux[1].w);
             }
         }
-        DrawMesh(cmd, d, view.index, flags, view.mirrored, false, aux);
+        DrawMesh(cmd, mesh_bindings, d, view.index, flags, view.mirrored, aux);
     }
     if (!main_view) {
         return;
@@ -2710,9 +2724,12 @@ void SceneRenderer::RecordView(gpu::CommandList& cmd, const ViewSetup& view, Ren
     }
     const bool metalfx_hdr = main_view && up_.enabled && up_.kind == UpscalerKind::MetalFx &&
                              renderer_->OutputMode() != RendererOutputMode::Sdr;
-    if (&output == &hdr_ && flare_depth_.Valid() && metalfx_hdr && vfx_has_filter && vfx_has_filter(1u)) {
+    // World effects read the live depth target. Only flare and screen filters consume this snapshot.
+    const bool filter_depth = &output == &hdr_ && flare_depth_.Valid() && vr_eye_ < 0 && vfx_filter &&
+                              (!vfx_has_filter || vfx_has_filter(3u));
+    if (filter_depth && metalfx_hdr && vfx_has_filter && vfx_has_filter(1u)) {
         RecordFlareDepth(cmd, view);
-    } else if (&output == &hdr_ && flare_depth_.Valid()) {
+    } else if (filter_depth) {
         cmd.UseTargets({{&depth_, gpu::Layout::TransferSrc}, {&flare_depth_, gpu::Layout::TransferDst}});
         gpu::ImageCopy copy;
         copy.src = {gpu::Aspect::Depth, 0, 0, 1};

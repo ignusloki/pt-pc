@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -30,6 +31,12 @@ struct LimiterPacing {
     int min_refreshes = 0;
     int max_refreshes = 0;
 };
+
+inline std::chrono::nanoseconds FrameLimitWait(int fps, std::chrono::nanoseconds elapsed) {
+    using namespace std::chrono;
+    if (fps <= 0) return nanoseconds::zero();
+    return std::max(nanoseconds::zero(), duration_cast<nanoseconds>(seconds(1)) / fps - elapsed);
+}
 
 inline LimiterPacing PacingOfLimit(double refresh_hz, int fps_limit) {
     if (refresh_hz <= 0.0 || fps_limit <= 0 || fps_limit >= refresh_hz * 0.99) return {};

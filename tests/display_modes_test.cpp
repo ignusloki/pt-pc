@@ -101,6 +101,13 @@ int main() {
     assert((pacing(60.0, 144) == glm::ivec2(0, 0)));
     assert((pacing(0.0, 60) == glm::ivec2(0, 0)));
 
+    using namespace std::chrono_literals;
+    assert(pt::FrameLimitWait(60, 6ms) == 16666666ns - 6ms);
+    assert(pt::FrameLimitWait(60, 16666666ns) == 0ns);
+    assert(pt::FrameLimitWait(60, 55ms) == 0ns);
+    assert(pt::FrameLimitWait(30, 22ms) == 33333333ns - 22ms);
+    assert(pt::FrameLimitWait(0, 1ms) == 0ns);
+
     const std::vector<pt::DisplayModeInfo> modes{
         {2560, 1440, 165.0}, {2560, 1440, 240.0}, {2560, 1440, 60.0}, {2560, 1440, 144.0}, {2560, 1440, 59.94}, {2560, 1440, 240.0},
         {1920, 1080, 144.0}, {1920, 1080, 60.0}, {1920, 1080, 120.0}, {1280, 720, 0.0}};
