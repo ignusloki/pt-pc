@@ -152,12 +152,14 @@ def zip_add(z, path, arcname):
         z.writestr(info, data.read())
 
 
-def validate_upscaler_archive(archive):
+def validate_upscaler_archive(archive, expected_root=None):
     """Reject Windows installer payload archives without a backend record bound to pt.exe."""
     with zipfile.ZipFile(archive) as package:
         files = {}
         for entry in package.infolist():
             parts = Path(entry.filename).parts
+            if expected_root is not None and (not parts or parts[0] != expected_root):
+                raise ValueError(f"Windows portable ZIP must unpack into {expected_root}: {entry.filename}")
             if len(parts) > 1 and parts[1].lower() == "data":
                 raise ValueError("Windows runtime ZIP contains the reserved data directory")
             if not entry.is_dir() and len(parts) > 1:
@@ -458,8 +460,8 @@ def main():
     if (build / "licenses").is_dir():
         shutil.copytree(build / "licenses", root / "licenses",
                         ignore=shutil.ignore_patterns("enhanced-textures", "Real-ESRGAN-*.txt", "bc7enc.txt"))
-    for name in ("README.md", "LICENSE", "NOTICE", "ADDITIONAL-TERMS.md"):
-        shutil.copy2(REPO / name, root / name)
+    for document in ("README.md", "LICENSE", "NOTICE", "ADDITIONAL-TERMS.md"):
+        shutil.copy2(REPO / document, root / document)
     try:
         refuse_loose_data(root)
     except ValueError as error:
@@ -468,7 +470,7 @@ def main():
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(root.rglob("*")):
             if path.is_file():
-                zip_add(z, path, Path(name) / path.relative_to(root))
+                zip_add(z, path, path.relative_to(root.parent))
     size = archive.stat().st_size / (1024 * 1024)
     print(f"{root}\n{archive} ({size:.1f} MB)")
 

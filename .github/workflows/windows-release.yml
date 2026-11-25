@@ -50,7 +50,7 @@ jobs:
           python tools/package.py --build build/windows --exe build/windows/pt_release.exe --out dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $archive = Get-Item dist/*.zip
-          python -c "import sys; sys.path.insert(0,'tools'); from package import validate_upscaler_archive; validate_upscaler_archive(sys.argv[1])" $archive.FullName
+          python -c "import sys; from pathlib import Path; sys.path.insert(0,'tools'); from package import validate_upscaler_archive; archive=Path(sys.argv[1]); validate_upscaler_archive(archive, expected_root=archive.stem)" $archive.FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $game = Get-Item dist/*/pt.exe
           $result = Start-Process $game.FullName -WorkingDirectory $game.DirectoryName -ArgumentList '--help' -Wait -PassThru
