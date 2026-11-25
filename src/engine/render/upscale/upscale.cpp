@@ -19,9 +19,6 @@
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale_platform.h"
-#ifdef _WIN32
-#include "engine/render/d3d12/backend/d3d12_neural.h"
-#endif
 
 #ifdef __APPLE__
 #include <vulkan/vulkan_metal.h>
@@ -836,8 +833,9 @@ bool UpscaleHost::RecordNativeNeural(const UpscaleDispatch& dispatch) {
     if (!native_neural_) {
         auto& core = backends_[static_cast<int>(UpscalerKind::Dlss)];
         if (!core && d3d12_factory_) core = d3d12_factory_(UpscalerKind::Dlss, *d3d12_device_);
-        std::string reason;
-        if (!core || !core->InitializeNeuralCore(reason)) {
+        std::string reason = "D3D12 DLSS backend is unavailable";
+        if (core) native_neural_ = core->CreateNativeNeural(reason);
+        if (!native_neural_) {
             native_neural_failure_.available = false;
             native_neural_failure_.runtime = NativeNeuralRuntime();
             native_neural_failure_.reason = "native NR core: " + reason;
@@ -845,7 +843,6 @@ bool UpscaleHost::RecordNativeNeural(const UpscaleDispatch& dispatch) {
             LogError("{}", native_neural_failure_.reason);
             return false;
         }
-        native_neural_ = gpu::d3d12::CreatePostUpscaleNeural(*d3d12_device_);
     }
     return native_neural_ && native_neural_->Record(dispatch);
 #else

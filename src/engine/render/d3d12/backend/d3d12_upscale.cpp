@@ -23,6 +23,7 @@
 #include "engine/core/log.h"
 #include "engine/core/resource_path.h"
 #include "engine/render/d3d12/backend/d3d12_native.h"
+#include "engine/render/d3d12/backend/d3d12_neural.h"
 #include "engine/render/d3d12/backend/reshade_native.h"
 #include "engine/render/upscale/upscale_platform.h"
 #include "engine/render/upscale/fsr_provider_gate.h"
@@ -139,7 +140,12 @@ public:
         return true;
     }
 
-    bool InitializeNeuralCore(std::string& reason) override {
+    std::unique_ptr<PostUpscaleNeural> CreateNativeNeural(std::string& reason) override {
+        if (!InitializeNeuralCore(reason)) return nullptr;
+        return CreatePostUpscaleNeural(device_);
+    }
+
+    bool InitializeNeuralCore(std::string& reason) {
         if (initialized_ && params_) return true;
         if (device_.Info().vendor_id != kNvidiaVendor) { reason = "needs an NVIDIA RTX GPU"; return false; }
         if (init_fault_) {

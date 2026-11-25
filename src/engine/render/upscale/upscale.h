@@ -196,7 +196,10 @@ public:
     virtual void Release() = 0;
     virtual bool Denoise(const RayDenoiseDispatch&) { return false; }
     virtual void DisableRayReconstruction(const std::string&) {}
-    virtual bool InitializeNeuralCore(std::string& reason) { reason = "native NGX is unavailable"; return false; }
+    virtual std::unique_ptr<PostUpscaleNeural> CreateNativeNeural(std::string& reason) {
+        reason = "native NGX is unavailable";
+        return nullptr;
+    }
     virtual float MipBias(float render_over_display) const;
     virtual bool UsesReactive() const { return true; }
     virtual bool RayReconstructionAvailable(std::string& reason) {
