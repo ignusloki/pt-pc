@@ -1,138 +1,63 @@
-# The macOS apps (docs/macos.md): one per CPU architecture, built natively on GitHub's runners, Apple silicon on macos-26 and
-# Intel on macos-15-intel. A published release gets P.T.PC.Port-macOS-arm64.zip and P.T.PC.Port-macOS-x64.zip;
-# each architecture also has a PKG/folder installer. The updater keeps its existing portable-app asset URLs,
-# so nothing in tools/ci/release.py needs a Mac; run by hand (Actions > macOS > Run workflow) the zips are workflow artifacts.
-name: macOS
+name: Windows portable release
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
-  push:
-    branches: [codex/macos-arm64-port, codex/upstream-1.0.4-integration]
-  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  app:
-    # Preserve the exact audited files on fork releases published with both Mac packages already attached.
-    # Android prereleases only publish APKs; upstream Mac releases and manual builds still compile on both architectures.
-    if: >-
-      (github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'macos-arm64-preview-')) &&
-      (github.event_name != 'release' || !contains(github.event.release.tag_name, '-android-')) &&
-      (github.event_name != 'release' || github.repository != 'ignusloki/pt-pc' ||
-       !contains(github.event.release.assets.*.name, 'P.T.PC.Port.Setup-macOS-arm64.zip') ||
-       !contains(github.event.release.assets.*.name, 'P.T.PC.Port.Setup-macOS-x64.zip') ||
-       !contains(github.event.release.assets.*.name, 'P.T.PC.Port-macOS-arm64.zip') ||
-       !contains(github.event.release.assets.*.name, 'P.T.PC.Port-macOS-x64.zip'))
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            cmake_arch: arm64
-            runner: macos-26
-          - arch: x64
-            cmake_arch: x86_64
-            runner: macos-15-intel
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+  portable:
+    runs-on: windows-2025
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v7
-
+        with:
+          ref: 2e06cbe9cc381f67f53b61a5f5ecd6dbc16d44b6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
 
-      - name: Tools
-        run: brew install ninja shaderc vulkan-headers
-
-      - name: Version
-        id: version
+      - name: Install the Vulkan SDK
+        shell: pwsh
         run: |
-          if [ "$GITHUB_EVENT_NAME" = release ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="$(sed -n 's/^set(PT_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          $version = '1.4.357.0'
+          $name = "vulkansdk-windows-X64-$version.exe"
+          $installer = Join-Path $env:RUNNER_TEMP $name
+          $sdk = Join-Path $env:RUNNER_TEMP 'VulkanSDK'
+          curl.exe --fail --location --retry 3 --output $installer "https://sdk.lunarg.com/sdk/download/$version/windows/$name"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $installer).Hash -ne '81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d') { throw 'Vulkan SDK checksum mismatch' }
+          $result = Start-Process $installer -Wait -PassThru -ArgumentList '--root',$sdk,'--accept-licenses','--default-answer','--confirm-command','install','copy_only=1'
+          if ($result.ExitCode) { exit $result.ExitCode }
+          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          "$sdk\Bin" >> $env:GITHUB_PATH
 
-      - name: Packaging regressions
+      - name: Build and test the x64 release
+        shell: cmd
         run: |
-          python3 tools/macos/test_packaging.py
-          python3 tests/payload_index_test.py
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x64
+          cmake --preset release -B build/windows -DPT_UPDATE_MANIFEST_URL_OVERRIDE=https://api.github.com/repos/%GITHUB_REPOSITORY%/releases/latest || exit /b 1
+          cmake --build build/windows --parallel 4 --target pt pt_release pt_display_modes_test pt_survival_logic_test || exit /b 1
+          build\windows\pt_display_modes_test.exe || exit /b 1
+          build\windows\pt_survival_logic_test.exe || exit /b 1
 
-      - name: Build, package and test
+      - name: Package and verify the portable game
+        shell: pwsh
         run: |
-          test "$(uname -m)" = "${{ matrix.cmake_arch }}"
-          python3 tools/macos/build.py --arch "${{ matrix.arch }}" --build build/macos --out dist --version "${{ steps.version.outputs.version }}" --jobs 4 \
-            --cmake-arg=-DPT_MACOS_RUNTIME_LOGS=OFF \
-            --cmake-arg="-DPT_UPDATE_MANIFEST_URL_OVERRIDE=https://api.github.com/repos/${{ github.repository }}/releases/latest"
-          mv "dist/pt-port-${{ steps.version.outputs.version }}-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
-          mv "dist/pt-port-${{ steps.version.outputs.version }}-setup-macos-${{ matrix.arch }}.zip" dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
-          lipo -archs "dist/P.T. PC Port.app/Contents/MacOS/pt"
-
-      - name: Diagnose native HDR test failure
-        if: failure()
-        continue-on-error: true
-        timeout-minutes: 3
-        run: |
-          mkdir -p gpu-test-failure
-          system_profiler SPDisplaysDataType > gpu-test-failure/displays.txt
-          python3 - <<'PY'
-          import pathlib
-          import shutil
-          reports = pathlib.Path.home() / "Library/Logs/DiagnosticReports"
-          for report in reports.glob("pt_macos_hdr_test*.ips"):
-              shutil.copy2(report, pathlib.Path("gpu-test-failure") / report.name)
-          PY
-          if test -x build/macos/pt_macos_hdr_test; then
-            MVK_CONFIG_LOG_LEVEL=4 xcrun lldb --batch -o run -k 'thread backtrace all' -k 'image list' -k quit -- build/macos/pt_macos_hdr_test > gpu-test-failure/backtrace.txt 2>&1
-          fi
-
-      - name: Upload native GPU failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: macOS-GPU-failure-${{ matrix.arch }}
-          path: gpu-test-failure/
-          if-no-files-found: ignore
-
-      # the installer: a disk image with the app and a link to Applications to drag it onto (the zip is the portable app)
-      - name: Disk image
-        run: |
-          mkdir -p dmg && cp -R "dist/P.T. PC Port.app" dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "P.T. PC Port" -srcfolder dmg -fs HFS+ -format UDZO "dist/P.T.PC.Port-macOS-${{ matrix.arch }}.dmg"
+          python tools/package.py --build build/windows --exe build/windows/pt_release.exe --out dist
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $archive = Get-Item dist/*.zip
+          python -c "import sys; sys.path.insert(0,'tools'); from package import validate_upscaler_archive; validate_upscaler_archive(sys.argv[1])" $archive.FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $game = Get-Item dist/*/pt.exe
+          $result = Start-Process $game.FullName -WorkingDirectory $game.DirectoryName -ArgumentList '--help' -Wait -PassThru
+          if ($result.ExitCode) { exit $result.ExitCode }
+          Rename-Item $archive.FullName 'P.T.PC.Port-Windows-x64.zip'
 
       - uses: actions/upload-artifact@v7
         with:
-          name: P.T.PC.Port-macOS-${{ matrix.arch }}-${{ steps.version.outputs.version }}
-          path: |
-            dist/P.T.PC.Port-macOS-${{ matrix.arch }}.zip
-            dist/P.T.PC.Port.Setup-macOS-${{ matrix.arch }}.zip
-            dist/installer-self-test.txt
-            dist/voice-smoke.log
-            dist/P.T.PC.Port-macOS-${{ matrix.arch }}.dmg
-
-  release:
-    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'macos-arm64-preview-') && !contains(github.event.release.tag_name, '-android-')
-    needs: app
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v7
-        with:
-          path: zips
-          merge-multiple: true
-
-      - name: Release app assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-macOS-arm64.zip zips/P.T.PC.Port-macOS-x64.zip zips/P.T.PC.Port.Setup-macOS-arm64.zip zips/P.T.PC.Port.Setup-macOS-x64.zip zips/P.T.PC.Port-macOS-arm64.dmg zips/P.T.PC.Port-macOS-x64.dmg --clobber --repo "$GITHUB_REPOSITORY"
+          name: Windows-x64-portable
+          path: dist/P.T.PC.Port-Windows-x64.zip
+          if-no-files-found: error
+          compression-level: 0
