@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   portable:
-    runs-on: windows-2025
+    # Match the release preset's clang-cl to the Visual Studio 2022 C++ headers.
+    runs-on: windows-2022
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@v7
