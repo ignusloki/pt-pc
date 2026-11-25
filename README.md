@@ -14,13 +14,13 @@
 
 </div>
 
-**Apple silicon test build 1.1.3-rc1** integrates LoreanXavier’s 1.1.2 reflection,
+**P.T. PC Port 1.1.3** integrates LoreanXavier’s 1.1.2 reflection,
 Survive the Night and keyboard updates with this fork’s frame-pacing and iOS memory
 fixes. Mac players can choose **Original** (default) or **Enhanced** rendering.
-The test build uses `-DPT_VERSION_OVERRIDE=1.1.3-rc1`. Players supply their own game files.
+Both HDR modes were playtested on Apple silicon. Players supply their own game files.
 
 [Built on Hallway Engine by LoreanXavier](https://github.com/LoreanXavier/pt-pc).
-Read the [upstream 1.1.2 release notes](https://github.com/LoreanXavier/pt-pc/releases/tag/v1.1.2),
+Read the [1.1.3 release notes](docs/release-notes-1.1.3.md),
 [Android installation guide](docs/android-installation.md), and
 [iPhone/iPad beta guide](docs/mobile.md).
 

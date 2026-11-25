@@ -3,7 +3,7 @@ name: Windows portable release
 on:
   workflow_dispatch:
   push:
-    branches: [codex/upstream-1.1.0-integration]
+    branches: [codex/upstream-1.1.0-integration, codex/upstream-1.1.2-integration]
 
 permissions:
   contents: read
@@ -39,9 +39,10 @@ jobs:
         run: |
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x64
           cmake --preset release -B build/windows -DPT_UPDATE_MANIFEST_URL_OVERRIDE=https://api.github.com/repos/%GITHUB_REPOSITORY%/releases/latest || exit /b 1
-          cmake --build build/windows --parallel 4 --target pt pt_release pt_display_modes_test pt_survival_logic_test || exit /b 1
+          cmake --build build/windows --parallel 4 --target pt pt_release pt_display_modes_test pt_survival_logic_test pt_key_rebind_test || exit /b 1
           build\windows\pt_display_modes_test.exe || exit /b 1
           build\windows\pt_survival_logic_test.exe || exit /b 1
+          build\windows\pt_key_rebind_test.exe || exit /b 1
 
       - name: Package and verify the portable game
         shell: pwsh
