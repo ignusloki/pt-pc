@@ -16,7 +16,6 @@
 #include "engine/assets/gltf_model.h"
 #include "engine/core/json.h"
 #include "engine/core/log.h"
-#include "engine/core/memory_status.h"
 #include "engine/core/resource_path.h"
 #include "engine/fs/mods.h"
 #include "engine/render/gpu_types.h"
@@ -1161,9 +1160,6 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
     auto read_cached = [&](const std::string& file) -> const std::vector<uint8_t>* {
         if (file != cached_file) {
             cached_bytes.reset();
-#if PT_IOS
-            LogInfo("iOS survival: loading {} with {:.0f} MiB available to the app", file, QuerySystemMemory().commit_headroom_mb);
-#endif
             cached_bytes = mods::ReadDiskFile(dir / file);
             cached_file = file;
         }

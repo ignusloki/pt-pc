@@ -1,0 +1,63 @@
+name: Windows portable release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/upstream-1.1.0-integration]
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $version = '1.4.357.0'
+          $name = "vulkansdk-windows-X64-$version.exe"
+          $installer = Join-Path $env:RUNNER_TEMP $name
+          $sdk = Join-Path $env:RUNNER_TEMP 'VulkanSDK'
+          curl.exe --fail --location --retry 3 --output $installer "https://sdk.lunarg.com/sdk/download/$version/windows/$name"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $installer).Hash -ne '81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d') { throw 'Vulkan SDK checksum mismatch' }
+          $result = Start-Process $installer -Wait -PassThru -ArgumentList '--root',$sdk,'--accept-licenses','--default-answer','--confirm-command','install','copy_only=1'
+          if ($result.ExitCode) { exit $result.ExitCode }
+          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          "$sdk\Bin" >> $env:GITHUB_PATH
+
+      - name: Build and test the x64 release
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x64
+          cmake --preset release -B build/windows -DPT_UPDATE_MANIFEST_URL_OVERRIDE=https://api.github.com/repos/%GITHUB_REPOSITORY%/releases/latest || exit /b 1
+          cmake --build build/windows --parallel 4 --target pt pt_release pt_display_modes_test pt_survival_logic_test || exit /b 1
+          build\windows\pt_display_modes_test.exe || exit /b 1
+          build\windows\pt_survival_logic_test.exe || exit /b 1
+
+      - name: Package and verify the portable game
+        shell: pwsh
+        run: |
+          python tools/package.py --build build/windows --exe build/windows/pt_release.exe --out dist
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $archive = Get-Item dist/*.zip
+          python -c "import sys; sys.path.insert(0,'tools'); from package import validate_upscaler_archive; validate_upscaler_archive(sys.argv[1])" $archive.FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $game = Get-Item dist/*/pt.exe
+          $result = Start-Process $game.FullName -WorkingDirectory $game.DirectoryName -ArgumentList '--help' -Wait -PassThru
+          if ($result.ExitCode) { exit $result.ExitCode }
+          Rename-Item $archive.FullName 'P.T.PC.Port-Windows-x64.zip'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Windows-x64-portable
+          path: dist/P.T.PC.Port-Windows-x64.zip
+          if-no-files-found: error
+          compression-level: 0

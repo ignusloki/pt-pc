@@ -6,7 +6,7 @@
 
 <a href="https://www.patreon.com/loreanxavier"><img src="https://img.shields.io/badge/Support%20the%20port%20on%20Patreon-F96854?style=for-the-badge&logo=patreon&logoColor=white" alt="Support the port on Patreon" height="48"></a>
 
-<a href="https://github.com/ignusloki/pt-pc/releases/latest"><img src="https://img.shields.io/github/v/release/ignusloki/pt-pc?style=for-the-badge&label=Download&color=2b2b2b" alt="Download the latest Mac and Android release"></a>
+<a href="https://github.com/ignusloki/pt-pc/releases/latest"><img src="https://img.shields.io/github/v/release/ignusloki/pt-pc?style=for-the-badge&label=Download&color=2b2b2b" alt="Download the latest release"></a>
 <a href="https://github.com/ignusloki/pt-pc/releases"><img src="https://img.shields.io/github/downloads/ignusloki/pt-pc/total?style=for-the-badge&color=2b2b2b" alt="Downloads"></a>
 <a href="https://discord.gg/3vKwUf2eTb"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
 
@@ -14,12 +14,11 @@
 
 </div>
 
-**P.T. PC Port 1.1.1** integrates LoreanXavier’s native HDR and New Game+ hotfixes,
-Survive the Night and the fork’s fix for black frames at Mac startup. Mac players
-can choose **Original** (default) or **Enhanced** rendering. Android and iOS use
-Original. Players supply their own game files.
-Standard gameplay was tested on Apple silicon with both HDR modes. Gameplay validation
-on Intel Mac, iOS and Android is pending. Read the [changelog](docs/release-notes-1.1.1.md),
+**P.T. PC Port 1.1.2** improves frame pacing across platforms and reduces memory
+use when starting Survive the Night on iOS. An Apple A15 player confirmed smoother
+weapon switching and reloading in the release candidate. Mac players can choose
+**Original** (default) or **Enhanced** rendering. Players supply their own game files.
+Read the [changelog](docs/release-notes-1.1.2.md),
 [Android installation guide](docs/android-installation.md), and
 [iPhone/iPad beta guide](docs/mobile.md).
 
@@ -59,7 +58,11 @@ the street, with the voice part included.
 
 ## Installing
 
-Download the installer from the Releases page: `P.T.PC.Port.Setup.exe` on Windows, the Linux setup binary on Linux.
+For the fork's Windows build, unzip `P.T.PC.Port-Windows-x64.zip` and run `pt.exe`.
+Select your extracted game folder when prompted. For an existing portable installation,
+close the game and extract the new ZIP over the program files, keeping your `data` folder.
+
+Lorean’s upstream releases also provide `P.T.PC.Port.Setup.exe` on Windows and the Linux setup binary.
 Point it at your dump folder or fake PKG and at a destination folder (the default on Windows is
 `%LocalAppData%\Programs\P.T. PC Port`). It copies the three game archives it needs (`chunk1.psarc`,
 `texture.qar`, `pathid_list_ps4.bin`) next to the port and makes a shortcut if you want one. The eboot, modules and
@@ -75,7 +78,7 @@ an extracted folder directly. Both apps use the selected forest/P.T. icon. Downl
 steps and microphone consent behavior are in [docs/macos.md](docs/macos.md). The unified 1.0.10 release incorporates upstream 1.0.8. See the
 [integration report](docs/integration/upstream-1.0.8.md) for changes and the regression checklist.
 
-Windows and Linux releases include installers and portable ZIPs. To update an existing installation, use the game's update
+Upstream Windows and Linux releases include installers and portable ZIPs. To update an upstream installation, use the game's update
 button or run the new installer over it. Your game archives, settings, saves and mods stay.
 
 On Windows and Linux, settings, saves, logs and cache live in `data/` beside the executable. The game migrates

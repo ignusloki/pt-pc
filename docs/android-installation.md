@@ -1,9 +1,9 @@
-# Android 1.1.1 installation and source builds
+# Android 1.1.2 installation and source builds
 
-Download `PT-1.1.1-arm64.apk` from the [1.1.1 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.1).
+Download `PT-1.1.2-arm64.apk` from the [1.1.2 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.2).
 Install it over the signed Android beta to keep your game files and progress.
 On a fresh installation, open the launcher and select your own P.T. PKG.
-On-device Android gameplay validation for 1.1.1 is pending.
+On-device Android gameplay validation for 1.1.2 is pending.
 
 ## Preserve an existing beta installation
 
@@ -27,7 +27,7 @@ pinned LibOrbisPkg reader:
 ```sh
 git clone https://github.com/ignusloki/pt-pc.git
 cd pt-pc
-git checkout v1.1.1
+git checkout v1.1.2
 git clone https://github.com/maxton/LibOrbisPkg.git /your/work/LibOrbisPkg
 git -C /your/work/LibOrbisPkg checkout 643477263b2644e0803e0f58b8726ea4e3f3b7d4
 ```
@@ -40,7 +40,7 @@ python3 tools/android/build.py \
   --jdk /absolute/path/to/jdk-21 \
   --liborbis /your/work/LibOrbisPkg \
   --application-id com.yourname.pt.selfbuilt \
-  --version 1.1.1 --version-code 18
+  --version 1.1.2 --version-code 19
 ```
 
 The development APK is named `PT-Android-Prototype-arm64.apk` under

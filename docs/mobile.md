@@ -1,8 +1,9 @@
 # iPhone and iPad
 
-Download `P.T.PC.Port-iOS-1.1.1.ipa` from the [1.1.1 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.1).
+Download `P.T.PC.Port-iOS-1.1.2.ipa` from the [1.1.2 release](https://github.com/ignusloki/pt-pc/releases/tag/v1.1.2).
 It is an unsigned, optimized device build for iOS/iPadOS 17+. A sideloading tool
-signs the IPA for your device. On-device gameplay validation for 1.1.1 is pending.
+signs the IPA for your device. An Apple A15 player finished Survive the Night
+and reported smoother weapon switching and reloading with test build 110102.
 
 The port is adapted from Alex Blount (`ilsonb`)'s
 [PR #5](https://github.com/ignusloki/pt-pc/pull/5). Android continues to use its
@@ -38,7 +39,7 @@ previous beta cycle. See the [1.0.12 changelog](release-notes-1.0.12.md).
 
 ## Build from source on a Mac
 
-Check out `v1.1.1`. Install the full Xcode app and iOS SDK, select its developer
+Check out `v1.1.2`. Install the full Xcode app and iOS SDK, select its developer
 tools, and install `cmake`, `ninja`, `shaderc` and `vulkan-headers` with Homebrew.
 The build uses the device arm64 SDK; simulator execution is not supported.
 
@@ -51,7 +52,7 @@ Pass the extracted dynamic framework to the builder:
 python3 tools/ios/build.py --build build/ios-release --configuration Release \
   --moltenvk /absolute/path/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework
 python3 tools/ios/audit.py build/ios-release/pt.app
-python3 tools/ios/package.py build/ios-release/pt.app dist/P.T.PC.Port-iOS-1.1.1.ipa
+python3 tools/ios/package.py build/ios-release/pt.app dist/P.T.PC.Port-iOS-1.1.2.ipa
 ```
 
 The IPA needs to be sideloaded. `--source-cache build/macos-local-validation`
@@ -61,7 +62,7 @@ when `--configuration` is omitted. `--xcode --configure-only` generates a projec
 for developers who sign their own builds. Keep the same identifier and signing
 account when updating an existing installation.
 
-The numeric bundle build number is derived from the version (1.1.1 → 110100),
+The numeric bundle build number is derived from the version (1.1.2 → 110200),
 or explicitly set with `--build-number`. The bundle contains shaders, fonts,
 `extras.pak`, voice models and embedded MoltenVK. Original game files do not
 belong in the bundle. Mac and Android retain their own runtime selection.

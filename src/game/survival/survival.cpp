@@ -3041,7 +3041,6 @@ void SurvivalNight::SelectWeapon(SurvivalWeapon weapon, bool from_road) {
 
 void SurvivalNight::TakeWeapon(SurvivalWeapon weapon) {
     weapon_ = weapon;
-    LogInfo("survival: switched to {} at game tick {}", Spec(weapon).name_key, game_.Frame());
     if (weapon == SurvivalWeapon::Flashlight) sights_ = false;
     since_swap_ = 0.0f;
     reload_timer_ = 0.0f;
@@ -3394,7 +3393,7 @@ void SurvivalNight::StartReload() {
     reload_timer_ = reload_length_;
     gun_.magazine_dropped = false;
     gun_.cases_out = false;
-    LogInfo("survival: reload {} ({} in the gun, {} left) at game tick {}", spec.name_key, state.clip, state.reserve, game_.Frame());
+    LogInfo("survival: reload {} ({} in the gun, {} left)", spec.name_key, state.clip, state.reserve);
 }
 
 float SurvivalNight::ShellStep() const {
