@@ -18,7 +18,8 @@ assert info['CFBundleIcons']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppI
 assert info['CFBundleIcons~ipad']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
 required = ['Assets.car', 'pt', 'extras.pak', 'Frameworks/MoltenVK.framework/MoltenVK',
             'voice/ggml-base.en-q5_1.bin', 'voice/ggml-silero-v6.2.0.bin',
-            'licenses/bcdecode-LICENSE.txt', 'licenses/MoltenVK-Apache-2.0.txt']
+            'licenses/bcdecode-LICENSE.txt', 'licenses/MoltenVK-Apache-2.0.txt',
+            'licenses/LICENSE', 'licenses/NOTICE', 'licenses/ADDITIONAL-TERMS.md']
 for name in required:
     assert (app / name).is_file(), name
 assert list((app / 'shaders').glob('*.spv'))

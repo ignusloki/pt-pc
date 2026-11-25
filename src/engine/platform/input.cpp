@@ -1046,11 +1046,23 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     uint32_t raw = 0;
     const bool video = SDL_WasInit(SDL_INIT_VIDEO) != 0;
     const bool* sdl_keys = keyboard_free && !capturing_key_ && video ? SDL_GetKeyboardState(nullptr) : nullptr;
-    auto key = [&](SDL_Scancode code) {
+    auto raw_key = [&](SDL_Scancode code) {
         return !capturing_key_ && ((sdl_keys && sdl_keys[code]) || (static_cast<size_t>(code) < injected_keys_.size() && injected_keys_[code]));
     };
-    const SDL_MouseButtonFlags buttons =
+    if (swallowed_capture_scancode_ != 0 && !raw_key(static_cast<SDL_Scancode>(swallowed_capture_scancode_))) {
+        swallowed_capture_scancode_ = 0;
+    }
+    auto key = [&](SDL_Scancode code) {
+        if (swallowed_capture_scancode_ != 0 && static_cast<uint16_t>(code) == swallowed_capture_scancode_) return false;
+        return raw_key(code);
+    };
+    SDL_MouseButtonFlags raw_buttons =
         (!capturing_key_ && mouse != MouseUse::None) ? (video ? SDL_GetMouseState(nullptr, nullptr) : 0u) | injected_mouse_ | mouse_down_latch_ : 0u;
+    if (swallowed_capture_mouse_ != 0 && !(raw_buttons & SDL_BUTTON_MASK(swallowed_capture_mouse_))) {
+        swallowed_capture_mouse_ = 0;
+    }
+    const SDL_MouseButtonFlags buttons =
+        swallowed_capture_mouse_ != 0 ? (raw_buttons & ~SDL_BUTTON_MASK(swallowed_capture_mouse_)) : raw_buttons;
     mouse_down_latch_ = 0;
     auto held = [&](KeyAction action) {
         for (const KeyBinding& binding : MutableBindings()) {
@@ -1075,10 +1087,20 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     }
     state.left_stick = move;
     state.fast_walk = held(KeyAction::FastWalk);
-    if (held(KeyAction::PadUp)) raw |= kRawUp;
-    if (held(KeyAction::PadDown)) raw |= kRawDown;
-    if (held(KeyAction::PadLeft)) raw |= kRawLeft;
-    if (held(KeyAction::PadRight)) raw |= kRawRight;
+    auto gameplay_owns_pad = [&](KeyAction pad_action) {
+        if (mouse != MouseUse::Look) return false;
+        const KeyBinding* pb = FirstBinding(pad_action, true);
+        if (!pb || pb->scancode == 0) return false;
+        for (const auto& entry : kRebindEntries) {
+            const KeyBinding* gb = FirstBinding(entry.action, true);
+            if (gb && gb->scancode == pb->scancode) return true;
+        }
+        return false;
+    };
+    if (held(KeyAction::PadUp) && !gameplay_owns_pad(KeyAction::PadUp)) raw |= kRawUp;
+    if (held(KeyAction::PadDown) && !gameplay_owns_pad(KeyAction::PadDown)) raw |= kRawDown;
+    if (held(KeyAction::PadLeft) && !gameplay_owns_pad(KeyAction::PadLeft)) raw |= kRawLeft;
+    if (held(KeyAction::PadRight) && !gameplay_owns_pad(KeyAction::PadRight)) raw |= kRawRight;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuColumn)) raw |= kRawR1;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuQuit)) raw |= kRawR1;
     const bool zoom_raw = held(KeyAction::Zoom);

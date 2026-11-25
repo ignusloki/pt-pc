@@ -6,6 +6,9 @@
 
 namespace pt::game::port_credits {
 
+inline constexpr char kEngineAttribution[] = "Built on Hallway Engine by LoreanXavier";
+inline constexpr char kEngineUrl[] = "https://github.com/LoreanXavier/pt-pc";
+
 struct Card {
     std::vector<std::string_view> lines;
     bool short_setin = false;

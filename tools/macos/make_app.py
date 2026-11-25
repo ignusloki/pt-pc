@@ -72,8 +72,9 @@ def copy_voice(source, target):
 
 
 def validate_build(build, exe):
-    required = [exe, build / "libMoltenVK.dylib", build / "fonts", build / "voice/licenses", build / "extras.pak", build / "survival/guns.json", REPO / "assets/macos" / ICON_FILE]
+    required = [exe, build / "libMoltenVK.dylib", build / "fonts", build / "voice/licenses", build / "extras.pak", REPO / "assets/macos" / ICON_FILE]
     required += [build / "voice" / name for name in VOICE_MODELS + VOICE_LIBRARIES]
+    required += [build / "survival" / name for name in ("guns.json", "body_clips.json", "carry_poses.json")]
     for path in required:
         if not path.exists():
             raise RuntimeError(f"Missing build output: {path}")
@@ -150,8 +151,8 @@ def main():
         shutil.copytree(build / "licenses", resources / "licenses",
                         ignore=shutil.ignore_patterns("enhanced-textures", "Real-ESRGAN-*.txt", "bc7enc.txt"))
     (resources / "licenses").mkdir(exist_ok=True)
-    shutil.copy2(REPO / "LICENSE", resources / "licenses/PT-MIT.txt")
-    shutil.copy2(REPO / "NOTICE", resources / "licenses/NOTICE")
+    for name in ("LICENSE", "NOTICE", "ADDITIONAL-TERMS.md"):
+        shutil.copy2(REPO / name, resources / "licenses" / name)
     shutil.copy2(REPO / "README.md", resources / "README.md")
     shutil.copy2(REPO / "docs" / "macos.md", resources / "macOS.md")
     copy_icon(resources)

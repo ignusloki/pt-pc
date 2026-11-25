@@ -458,7 +458,8 @@ def main():
     if (build / "licenses").is_dir():
         shutil.copytree(build / "licenses", root / "licenses",
                         ignore=shutil.ignore_patterns("enhanced-textures", "Real-ESRGAN-*.txt", "bc7enc.txt"))
-    shutil.copy2(REPO / "README.md", root / "README.md")
+    for name in ("README.md", "LICENSE", "NOTICE", "ADDITIONAL-TERMS.md"):
+        shutil.copy2(REPO / name, root / name)
     try:
         refuse_loose_data(root)
     except ValueError as error:

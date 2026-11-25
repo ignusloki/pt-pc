@@ -71,7 +71,7 @@ def stage_runtime(build, ndk, sdl_source):
     shutil.copy2(build / "extras.pak", assets / "runtime/extras.pak")
     licenses = assets / "licenses"
     licenses.mkdir(exist_ok=True)
-    for name in ("LICENSE", "LICENSE.md", "NOTICE", "COPYING"):
+    for name in ("LICENSE", "LICENSE.md", "NOTICE", "ADDITIONAL-TERMS.md", "COPYING"):
         if (REPO / name).is_file():
             shutil.copy2(REPO / name, licenses / name)
     if (build / "licenses").is_dir():

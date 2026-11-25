@@ -36,6 +36,8 @@ class PackagingTests(unittest.TestCase):
         (self.build/'voice/licenses/MIT.txt').write_text('Fixture license')
         (self.build/'fonts/font.ttf').write_bytes(b'font fixture')
         (self.build/'survival/guns.json').write_text('{}')
+        for name in ('body_clips.json', 'carry_poses.json'):
+            (self.build/'survival'/name).write_bytes((REPO/'assets/survival'/name).read_bytes())
         (self.build/'extras.pak').write_bytes(b'Fixture packed bonus content')
         (self.build/'licenses/enhanced-textures').mkdir(parents=True)
         (self.build/'licenses/enhanced-textures/notice.txt').write_text('Fixture texture tool license')
@@ -84,10 +86,13 @@ class PackagingTests(unittest.TestCase):
         self.assertFalse(any(n.startswith('__MACOSX') for n in files))
         self.assertIn('extractor/PT.PkgExtract',files)
         self.assertEqual(files[prefix+'Resources/survival/guns.json'], b'{}')
+        for name in ('body_clips.json', 'carry_poses.json'):
+            self.assertEqual(files[prefix+'Resources/survival/'+name], (REPO/'assets/survival'/name).read_bytes())
         self.assertEqual(files[prefix+'Resources/extras.pak'],b'Fixture packed bonus content')
         self.assertFalse(any('texture-tools/' in name or 'enhanced-textures/' in name or
                              name.endswith('bc7enc.txt') or 'Real-ESRGAN-' in name for name in files))
-        self.assertEqual(files[prefix+'Resources/licenses/PT-MIT.txt'], (REPO/'LICENSE').read_bytes())
+        for name in ('LICENSE', 'NOTICE', 'ADDITIONAL-TERMS.md'):
+            self.assertEqual(files[prefix+'Resources/licenses/'+name], (REPO/name).read_bytes())
         self.assertIn('pt-files.json',files)
         with zipfile.ZipFile(out/'extractor-source.zip') as z:self.assertIn('-r osx-arm64',z.read('BUILD.txt').decode())
         self.assertEqual(set(files),set(json.loads((out/'payload-manifest.json').read_text())))
@@ -139,6 +144,10 @@ class PackagingTests(unittest.TestCase):
         (self.build/'shaders/enhanced_tonemap.frag.spv').unlink()
         with self.assertRaisesRegex(RuntimeError,'Shader build is incomplete'):
             make_app.validate_build(self.build,self.build/'pt_release')
+    def test_missing_survival_animation_refused(self):
+        (self.build/'survival/body_clips.json').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'body_clips.json'):
+            make_app.validate_build(self.build, self.build/'pt_release')
     def test_static_moltenvk_refused(self):
         (self.build/'libMoltenVK.dylib').write_bytes(b'!<arch>\n')
         with self.assertRaisesRegex(RuntimeError,'Expected a Mach-O'):make_app.validate_build(self.build,self.build/'pt_release')

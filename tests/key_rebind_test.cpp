@@ -49,6 +49,23 @@ int main() {
     ApplyKeyBindings(exported2);
     Check(FirstBinding(KeyAction::Zoom)->mouse == 2 && FirstBinding(KeyAction::Zoom)->scancode == 0, "Zoom middle mouse roundtrip");
 
+    InputDevice device;
+    device.BeginKeyCapture();
+    device.InjectKey(SDL_SCANCODE_UP, true);
+    uint16_t captured = 0;
+    uint8_t mouse = 0;
+    bool cancelled = false;
+    Check(device.PollCapturedKey(captured, mouse, cancelled) && !cancelled && captured == SDL_SCANCODE_UP, "capture Up");
+    Check(SetKeyBinding(KeyAction::WalkForward, captured, mouse), "bind forward movement to Up");
+    Check(device.Poll(false, MouseUse::Look).left_stick.y == 0.0f, "captured Up waits for release");
+    device.InjectKey(SDL_SCANCODE_UP, false);
+    device.Poll(false, MouseUse::Look);
+    device.InjectKey(SDL_SCANCODE_UP, true);
+    device.InjectKey(SDL_SCANCODE_LSHIFT, true);
+    const InputState walking = device.Poll(false, MouseUse::Look);
+    Check(walking.left_stick.y == 1.0f && walking.fast_walk && !(walking.raw_held & kRawUp), "Shift and rebound Up fast-walk without moving the camera");
+    Check(device.Poll(false, MouseUse::Menu).raw_held & kRawUp, "Up still navigates menus");
+
     ResetKeyBindings();
     std::printf("%d failures\n", g_failures);
     return g_failures == 0 ? 0 : 1;

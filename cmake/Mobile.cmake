@@ -108,9 +108,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/voice/licenses" "$<TARGET_FILE_DIR:pt>/licenses/voice"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/licenses/bcdecode-LICENSE.txt" "$<TARGET_FILE_DIR:pt>/licenses/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${google_sbc_SOURCE_DIR}/LICENSE" "$<TARGET_FILE_DIR:pt>/licenses/google-libsbc-LICENSE.txt"
-    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:pt>/licenses/zstd-LICENSE.txt" VERBATIM)
+    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:pt>/licenses/zstd-LICENSE.txt" "$<TARGET_FILE_DIR:pt>/licenses/pt-MIT.txt" VERBATIM)
+  set(pt_ios_project_notices "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/NOTICE" "${CMAKE_SOURCE_DIR}/ADDITIONAL-TERMS.md")
+  set_property(TARGET pt APPEND PROPERTY LINK_DEPENDS ${pt_ios_project_notices})
+  add_custom_command(TARGET pt POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different ${pt_ios_project_notices} "$<TARGET_FILE_DIR:pt>/licenses" VERBATIM)
   foreach(entry
-      "${CMAKE_SOURCE_DIR}/LICENSE|pt-MIT.txt"
       "${CMAKE_SOURCE_DIR}/third_party/macos_notices/MoltenVK-Apache-2.0.txt|MoltenVK-Apache-2.0.txt"
       "${sdl3_SOURCE_DIR}/LICENSE.txt|SDL3-LICENSE.txt"
       "${sdl3_SOURCE_DIR}/src/hidapi/LICENSE.txt|hidapi-LICENSE.txt"

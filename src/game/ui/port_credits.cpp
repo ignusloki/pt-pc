@@ -17,7 +17,7 @@ constexpr Setin kLong{59.0f, 209.0f, 329.0f};
 
 std::vector<Card> MakeCards() {
     std::vector<Card> cards;
-    cards.push_back({{"P.T. PC Port", "pc_credits_by", "", "pc_credits_engine"}, true, 1.4f});
+    cards.push_back({{"P.T. PC Port", "pc_credits_by", "", kEngineAttribution, kEngineUrl}, true, 1.4f});
 #if defined(PT_WITH_DLSS) || defined(PT_WITH_STREAMLINE)
     cards.push_back({{"NVIDIA RTX", "pc_credits_dlss",
 #if defined(PT_WITH_STREAMLINE)
